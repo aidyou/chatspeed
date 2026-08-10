@@ -433,14 +433,15 @@ pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency co
 Your goal is to aggressively reduce context size while preserving the user's active working state.
 
 ## PRIORITIES
-1. Preserve `overall_goal` only when the compressed slice still contains a live cross-task objective. Omit it for completed-task archive slices.
-2. Preserve `task_state` with the highest fidelity when a live active workspace exists in the compressed slice. Otherwise convert it into an archive/no-active-task state.
-3. Preserve only the directly relevant parts of `key_knowledge` and `file_system_state`.
-4. Preserve only [PERSISTENT/UNRESOLVED] errors that still affect the active task.
-5. Compress `prev_tasks` aggressively:
+1. Treat every user-role message in an active-task slice as durable authority. Preserve the original objective plus all later corrections, calibrations, constraints, acceptance criteria, priorities, and explicit non-goals. Never replace or weaken a newer user instruction with an older snapshot.
+2. When a live active workspace exists, preserve `overall_goal` and `task_state` with the highest fidelity. `task_state.current_focus` and `next_steps` must make the exact continuation clear without requiring access to removed messages. Omit `overall_goal` only for completed-task archive slices.
+3. Preserve execution continuity: what has been completed, concrete tool evidence and decisions, files changed or inspected, unresolved todos, blockers, failed approaches, and the exact next action.
+4. Preserve only the directly relevant parts of `key_knowledge` and `file_system_state`, but never drop a fact required to honor a user constraint or avoid repeating work.
+5. Preserve only [PERSISTENT/UNRESOLVED] errors that still affect the active task, including failed approaches that must not be retried.
+6. Compress `prev_tasks` aggressively:
    - Keep only the 2-3 most recent relevant tasks in detailed form.
    - Convert all older or less relevant tasks into `brief` entries.
-6. Remove noise, duplicated observations, transient reminders, and implementation-transition chatter.
+7. Remove noise, duplicated observations, transient reminders, and implementation-transition chatter. Prefer precise facts over vague statements such as "work continued" or "some changes were made".
 
 ## INPUT FORMAT
 - You will receive `<completed_tasks>` and `<conversation_history>`.
@@ -481,12 +482,17 @@ Your output MUST be a valid JSON object with this shape:
   "file_system_state": ["Only active-task-relevant file pointers and changes"],
   "recent_actions": ["Only the most recent critical observations"],
   "task_state": {
-    "status": "completed_archive",
-    "current_focus": "No active task in compressed segment; rely on uncompressed tail messages for the live request",
-    "next_steps": [],
+    "status": "in_progress",
+    "current_focus": "Exact active objective and current implementation checkpoint",
+    "next_steps": ["The next concrete action needed to resume safely"],
     "open_questions": [],
     "blockers": [],
-    "todos": []
+    "todos": [
+      {
+        "text": "Remaining active-task work",
+        "status": "pending"
+      }
+    ]
   }
 }"#;
 

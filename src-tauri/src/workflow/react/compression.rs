@@ -66,21 +66,31 @@ impl ContextCompressor {
             .iter()
             .rposition(ContextManager::is_compression_summary_message);
 
-        // 2. Slice history from the last summary point to now
+        // 2. Slice history from the last summary point to now. For active-task
+        // compression, prepend every raw user input from before the summary so
+        // each round sees the durable objective and later calibrations again.
         let incremental_messages = if let Some(idx) = last_summary_idx {
             &messages[idx..]
         } else {
             messages
         };
+        let compression_input =
+            Self::compression_input_messages_with_user_anchors(messages, last_summary_idx);
 
         // 3. Layer 1: Purification (Filter out noise)
-        let purified_history: Vec<serde_json::Value> = incremental_messages
+        let purified_history: Vec<serde_json::Value> = compression_input
             .iter()
             .filter_map(|m| {
                 if Self::should_skip_message_for_compression(m) {
                     return None;
                 }
-                let content = Self::sanitize_message_content_for_compression(&m.message);
+                let merged_content = match m.attached_context.as_deref() {
+                    Some(attached) if !attached.trim().is_empty() => {
+                        format!("{}\n\n{}", m.message, attached)
+                    }
+                    _ => m.message.clone(),
+                };
+                let content = Self::sanitize_message_content_for_compression(&merged_content);
                 let keep = Self::should_keep_message_content_for_compression(m, &content);
                 keep.then(|| serde_json::json!({ "role": m.role, "content": content }))
             })
@@ -99,13 +109,13 @@ impl ContextCompressor {
             if completed_history_only {
                 "Please update the existing state snapshot with the new completed-task archive information provided above. This compression slice contains only already-completed tasks and does NOT contain the currently active user request or active workspace. Do NOT preserve or invent an `overall_goal` from older work unless this slice itself contains a still-active cross-task objective. For this archive slice, `task_state` should describe an archive/no-active-task state rather than the live current request. Output only the updated JSON object."
             } else {
-                "Please update the existing state snapshot with the new information provided above. Output only the updated JSON object."
+                "Please update the existing state snapshot with the new active-task information provided above. User-role messages are authoritative: preserve the active objective, every correction, calibration, constraint, acceptance criterion, and explicit non-goal that still applies. Preserve what has been completed, concrete tool evidence, modified paths, pending work, blockers, failed attempts, and the exact next step so execution can resume without guessing. Output only the updated JSON object."
             }
         } else {
             if completed_history_only {
                 "Create the first completed-task archive snapshot JSON object based on the conversation history provided above. This compression slice contains only already-completed tasks and does NOT contain the currently active user request or active workspace. Do NOT add an `overall_goal` unless this slice itself contains a still-active cross-task objective. `task_state` should describe an archive/no-active-task state rather than a live current request."
             } else {
-                "Create the first state snapshot JSON object based on the conversation history provided above."
+                "Create the first active-task state snapshot JSON object based on the conversation history provided above. User-role messages are authoritative: preserve the active objective, every correction, calibration, constraint, acceptance criterion, and explicit non-goal that still applies. Preserve what has been completed, concrete tool evidence, modified paths, pending work, blockers, failed attempts, and the exact next step so execution can resume without guessing."
             }
         };
 
@@ -225,6 +235,30 @@ impl ContextCompressor {
                 Err(err) => return Err(WorkflowEngineError::Ai(err)),
             }
         }
+    }
+
+    fn compression_input_messages_with_user_anchors<'a>(
+        messages: &'a [WorkflowMessage],
+        last_summary_idx: Option<usize>,
+    ) -> Vec<&'a WorkflowMessage> {
+        let Some(summary_idx) = last_summary_idx else {
+            return messages.iter().collect();
+        };
+
+        let mut input = messages[..summary_idx]
+            .iter()
+            .filter(|message| {
+                message.role == "user"
+                    && message.step_type.as_deref() != Some("observe")
+                    && (!message.message.trim().is_empty()
+                        || message
+                            .attached_context
+                            .as_deref()
+                            .is_some_and(|attached| !attached.trim().is_empty()))
+            })
+            .collect::<Vec<_>>();
+        input.extend(messages[summary_idx..].iter());
+        input
     }
 
     fn sanitize_message_content_for_compression(content: &str) -> String {
@@ -781,6 +815,50 @@ mod tests {
         assert!(transcript.contains("<message role=\"user\">"));
         assert!(transcript.contains("<message role=\"tool\">"));
         assert!(transcript.contains("result"));
+    }
+
+    #[test]
+    fn compression_input_replays_user_anchors_before_latest_summary() {
+        let message = |id: i64, role: &str, content: &str, subtype: Option<&str>| WorkflowMessage {
+            id: Some(id),
+            session_id: "s".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: None,
+            message_kind: if subtype.is_some() {
+                "summary".to_string()
+            } else {
+                "message".to_string()
+            },
+            message_subtype: subtype.map(str::to_string),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let messages = vec![
+            message(1, "user", "Original objective", None),
+            message(2, "assistant", "Discarded old progress", None),
+            message(3, "user", "Calibration", None),
+            message(4, "system", "Previous snapshot", Some("compression")),
+            message(5, "assistant", "New progress", None),
+            message(6, "user", "Latest correction", None),
+        ];
+
+        let input =
+            ContextCompressor::compression_input_messages_with_user_anchors(&messages, Some(3));
+        assert_eq!(
+            input
+                .iter()
+                .filter_map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 4, 5, 6]
+        );
     }
 
     #[test]

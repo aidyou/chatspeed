@@ -185,36 +185,55 @@ impl ContextManager {
             return messages.to_vec();
         };
         let latest_summary_id = latest_summary.id;
-        let latest_manual_clear_id = Self::latest_manual_clear_context_index(messages)
+        let latest_manual_clear = Self::latest_manual_clear_context_index(messages)
             .and_then(|index| messages.get(index))
-            .and_then(|message| message.id);
-        let execution_handoff_ids = Self::active_execution_handoff_message_ids(messages);
+            .cloned();
+        let latest_manual_clear_id = latest_manual_clear.as_ref().and_then(|message| message.id);
+        let active_task_anchor_ids = Self::active_task_anchor_message_ids(messages);
+        let mut compacted = Vec::new();
 
-        messages
-            .iter()
-            .filter(|message| {
-                if message.id == latest_summary_id {
-                    return true;
-                }
-                if message.id == latest_manual_clear_id {
-                    return true;
-                }
-                if message
-                    .id
-                    .is_some_and(|id| execution_handoff_ids.contains(&id))
-                {
-                    return true;
-                }
-                !Self::is_summary_message(message)
-                    && message
-                        .id
-                        .is_some_and(|id| id > compressed_until_message_id)
-            })
-            .cloned()
-            .collect()
+        if latest_manual_clear_id != latest_summary_id {
+            if let Some(manual_clear) = latest_manual_clear {
+                compacted.push(manual_clear);
+            }
+        }
+
+        compacted.extend(
+            messages
+                .iter()
+                .filter(|message| {
+                    message.id.is_some_and(|id| {
+                        id <= compressed_until_message_id && active_task_anchor_ids.contains(&id)
+                    })
+                })
+                .cloned(),
+        );
+        compacted.push(latest_summary);
+        compacted.extend(
+            messages
+                .iter()
+                .filter(|message| {
+                    !Self::is_summary_message(message)
+                        && message
+                            .id
+                            .is_some_and(|id| id > compressed_until_message_id)
+                })
+                .cloned(),
+        );
+        compacted
     }
 
-    fn active_execution_handoff_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
+    fn is_user_authored_task_message(message: &WorkflowMessage) -> bool {
+        message.role == "user"
+            && message.step_type.as_deref() != Some("observe")
+            && (!message.message.trim().is_empty()
+                || message
+                    .attached_context
+                    .as_deref()
+                    .is_some_and(|attached| !attached.trim().is_empty()))
+    }
+
+    fn active_task_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
         let completion_start = Self::latest_successful_completion_index(messages)
             .map(|index| index + 1)
             .unwrap_or(0);
@@ -222,25 +241,12 @@ impl ContextManager {
             .map(|index| index + 1)
             .unwrap_or(0);
         let task_start = completion_start.max(manual_clear_start);
-        let current_task = &messages[task_start..];
-        let Some(approved_plan_index) = current_task
-            .iter()
-            .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))
-        else {
-            return HashSet::new();
-        };
 
-        current_task[..=approved_plan_index]
+        messages[task_start..]
             .iter()
             .filter(|message| {
-                message.message_subtype.as_deref() == Some("approved_plan")
-                    || (message.role == "user"
-                        && message.step_type.as_deref() != Some("observe")
-                        && (!message.message.trim().is_empty()
-                            || message
-                                .attached_context
-                                .as_deref()
-                                .is_some_and(|attached| !attached.trim().is_empty())))
+                Self::is_user_authored_task_message(message)
+                    || message.message_subtype.as_deref() == Some("approved_plan")
             })
             .filter_map(|message| message.id)
             .collect()
@@ -447,10 +453,18 @@ impl ContextManager {
 
         let boundary_idx = candidate_boundary_idx.or(fallback_boundary_idx)?;
         let compressed_until_id = self.messages[boundary_idx].id?;
-        Some((
-            self.messages[start_idx..=boundary_idx].to_vec(),
-            compressed_until_id,
-        ))
+        let active_task_anchor_ids = Self::active_task_anchor_message_ids(&self.messages);
+        let mut candidate = self.messages[..start_idx]
+            .iter()
+            .filter(|message| {
+                message
+                    .id
+                    .is_some_and(|id| active_task_anchor_ids.contains(&id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        candidate.extend(self.messages[start_idx..=boundary_idx].iter().cloned());
+        Some((candidate, compressed_until_id))
     }
 
     pub fn build_pressure_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
@@ -890,6 +904,11 @@ impl ContextManager {
             return scoped_messages.to_vec();
         };
 
+        let user_anchors = scoped_messages[..summary_idx]
+            .iter()
+            .filter(|message| Self::is_user_authored_task_message(message))
+            .cloned()
+            .collect::<Vec<_>>();
         let summary = scoped_messages[summary_idx].clone();
         let Some(compressed_until_message_id) = summary
             .metadata
@@ -897,7 +916,8 @@ impl ContextManager {
             .and_then(|meta| meta.get("compressed_until_message_id"))
             .and_then(|value| value.as_i64())
         else {
-            let mut projection = vec![summary];
+            let mut projection = user_anchors;
+            projection.push(summary);
             projection.extend(scoped_messages[summary_idx + 1..].iter().cloned());
             return projection;
         };
@@ -928,7 +948,8 @@ impl ContextManager {
             .map(|index| index + 1)
             .unwrap_or(0);
 
-        let mut projection = vec![summary];
+        let mut projection = user_anchors;
+        projection.push(summary);
         projection.extend(tail_messages[retained_start..].iter().cloned());
         projection
     }
@@ -3009,6 +3030,171 @@ mod tests {
         assert_eq!(execution_projection[0].id, Some(1));
         assert_eq!(execution_projection[1].id, Some(3));
         assert_eq!(execution_projection[2].id, Some(5));
+    }
+
+    #[test]
+    fn multi_round_active_task_compression_preserves_all_user_inputs_and_recent_tail() {
+        let message = |id: i64,
+                       role: &str,
+                       content: &str,
+                       kind: &str,
+                       subtype: Option<&str>,
+                       metadata: Option<serde_json::Value>| WorkflowMessage {
+            id: Some(id),
+            session_id: "multi-round-active-compression".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: None,
+            message_kind: kind.to_string(),
+            message_subtype: subtype.map(str::to_string),
+            segment_id: 1,
+            source_event_type: None,
+            metadata,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let first_round = vec![
+            message(
+                1,
+                "user",
+                "Original long-running objective",
+                "message",
+                None,
+                None,
+            ),
+            message(2, "assistant", "Old investigation", "message", None, None),
+            message(
+                3,
+                "user",
+                "Calibration: do not change the public API",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                4,
+                "assistant",
+                "First safe checkpoint",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                5,
+                "system",
+                "## Previous Context Snapshot\n{\"task_state\":{}}",
+                "summary",
+                Some("compression"),
+                Some(json!({"compressed_until_message_id": 4})),
+            ),
+            message(
+                6,
+                "assistant",
+                "Implementation progress",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                7,
+                "user",
+                "Correction: verification must cover retries",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                8,
+                "assistant",
+                "Second safe checkpoint",
+                "message",
+                None,
+                None,
+            ),
+            message(
+                9,
+                "assistant",
+                &format!("Recent uncompressed work {}", "x".repeat(1000)),
+                "message",
+                None,
+                None,
+            ),
+        ];
+
+        let first_compacted = ContextManager::rebuild_compacted_messages(&first_round, 128);
+        let (_dir, store) = setup_store();
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context = ContextManager::new(
+            "multi-round-active-compression".to_string(),
+            store,
+            128,
+            tsid_generator,
+        );
+        context.messages = first_compacted;
+
+        let (second_candidate, second_boundary_id) = context
+            .build_pressure_compression_candidate()
+            .expect("second pressure compression should find a safe boundary");
+        let candidate_user_inputs = second_candidate
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(|message| message.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            candidate_user_inputs,
+            vec![
+                "Original long-running objective",
+                "Calibration: do not change the public API",
+                "Correction: verification must cover retries"
+            ],
+            "every pressure-compression round must receive all raw user inputs from the active task"
+        );
+        assert_eq!(second_boundary_id, 8);
+
+        let mut second_round = context.messages.clone();
+        second_round.push(message(
+            10,
+            "system",
+            "## Previous Context Snapshot\n{\"task_state\":{}}",
+            "summary",
+            Some("compression"),
+            Some(json!({"compressed_until_message_id": second_boundary_id})),
+        ));
+        context.messages = ContextManager::rebuild_compacted_messages(&second_round, 128);
+
+        let projection = context.projection_source_messages();
+        let projection_ids = projection
+            .iter()
+            .filter_map(|message| message.id)
+            .collect::<Vec<_>>();
+        assert_eq!(projection_ids, vec![1, 3, 7, 10, 9]);
+        assert_eq!(
+            projection
+                .iter()
+                .filter(|message| message.role == "user")
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Original long-running objective",
+                "Calibration: do not change the public API",
+                "Correction: verification must cover retries"
+            ]
+        );
+        assert_eq!(
+            projection
+                .iter()
+                .filter(|message| ContextManager::is_compression_summary_message(message))
+                .count(),
+            1,
+            "only the latest summary should remain in the LLM projection"
+        );
+        assert!(projection
+            .last()
+            .is_some_and(|message| message.message.starts_with("Recent uncompressed work")));
     }
 
     #[tokio::test]
