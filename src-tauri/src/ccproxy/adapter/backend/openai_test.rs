@@ -58,8 +58,8 @@ mod tests {
 
         assert!(matches!(
             &unified.content[0],
-            UnifiedContentBlock::ToolUse { name, input, .. }
-                if name == "lookup" && input.get("partial_data").is_some()
+            UnifiedContentBlock::ToolUse { id, name, input }
+                if id == "call_test" && name == "lookup" && input.get("partial_data").is_some()
         ));
     }
 
@@ -266,6 +266,7 @@ mod tests {
         );
         assert_eq!(payload["messages"][1]["role"], "tool");
         assert_eq!(payload["messages"][1]["tool_call_id"], "call_123");
+        assert_eq!(payload["messages"][1]["content"], "done");
     }
 
     /// Test that tool calls are properly paired with tool results
