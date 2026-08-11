@@ -2,6 +2,38 @@
 
 # Release Notes
 
+## [2.0.12]
+
+### 🚀 New Features
+
+- **Sandboxed Shell execution**:
+  - Added configurable Docker-based sandbox profiles and reusable sandbox schemes for Workflow Agents.
+  - Shell commands now select matching sandbox profiles and request approval before safely falling back to the host; agents can configure a common fallback profile, profile order, and allowed roots.
+- **Workflow experience**:
+  - Added execution-duration display for tools, clearer sub-agent messages, persisted queued user messages, and preserved queued task context across recovery and compression.
+  - Refined tool, Agent, and sandbox configuration flows, including reasoning-output handling and authorized-root reordering.
+- **Appearance and settings**:
+  - Added primary color themes and semantic UI color tokens.
+  - Added selective configuration export and import.
+
+### 🪄 Improvements
+
+- **Workflow, Shell, and terminal reliability**:
+  - Hardened sandbox routing, command parsing and execution, local file and proxy access, recovery, pagination, tool-output handling, and terminal input and presentation.
+  - Stopping a Workflow now interrupts active operations; completed task boundaries, message cursors, IDs, and compression context are preserved more reliably.
+- **Interface and localization**:
+  - Simplified Shell approval presentation, refined Bash-result styling, and abbreviated home paths in Fish terminal output.
+  - Reduced the set of supported interface locales to Simplified Chinese, Traditional Chinese, English, and Japanese.
+
+### 🐞 Bug Fixes
+
+- **Configuration and protocols**:
+  - Configuration transfers now tolerate stale references, and sandbox host-rule IDs are generated on the backend.
+  - Preserved OpenAI tool-call IDs in CCProxy responses.
+- **Maintenance**: Updated frontend and Rust dependencies to address reported vulnerabilities.
+
+---
+
 ## [2.0.11]
 
 ### 🚀 New Features
