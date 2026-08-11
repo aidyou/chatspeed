@@ -61,7 +61,7 @@
     "markmap-common": "^0.18",
     "markmap-lib": "^0.18",
     "markmap-view": "^0.18",
-    "mermaid": "^11.15.0",
+    "mermaid": "^11.16.1",
     "pdfjs-dist": "^5.4.530",
     "pinia": "^3.0.3",
     "sortablejs": "^1.15.6",
@@ -85,9 +85,9 @@
   "pnpm": {
     "overrides": {
       "@xmldom/xmldom": "0.8.13",
-      "brace-expansion": "5.0.8",
+      "brace-expansion": "5.0.9",
       "braces": "3.0.3",
-      "dompurify": "3.4.12",
+      "dompurify": "3.4.13",
       "immutable": "5.1.9",
       "linkify-it": "5.0.2",
       "esbuild": "0.28.1",
@@ -95,13 +95,14 @@
       "lodash-es": "4.18.1",
       "markdown-it": "14.2.0",
       "micromatch": "4.0.8",
+      "nanoid": "3.3.17",
       "picomatch@2": "2.3.2",
       "picomatch@4": "4.0.4",
       "postcss": "8.5.23",
       "rollup": "4.60.3",
       "svgo": "4.0.2",
       "tmp": "0.2.7",
-      "undici": "7.28.0",
+      "undici": "7.29.0",
       "uuid": "11.1.1",
       "yaml": "2.8.3"
     }
