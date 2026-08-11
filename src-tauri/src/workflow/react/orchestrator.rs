@@ -13,7 +13,7 @@ use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata_with_visibility, RuntimeObservationLlmVisibility,
     RuntimeObservationType, RuntimeObservationUiVisibility,
 };
-use crate::workflow::react::types::{ExecutionContext, RuntimeState, StepType, SubAgentCompletion};
+use crate::workflow::react::types::{RuntimeState, StepType, SubAgentCompletion};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -230,42 +230,12 @@ fn build_sub_agent_completion(
 
 fn persist_sub_agent_completion(
     main_store: &Arc<MainStore>,
+    expected_parent_segment_id: Option<i32>,
     completion: SubAgentCompletion,
-) -> Result<(), WorkflowEngineError> {
-    let store = main_store.as_ref();
-    let mut context = store
-        .get_execution_context(&completion.parent_session_id)
-        .map_err(WorkflowEngineError::Db)?
-        .unwrap_or_else(|| ExecutionContext {
-            session_id: completion.parent_session_id.clone(),
-            state: RuntimeState::Waiting,
-            wait_reason: Some(crate::workflow::react::types::WaitReason::SubAgent),
-            queued_user_messages: Vec::new(),
-            current_segment_id: 1,
-            current_step: 0,
-            max_steps: 0,
-            pending_tools: Vec::new(),
-            last_action_summary: None,
-            current_context_tokens: None,
-            max_context_tokens: None,
-            last_event_id: None,
-            version: ExecutionContext::CURRENT_VERSION.to_string(),
-            waiting_on_sub_agent_id: Some(completion.sub_agent_id.clone()),
-            sub_agent_sessions: vec![completion.sub_agent_id.clone()],
-            pending_sub_agent_completions: Vec::new(),
-            pending_final_review: None,
-            pending_completion_reports: Vec::new(),
-            removed_queued_user_message_ids: Vec::new(),
-        });
-
-    context
-        .pending_sub_agent_completions
-        .retain(|existing| existing.sub_agent_id != completion.sub_agent_id);
-    context.pending_sub_agent_completions.push(completion);
-    store
-        .upsert_execution_context(&context)
-        .map_err(WorkflowEngineError::Db)?;
-    Ok(())
+) -> Result<bool, WorkflowEngineError> {
+    main_store
+        .persist_sub_agent_completion(expected_parent_segment_id, &completion)
+        .map_err(WorkflowEngineError::Db)
 }
 
 fn persist_background_completion_projection(
@@ -594,6 +564,21 @@ fn format_available_task_ids_for_owner(owner_session_id: &str) -> String {
     }
 }
 
+pub fn clear_completed_background_tasks_for_owner(owner_session_id: &str) {
+    let task_ids = COMPLETED_BACKGROUND_TASKS
+        .iter()
+        .filter_map(|entry| {
+            (entry.value().owner_session_id.as_deref() == Some(owner_session_id))
+                .then(|| entry.key().clone())
+        })
+        .collect::<Vec<_>>();
+    for task_id in task_ids {
+        COMPLETED_BACKGROUND_TASKS.remove(&task_id);
+        TASK_OUTPUT_THROTTLE.remove(&task_id);
+        PENDING_TASK_OUTPUT_WAITS.remove(&task_id);
+    }
+}
+
 pub fn list_background_task_ids_for_owner(owner_session_id: &str) -> Vec<String> {
     BACKGROUND_TASKS
         .iter()
@@ -676,6 +661,7 @@ pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatSta
                     task_id,
                     serde_json::json!({ "type": "stop" }).to_string(),
                 )
+                .await
             {
                 log::warn!(
                     "[Workflow][session={}][phase=cleanup] Failed to send stop signal to sub-agent session: {}",
@@ -1017,6 +1003,11 @@ pub async fn spawn_call_sub_agent(
     let exec_clone = sub_executor.clone();
     let task_id_clone = task_id.clone();
     let main_store_clone = main_store.clone();
+    let expected_parent_segment_id = main_store
+        .get_execution_context(&parent_session_id)
+        .ok()
+        .flatten()
+        .map(|context| context.current_segment_id);
     BACKGROUND_TASKS.insert(
         task_id.clone(),
         BackgroundTask::SubAgent {
@@ -1063,14 +1054,24 @@ pub async fn spawn_call_sub_agent(
             .to_string();
         let completion =
             build_sub_agent_completion(&parent_session_id, &task_id_clone, &completion_result);
-        if let Err(error) = persist_sub_agent_completion(&main_store_clone, completion) {
-            log::error!(
-                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
-                task_id_clone,
-                parent_session_id,
-                error
-            );
-            recover_terminal_sub_agent_finalization(&main_store_clone, &task_id_clone);
+        let projected = match persist_sub_agent_completion(
+            &main_store_clone,
+            expected_parent_segment_id,
+            completion,
+        ) {
+            Ok(projected) => projected,
+            Err(error) => {
+                log::error!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
+                    task_id_clone,
+                    parent_session_id,
+                    error
+                );
+                recover_terminal_sub_agent_finalization(&main_store_clone, &task_id_clone);
+                return;
+            }
+        };
+        if !projected {
             return;
         }
 
@@ -1101,7 +1102,9 @@ pub async fn spawn_call_sub_agent(
                 "result": completion_result
             })
             .to_string(),
-        ) {
+        )
+        .await
+        {
             log::warn!(
                 "[Workflow][session={}][parent={}][phase=sub_agent_completion] Live signal delivery failed; durable completion will be replayed on recovery: {}",
                 task_id_clone,
@@ -1332,6 +1335,13 @@ impl ToolDefinition for TaskTool {
             let task_id_clone = task_id.clone();
             let owner_session_id = self.parent_session_id.clone();
             let main_store = self.main_store.clone();
+            let expected_parent_segment_id = owner_session_id.as_deref().and_then(|session_id| {
+                main_store
+                    .get_execution_context(session_id)
+                    .ok()
+                    .flatten()
+                    .map(|context| context.current_segment_id)
+            });
             let gateway = self.gateway.clone();
             BACKGROUND_TASKS.insert(
                 task_id.clone(),
@@ -1387,14 +1397,29 @@ impl ToolDefinition for TaskTool {
                         &task_id_clone,
                         &completion_result,
                     );
-                    if let Err(error) = persist_sub_agent_completion(&main_store, completion) {
-                        log::error!(
-                            "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable background completion projection failed; terminal result will not be published: {}",
-                            task_id_clone,
-                            parent_session_id,
-                            error
+                    let projected = match persist_sub_agent_completion(
+                        &main_store,
+                        expected_parent_segment_id,
+                        completion,
+                    ) {
+                        Ok(projected) => projected,
+                        Err(error) => {
+                            log::error!(
+                                "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable background completion projection failed; terminal result will not be published: {}",
+                                task_id_clone,
+                                parent_session_id,
+                                error
+                            );
+                            recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                            return;
+                        }
+                    };
+                    if !projected {
+                        TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
+                        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+                            &task_id_clone,
                         );
-                        recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                        BACKGROUND_TASKS.remove(&task_id_clone);
                         return;
                     }
                     if let Err(error) = persist_background_completion_projection(
@@ -1543,6 +1568,11 @@ impl ToolDefinition for TaskTool {
         let parent_id = parent_id.clone();
         let task_id_clone = task_id.clone();
         let main_store = self.main_store.clone();
+        let expected_parent_segment_id = main_store
+            .get_execution_context(&parent_id)
+            .ok()
+            .flatten()
+            .map(|context| context.current_segment_id);
         tokio::spawn(async move {
             let (result, final_state, messages) = {
                 let mut guard = exec_clone.lock().await;
@@ -1580,14 +1610,24 @@ impl ToolDefinition for TaskTool {
                 .to_string();
             let completion =
                 build_sub_agent_completion(&parent_id, &task_id_clone, &completion_result);
-            if let Err(error) = persist_sub_agent_completion(&main_store, completion) {
-                log::error!(
-                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
-                    task_id_clone,
-                    parent_id,
-                    error
-                );
-                recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+            let projected = match persist_sub_agent_completion(
+                &main_store,
+                expected_parent_segment_id,
+                completion,
+            ) {
+                Ok(projected) => projected,
+                Err(error) => {
+                    log::error!(
+                        "[Workflow][session={}][parent={}][phase=sub_agent_completion] Durable sub-agent completion projection failed; terminal result will not be signaled: {}",
+                        task_id_clone,
+                        parent_id,
+                        error
+                    );
+                    recover_terminal_sub_agent_finalization(&main_store, &task_id_clone);
+                    return;
+                }
+            };
+            if !projected {
                 return;
             }
 
@@ -1610,15 +1650,18 @@ impl ToolDefinition for TaskTool {
                 return;
             }
 
-            if let Err(e) = crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
-                &parent_id,
-                json!({
-                    "type": "sub_agent_complete",
-                    "sub_agent_id": task_id_clone,
-                    "result": completion_result
-                })
-                .to_string(),
-            ) {
+            if let Err(e) =
+                crate::workflow::react::manager::WorkflowManager::send_signal_to_session(
+                    &parent_id,
+                    json!({
+                        "type": "sub_agent_complete",
+                        "sub_agent_id": task_id_clone,
+                        "result": completion_result
+                    })
+                    .to_string(),
+                )
+                .await
+            {
                 log::warn!(
                     "[Workflow][session={}][parent={}][phase=sub_agent_completion] Live signal delivery failed; durable completion will be replayed on recovery: {}",
                     task_id_clone,
@@ -1982,7 +2025,8 @@ impl ToolDefinition for TaskStopTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_terminal_sub_agent_result, persist_background_completion_projection,
+        build_terminal_sub_agent_result, clear_completed_background_tasks_for_owner,
+        persist_background_completion_projection, persist_sub_agent_completion,
         remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
         DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool, BACKGROUND_TASKS,
         COMPLETED_BACKGROUND_TASKS, TASK_OUTPUT_THROTTLE,
@@ -2158,6 +2202,63 @@ mod tests {
         let db_path = dir.path().join("orchestrator_diagnostic_test.db");
         let store = MainStore::new(&db_path).expect("failed to create MainStore");
         (dir, Arc::new(store))
+    }
+
+    #[test]
+    fn clearing_completed_tasks_removes_only_matching_owner() {
+        let owner_task = "subagent_completed_owner";
+        let other_task = "subagent_completed_other";
+        remember_completed_task(
+            owner_task.to_string(),
+            Some("owner-session".to_string()),
+            "owner output".to_string(),
+            true,
+        );
+        remember_completed_task(
+            other_task.to_string(),
+            Some("other-session".to_string()),
+            "other output".to_string(),
+            true,
+        );
+
+        clear_completed_background_tasks_for_owner("owner-session");
+
+        assert!(!COMPLETED_BACKGROUND_TASKS.contains_key(owner_task));
+        assert!(COMPLETED_BACKGROUND_TASKS.contains_key(other_task));
+        COMPLETED_BACKGROUND_TASKS.remove(other_task);
+    }
+
+    #[test]
+    fn completion_from_cleared_parent_segment_is_not_projected() {
+        let (_dir, store) = test_store();
+        let mut context = ExecutionContext::new("parent-session".to_string());
+        context.current_segment_id = 2;
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist parent context");
+        let completion = SubAgentCompletion {
+            sub_agent_id: "old-child".to_string(),
+            parent_session_id: "parent-session".to_string(),
+            status: "completed".to_string(),
+            result: Some("done".to_string()),
+            summary: Some("done".to_string()),
+            error: None,
+            tool_calls_count: 0,
+            usage_summary: None,
+            completed_at_ms: 1,
+            consumed: false,
+        };
+
+        let projected = persist_sub_agent_completion(&store, Some(1), completion)
+            .expect("stale completion check should succeed");
+
+        assert!(!projected);
+        let persisted = store
+            .get_execution_context("parent-session")
+            .expect("failed to load parent context")
+            .expect("parent context should exist");
+        assert!(persisted.pending_sub_agent_completions.is_empty());
+        assert!(persisted.sub_agent_sessions.is_empty());
     }
 
     fn repo_root() -> PathBuf {

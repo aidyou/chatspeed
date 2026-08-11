@@ -2291,6 +2291,21 @@ impl MainStore {
 
     // ExecutionContext Snapshot Operations
 
+    pub fn latest_workflow_message_segment_id(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i32>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT MAX(segment_id) FROM workflow_messages WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<i32>>(0),
+            )
+            .map_err(StoreError::from)
+        })
+    }
+
     pub fn get_execution_context(
         &self,
         session_id: &str,
@@ -2317,6 +2332,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn upsert_execution_context_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         ctx: ExecutionContext,
@@ -2370,8 +2386,181 @@ impl MainStore {
         })
     }
 
+    pub fn upsert_execution_context_preserving_concurrent_completions(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> Result<bool, StoreError> {
+        let mut ctx = ctx.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let existing_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![ctx.session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+
+            if let Some(existing_json) = existing_json {
+                let existing: ExecutionContext = serde_json::from_str(&existing_json)?;
+                if existing.current_segment_id > ctx.current_segment_id {
+                    log::warn!(
+                        "[Workflow][session={}] snapshot.write_rejected - stale_segment={}, current_segment={}",
+                        ctx.session_id,
+                        ctx.current_segment_id,
+                        existing.current_segment_id
+                    );
+                    return Ok(false);
+                }
+
+                if existing.current_segment_id == ctx.current_segment_id {
+                    for existing_completion in existing.pending_sub_agent_completions {
+                        if let Some(incoming_completion) = ctx
+                            .pending_sub_agent_completions
+                            .iter_mut()
+                            .find(|completion| {
+                                completion.sub_agent_id == existing_completion.sub_agent_id
+                            })
+                        {
+                            incoming_completion.consumed |= existing_completion.consumed;
+                        } else {
+                            ctx.pending_sub_agent_completions.push(existing_completion);
+                        }
+                    }
+                    let terminal_ids = ctx
+                        .pending_sub_agent_completions
+                        .iter()
+                        .map(|completion| completion.sub_agent_id.as_str())
+                        .collect::<HashSet<_>>();
+                    ctx.sub_agent_sessions
+                        .retain(|sub_agent_id| !terminal_ids.contains(sub_agent_id.as_str()));
+                }
+            }
+
+            let context_json = serde_json::to_string(&ctx)?;
+            let state = ctx.state.to_string();
+            let wait_reason = ctx.wait_reason.as_ref().map(ToString::to_string);
+            let sub_agent_sessions = serde_json::to_string(&ctx.sub_agent_sessions)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    ctx.session_id,
+                    context_json,
+                    ctx.version,
+                    state,
+                    wait_reason,
+                    ctx.waiting_on_sub_agent_id,
+                    sub_agent_sessions,
+                ],
+            )?;
+            log::info!(
+                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}, concurrent_completions_preserved=true",
+                ctx.session_id,
+                ctx.state,
+                ctx.wait_reason,
+                ctx.pending_tools.len()
+            );
+            Ok(true)
+        })
+    }
+
+    pub fn persist_sub_agent_completion(
+        &self,
+        expected_parent_segment_id: Option<i32>,
+        completion: &crate::workflow::react::types::SubAgentCompletion,
+    ) -> Result<bool, StoreError> {
+        let mut completion = completion.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let existing_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![completion.parent_session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let mut context = existing_json
+                .map(|json| serde_json::from_str::<ExecutionContext>(&json))
+                .transpose()?
+                .unwrap_or_else(|| ExecutionContext {
+                    session_id: completion.parent_session_id.clone(),
+                    state: RuntimeState::Waiting,
+                    wait_reason: Some(WaitReason::SubAgent),
+                    queued_user_messages: Vec::new(),
+                    current_segment_id: 1,
+                    current_step: 0,
+                    max_steps: 0,
+                    pending_tools: Vec::new(),
+                    last_action_summary: None,
+                    current_context_tokens: None,
+                    max_context_tokens: None,
+                    last_event_id: None,
+                    version: ExecutionContext::CURRENT_VERSION.to_string(),
+                    waiting_on_sub_agent_id: Some(completion.sub_agent_id.clone()),
+                    sub_agent_sessions: vec![completion.sub_agent_id.clone()],
+                    pending_sub_agent_completions: Vec::new(),
+                    pending_final_review: None,
+                    pending_completion_reports: Vec::new(),
+                    removed_queued_user_message_ids: Vec::new(),
+                });
+
+            if expected_parent_segment_id
+                .is_some_and(|segment_id| segment_id != context.current_segment_id)
+            {
+                log::info!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Ignoring completion from cleared parent segment {:?}; current segment is {}",
+                    completion.sub_agent_id,
+                    completion.parent_session_id,
+                    expected_parent_segment_id,
+                    context.current_segment_id
+                );
+                return Ok(false);
+            }
+
+            context
+                .sub_agent_sessions
+                .retain(|sub_agent_id| sub_agent_id != &completion.sub_agent_id);
+            if context.waiting_on_sub_agent_id.as_deref()
+                == Some(completion.sub_agent_id.as_str())
+                && context.wait_reason != Some(WaitReason::SubAgent)
+            {
+                context.waiting_on_sub_agent_id = None;
+            }
+            completion.consumed |= context
+                .pending_sub_agent_completions
+                .iter()
+                .find(|existing| existing.sub_agent_id == completion.sub_agent_id)
+                .is_some_and(|existing| existing.consumed);
+            context
+                .pending_sub_agent_completions
+                .retain(|existing| existing.sub_agent_id != completion.sub_agent_id);
+            context.pending_sub_agent_completions.push(completion);
+
+            let context_json = serde_json::to_string(&context)?;
+            let state = context.state.to_string();
+            let wait_reason = context.wait_reason.as_ref().map(ToString::to_string);
+            let sub_agent_sessions = serde_json::to_string(&context.sub_agent_sessions)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    context.session_id,
+                    context_json,
+                    context.version,
+                    state,
+                    wait_reason,
+                    context.waiting_on_sub_agent_id,
+                    sub_agent_sessions,
+                ],
+            )?;
+            Ok(true)
+        })
+    }
+
     // Workflow Event Operations
 
+    #[cfg(test)]
     pub(crate) async fn append_workflow_event_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         event: WorkflowEvent,
@@ -2788,7 +2977,9 @@ fn score_execution(metrics: &WorkflowEfficiencyMetrics) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::react::types::{PendingTool, RuntimeState, WaitReason};
+    use crate::workflow::react::types::{
+        PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
+    };
     use tempfile::tempdir;
 
     fn create_test_store() -> (tempfile::TempDir, MainStore) {
@@ -2796,6 +2987,104 @@ mod tests {
         let db_path = dir.path().join("workflow_phase4_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         (dir, store)
+    }
+
+    fn test_completion(parent_session_id: &str, sub_agent_id: &str) -> SubAgentCompletion {
+        SubAgentCompletion {
+            sub_agent_id: sub_agent_id.to_string(),
+            parent_session_id: parent_session_id.to_string(),
+            status: "completed".to_string(),
+            result: Some("done".to_string()),
+            summary: Some("done".to_string()),
+            error: None,
+            tool_calls_count: 0,
+            usage_summary: None,
+            completed_at_ms: 1,
+            consumed: false,
+        }
+    }
+
+    #[test]
+    fn guarded_snapshot_rejects_stale_segment() {
+        let (_temp_dir, store) = create_test_store();
+        let mut current = ExecutionContext::new("snapshot-segment-guard".to_string());
+        current.current_segment_id = 2;
+        store.upsert_execution_context(&current).unwrap();
+
+        let mut stale = current.clone();
+        stale.current_segment_id = 1;
+        stale.state = RuntimeState::Completed;
+        assert!(!store
+            .upsert_execution_context_preserving_concurrent_completions(&stale)
+            .unwrap());
+
+        let restored = store
+            .get_execution_context(&current.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.current_segment_id, 2);
+        assert_eq!(restored.state, RuntimeState::Pending);
+    }
+
+    #[test]
+    fn guarded_snapshot_preserves_concurrent_sub_agent_completion() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "snapshot-completion-merge";
+        let mut executor_snapshot = ExecutionContext::new(session_id.to_string());
+        executor_snapshot
+            .sub_agent_sessions
+            .push("child-1".to_string());
+        store.upsert_execution_context(&executor_snapshot).unwrap();
+        store
+            .persist_sub_agent_completion(Some(1), &test_completion(session_id, "child-1"))
+            .unwrap();
+
+        executor_snapshot.state = RuntimeState::Running;
+        assert!(store
+            .upsert_execution_context_preserving_concurrent_completions(&executor_snapshot)
+            .unwrap());
+
+        let restored = store.get_execution_context(session_id).unwrap().unwrap();
+        assert_eq!(restored.pending_sub_agent_completions.len(), 1);
+        assert_eq!(
+            restored.pending_sub_agent_completions[0].sub_agent_id,
+            "child-1"
+        );
+        assert!(restored.sub_agent_sessions.is_empty());
+    }
+
+    #[test]
+    fn persist_sub_agent_completion_is_idempotent_and_segment_guarded() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "atomic-sub-agent-completion";
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.current_segment_id = 3;
+        context.wait_reason = Some(WaitReason::SubAgent);
+        context.waiting_on_sub_agent_id = Some("child-1".to_string());
+        context.sub_agent_sessions.push("child-1".to_string());
+        store.upsert_execution_context(&context).unwrap();
+        let completion = test_completion(session_id, "child-1");
+
+        assert!(!store
+            .persist_sub_agent_completion(Some(2), &completion)
+            .unwrap());
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &completion)
+            .unwrap());
+        let mut consumed_completion = completion.clone();
+        consumed_completion.consumed = true;
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &consumed_completion)
+            .unwrap());
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &completion)
+            .unwrap());
+
+        let restored = store.get_execution_context(session_id).unwrap().unwrap();
+        assert_eq!(restored.pending_sub_agent_completions.len(), 1);
+        assert!(restored.pending_sub_agent_completions[0].consumed);
+        assert!(restored.sub_agent_sessions.is_empty());
+        assert_eq!(restored.waiting_on_sub_agent_id.as_deref(), Some("child-1"));
     }
 
     #[test]

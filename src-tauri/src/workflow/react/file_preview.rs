@@ -1,7 +1,8 @@
+use crate::workflow::react::security::PathGuard;
 use serde_json::{json, Value};
 use std::cmp::{max, min};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const CONTEXT_LINE_COUNT: usize = 5;
 
@@ -39,7 +40,8 @@ pub fn normalize_preview_details(value: Value) -> Value {
 
 pub fn attach_write_file_overwrite_old_content(
     preview_args: &mut Value,
-    primary_root: Option<&Path>,
+    path_guard: &PathGuard,
+    is_planning_phase: bool,
 ) {
     let Some(preview_obj) = preview_args.as_object_mut() else {
         return;
@@ -60,7 +62,11 @@ pub fn attach_write_file_overwrite_old_content(
         return;
     };
 
-    let resolved_path = resolve_preview_file_path(file_path, primary_root);
+    let Ok(resolved_path) =
+        path_guard.validate(Path::new(file_path), is_planning_phase, false, false)
+    else {
+        return;
+    };
     let Ok(old_content) = fs::read_to_string(resolved_path) else {
         return;
     };
@@ -85,7 +91,8 @@ pub fn render_preview_details_text(details: &Value, display_type: &str) -> Strin
 pub fn attach_display_context(
     preview_args: &mut Value,
     prefer_updated_content: bool,
-    primary_root: Option<&Path>,
+    path_guard: &PathGuard,
+    is_planning_phase: bool,
 ) {
     let Some(preview_obj) = preview_args.as_object_mut() else {
         return;
@@ -107,7 +114,11 @@ pub fn attach_display_context(
         return;
     };
 
-    let resolved_path = resolve_preview_file_path(file_path, primary_root);
+    let Ok(resolved_path) =
+        path_guard.validate(Path::new(file_path), is_planning_phase, false, false)
+    else {
+        return;
+    };
 
     let Ok(file_content) = fs::read_to_string(&resolved_path) else {
         return;
@@ -196,19 +207,6 @@ pub fn attach_display_context(
         "display_context_line_count".to_string(),
         json!(CONTEXT_LINE_COUNT),
     );
-}
-
-fn resolve_preview_file_path(file_path: &str, primary_root: Option<&Path>) -> PathBuf {
-    let path = Path::new(file_path);
-    if path.is_absolute() {
-        return path.to_path_buf();
-    }
-
-    if let Some(root) = primary_root {
-        return root.join(path);
-    }
-
-    path.to_path_buf()
 }
 
 fn decode_preview_json_string(value: &str) -> Option<Value> {
@@ -371,7 +369,8 @@ mod tests {
             "new_string": "updated start\nupdated end"
         });
 
-        attach_display_context(&mut preview_args, false, Some(root.as_path()));
+        let guard = PathGuard::new(vec![root.clone()], vec![], vec![]);
+        attach_display_context(&mut preview_args, false, &guard, false);
 
         assert_eq!(
             preview_args.get("start_line").and_then(|v| v.as_u64()),
@@ -404,7 +403,8 @@ mod tests {
             "overwrite": true
         });
 
-        attach_write_file_overwrite_old_content(&mut preview_args, Some(root.as_path()));
+        let guard = PathGuard::new(vec![root.clone()], vec![], vec![]);
+        attach_write_file_overwrite_old_content(&mut preview_args, &guard, false);
 
         assert_eq!(
             preview_args
@@ -413,6 +413,39 @@ mod tests {
             Some("original content")
         );
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn preview_helpers_do_not_read_outside_authorized_roots() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("file_preview_guard_root_{unique}"));
+        let outside = std::env::temp_dir().join(format!("file_preview_guard_outside_{unique}.txt"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&outside, "host secret").unwrap();
+        let guard = PathGuard::new(vec![root.clone()], vec![], vec![]);
+        let mut overwrite_args = json!({
+            "file_path": outside,
+            "content": "replacement",
+            "overwrite": true
+        });
+        let mut edit_args = json!({
+            "file_path": outside,
+            "old_string": "host secret",
+            "new_string": "replacement"
+        });
+
+        attach_write_file_overwrite_old_content(&mut overwrite_args, &guard, false);
+        attach_display_context(&mut edit_args, false, &guard, false);
+
+        assert!(overwrite_args.get("old_string").is_none());
+        assert!(edit_args.get("context_before").is_none());
+        assert!(edit_args.get("context_after").is_none());
+
+        let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&root);
     }
 }

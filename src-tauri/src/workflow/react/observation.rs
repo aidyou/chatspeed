@@ -11,6 +11,7 @@ use crate::tools::{
 use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
 };
+use crate::workflow::react::security::PathGuard;
 
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -75,6 +76,7 @@ fn line_based_preview(value: &str, max_chars: usize) -> String {
 
 impl ObservationReinforcer {
     /// Reinforces with extra context (like full todo list)
+    #[cfg(test)]
     pub fn reinforce_with_context(
         tool_call: &Value,
         result: &Result<Value, ToolError>,
@@ -86,6 +88,26 @@ impl ObservationReinforcer {
             result,
             extra_context,
             primary_root,
+            None,
+            false,
+            persist_tool_output,
+        )
+    }
+
+    pub fn reinforce_with_guard(
+        tool_call: &Value,
+        result: &Result<Value, ToolError>,
+        extra_context: Option<Value>,
+        path_guard: &PathGuard,
+        is_planning_phase: bool,
+    ) -> ReinforcedResult {
+        Self::reinforce_with_context_and_persist(
+            tool_call,
+            result,
+            extra_context,
+            path_guard.get_primary_root(),
+            Some(path_guard),
+            is_planning_phase,
             persist_tool_output,
         )
     }
@@ -95,6 +117,8 @@ impl ObservationReinforcer {
         result: &Result<Value, ToolError>,
         extra_context: Option<Value>,
         primary_root: Option<&std::path::Path>,
+        path_guard: Option<&PathGuard>,
+        is_planning_phase: bool,
         persist_overflow: F,
     ) -> ReinforcedResult
     where
@@ -232,7 +256,14 @@ impl ObservationReinforcer {
                         val.get("structured_content"),
                         val.get("content").and_then(|value| value.as_str()),
                     );
-                    attach_display_context(&mut preview_args, true, primary_root);
+                    if let Some(path_guard) = path_guard {
+                        attach_display_context(
+                            &mut preview_args,
+                            true,
+                            path_guard,
+                            is_planning_phase,
+                        );
+                    }
                     raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
@@ -732,16 +763,7 @@ impl ObservationReinforcer {
                 format!("Read {} lines", lines)
             }
             TOOL_WRITE_FILE => t!("workflow.summary.write_file").to_string(),
-            TOOL_BASH => {
-                let last_line = content.lines().last().unwrap_or("Done");
-                match last_line.char_indices().nth(30) {
-                    Some(_) => {
-                        let truncated: String = last_line.chars().take(27).collect();
-                        format!("{}...", truncated)
-                    }
-                    None => last_line.to_string(),
-                }
-            }
+            TOOL_BASH => "Command completed".to_string(),
             _ => {
                 if tool_name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                     "Operation completed".to_string()
@@ -981,6 +1003,8 @@ mod tests {
             &Ok(json!({ "content": raw_content })),
             None,
             None,
+            None,
+            false,
             |_| Err(std::io::Error::other("simulated persistence failure")),
         );
 

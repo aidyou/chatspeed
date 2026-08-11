@@ -429,15 +429,30 @@ impl WorkflowManager {
         }
     }
 
-    pub fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
+    pub fn try_send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
         let Some(map) = Self::lock_global_signal_tx() else {
             return Err("GLOBAL_SIGNAL_TX poisoned".to_string());
         };
-        if let Some(tx) = map.get(session_id) {
-            tx.try_send(signal).map_err(|e| e.to_string())
-        } else {
-            Err(format!("Session {} signal channel not found", session_id))
-        }
+        let Some(tx) = map.get(session_id) else {
+            return Err(format!("Session {} signal channel not found", session_id));
+        };
+        tx.try_send(signal).map_err(|error| error.to_string())
+    }
+
+    pub async fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
+        let tx = {
+            let Some(map) = Self::lock_global_signal_tx() else {
+                return Err("GLOBAL_SIGNAL_TX poisoned".to_string());
+            };
+            map.get(session_id).cloned()
+        };
+        let Some(tx) = tx else {
+            return Err(format!("Session {} signal channel not found", session_id));
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), tx.send(signal))
+            .await
+            .map_err(|_| format!("Session {session_id} signal channel remained full for 5s"))?
+            .map_err(|error| error.to_string())
     }
 }
 

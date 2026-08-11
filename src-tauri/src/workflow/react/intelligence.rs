@@ -35,6 +35,49 @@ pub struct ToolApprovalReview {
 }
 
 impl IntelligenceManager {
+    fn parse_tool_approval_review(result: &str) -> ToolApprovalReview {
+        let invalid_review = || ToolApprovalReview {
+            approved: false,
+            reason: "Approval reviewer returned invalid structured output; manual review required"
+                .to_string(),
+            risk_level: "medium".to_string(),
+        };
+
+        let Ok(review_json) = serde_json::from_str::<serde_json::Value>(
+            crate::libs::util::format_json_str(result).as_str(),
+        ) else {
+            return invalid_review();
+        };
+        let Some(review) = review_json.as_object() else {
+            return invalid_review();
+        };
+        let Some(approved) = review.get("approved").and_then(|value| value.as_bool()) else {
+            return invalid_review();
+        };
+        let Some(reason) = review
+            .get("reason")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return invalid_review();
+        };
+        let Some(risk_level) = review
+            .get("risk_level")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| matches!(*value, "low" | "medium" | "high"))
+        else {
+            return invalid_review();
+        };
+
+        ToolApprovalReview {
+            approved: approved && risk_level == "low",
+            reason: reason.to_string(),
+            risk_level: risk_level.to_string(),
+        }
+    }
+
     pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
@@ -330,42 +373,7 @@ impl IntelligenceManager {
             }
         }
 
-        let result = result.trim();
-        let review_json: serde_json::Value = match serde_json::from_str(
-            crate::libs::util::format_json_str(result).as_str(),
-        ) {
-            Ok(v) => v,
-            Err(_) => {
-                let result_lower = result.to_lowercase();
-                if result_lower.contains("approve") && !result_lower.contains("reject") {
-                    serde_json::json!({
-                        "approved": true,
-                        "reason": if result.is_empty() { "approved".to_string() } else { result.to_string() },
-                        "risk_level": "low"
-                    })
-                } else {
-                    serde_json::json!({
-                        "approved": false,
-                        "reason": if result.is_empty() { "approval review rejected the call".to_string() } else { result.to_string() },
-                        "risk_level": "medium"
-                    })
-                }
-            }
-        };
-
-        Ok(ToolApprovalReview {
-            approved: review_json["approved"].as_bool().unwrap_or(false),
-            reason: review_json["reason"]
-                .as_str()
-                .unwrap_or("Approval review unavailable")
-                .trim()
-                .to_string(),
-            risk_level: review_json["risk_level"]
-                .as_str()
-                .unwrap_or("medium")
-                .trim()
-                .to_string(),
-        })
+        Ok(Self::parse_tool_approval_review(result.trim()))
     }
 
     /// Generates a concise title for the workflow session based on the user's initial query.
@@ -505,5 +513,40 @@ impl IntelligenceManager {
         }
 
         Ok(final_title)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntelligenceManager;
+
+    #[test]
+    fn smart_approval_requires_valid_low_risk_json() {
+        let approved = IntelligenceManager::parse_tool_approval_review(
+            r#"{"approved":true,"reason":"Read-only inspection","risk_level":"low"}"#,
+        );
+        assert!(approved.approved);
+
+        for invalid in [
+            "I approve this action",
+            "I do not recommend approving this action",
+            r#"{"approved":true,"reason":"Mutation","risk_level":"medium"}"#,
+            r#"{"approved":"true","reason":"Invalid type","risk_level":"low"}"#,
+            r#"{"approved":true,"reason":"Missing risk"}"#,
+        ] {
+            let review = IntelligenceManager::parse_tool_approval_review(invalid);
+            assert!(!review.approved, "invalid review was approved: {invalid}");
+            assert_eq!(review.risk_level, "medium");
+        }
+    }
+
+    #[test]
+    fn smart_approval_preserves_structured_rejection() {
+        let review = IntelligenceManager::parse_tool_approval_review(
+            r#"{"approved":false,"reason":"Needs user review","risk_level":"high"}"#,
+        );
+        assert!(!review.approved);
+        assert_eq!(review.reason, "Needs user review");
+        assert_eq!(review.risk_level, "high");
     }
 }

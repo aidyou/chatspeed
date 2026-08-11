@@ -142,7 +142,7 @@ impl EventReducer {
                         field: "to_state".to_string(),
                     }
                 })?;
-                self.state = map_ui_state_to_runtime(to_state);
+                self.state = map_ui_state_to_runtime(to_state)?;
             }
             WorkflowEventType::WaitEntered => {
                 self.state = RuntimeState::Waiting;
@@ -153,7 +153,7 @@ impl EventReducer {
                             field: "wait_reason".to_string(),
                         }
                     })?;
-                self.wait_reason = parse_wait_reason(wait_reason_str);
+                self.wait_reason = Some(parse_wait_reason(wait_reason_str)?);
 
                 if let Some(tools) = event.event_data["pending_tools"].as_array() {
                     self.pending_tools.clear();
@@ -381,35 +381,33 @@ impl EventReducer {
     }
 }
 
-fn map_ui_state_to_runtime(ui_state: &str) -> RuntimeState {
+fn map_ui_state_to_runtime(ui_state: &str) -> Result<RuntimeState, RecoveryError> {
     match ui_state {
-        "pending" => RuntimeState::Pending,
-        "thinking" | "executing" | "auditing" => RuntimeState::Running,
+        "pending" => Ok(RuntimeState::Pending),
+        "thinking" | "executing" | "auditing" => Ok(RuntimeState::Running),
         "paused"
         | "awaiting_user"
         | "awaiting_approval"
         | "awaiting_auto_approval"
-        | "awaiting_sub_agent" => RuntimeState::Waiting,
-        "completed" => RuntimeState::Completed,
-        "error" => RuntimeState::Failed,
-        "cancelled" => RuntimeState::Cancelled,
-        _ => {
-            log::info!("Unknown UI state '{}' mapping to Running", ui_state);
-            RuntimeState::Running
-        }
+        | "awaiting_sub_agent" => Ok(RuntimeState::Waiting),
+        "completed" => Ok(RuntimeState::Completed),
+        "error" => Ok(RuntimeState::Failed),
+        "cancelled" => Ok(RuntimeState::Cancelled),
+        _ => Err(RecoveryError::ReplayFailed {
+            reason: format!("Unknown workflow state '{ui_state}'"),
+        }),
     }
 }
 
-fn parse_wait_reason(s: &str) -> Option<WaitReason> {
+fn parse_wait_reason(s: &str) -> Result<WaitReason, RecoveryError> {
     match s {
-        "confirmation" => Some(WaitReason::Confirmation),
-        "user_input" => Some(WaitReason::UserInput),
-        "approval" => Some(WaitReason::Approval),
-        "sub_agent" => Some(WaitReason::SubAgent),
-        _ => {
-            log::info!("Unknown wait reason '{}' parsing to None", s);
-            None
-        }
+        "confirmation" => Ok(WaitReason::Confirmation),
+        "user_input" => Ok(WaitReason::UserInput),
+        "approval" => Ok(WaitReason::Approval),
+        "sub_agent" => Ok(WaitReason::SubAgent),
+        _ => Err(RecoveryError::ReplayFailed {
+            reason: format!("Unknown workflow wait reason '{s}'"),
+        }),
     }
 }
 
@@ -500,7 +498,7 @@ fn replay_from_events(main_store: Arc<MainStore>, session_id: &str) -> RecoveryR
         };
     }
 
-    let context = match replay_events_to_execution_context(session_id, &events) {
+    let mut context = match replay_events_to_execution_context(session_id, &events) {
         Ok(context) => context,
         Err(e) => {
             log::error!(
@@ -511,6 +509,16 @@ fn replay_from_events(main_store: Arc<MainStore>, session_id: &str) -> RecoveryR
             return RecoveryResult::SafeFailed { error: e };
         }
     };
+    match main_store.latest_workflow_message_segment_id(session_id) {
+        Ok(segment_id) => {
+            context.current_segment_id = segment_id.unwrap_or(1).max(1);
+        }
+        Err(error) => {
+            return RecoveryResult::SafeFailed {
+                error: RecoveryError::DatabaseError(error),
+            };
+        }
+    }
 
     log::info!(
         "[Workflow][session={}] workflow.replay.done - state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
@@ -836,42 +844,61 @@ mod tests {
 
     #[test]
     fn test_map_ui_state_to_runtime() {
-        assert_eq!(map_ui_state_to_runtime("pending"), RuntimeState::Pending);
-        assert_eq!(map_ui_state_to_runtime("thinking"), RuntimeState::Running);
-        assert_eq!(map_ui_state_to_runtime("executing"), RuntimeState::Running);
         assert_eq!(
-            map_ui_state_to_runtime("awaiting_user"),
+            map_ui_state_to_runtime("pending").unwrap(),
+            RuntimeState::Pending
+        );
+        assert_eq!(
+            map_ui_state_to_runtime("thinking").unwrap(),
+            RuntimeState::Running
+        );
+        assert_eq!(
+            map_ui_state_to_runtime("executing").unwrap(),
+            RuntimeState::Running
+        );
+        assert_eq!(
+            map_ui_state_to_runtime("awaiting_user").unwrap(),
             RuntimeState::Waiting
         );
         assert_eq!(
-            map_ui_state_to_runtime("awaiting_approval"),
+            map_ui_state_to_runtime("awaiting_approval").unwrap(),
             RuntimeState::Waiting
         );
         assert_eq!(
-            map_ui_state_to_runtime("awaiting_sub_agent"),
+            map_ui_state_to_runtime("awaiting_sub_agent").unwrap(),
             RuntimeState::Waiting
         );
         assert_eq!(
-            map_ui_state_to_runtime("completed"),
+            map_ui_state_to_runtime("completed").unwrap(),
             RuntimeState::Completed
         );
-        assert_eq!(map_ui_state_to_runtime("error"), RuntimeState::Failed);
         assert_eq!(
-            map_ui_state_to_runtime("cancelled"),
+            map_ui_state_to_runtime("error").unwrap(),
+            RuntimeState::Failed
+        );
+        assert_eq!(
+            map_ui_state_to_runtime("cancelled").unwrap(),
             RuntimeState::Cancelled
         );
+        assert!(map_ui_state_to_runtime("future_state").is_err());
     }
 
     #[test]
     fn test_parse_wait_reason() {
         assert_eq!(
-            parse_wait_reason("confirmation"),
-            Some(WaitReason::Confirmation)
+            parse_wait_reason("confirmation").unwrap(),
+            WaitReason::Confirmation
         );
-        assert_eq!(parse_wait_reason("user_input"), Some(WaitReason::UserInput));
-        assert_eq!(parse_wait_reason("approval"), Some(WaitReason::Approval));
-        assert_eq!(parse_wait_reason("sub_agent"), Some(WaitReason::SubAgent));
-        assert_eq!(parse_wait_reason("unknown"), None);
+        assert_eq!(
+            parse_wait_reason("user_input").unwrap(),
+            WaitReason::UserInput
+        );
+        assert_eq!(parse_wait_reason("approval").unwrap(), WaitReason::Approval);
+        assert_eq!(
+            parse_wait_reason("sub_agent").unwrap(),
+            WaitReason::SubAgent
+        );
+        assert!(parse_wait_reason("unknown").is_err());
     }
 
     #[test]

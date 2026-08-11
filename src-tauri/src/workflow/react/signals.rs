@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
+const MAX_STASHED_ITEMS_PER_SESSION: usize = 256;
+
 /// Runtime signal classification used by non-blocking signal drains.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeSignal {
@@ -21,7 +23,22 @@ pub enum RuntimeSignal {
 
 /// Parses a raw signal JSON payload into a runtime classification.
 pub fn parse_runtime_signal(raw: &str) -> RuntimeSignal {
-    let parsed: Value = serde_json::from_str(raw).unwrap_or_default();
+    let parsed: Value = match serde_json::from_str(raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            if raw.trim().eq_ignore_ascii_case("stop") {
+                return RuntimeSignal::Stop;
+            }
+            log::warn!(
+                "[Workflow][phase=signal_parse] Invalid runtime signal JSON: {}",
+                error
+            );
+            return RuntimeSignal::Other {
+                signal: None,
+                signal_type: None,
+            };
+        }
+    };
     let signal_type = parsed["type"].as_str().unwrap_or_default();
     let signal_type_enum = SignalType::from_str(signal_type);
     let workflow_signal = crate::workflow::react::types::WorkflowSignal::parse(raw);
@@ -191,6 +208,15 @@ pub fn stash_user_message(
     if entry.iter().any(|(id, _, _, _)| id == &queued_id) {
         return false;
     }
+    if entry.len() >= MAX_STASHED_ITEMS_PER_SESSION {
+        log::warn!(
+            "[Workflow][session={}][phase=signal_stash] User-message stash reached {}; rejecting newest message {}",
+            session_id,
+            MAX_STASHED_ITEMS_PER_SESSION,
+            queued_id
+        );
+        return false;
+    }
     entry.push_back((queued_id, content, attached_context, metadata));
     true
 }
@@ -222,6 +248,14 @@ pub fn stash_runtime_signal(session_id: &str, signal: String) {
     let mut entry = stashed_runtime_signals()
         .entry(session_id.to_string())
         .or_default();
+    if entry.len() >= MAX_STASHED_ITEMS_PER_SESSION {
+        log::warn!(
+            "[Workflow][session={}][phase=signal_stash] Runtime-signal stash reached {}; dropping oldest signal",
+            session_id,
+            MAX_STASHED_ITEMS_PER_SESSION
+        );
+        entry.pop_front();
+    }
     entry.push_back(signal);
 }
 
@@ -265,7 +299,7 @@ mod tests {
     use super::{
         remove_stashed_user_message, restore_stashed_user_message_tombstones, stash_runtime_signal,
         stash_user_message, take_stashed_runtime_signal, take_stashed_runtime_signals,
-        take_stashed_user_messages,
+        take_stashed_user_messages, MAX_STASHED_ITEMS_PER_SESSION,
     };
 
     #[test]
@@ -313,6 +347,18 @@ mod tests {
         );
         assert_eq!(take_stashed_runtime_signal(session_id), None);
         assert!(take_stashed_runtime_signals(session_id).is_empty());
+    }
+
+    #[test]
+    fn stashed_runtime_signals_are_bounded_per_session() {
+        let session_id = "bounded-runtime-signal-test";
+        for index in 0..MAX_STASHED_ITEMS_PER_SESSION + 10 {
+            stash_runtime_signal(session_id, format!("signal-{index}"));
+        }
+
+        let signals = take_stashed_runtime_signals(session_id);
+        assert_eq!(signals.len(), MAX_STASHED_ITEMS_PER_SESSION);
+        assert_eq!(signals.first().map(String::as_str), Some("signal-10"));
     }
 
     #[test]

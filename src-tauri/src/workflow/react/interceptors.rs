@@ -61,6 +61,34 @@ impl WorkflowExecutor {
             .collect()
     }
 
+    fn refresh_durable_sub_agent_terminal_state(&mut self) -> Result<(), WorkflowEngineError> {
+        let store = self.context.main_store.as_ref();
+        let Some(context) = store.get_execution_context(&self.session_id)? else {
+            return Ok(());
+        };
+        if context.pending_sub_agent_completions.is_empty() {
+            return Ok(());
+        }
+
+        let terminal_ids = context
+            .pending_sub_agent_completions
+            .iter()
+            .map(|completion| completion.sub_agent_id.clone())
+            .collect::<HashSet<_>>();
+        self.sub_agent_sessions
+            .retain(|sub_agent_id| !terminal_ids.contains(sub_agent_id));
+        if self
+            .sub_agent_id
+            .as_ref()
+            .is_some_and(|sub_agent_id| terminal_ids.contains(sub_agent_id))
+            && self.state != WorkflowState::AwaitingSubAgent
+        {
+            self.sub_agent_id = None;
+        }
+        self.pending_sub_agent_completions = context.pending_sub_agent_completions;
+        Ok(())
+    }
+
     pub(crate) fn capture_pending_completion_report(&mut self, text_part: &str) -> bool {
         if !Self::is_valid_finish_task_summary(text_part) {
             return false;
@@ -1405,19 +1433,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             .collect()
     }
 
-    fn completion_report_numeric_literals(literals: &HashSet<String>) -> HashSet<&str> {
-        literals
-            .iter()
-            .map(String::as_str)
-            .filter(|literal| {
-                literal.bytes().any(|byte| byte.is_ascii_digit())
-                    && literal
-                        .bytes()
-                        .any(|byte| matches!(byte, b'.' | b'%' | b':' | b'='))
-            })
-            .collect()
-    }
-
     fn completion_report_verification_commands(literals: &HashSet<String>) -> HashSet<&str> {
         literals
             .iter()
@@ -1513,6 +1528,90 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             })
     }
 
+    fn completion_reports_have_material_conflict(left: &str, right: &str) -> bool {
+        if Self::completion_report_claims_conflict(left, right) {
+            return true;
+        }
+
+        let left_text = Self::completion_report_similarity_text(left);
+        let right_text = Self::completion_report_similarity_text(right);
+        let shorter_len = left_text.len().min(right_text.len());
+        let longer_len = left_text.len().max(right_text.len());
+        if shorter_len < 3 || shorter_len as f64 / (longer_len as f64) < 0.60 {
+            return false;
+        }
+
+        let (dice, containment) = Self::completion_report_trigram_scores(&left_text, &right_text);
+        if dice < 0.52 || containment < 0.52 {
+            return false;
+        }
+
+        let left_literals = Self::completion_report_code_literals(left);
+        let right_literals = Self::completion_report_code_literals(right);
+        let critical_literals_conflict = |left: HashSet<&str>, right: HashSet<&str>| {
+            !left.is_empty() && !right.is_empty() && left.intersection(&right).next().is_none()
+        };
+
+        critical_literals_conflict(
+            Self::completion_report_paths(&left_literals),
+            Self::completion_report_paths(&right_literals),
+        ) || critical_literals_conflict(
+            Self::completion_report_hashes(&left_literals),
+            Self::completion_report_hashes(&right_literals),
+        ) || critical_literals_conflict(
+            Self::completion_report_verification_commands(&left_literals),
+            Self::completion_report_verification_commands(&right_literals),
+        )
+    }
+
+    fn completion_report_conflicts_with_explicit_summary(
+        visible_report: &str,
+        explicit_summary: &str,
+    ) -> bool {
+        let visible_text = Self::completion_report_similarity_text(visible_report);
+        let summary_text = Self::completion_report_similarity_text(explicit_summary);
+        if visible_text.len() < 3 || summary_text.len() < 3 {
+            return false;
+        }
+        let (_, containment) = Self::completion_report_trigram_scores(&visible_text, &summary_text);
+        if containment < 0.70 {
+            return false;
+        }
+        if Self::completion_report_claims_conflict(visible_report, explicit_summary) {
+            return true;
+        }
+
+        let visible_literals = Self::completion_report_code_literals(visible_report);
+        let summary_literals = Self::completion_report_code_literals(explicit_summary);
+        let literals_conflict = |visible: HashSet<&str>, summary: HashSet<&str>| {
+            !visible.is_empty()
+                && !summary.is_empty()
+                && visible.intersection(&summary).next().is_none()
+        };
+
+        literals_conflict(
+            Self::completion_report_paths(&visible_literals),
+            Self::completion_report_paths(&summary_literals),
+        ) || literals_conflict(
+            Self::completion_report_hashes(&visible_literals),
+            Self::completion_report_hashes(&summary_literals),
+        ) || literals_conflict(
+            Self::completion_report_verification_commands(&visible_literals),
+            Self::completion_report_verification_commands(&summary_literals),
+        )
+    }
+
+    fn completion_reports_have_high_similarity(left: &str, right: &str) -> bool {
+        let left_text = Self::completion_report_similarity_text(left);
+        let right_text = Self::completion_report_similarity_text(right);
+        if left_text.len() < 3 || right_text.len() < 3 {
+            return false;
+        }
+
+        let (_, containment) = Self::completion_report_trigram_scores(&left_text, &right_text);
+        containment >= 0.70
+    }
+
     fn completion_reports_are_similar(left: &str, right: &str) -> bool {
         let left_text = Self::completion_report_similarity_text(left);
         let right_text = Self::completion_report_similarity_text(right);
@@ -1537,34 +1636,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             return false;
         }
 
-        let left_paths = Self::completion_report_paths(&left_literals);
-        let right_paths = Self::completion_report_paths(&right_literals);
-        if !left_paths.is_empty() && !right_paths.is_empty() && left_paths != right_paths {
-            return false;
-        }
-
-        let left_hashes = Self::completion_report_hashes(&left_literals);
-        let right_hashes = Self::completion_report_hashes(&right_literals);
-        if !left_hashes.is_empty() && !right_hashes.is_empty() && left_hashes != right_hashes {
-            return false;
-        }
-
-        let left_numbers = Self::completion_report_numeric_literals(&left_literals);
-        let right_numbers = Self::completion_report_numeric_literals(&right_literals);
-        if !left_numbers.is_empty() && !right_numbers.is_empty() && left_numbers != right_numbers {
-            return false;
-        }
-
-        let left_commands = Self::completion_report_verification_commands(&left_literals);
-        let right_commands = Self::completion_report_verification_commands(&right_literals);
-        if !left_commands.is_empty()
-            && !right_commands.is_empty()
-            && left_commands != right_commands
-        {
-            return false;
-        }
-
-        !Self::completion_report_claims_conflict(left, right)
+        !Self::completion_reports_have_material_conflict(left, right)
     }
 
     fn resolve_completion_report(
@@ -1669,15 +1741,51 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             0 => Err("no valid completion report is available"),
             1 => Ok(unique.remove(0)),
             _ => {
-                let latest_index = unique
+                let mut latest_index = unique
                     .iter()
                     .enumerate()
                     .max_by_key(|(_, candidate)| candidate.recency)
                     .map(|(index, _)| index)
                     .ok_or("no valid completion report is available")?;
+                let explicit_summary_index = unique
+                    .iter()
+                    .position(|candidate| candidate.persist_as_message);
+                let visible_report_index =
+                    unique.iter().position(|candidate| candidate.recency.0 == 1);
+
+                // A visible assistant report and the explicit summary from the same response are
+                // alternate representations of one completion attempt. They may differ in detail
+                // or add aggregate context without being contradictory. When they are clearly about
+                // the same report, retain the longer representation as the canonical completion
+                // report; otherwise keep the explicit tool argument as the completion boundary.
+                if let (Some(summary_index), Some(visible_index)) =
+                    (explicit_summary_index, visible_report_index)
+                {
+                    let visible = &unique[visible_index].content;
+                    let summary = &unique[summary_index].content;
+                    if Self::completion_report_conflicts_with_explicit_summary(visible, summary) {
+                        return Err("multiple different completion reports are available");
+                    }
+                    if Self::completion_reports_have_high_similarity(visible, summary)
+                        && visible.chars().count() > summary.chars().count()
+                    {
+                        latest_index = visible_index;
+                    } else {
+                        latest_index = summary_index;
+                    }
+                }
+
                 let latest = &unique[latest_index];
+                // Same-turn visible text and `complete_workflow.summary` are alternate
+                // representations of one completion attempt. A semantic contradiction is
+                // rejected; otherwise a highly similar pair uses the longer representation.
+                // Historical pending drafts still require the stricter similarity check below.
                 if unique.iter().enumerate().all(|(index, candidate)| {
                     index == latest_index
+                        || (explicit_summary_index == Some(index)
+                            && visible_report_index == Some(latest_index))
+                        || (visible_report_index == Some(index)
+                            && explicit_summary_index == Some(latest_index))
                         || Self::completion_reports_are_similar(&candidate.content, &latest.content)
                 }) {
                     Ok(unique.swap_remove(latest_index))
@@ -2324,6 +2432,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
 
+        self.refresh_durable_sub_agent_terminal_state()?;
         let active_sub_agents = Self::active_sub_agent_ids(
             &self.sub_agent_sessions,
             &self.pending_sub_agent_completions,
@@ -2620,17 +2729,17 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
-                    let primary_root =
-                        self.path_guard.read().ok().and_then(|guard| {
-                            guard.get_primary_root().map(|path| path.to_path_buf())
-                        });
-                    if name == TOOL_WRITE_FILE {
-                        attach_write_file_overwrite_old_content(
-                            &mut preview_args,
-                            primary_root.as_deref(),
-                        );
+                    if let Ok(guard) = self.path_guard.read() {
+                        let is_planning_phase = self.policy.phase == ExecutionPhase::Planning;
+                        if name == TOOL_WRITE_FILE {
+                            attach_write_file_overwrite_old_content(
+                                &mut preview_args,
+                                &guard,
+                                is_planning_phase,
+                            );
+                        }
+                        attach_display_context(&mut preview_args, false, &guard, is_planning_phase);
                     }
-                    attach_display_context(&mut preview_args, false, primary_root.as_deref());
                     let normalized_details = normalize_preview_details(preview_args);
                     (
                         render_preview_details_text(&normalized_details, &display_type),
@@ -3015,6 +3124,111 @@ mod tests {
     }
 
     #[test]
+    fn completion_report_resolution_prefers_longer_highly_similar_same_turn_report() {
+        let visible_report = "所有 21 个失败测试均为预存在，与当前工作区变更无关。\n\n## ReAct 流程完整性检查报告\n- `cargo check` 通过。\n- 346 个 ReAct 工作流测试全部通过。\n- 变更覆盖 dispatch 可靠性、快照持久化、子 Agent 段守卫、上下文重置、智能审批、安全路径检查和信号缓冲上限。\n- 其余 21 个失败已在 HEAD 基础提交逐项复现，属于环境、网络、MCP 或 Docker 检测相关问题。\n\n当前工作区修改没有改坏 ReAct 流程，没有已知的本次变更回归。";
+        let explicit_summary = "## ReAct 流程完整性检查结果\n\n- `cargo check` 通过。\n- 346 个 ReAct 工作流测试全部通过。\n- 21 个其他失败均已在 HEAD 基础提交验证为预存在，与当前改动无关。\n\n当前工作区修改没有改坏 ReAct 流程。";
+
+        assert!(WorkflowExecutor::completion_reports_have_high_similarity(
+            visible_report,
+            explicit_summary
+        ));
+
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "summary": explicit_summary }),
+            visible_report,
+            &[],
+            3,
+        )
+        .expect("compatible same-turn reports should resolve");
+
+        assert_eq!(
+            resolved.content,
+            WorkflowExecutor::normalized_finish_task_summary(visible_report)
+        );
+        assert!(!resolved.persist_as_message);
+    }
+
+    #[test]
+    fn completion_report_resolution_allows_summary_aggregate_numbers() {
+        let visible_report =
+            "审查完成。\n逐项验证了所有受影响模块，测试均通过。\n没有发现本次修改引入的回归。";
+        let explicit_summary =
+            "审查完成。\n12 个测试模块共 203 个测试通过。\n没有发现本次修改引入的回归。";
+
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "summary": explicit_summary }),
+            visible_report,
+            &[],
+            3,
+        )
+        .expect("summary-only aggregate details must not be treated as a conflict");
+
+        assert_eq!(resolved.content, explicit_summary);
+        assert!(resolved.persist_as_message);
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_conflicting_explicit_summary_and_visible_report() {
+        for (visible_report, explicit_summary) in [
+            (
+                "Implemented `src/workflow.rs` completion handling.\nThe focused tests failed, and a Windows recovery limitation remains.",
+                "Implemented `src/workflow.rs` completion handling.\nThe focused tests passed, and no known limitations remain.",
+            ),
+            (
+                "完成 ReAct 流程检查。\n346 个测试全部失败，当前没有已知限制。",
+                "完成 ReAct 流程检查。\n346 个测试全部通过，当前没有已知限制。",
+            ),
+        ] {
+            assert!(WorkflowExecutor::resolve_completion_report(
+                &json!({ "summary": explicit_summary }),
+                visible_report,
+                &[],
+                3,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn completion_report_resolution_rejects_conflicting_explicit_summary_literals() {
+        for (visible_report, explicit_summary) in [
+            (
+                "Updated `/workspace/api/src/auth.rs`.\nVerified with `cargo test auth`; all tests pass.",
+                "Updated `/workspace/web/src/auth.rs`.\nVerified with `cargo test auth`; all tests pass.",
+            ),
+            (
+                "Updated `src/auth.rs`.\nVerified with `cargo test auth`; all tests pass.",
+                "Updated `src/auth.rs`.\nVerified with `cargo check`; all tests pass.",
+            ),
+        ] {
+            assert!(WorkflowExecutor::resolve_completion_report(
+                &json!({ "summary": explicit_summary }),
+                visible_report,
+                &[],
+                3,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn completion_report_resolution_allows_numeric_differences_in_same_turn_reports() {
+        let visible_report = "Completed the ReAct integrity review.\n`cargo check` passed and 346 focused tests passed; 21 unrelated failures were pre-existing.";
+        let explicit_summary = "Completed the ReAct integrity review.\n`cargo check` passed and 347 focused tests passed; 21 unrelated failures were pre-existing.";
+
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "summary": explicit_summary }),
+            visible_report,
+            &[],
+            3,
+        )
+        .expect("numeric differences alone must not make same-turn reports conflict");
+
+        assert_eq!(resolved.content, explicit_summary);
+        assert!(resolved.persist_as_message);
+    }
+
+    #[test]
     fn completion_report_resolution_uses_latest_similar_pending_report() {
         let earlier_report = "Tested the `submit_plan` workflow in `/workspace/chatspeed`.\nThe plan was approved, `.gitignore` was read, and `src` plus `src-tauri` were listed successfully. No files were modified.";
         let latest_report = "Completed the `submit_plan` workflow test in `/workspace/chatspeed`.\nVerification covered plan approval, reading `.gitignore`, and listing `src` and `src-tauri`; every step passed without modifying files.";
@@ -3066,14 +3280,6 @@ mod tests {
             (
                 "Updated `/workspace/api/src/auth.rs` to correct token validation.\nThe focused authentication tests passed, and no known limitations remain.",
                 "Updated `/workspace/web/src/auth.rs` to correct token validation.\nThe focused authentication tests passed, and no known limitations remain.",
-            ),
-            (
-                "Updated `src/auth.rs` for release `2.0.8`.\nThe focused authentication tests passed, and no known limitations remain.",
-                "Updated `src/auth.rs` for release `2.0.9`.\nThe focused authentication tests passed, and no known limitations remain.",
-            ),
-            (
-                "Updated `src/auth.rs` for release `2.0.8`.\nThe focused authentication tests passed, and no known limitations remain.",
-                "Updated `src/auth.rs` for release `20.8`.\nThe focused authentication tests passed, and no known limitations remain.",
             ),
             (
                 "Updated `src/auth.rs` and verified it with `cargo test auth`.\nThe focused authentication tests passed, and no known limitations remain.",

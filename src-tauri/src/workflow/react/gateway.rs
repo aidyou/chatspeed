@@ -59,6 +59,7 @@ impl TauriGateway {
             let mut reasoning_buffer = String::new();
             let mut last_emit = Instant::now();
             let throttle_duration = Duration::from_millis(100);
+            const MAX_STREAM_BUFFER_BYTES: usize = 64 * 1024;
 
             // Tracking code block state to avoid partial high-load re-renders
             let mut in_code_block = false;
@@ -77,9 +78,10 @@ impl TauriGateway {
 
                         // If we are in a code block, we can batch more aggressively
                         // If not, or if duration reached, emit
-                        let should_emit = !in_code_block
-                            && (last_emit.elapsed() >= throttle_duration
-                                || chunk_buffer.len() > 500);
+                        let should_emit = chunk_buffer.len() >= MAX_STREAM_BUFFER_BYTES
+                            || (!in_code_block
+                                && (last_emit.elapsed() >= throttle_duration
+                                    || chunk_buffer.len() > 500));
 
                         if should_emit {
                             let _ = app_handle.emit(
@@ -94,7 +96,9 @@ impl TauriGateway {
                     }
                     GatewayPayload::ReasoningChunk { content } => {
                         reasoning_buffer.push_str(&content);
-                        if last_emit.elapsed() >= throttle_duration {
+                        if last_emit.elapsed() >= throttle_duration
+                            || reasoning_buffer.len() >= MAX_STREAM_BUFFER_BYTES
+                        {
                             let _ = app_handle.emit(
                                 &event_name,
                                 GatewayPayload::ReasoningChunk {
@@ -140,6 +144,23 @@ impl TauriGateway {
 
                 // Small sleep to yield
                 sleep(Duration::from_millis(5)).await;
+            }
+
+            if !chunk_buffer.is_empty() {
+                let _ = app_handle.emit(
+                    &event_name,
+                    GatewayPayload::Chunk {
+                        content: chunk_buffer,
+                    },
+                );
+            }
+            if !reasoning_buffer.is_empty() {
+                let _ = app_handle.emit(
+                    &event_name,
+                    GatewayPayload::ReasoningChunk {
+                        content: reasoning_buffer,
+                    },
+                );
             }
         });
 

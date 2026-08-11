@@ -809,19 +809,19 @@
         </div>
       </div>
       <div class="item">
-        <div class="label">{{ $t('settings.general.configTransfer') }}</div>
-        <div class="value">
-          <el-button @click="exportConfiguration">{{ $t('settings.general.exportConfiguration') }}</el-button>
-          <el-button @click="selectConfigurationImport">{{ $t('settings.general.importConfiguration') }}</el-button>
-        </div>
-      </div>
-      <div class="item">
         <div class="label">{{ $t('settings.general.completeRestore') }}</div>
         <div class="value">
           <el-select v-model="restoreDir" class="auto-width-select" placement="top" filterable @change="onRestore">
             <el-option v-for="backup in backups" :key="backup.value" :label="backup.label" :value="backup.value">
             </el-option>
           </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">{{ $t('settings.general.configTransfer') }}</div>
+        <div class="value">
+          <el-button @click="exportConfiguration">{{ $t('settings.general.exportConfiguration') }}</el-button>
+          <el-button @click="selectConfigurationImport">{{ $t('settings.general.importConfiguration') }}</el-button>
         </div>
       </div>
     </div>

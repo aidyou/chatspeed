@@ -10,9 +10,13 @@ use async_trait::async_trait;
 
 use super::dispatcher::{DispatchEvent, EventEnvelope};
 use super::error::WorkflowEngineError;
+#[cfg(test)]
 use super::events::WorkflowEvent;
 use super::gateway::Gateway;
-use super::types::{ExecutionContext, GatewayPayload};
+#[cfg(test)]
+use super::types::ExecutionContext;
+use super::types::GatewayPayload;
+#[cfg(test)]
 use crate::db::MainStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,11 +101,13 @@ impl Sink for TauriSink {
     }
 }
 
+#[cfg(test)]
 /// Sink that persists events and snapshots to the database.
 pub struct DBSink {
     store: Arc<MainStore>,
 }
 
+#[cfg(test)]
 impl DBSink {
     pub fn new(store: Arc<MainStore>) -> Self {
         Self { store }
@@ -128,6 +134,7 @@ impl DBSink {
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl Sink for DBSink {
     fn accepts(&self, event: &DispatchEvent) -> bool {

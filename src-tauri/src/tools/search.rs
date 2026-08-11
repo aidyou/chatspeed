@@ -76,11 +76,16 @@ fn is_search_path_allowed(
     path: &Path,
     is_dir: bool,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
-) -> bool {
-    path_guard
-        .and_then(|path_guard| path_guard.read().ok())
-        .map(|guard| guard.is_chatspeed_allowed(path, is_dir).unwrap_or(false))
-        .unwrap_or(true)
+) -> Result<bool, ToolError> {
+    let Some(path_guard) = path_guard else {
+        return Ok(true);
+    };
+    let guard = path_guard
+        .read()
+        .map_err(|error| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {error}")))?;
+    guard
+        .is_chatspeed_allowed(path, is_dir)
+        .map_err(|error| ToolError::ExecutionFailed(format!("Security Error: {error}")))
 }
 
 fn configure_search_walker(base_path: &Path) -> ignore::Walk {
@@ -172,7 +177,7 @@ impl ToolDefinition for Glob {
 
             let path = entry.path();
             if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                if !is_search_path_allowed(path, false, self.path_guard.as_ref()) {
+                if !is_search_path_allowed(path, false, self.path_guard.as_ref())? {
                     continue;
                 }
                 // Get relative path for matching
@@ -311,7 +316,7 @@ impl ToolDefinition for Grep {
         }
 
         if path.is_file() {
-            if is_search_path_allowed(&path, false, self.path_guard.as_ref())
+            if is_search_path_allowed(&path, false, self.path_guard.as_ref())?
                 && Self::matches_glob(&path, path.parent(), glob_set.as_ref())
                 && Self::is_searchable_text_file(&path)
             {
@@ -336,7 +341,7 @@ impl ToolDefinition for Grep {
                 };
 
                 if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                    if !is_search_path_allowed(entry.path(), false, self.path_guard.as_ref()) {
+                    if !is_search_path_allowed(entry.path(), false, self.path_guard.as_ref())? {
                         continue;
                     }
                     if !Self::matches_glob(entry.path(), Some(&path), glob_set.as_ref()) {

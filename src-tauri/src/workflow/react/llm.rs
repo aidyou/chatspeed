@@ -288,8 +288,8 @@ impl LlmProcessor {
         raw: &str,
         allowed_tool_names: &HashSet<String>,
     ) -> Result<serde_json::Value, String> {
-        let mut tool_calls_val: serde_json::Value =
-            serde_json::from_str(raw).unwrap_or(serde_json::json!([]));
+        let mut tool_calls_val: serde_json::Value = serde_json::from_str(raw)
+            .map_err(|error| format!("LLM returned invalid tool-call JSON: {error}"))?;
 
         if let Some(tool_calls) = tool_calls_val.get("tool_calls").cloned() {
             tool_calls_val = tool_calls;
@@ -833,20 +833,17 @@ impl LlmProcessor {
             }
 
             let content_start = leading_ws_len + start_tag.len();
-            let reasoning = if let Some(end_idx) = trimmed_lower[start_tag.len()..].find(end_tag) {
-                let absolute_end = content_start + end_idx;
-                let mut cleaned_content = String::new();
-                cleaned_content.push_str(&plain_text[..leading_ws_len]);
-                cleaned_content.push_str(&plain_text[absolute_end + end_tag.len()..]);
-                return Some((
-                    cleaned_content.trim().to_string(),
-                    plain_text[content_start..absolute_end].trim().to_string(),
-                ));
-            } else {
-                plain_text[content_start..].trim().to_string()
+            let Some(end_idx) = trimmed_lower[start_tag.len()..].find(end_tag) else {
+                return None;
             };
-
-            return Some((String::new(), reasoning));
+            let absolute_end = content_start + end_idx;
+            let mut cleaned_content = String::new();
+            cleaned_content.push_str(&plain_text[..leading_ws_len]);
+            cleaned_content.push_str(&plain_text[absolute_end + end_tag.len()..]);
+            return Some((
+                cleaned_content.trim().to_string(),
+                plain_text[content_start..absolute_end].trim().to_string(),
+            ));
         }
 
         None
@@ -2593,6 +2590,14 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("bytes_written"));
+    }
+
+    #[test]
+    fn extract_leading_native_think_block_preserves_unclosed_content() {
+        assert!(LlmProcessor::extract_leading_native_think_block(
+            "<think>reasoning without a closing tag"
+        )
+        .is_none());
     }
 
     #[test]

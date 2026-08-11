@@ -193,7 +193,10 @@ impl ContextCompressor {
             {
                 Ok(result) => {
                     let normalized = Self::normalize_summary_result(&result);
-                    let validation_error = match Self::validate_summary_result(&normalized) {
+                    let validation_error = match Self::validate_summary_result_with_completed_tasks(
+                        &normalized,
+                        completed_tasks,
+                    ) {
                         Ok(validated) => return Ok(validated),
                         Err(err) => err,
                     };
@@ -621,6 +624,50 @@ impl ContextCompressor {
             .map_err(|error| format!("failed to normalize snapshot json: {}", error))
     }
 
+    fn validate_summary_result_with_completed_tasks(
+        normalized: &str,
+        completed_tasks: &str,
+    ) -> Result<String, String> {
+        let validated = Self::validate_summary_result(normalized)?;
+        if completed_tasks.trim() == "None" {
+            return Ok(validated);
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&validated)
+            .map_err(|_| "completed-task carryover requires JSON snapshot output".to_string())?;
+        let prev_tasks = parsed["prev_tasks"]
+            .as_array()
+            .ok_or_else(|| "prev_tasks must be an array".to_string())?;
+        if prev_tasks.is_empty() {
+            return Err(
+                "prev_tasks must preserve the completed-task archive supplied to compression"
+                    .to_string(),
+            );
+        }
+
+        let latest_completed_task = completed_tasks
+            .rsplit_once("<task>")
+            .map(|(_, task)| task)
+            .unwrap_or(completed_tasks);
+        let latest_task_index = latest_completed_task
+            .split_once("<task_index>")
+            .and_then(|(_, rest)| rest.split_once("</task_index>"))
+            .and_then(|(index, _)| index.trim().parse::<i64>().ok())
+            .ok_or_else(|| "completed-task archive is missing the latest task_index".to_string())?;
+        let latest_task_preserved = prev_tasks.iter().any(|task| {
+            task.get("task_index").and_then(|value| value.as_i64()) == Some(latest_task_index)
+                || task.get("task_index").and_then(|value| value.as_u64())
+                    == u64::try_from(latest_task_index).ok()
+        });
+        if !latest_task_preserved {
+            return Err(
+                "prev_tasks omitted the latest completed task supplied to compression".to_string(),
+            );
+        }
+
+        Ok(validated)
+    }
+
     fn validate_non_empty_string_field(
         value: &serde_json::Value,
         field: &str,
@@ -880,6 +927,28 @@ mod tests {
     fn validate_summary_result_accepts_json_snapshot_without_overall_goal() {
         let valid = r#"{"prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"completed_archive","current_focus":"No active task in compressed segment","next_steps":[],"open_questions":[],"blockers":[],"todos":[]}}"#;
         assert!(ContextCompressor::validate_summary_result(valid).is_ok());
+    }
+
+    #[test]
+    fn validate_summary_result_requires_latest_completed_task_carryover() {
+        let completed_tasks = "<task><task_index>1</task_index><user_query>Latest finished request</user_query><result_summary>Latest finished result</result_summary></task>";
+        let missing = r#"{"prev_tasks":[{"task_index":0,"brief":"older task"}],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"completed_archive","current_focus":"No active task in compressed segment","next_steps":[],"open_questions":[],"blockers":[],"todos":[]}}"#;
+        assert!(
+            ContextCompressor::validate_summary_result_with_completed_tasks(
+                missing,
+                completed_tasks
+            )
+            .is_err()
+        );
+
+        let preserved = r#"{"prev_tasks":[{"task_index":1,"user_query":"Latest finished request","result_summary":"Latest finished result"}],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":{"status":"completed_archive","current_focus":"No active task in compressed segment","next_steps":[],"open_questions":[],"blockers":[],"todos":[]}}"#;
+        assert!(
+            ContextCompressor::validate_summary_result_with_completed_tasks(
+                preserved,
+                completed_tasks
+            )
+            .is_ok()
+        );
     }
 
     #[test]

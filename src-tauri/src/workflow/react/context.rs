@@ -343,7 +343,7 @@ impl ContextManager {
             .rev()
             .find(|index| messages[*index].role == "assistant")
         else {
-            return false;
+            return true;
         };
 
         let assistant_tool_call_ids = messages[assistant_idx]
@@ -369,7 +369,7 @@ impl ContextManager {
             })
             .unwrap_or_default();
         if assistant_tool_call_ids.is_empty() {
-            return false;
+            return true;
         }
 
         let resolved_tool_call_ids = messages[assistant_idx + 1..=boundary_idx]

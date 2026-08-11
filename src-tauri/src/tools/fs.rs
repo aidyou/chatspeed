@@ -80,11 +80,16 @@ fn is_tool_path_allowed(
     path: &Path,
     is_dir: bool,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
-) -> bool {
-    path_guard
-        .and_then(|path_guard| path_guard.read().ok())
-        .map(|guard| guard.is_chatspeed_allowed(path, is_dir).unwrap_or(false))
-        .unwrap_or(true)
+) -> Result<bool, ToolError> {
+    let Some(path_guard) = path_guard else {
+        return Ok(true);
+    };
+    let guard = path_guard
+        .read()
+        .map_err(|error| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {error}")))?;
+    guard
+        .is_chatspeed_allowed(path, is_dir)
+        .map_err(|error| ToolError::ExecutionFailed(format!("Security Error: {error}")))
 }
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
@@ -1186,7 +1191,7 @@ impl ToolDefinition for ListDir {
             }
 
             let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-            if !is_tool_path_allowed(entry.path(), is_dir, self.path_guard.as_ref()) {
+            if !is_tool_path_allowed(entry.path(), is_dir, self.path_guard.as_ref())? {
                 continue;
             }
 

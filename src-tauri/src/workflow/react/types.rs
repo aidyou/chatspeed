@@ -561,6 +561,25 @@ fn default_execution_context_segment_id() -> i32 {
 impl ExecutionContext {
     pub const CURRENT_VERSION: &'static str = "1.4.0";
 
+    /// Resets task-local runtime state while preserving the durable session and
+    /// the current manual-clear segment boundary.
+    pub fn reset_for_new_context(&mut self) {
+        self.state = RuntimeState::Pending;
+        self.wait_reason = None;
+        self.queued_user_messages.clear();
+        self.current_step = 0;
+        self.max_steps = 0;
+        self.pending_tools.clear();
+        self.last_action_summary = None;
+        self.waiting_on_sub_agent_id = None;
+        self.sub_agent_sessions.clear();
+        self.pending_sub_agent_completions.clear();
+        self.pending_final_review = None;
+        self.pending_completion_reports.clear();
+        self.removed_queued_user_message_ids.clear();
+        self.version = Self::CURRENT_VERSION.to_string();
+    }
+
     #[cfg(test)]
     pub fn new(session_id: String) -> Self {
         Self {
@@ -590,6 +609,71 @@ impl ExecutionContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_for_new_context_clears_all_task_local_state() {
+        let mut context = ExecutionContext::new("session-1".to_string());
+        context.state = RuntimeState::Completed;
+        context.wait_reason = Some(WaitReason::SubAgent);
+        context.queued_user_messages.push(QueuedUserMessage {
+            queued_user_message_id: "queued-1".to_string(),
+            content: "queued".to_string(),
+            attached_context: None,
+            metadata: None,
+        });
+        context.current_segment_id = 7;
+        context.current_step = 9;
+        context.max_steps = 50;
+        context.pending_tools.push(PendingTool {
+            tool_call_id: "tool-1".to_string(),
+            tool_name: "read_file".to_string(),
+            arguments: serde_json::json!({}),
+            details: None,
+            display_type: None,
+        });
+        context.last_action_summary = Some("old task".to_string());
+        context.current_context_tokens = Some(42);
+        context.max_context_tokens = Some(8192);
+        context.last_event_id = Some(99);
+        context.waiting_on_sub_agent_id = Some("subagent-1".to_string());
+        context.sub_agent_sessions.push("subagent-1".to_string());
+        context.pending_final_review = Some(PendingFinalReview {
+            sub_agent_id: "reviewer-1".to_string(),
+            completion_summary: "review".to_string(),
+        });
+        context
+            .pending_completion_reports
+            .push(PendingCompletionReport::new(
+                "Completed: old. Verified: old. Remaining: none.",
+                None,
+                7,
+                9,
+            ));
+        context
+            .removed_queued_user_message_ids
+            .push("queued-removed".to_string());
+
+        context.reset_for_new_context();
+
+        assert_eq!(context.session_id, "session-1");
+        assert_eq!(context.current_segment_id, 7);
+        assert_eq!(context.current_context_tokens, Some(42));
+        assert_eq!(context.max_context_tokens, Some(8192));
+        assert_eq!(context.last_event_id, Some(99));
+        assert_eq!(context.state, RuntimeState::Pending);
+        assert_eq!(context.wait_reason, None);
+        assert!(context.queued_user_messages.is_empty());
+        assert_eq!(context.current_step, 0);
+        assert_eq!(context.max_steps, 0);
+        assert!(context.pending_tools.is_empty());
+        assert_eq!(context.last_action_summary, None);
+        assert_eq!(context.waiting_on_sub_agent_id, None);
+        assert!(context.sub_agent_sessions.is_empty());
+        assert!(context.pending_sub_agent_completions.is_empty());
+        assert_eq!(context.pending_final_review, None);
+        assert!(context.pending_completion_reports.is_empty());
+        assert!(context.removed_queued_user_message_ids.is_empty());
+    }
 
     #[test]
     fn test_task_completed_gateway_payload_serialization() {

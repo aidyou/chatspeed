@@ -14,8 +14,8 @@ use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{
-    list_background_task_ids_for_owner, stop_background_task, BackgroundTask, SubAgentFactory,
-    BACKGROUND_TASKS,
+    clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
+    stop_background_task, BackgroundTask, SubAgentFactory, BACKGROUND_TASKS,
 };
 use crate::workflow::react::replay::{
     replay_events_to_execution_context, restore_execution_context, RecoveryResult,
@@ -503,8 +503,7 @@ fn persist_pending_workflow_state(store: &MainStore, session_id: &str) -> Result
         .get_execution_context(session_id)
         .map_err(|error| error.to_string())?
     {
-        context.state = RuntimeState::Pending;
-        context.wait_reason = None;
+        context.reset_for_new_context();
         store
             .upsert_execution_context(&context)
             .map_err(|error| error.to_string())?;
@@ -1649,6 +1648,14 @@ fn resolve_agent_sandbox_snapshot(
     }
 }
 
+fn reset_workflow_phase_for_new_context(store: &MainStore, session_id: &str) -> Result<(), String> {
+    let mut config = raw_workflow_agent_config(store, session_id)?;
+    config.phase = Some("standard".to_string());
+    store
+        .update_workflow_agent_config(session_id, &config.to_json())
+        .map_err(|error| error.to_string())
+}
+
 fn sync_workflow_agent_config_at_tool_boundary(
     store: &MainStore,
     session_id: &str,
@@ -1975,6 +1982,63 @@ fn durable_child_terminal_state(
     Ok(terminal_workflow_state(&context.state))
 }
 
+fn child_was_detached_by_latest_manual_clear(
+    store: &MainStore,
+    parent_session_id: &str,
+    child_id: &str,
+) -> Result<bool, crate::db::StoreError> {
+    let snapshot = store.get_workflow_snapshot(parent_session_id)?;
+    let marker_index = snapshot
+        .messages
+        .iter()
+        .rposition(ContextManager::is_manual_clear_context_message);
+    let Some(marker_index) = marker_index else {
+        return Ok(false);
+    };
+    let marker = &snapshot.messages[marker_index];
+    let previous_context = marker
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("previous_execution_context"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ExecutionContext>(value).ok());
+    let tracked_by_previous_context = previous_context.is_some_and(|context| {
+        context
+            .sub_agent_sessions
+            .iter()
+            .any(|sub_agent_id| sub_agent_id == child_id)
+            || context.waiting_on_sub_agent_id.as_deref() == Some(child_id)
+            || context
+                .pending_sub_agent_completions
+                .iter()
+                .any(|completion| completion.sub_agent_id == child_id)
+    });
+    let observed_before_clear = snapshot.messages[..marker_index].iter().any(|message| {
+        message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("sub_agent_id"))
+            .and_then(Value::as_str)
+            == Some(child_id)
+    });
+    if !tracked_by_previous_context && !observed_before_clear {
+        return Ok(false);
+    }
+
+    let current_context = store.get_execution_context(parent_session_id)?;
+    Ok(current_context.is_none_or(|context| {
+        !context
+            .sub_agent_sessions
+            .iter()
+            .any(|sub_agent_id| sub_agent_id == child_id)
+            && context.waiting_on_sub_agent_id.as_deref() != Some(child_id)
+            && !context
+                .pending_sub_agent_completions
+                .iter()
+                .any(|completion| completion.sub_agent_id == child_id)
+    }))
+}
+
 fn reconcile_durable_child_completion(
     store: &MainStore,
     child: &Workflow,
@@ -2028,6 +2092,12 @@ fn reconcile_durable_child_completion(
         )
         && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id)
         && existing_completion.is_none_or(|completion| !completion.consumed);
+    parent_context
+        .sub_agent_sessions
+        .retain(|sub_agent_id| sub_agent_id != child_id);
+    if !should_signal && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id) {
+        parent_context.waiting_on_sub_agent_id = None;
+    }
     let (has_event, is_background, has_background_projection) =
         store.get_child_reconciliation_state(parent_session_id, child_id)?;
     if already_projected
@@ -2035,6 +2105,7 @@ fn reconcile_durable_child_completion(
         && (!is_background || has_background_projection)
         && !should_signal
     {
+        store.upsert_execution_context(&parent_context)?;
         return Ok(false);
     }
 
@@ -2100,14 +2171,14 @@ fn reconcile_durable_child_completion(
                 completed_at_ms: chrono::Utc::now().timestamp_millis(),
                 consumed: false,
             });
-        store.upsert_execution_context(&parent_context)?;
     }
+    store.upsert_execution_context(&parent_context)?;
 
     // Re-deliver only while the parent is durably waiting for this child. A missing live channel
     // is normal during cold recovery; the durable completion will be applied when the executor
     // is restored.
     if should_signal {
-        if let Err(error) = WorkflowManager::send_signal_to_session(
+        if let Err(error) = WorkflowManager::try_send_signal_to_session(
             parent_session_id,
             json!({
                 "type": "sub_agent_complete",
@@ -2197,11 +2268,59 @@ fn reconcile_child_workflows(
             continue;
         }
 
+        let detached_by_manual_clear = match child.parent_session_id.as_deref() {
+            Some(parent_session_id) => {
+                child_was_detached_by_latest_manual_clear(store, parent_session_id, &child_id)?
+            }
+            None => false,
+        };
         let terminal_status = durable_child_terminal_state(store, &child_id)?;
-        decisions.push((child, child_id, terminal_status));
+        decisions.push((child, child_id, terminal_status, detached_by_manual_clear));
     }
 
-    for (child, child_id, terminal_status) in decisions {
+    for (child, child_id, terminal_status, detached_by_manual_clear) in decisions {
+        if detached_by_manual_clear {
+            let detached_status = terminal_status.clone().unwrap_or(WorkflowState::Cancelled);
+            store.update_workflow_status(&child_id, &detached_status.to_string())?;
+            if terminal_status.is_none() {
+                let mut child_context =
+                    store
+                        .get_execution_context(&child_id)?
+                        .unwrap_or_else(|| ExecutionContext {
+                            session_id: child_id.clone(),
+                            state: RuntimeState::Cancelled,
+                            wait_reason: None,
+                            queued_user_messages: Vec::new(),
+                            current_segment_id: 1,
+                            current_step: 0,
+                            max_steps: 0,
+                            pending_tools: Vec::new(),
+                            last_action_summary: None,
+                            current_context_tokens: None,
+                            max_context_tokens: None,
+                            last_event_id: None,
+                            version: ExecutionContext::CURRENT_VERSION.to_string(),
+                            waiting_on_sub_agent_id: None,
+                            sub_agent_sessions: Vec::new(),
+                            pending_sub_agent_completions: Vec::new(),
+                            pending_final_review: None,
+                            pending_completion_reports: Vec::new(),
+                            removed_queued_user_message_ids: Vec::new(),
+                        });
+                child_context.state = RuntimeState::Cancelled;
+                child_context.wait_reason = None;
+                child_context.pending_tools.clear();
+                child_context.waiting_on_sub_agent_id = None;
+                child_context.last_action_summary =
+                    Some("Sub-agent detached by manual context clear.".to_string());
+                store.upsert_execution_context(&child_context)?;
+            }
+            log::info!(
+                "[Workflow][session={}][phase=reconcile] Child belongs to a cleared parent context; parent projection was skipped",
+                child_id
+            );
+            continue;
+        }
         if let Some(terminal_status) = terminal_status {
             let reconciled =
                 reconcile_durable_child_completion(store, &child, terminal_status.clone())?;
@@ -2688,12 +2807,14 @@ async fn finalize_manual_clear_context_state(
 #[tauri::command]
 pub async fn workflow_begin_new_context_frame(
     state: State<'_, Arc<MainStore>>,
+    chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     gateway: State<'_, Arc<TauriGateway>>,
     session_id: String,
 ) -> Result<WorkflowContextFrameResult, String> {
     let main_store = state.inner().clone();
+    let chat_state = chat_state.inner().clone();
     let workflow_manager = workflow_manager.inner().clone();
     let gateway = gateway.inner().clone();
     let tsid_generator = tsid_generator.inner().clone();
@@ -2724,7 +2845,9 @@ pub async fn workflow_begin_new_context_frame(
         {
             let store = &*main_store;
             sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+            reset_workflow_phase_for_new_context(&store, &session_id)?;
         }
+        cleanup_owned_background_resources(&session_id, &chat_state).await;
         finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
             .await?;
         return Ok(WorkflowContextFrameResult {
@@ -2790,16 +2913,16 @@ pub async fn workflow_begin_new_context_frame(
         }
 
         {
-            let store = &*main_store;
-            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
-        }
-
-        {
             let mut guard = executor.lock().await;
             guard
                 .begin_manual_clear_context_segment()
                 .await
                 .map_err(|e| e.to_string())?;
+        }
+        {
+            let store = &*main_store;
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+            reset_workflow_phase_for_new_context(&store, &session_id)?;
         }
 
         let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
@@ -2829,6 +2952,7 @@ pub async fn workflow_begin_new_context_frame(
                     .unwrap_or(4096),
             )
         };
+        cleanup_owned_background_resources(&session_id, &chat_state).await;
         finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
             .await?;
         return Ok(WorkflowContextFrameResult {
@@ -2843,11 +2967,6 @@ pub async fn workflow_begin_new_context_frame(
         });
     }
 
-    {
-        let store = &*main_store;
-        sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
-    }
-
     let (segment_id, marker_message) = begin_new_context_frame_for_cold_session(
         main_store.clone(),
         tsid_generator,
@@ -2855,12 +2974,18 @@ pub async fn workflow_begin_new_context_frame(
         execution_context,
     )
     .await?;
+    {
+        let store = &*main_store;
+        sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+        reset_workflow_phase_for_new_context(&store, &session_id)?;
+    }
     let current_context = {
         let store = &*state;
         store
             .get_execution_context(&session_id)
             .map_err(|e| e.to_string())?
     };
+    cleanup_owned_background_resources(&session_id, &chat_state).await;
     finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
         .await?;
     Ok(WorkflowContextFrameResult {
@@ -3545,6 +3670,8 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
             );
         }
     }
+
+    clear_completed_background_tasks_for_owner(root_session_id);
 }
 
 async fn cleanup_workflow_resources(
@@ -6366,6 +6493,10 @@ mod tests {
                 .any(|completion| {
                     completion.sub_agent_id == child_id && completion.usage_summary.is_some()
                 }));
+            assert!(!parent_context
+                .sub_agent_sessions
+                .iter()
+                .any(|sub_agent_id| sub_agent_id == &child_id));
         }
     }
 
@@ -6891,6 +7022,162 @@ mod tests {
     }
 
     #[test]
+    fn latest_manual_clear_detaches_previous_child_from_recovery() {
+        let store = create_test_store();
+        let session_id = "manual-clear-detached-child";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        let mut previous_context = ExecutionContext::new(session_id.to_string());
+        previous_context.current_segment_id = 1;
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_name": crate::tools::TOOL_SUB_AGENT_RUN,
+                    "sub_agent_id": "old-child",
+                    "execution_mode": "background"
+                })),
+                attached_context: None,
+                step_type: Some(StepType::Observe.to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add old child observation");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "previous_execution_context": previous_context
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add manual clear marker");
+        let mut current_context = ExecutionContext::new(session_id.to_string());
+        current_context.current_segment_id = 2;
+        store
+            .upsert_execution_context(&current_context)
+            .expect("failed to persist current context");
+
+        assert!(
+            child_was_detached_by_latest_manual_clear(&store, session_id, "old-child")
+                .expect("manual clear ownership check should succeed")
+        );
+        assert!(
+            !child_was_detached_by_latest_manual_clear(&store, session_id, "new-child")
+                .expect("new child ownership check should succeed")
+        );
+
+        store
+            .create_workflow(
+                "old-child",
+                "Old background child",
+                "agent-test",
+                None,
+                Some(session_id),
+            )
+            .expect("failed to create old child workflow");
+        let mut child_context = ExecutionContext::new("old-child".to_string());
+        child_context.state = RuntimeState::Completed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist terminal child context");
+        store
+            .update_workflow_status("old-child", &WorkflowState::Completed.to_string())
+            .expect("failed to persist terminal child status");
+
+        reconcile_interrupted_child_workflows(&store)
+            .expect("detached child reconciliation should succeed");
+
+        let parent_context = store
+            .get_execution_context(session_id)
+            .expect("failed to reload parent context")
+            .expect("parent context should remain available");
+        assert!(parent_context.sub_agent_sessions.is_empty());
+        assert!(parent_context.pending_sub_agent_completions.is_empty());
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load parent snapshot");
+        assert!(snapshot
+            .messages
+            .iter()
+            .skip_while(|message| { !ContextManager::is_manual_clear_context_message(message) })
+            .all(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("sub_agent_id"))
+                    .and_then(Value::as_str)
+                    != Some("old-child")
+            }));
+    }
+
+    #[test]
+    fn reset_workflow_phase_for_new_context_preserves_user_preferences() {
+        let store = create_test_store();
+        let session_id = "manual-clear-phase-reset";
+        seed_agent(&store, "agent-test");
+        let config = AgentConfig {
+            phase: Some("implementation".to_string()),
+            approval_level: Some("smart".to_string()),
+            allowed_paths: Some(vec!["/preserved".to_string()]),
+            available_tools: Some(vec!["read_file".to_string()]),
+            models: Some(crate::db::agent::AgentModels::default()),
+            ..AgentConfig::default()
+        };
+        store
+            .create_workflow(
+                session_id,
+                "Initial query",
+                "agent-test",
+                Some(config.to_json()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        reset_workflow_phase_for_new_context(&store, session_id)
+            .expect("phase reset should succeed");
+
+        let persisted =
+            raw_workflow_agent_config(&store, session_id).expect("failed to load reset config");
+        assert_eq!(persisted.phase.as_deref(), Some("standard"));
+        assert_eq!(persisted.approval_level.as_deref(), Some("smart"));
+        assert_eq!(
+            persisted.allowed_paths,
+            Some(vec!["/preserved".to_string()])
+        );
+        assert_eq!(
+            persisted.available_tools,
+            Some(vec!["read_file".to_string()])
+        );
+        assert!(persisted.models.is_some());
+    }
+
+    #[test]
     fn test_persist_pending_workflow_state_updates_execution_context() {
         let store = create_test_store();
         let session_id = "manual-clear-pending-state";
@@ -6904,8 +7191,19 @@ mod tests {
 
         let mut context = ExecutionContext::new(session_id.to_string());
         context.state = RuntimeState::Cancelled;
+        context.wait_reason = Some(WaitReason::SubAgent);
         context.current_segment_id = 2;
+        context.current_step = 12;
         context.current_context_tokens = Some(64);
+        context.waiting_on_sub_agent_id = Some("subagent-old".to_string());
+        context.sub_agent_sessions.push("subagent-old".to_string());
+        context.pending_final_review = Some(crate::workflow::react::types::PendingFinalReview {
+            sub_agent_id: "reviewer-old".to_string(),
+            completion_summary: "old summary".to_string(),
+        });
+        context
+            .removed_queued_user_message_ids
+            .push("old-queue".to_string());
         store
             .upsert_execution_context(&context)
             .expect("failed to persist execution context");
@@ -6925,6 +7223,14 @@ mod tests {
         assert_eq!(execution_context.wait_reason, None);
         assert_eq!(execution_context.current_segment_id, 2);
         assert_eq!(execution_context.current_context_tokens, Some(64));
+        assert_eq!(execution_context.current_step, 0);
+        assert_eq!(execution_context.waiting_on_sub_agent_id, None);
+        assert!(execution_context.sub_agent_sessions.is_empty());
+        assert!(execution_context.pending_sub_agent_completions.is_empty());
+        assert_eq!(execution_context.pending_final_review, None);
+        assert!(execution_context.pending_completion_reports.is_empty());
+        assert!(execution_context.queued_user_messages.is_empty());
+        assert!(execution_context.removed_queued_user_message_ids.is_empty());
     }
 
     #[test]

@@ -52,6 +52,24 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
     }
 }
 
+fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
+    match event {
+        DispatchEvent::Terminal { .. }
+        | DispatchEvent::Audit { .. }
+        | DispatchEvent::Snapshot { .. } => true,
+        DispatchEvent::Ui { payload, .. } => matches!(
+            payload,
+            GatewayPayload::State { .. }
+                | GatewayPayload::Confirm { .. }
+                | GatewayPayload::ApprovalResolved { .. }
+                | GatewayPayload::ToolCompleted { .. }
+                | GatewayPayload::ToolFailed { .. }
+                | GatewayPayload::TaskCompleted { .. }
+                | GatewayPayload::Error { .. }
+        ),
+    }
+}
+
 fn summarize_dispatch_event(event: &DispatchEvent) -> String {
     match event {
         DispatchEvent::Ui {
@@ -389,13 +407,17 @@ impl Dispatcher {
                     let mut sink_envelope = envelope.clone();
                     sink_envelope.created_at = Instant::now();
 
-                    let send_result = match sink_target.delivery_guarantee {
-                        SinkDeliveryGuarantee::Reliable => sink_target
+                    let send_result = if sink_target.delivery_guarantee
+                        == SinkDeliveryGuarantee::Reliable
+                        || dispatch_event_requires_reliable_delivery(&envelope.event)
+                    {
+                        sink_target
                             .tx
                             .send(sink_envelope)
                             .await
-                            .map_err(|_| WorkflowEngineError::DispatcherClosed),
-                        SinkDeliveryGuarantee::BestEffort => sink_target
+                            .map_err(|_| WorkflowEngineError::DispatcherClosed)
+                    } else {
+                        sink_target
                             .tx
                             .try_send(sink_envelope)
                             .map_err(|err| match err {
@@ -405,7 +427,7 @@ impl Dispatcher {
                                 mpsc::error::TrySendError::Closed(_) => {
                                     WorkflowEngineError::DispatcherClosed
                                 }
-                            }),
+                            })
                     };
 
                     match send_result {
@@ -457,6 +479,7 @@ impl Dispatcher {
     ///
     /// This is non-blocking - if the channel is full, the event is dropped
     /// and the drop counter is incremented.
+    #[cfg(test)]
     pub fn dispatch_now(&self, event: DispatchEvent) -> Result<(), WorkflowEngineError> {
         let seq = self.sequence_counter.fetch_add(1, Ordering::Relaxed);
         let envelope = EventEnvelope::new(event).with_sequence(seq);
@@ -479,7 +502,12 @@ impl Dispatcher {
     }
 
     pub async fn dispatch(&self, event: DispatchEvent) -> Result<(), WorkflowEngineError> {
-        self.dispatch_now(event)
+        let sequence = self.sequence_counter.fetch_add(1, Ordering::Relaxed);
+        let envelope = EventEnvelope::new(event).with_sequence(sequence);
+        self.tx
+            .send(envelope)
+            .await
+            .map_err(|_| WorkflowEngineError::DispatcherClosed)
     }
 
     /// Dispatch a UI event (convenience method).
@@ -496,16 +524,9 @@ impl Dispatcher {
     }
 
     /// Dispatch an audit event from synchronous runtime paths.
+    #[cfg(test)]
     pub fn dispatch_audit_now(&self, event: WorkflowEvent) -> Result<(), WorkflowEngineError> {
         self.dispatch_now(DispatchEvent::Audit { event })
-    }
-
-    /// Dispatch a snapshot (convenience method).
-    pub async fn dispatch_snapshot(
-        &self,
-        context: ExecutionContext,
-    ) -> Result<(), WorkflowEngineError> {
-        self.dispatch(DispatchEvent::Snapshot { context }).await
     }
 
     /// Dispatch a terminal event (convenience method).
@@ -888,9 +909,8 @@ mod tests {
             let _ = dispatcher
                 .dispatch_ui(
                     format!("session-{}", i),
-                    GatewayPayload::State {
-                        state: super::super::types::WorkflowState::Thinking,
-                        wait_reason: None,
+                    GatewayPayload::Chunk {
+                        content: format!("chunk-{i}"),
                     },
                 )
                 .await;

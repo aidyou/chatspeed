@@ -47,7 +47,7 @@ use crate::workflow::react::{
         stash_runtime_signal, take_stashed_runtime_signal, take_stashed_runtime_signals,
         take_stashed_user_messages, RuntimeSignal, SignalType,
     },
-    sinks::{DBSink, Sink, TauriSink},
+    sinks::{Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
         ExecutionContext, GatewayPayload, PendingCompletionReport, PendingTool, QueuedUserMessage,
@@ -337,15 +337,12 @@ impl WorkflowExecutor {
         }
 
         let mut preview_args = args.clone();
-        let primary_root = self
-            .path_guard
-            .read()
-            .ok()
-            .and_then(|guard| guard.get_primary_root().map(|path| path.to_path_buf()));
+        let guard = self.path_guard.read().ok()?;
+        let is_planning_phase = self.policy.phase == ExecutionPhase::Planning;
         if tool_name == crate::tools::TOOL_WRITE_FILE {
-            attach_write_file_overwrite_old_content(&mut preview_args, primary_root.as_deref());
+            attach_write_file_overwrite_old_content(&mut preview_args, &guard, is_planning_phase);
         }
-        attach_display_context(&mut preview_args, false, primary_root.as_deref());
+        attach_display_context(&mut preview_args, false, &guard, is_planning_phase);
         Some(normalize_preview_details(preview_args))
     }
 
@@ -1065,9 +1062,32 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        self.save_snapshot().await?;
+        self.context.begin_manual_clear_context_segment(0).await?;
+        self.state = WorkflowState::Pending;
+        self.current_step = 0;
+        self.consecutive_no_tool_calls = 0;
+        self.last_compression_step = 0;
+        self.last_compression_boundary_id = None;
+        self.background_compression_boundary_id = None;
+        self.background_compression_retry_state.clear();
+        self.pending_approvals.clear();
+        self.pending_approval_queue.clear();
+        self.approved_shell_execution_plans.clear();
+        self.smart_approved_bash_commands.clear();
+        self.smart_approved_tool_call_ids.clear();
+        self.loop_detector = LoopDetector::new();
+        self.recovery_failed = false;
+        self.recovery_error = None;
+        self.queued_user_messages.clear();
+        self.applied_queued_user_message_ids.clear();
+        self.removed_queued_user_message_ids.clear();
+        self.sub_agent_id = None;
+        self.sub_agent_sessions.clear();
+        self.pending_sub_agent_completions.clear();
+        self.pending_final_review = None;
         self.pending_completion_reports.clear();
         self.next_llm_runtime_reminder = None;
-        self.context.begin_manual_clear_context_segment(0).await?;
         self.save_snapshot().await
     }
 
@@ -1397,11 +1417,10 @@ impl WorkflowExecutor {
             next_llm_runtime_reminder: None,
         };
 
-        // Phase 6: wire default dispatcher with UI + DB sinks for all executors.
-        let sinks: Vec<Arc<dyn Sink>> = vec![
-            Arc::new(TauriSink::new(gateway.clone())) as Arc<dyn Sink>,
-            Arc::new(DBSink::new(main_store.clone())) as Arc<dyn Sink>,
-        ];
+        // UI delivery stays isolated behind the best-effort dispatcher. Recovery-authoritative
+        // events and snapshots are persisted synchronously through MainStore.
+        let sinks: Vec<Arc<dyn Sink>> =
+            vec![Arc::new(TauriSink::new(gateway.clone())) as Arc<dyn Sink>];
         let dispatcher = Arc::new(Dispatcher::new(sinks, DispatcherConfig::default()));
         Dispatcher::register_session_dispatcher(executor.session_id.clone(), dispatcher.clone());
         executor.dispatcher = Some(dispatcher);
@@ -1552,32 +1571,28 @@ impl WorkflowExecutor {
     async fn dispatch_terminal_with_fallback(
         &self,
         terminal_state: &str,
-        fallback_event: &WorkflowEvent,
+        terminal_event: &WorkflowEvent,
     ) {
+        if let Err(error) = self.append_event(terminal_event) {
+            log::error!(
+                "[Workflow][session={}] workflow.event.append_failed - error={}",
+                self.session_id,
+                error
+            );
+            return;
+        }
+
         if let Some(ref dispatcher) = self.dispatcher {
-            if let Err(e) = dispatcher
+            if let Err(error) = dispatcher
                 .dispatch_terminal(self.session_id.clone(), terminal_state.to_string())
                 .await
             {
                 log::warn!(
-                    "[Workflow][session={}] dispatcher.terminal failed: {}",
+                    "[Workflow][session={}] dispatcher.terminal failed after durable event: {}",
                     self.session_id,
-                    e
+                    error
                 );
-                if let Err(e2) = self.append_event(fallback_event) {
-                    log::error!(
-                        "[Workflow][session={}] workflow.event.append_failed - error={}",
-                        self.session_id,
-                        e2
-                    );
-                }
             }
-        } else if let Err(e) = self.append_event(fallback_event) {
-            log::error!(
-                "[Workflow][session={}] workflow.event.append_failed - error={}",
-                self.session_id,
-                e
-            );
         }
     }
 
@@ -5474,9 +5489,11 @@ impl WorkflowExecutor {
             let gtm = self.global_tool_manager.clone();
             let semaphore = self.context.semaphore.clone();
 
+            let mut started_tools = HashMap::new();
             for (id, name, args, call) in parallel_execution_queue {
                 self.append_tool_started_event(&id, &name, &args);
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
+                started_tools.insert(id.clone(), name.clone());
 
                 let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
                 let tm_clone = tm.clone();
@@ -5510,10 +5527,34 @@ impl WorkflowExecutor {
 
             loop {
                 let next_result =
-                    await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await?;
+                    match await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await {
+                        Ok(next_result) => next_result,
+                        Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                            let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                                "Tool execution interrupted because the workflow was cancelled"
+                                    .to_string(),
+                            ));
+                            for (tool_call_id, tool_name) in &started_tools {
+                                self.append_tool_terminal_event(
+                                    tool_call_id,
+                                    tool_name,
+                                    &cancelled_result,
+                                );
+                                self.dispatch_tool_terminal_payload(
+                                    tool_call_id,
+                                    tool_name,
+                                    &cancelled_result,
+                                )
+                                .await;
+                            }
+                            return Err(error);
+                        }
+                        Err(error) => return Err(error),
+                    };
                 let Some((id, name, args, call, res, duration_ms)) = next_result else {
                     break;
                 };
+                started_tools.remove(&id);
                 self.append_tool_terminal_event(&id, &name, &res);
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&res);
@@ -5547,7 +5588,7 @@ impl WorkflowExecutor {
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
-            let final_res = await_with_stop(&self.session_id, signal_rx, async move {
+            let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
                 if tool_name_for_call.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
                     if mcp_tool_allowed {
                         global_tool_manager
@@ -5565,7 +5606,20 @@ impl WorkflowExecutor {
                         .await
                 }
             })
-            .await?;
+            .await
+            {
+                Ok(result) => result,
+                Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                    let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                        "Tool execution interrupted because the workflow was cancelled".to_string(),
+                    ));
+                    self.append_tool_terminal_event(&id, &name, &cancelled_result);
+                    self.dispatch_tool_terminal_payload(&id, &name, &cancelled_result)
+                        .await;
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
 
             let duration_ms = Self::execution_duration_ms(execution_started_at);
             self.append_tool_terminal_event(&id, &name, &final_res);
@@ -5713,30 +5767,30 @@ impl WorkflowExecutor {
         }
 
         // 2. Reinforce with Todo Context (Freshly fetched from DB)
-        let primary_root = self
-            .path_guard
-            .read()
-            .unwrap()
-            .get_primary_root()
-            .map(|p| p.to_path_buf());
+        let guard = self.path_guard.read().map_err(|error| {
+            WorkflowEngineError::General(format!("PathGuard lock poisoned: {error}"))
+        })?;
+        let is_planning_phase = self.policy.phase == ExecutionPhase::Planning;
         if name.starts_with("todo_") {
             let todos = self
                 .context
                 .main_store
                 .get_todo_list_for_workflow(&self.session_id)
                 .unwrap_or_default();
-            Ok(ObservationReinforcer::reinforce_with_context(
+            Ok(ObservationReinforcer::reinforce_with_guard(
                 tool_call,
                 &result,
                 Some(serde_json::json!(todos)),
-                primary_root.as_deref(),
+                &guard,
+                is_planning_phase,
             ))
         } else {
-            Ok(ObservationReinforcer::reinforce_with_context(
+            Ok(ObservationReinforcer::reinforce_with_guard(
                 tool_call,
                 &result,
                 None,
-                primary_root.as_deref(),
+                &guard,
+                is_planning_phase,
             ))
         }
     }
@@ -6070,6 +6124,7 @@ impl WorkflowExecutor {
                 .handle_final_review_completion(&sub_agent_id, &result)
                 .await?
             {
+                self.save_snapshot().await?;
                 return Ok(true);
             }
         }
@@ -6087,6 +6142,7 @@ impl WorkflowExecutor {
                 .await?;
 
             self.update_state(WorkflowState::Thinking).await?;
+            self.save_snapshot().await?;
             Ok(true)
         } else {
             Ok(false)
@@ -6137,12 +6193,47 @@ impl WorkflowExecutor {
         }
     }
 
+    fn has_projected_sub_agent_completion(
+        messages: &[WorkflowMessage],
+        segment_id: i32,
+        sub_agent_id: &str,
+    ) -> bool {
+        messages.iter().any(|message| {
+            message.segment_id == segment_id
+                && message.metadata.as_ref().is_some_and(|metadata| {
+                    metadata
+                        .get("observation_type")
+                        .and_then(|value| value.as_str())
+                        == Some("sub_agent_completion")
+                        && metadata
+                            .get("sub_agent_id")
+                            .and_then(|value| value.as_str())
+                            == Some(sub_agent_id)
+                })
+        })
+    }
+
     async fn append_sub_agent_completion_observation(
         &mut self,
         sub_agent_id: &str,
         result: &serde_json::Value,
         resolution: &SubAgentResolution,
     ) -> Result<(), WorkflowEngineError> {
+        let already_projected = Self::has_projected_sub_agent_completion(
+            &self.context.messages,
+            self.context.current_segment_id,
+            sub_agent_id,
+        );
+        if already_projected {
+            log::info!(
+                "[Workflow][session={}][sub_agent={}] completion observation already projected in segment {}; skipping duplicate",
+                self.session_id,
+                sub_agent_id,
+                self.context.current_segment_id
+            );
+            return Ok(());
+        }
+
         let summary = resolution
             .summary
             .as_deref()
@@ -6396,22 +6487,10 @@ impl WorkflowExecutor {
     }
 
     pub(crate) fn append_event(&self, event: &WorkflowEvent) -> Result<(), WorkflowEngineError> {
-        if let Some(ref dispatcher) = self.dispatcher {
-            if let Err(e) = dispatcher.dispatch_audit_now(event.clone()) {
-                log::warn!(
-                    "[Workflow][session={}][phase=dispatcher] audit dispatch failed: {}, falling back to direct DB write",
-                    self.session_id,
-                    e
-                );
-            } else {
-                return Ok(());
-            }
-        }
-
         let store = self.context.main_store.as_ref();
         store
             .append_workflow_event(event)
-            .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+            .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
         Ok(())
     }
 
@@ -7768,28 +7847,19 @@ impl WorkflowExecutor {
     pub async fn save_snapshot(&self) -> Result<(), WorkflowEngineError> {
         let mut ctx = self.export_execution_context();
         self.fill_snapshot_last_event_id(&mut ctx)?;
-
-        if let Some(ref dispatcher) = self.dispatcher {
-            if let Err(e) = dispatcher.dispatch_snapshot(ctx.clone()).await {
-                log::warn!(
-                    "[Workflow][session={}][phase=dispatcher] snapshot dispatch failed: {}, falling back to direct DB write",
-                    self.session_id,
-                    e
-                );
-                let store = self.context.main_store.as_ref();
-                store
-                    .upsert_execution_context(&ctx)
-                    .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
-            }
-        } else {
-            let store = self.context.main_store.as_ref();
-            store
-                .upsert_execution_context(&ctx)
-                .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
+        let store = self.context.main_store.as_ref();
+        let persisted = store
+            .upsert_execution_context_preserving_concurrent_completions(&ctx)
+            .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+        if !persisted {
+            return Err(WorkflowEngineError::General(format!(
+                "Refused to overwrite a newer execution-context segment for session {}",
+                self.session_id
+            )));
         }
 
         log::info!(
-            "[Workflow][session={}][phase=snapshot] Saved: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
+            "[Workflow][session={}][phase=snapshot] Saved durably: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
             self.session_id,
             ctx.state,
             ctx.wait_reason,
@@ -7809,7 +7879,7 @@ impl WorkflowExecutor {
             .get_last_event_id(&self.session_id)
             .map_err(|e| WorkflowEngineError::General(e.to_string()))?;
         log::debug!(
-            "[Workflow][session={}][phase=snapshot] last_event_id captured as {:?}; dispatcher writes are asynchronous so this value may lag events that were just enqueued",
+            "[Workflow][session={}][phase=snapshot] last_event_id captured as {:?} after synchronous durable event writes",
             self.session_id,
             ctx.last_event_id
         );
@@ -7835,6 +7905,47 @@ mod recovery_tests {
     use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
     use tempfile::tempdir;
     use tokio::sync::{mpsc, Mutex};
+
+    #[test]
+    fn projected_sub_agent_completion_is_idempotent_per_segment() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "parent".to_string(),
+            role: "user".to_string(),
+            message: "completion".to_string(),
+            reasoning: None,
+            message_kind: "runtime_observation".to_string(),
+            message_subtype: None,
+            segment_id: 2,
+            source_event_type: None,
+            metadata: Some(json!({
+                "observation_type": "sub_agent_completion",
+                "sub_agent_id": "child-1"
+            })),
+            attached_context: None,
+            step_type: Some(StepType::Observe.to_string()),
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert!(WorkflowExecutor::has_projected_sub_agent_completion(
+            std::slice::from_ref(&message),
+            2,
+            "child-1"
+        ));
+        assert!(!WorkflowExecutor::has_projected_sub_agent_completion(
+            std::slice::from_ref(&message),
+            3,
+            "child-1"
+        ));
+        assert!(!WorkflowExecutor::has_projected_sub_agent_completion(
+            &[message],
+            2,
+            "child-2"
+        ));
+    }
 
     #[test]
     fn tool_duration_metadata_excludes_workflow_control_tools() {
@@ -7945,6 +8056,138 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         (dir, Arc::new(store))
+    }
+
+    #[tokio::test]
+    async fn manual_clear_context_resets_live_executor_task_state() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "manual-clear-live-runtime";
+        let agent = Agent::new(
+            "manual-clear-agent".to_string(),
+            "Manual Clear Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "Old task", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(14).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Completed;
+        executor.current_step = 12;
+        executor.consecutive_no_tool_calls = 3;
+        executor.queued_user_messages.push_back((
+            "queued-1".to_string(),
+            "queued".to_string(),
+            None,
+            None,
+        ));
+        executor.sub_agent_id = Some("subagent-old".to_string());
+        executor.sub_agent_sessions.push("subagent-old".to_string());
+        executor.pending_final_review = Some(crate::workflow::react::types::PendingFinalReview {
+            sub_agent_id: "reviewer-old".to_string(),
+            completion_summary: "old summary".to_string(),
+        });
+        executor
+            .pending_completion_reports
+            .push(PendingCompletionReport::new(
+                "Completed: old. Verified: old. Remaining: none.",
+                None,
+                1,
+                12,
+            ));
+        executor
+            .context
+            .add_message(
+                "user".to_string(),
+                "Old task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add old task message");
+
+        ReActExecutor::begin_manual_clear_context_segment(&mut executor)
+            .await
+            .expect("manual clear should succeed");
+
+        assert_eq!(executor.state, WorkflowState::Pending);
+        assert_eq!(executor.current_step, 0);
+        assert_eq!(executor.consecutive_no_tool_calls, 0);
+        assert!(executor.queued_user_messages.is_empty());
+        assert_eq!(executor.sub_agent_id, None);
+        assert!(executor.sub_agent_sessions.is_empty());
+        assert_eq!(executor.pending_final_review, None);
+        assert!(executor.pending_completion_reports.is_empty());
+        let persisted = store
+            .get_execution_context(session_id)
+            .expect("failed to load reset context")
+            .expect("reset context should exist");
+        assert_eq!(persisted.state, RuntimeState::Pending);
+        assert_eq!(persisted.wait_reason, None);
+        assert!(persisted.sub_agent_sessions.is_empty());
+        assert!(persisted.pending_sub_agent_completions.is_empty());
+        let marker = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load manual clear marker")
+            .messages
+            .last()
+            .cloned()
+            .expect("manual clear marker should exist");
+        let previous_context = marker
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("previous_execution_context"))
+            .cloned()
+            .and_then(|value| serde_json::from_value::<ExecutionContext>(value).ok())
+            .expect("manual clear marker should contain the latest execution context");
+        assert_eq!(
+            previous_context.sub_agent_sessions,
+            vec!["subagent-old".to_string()]
+        );
     }
 
     #[tokio::test]
