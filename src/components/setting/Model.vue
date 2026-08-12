@@ -88,13 +88,13 @@
   <!-- model editor -->
   <el-dialog
     v-model="modelDialogVisible"
-    width="560px"
+    width="650px"
     class="model-edit-dialog"
     :show-close="false"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
     @closed="onModelDialogClose">
-    <el-form :model="modelForm" :rules="modelRules" ref="formRef" label-width="120px">
+    <el-form :model="modelForm" :rules="modelRules" ref="formRef" label-width="180px">
       <el-tabs v-model="activeTab">
         <!-- basic info -->
         <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">

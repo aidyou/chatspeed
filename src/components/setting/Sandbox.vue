@@ -66,11 +66,11 @@
         <section class="editor-section editor-section--rules">
           <div class="rule-tabs__header">
             <el-tabs v-model="activeRuleTab" class="rule-tabs">
-              <el-tab-pane :label="$t('settings.sandbox.profiles')" name="profiles" />
+              <el-tab-pane :label="$t('settings.sandbox.sandboxRules')" name="profiles" />
               <el-tab-pane :label="$t('settings.sandbox.hostRules')" name="hostRules" />
             </el-tabs>
             <el-button v-if="activeRuleTab === 'profiles'" size="small" @click="openProfileEditor()">
-              {{ $t('settings.sandbox.addProfile') }}
+              {{ $t('settings.sandbox.addSandboxRule') }}
             </el-button>
             <el-button v-else size="small" @click="openHostRuleEditor()">
               {{ $t('settings.sandbox.addHostRule') }}
@@ -84,25 +84,32 @@
               size="small"
               max-height="320"
               class="rule-table">
-              <el-table-column prop="name" :label="$t('settings.sandbox.profileName')" min-width="150" />
-              <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="100" />
-              <el-table-column prop="image" :label="$t('settings.sandbox.image')" width="180" show-overflow-tooltip />
+              <el-table-column prop="name" :label="$t('settings.sandbox.sandboxRuleName')" min-width="120" />
+              <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="80" />
+              <el-table-column prop="image" :label="$t('settings.sandbox.image')" width="150" show-overflow-tooltip />
               <el-table-column
                 v-if="hasProfileWorkspaceAccess"
                 :label="$t('settings.sandbox.workspaceAccess')"
-                width="120">
+                width="150">
                 <template #default="{ row }">
                   {{ workspaceAccessLabel(row.workspaceAccess) }}
                 </template>
               </el-table-column>
               <el-table-column
+                :label="$t('settings.sandbox.network')"
+                width="120">
+                <template #default="{ row }">
+                  {{ networkLabel(row.network?.mode) }}
+                </template>
+              </el-table-column>
+              <el-table-column
                 :label="$t('settings.sandbox.management')"
-                width="112"
+                width="100"
                 align="right"
                 fixed="right">
                 <template #default="{ row }">
                   <div class="rule-table__actions">
-                    <el-tooltip :content="$t('settings.sandbox.editProfile')" placement="top" :enterable="false" :hide-after="0">
+                    <el-tooltip :content="$t('settings.sandbox.editSandboxRule')" placement="top" :enterable="false" :hide-after="0">
                       <span class="icon" @click="openProfileEditor(row)"><cs name="edit" size="16px" color="secondary" /></span>
                     </el-tooltip>
                     <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
@@ -112,7 +119,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptyProfiles') }}</div>
+            <div v-else class="profile-list__empty">{{ $t('settings.sandbox.emptySandboxRules') }}</div>
           </div>
 
           <div v-else>
@@ -165,13 +172,13 @@
     <el-dialog
       v-model="profileDialogVisible"
       width="640px"
-      :title="profileEditing ? $t('settings.sandbox.editProfile') : $t('settings.sandbox.addProfile')"
+      :title="profileEditing ? $t('settings.sandbox.editSandboxRule') : $t('settings.sandbox.addSandboxRule')"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :show-close="false"
       destroy-on-close>
-      <el-form label-width="130px">
-        <el-form-item :label="$t('settings.sandbox.profileName')" required>
+      <el-form label-width="180px">
+        <el-form-item :label="$t('settings.sandbox.sandboxRuleName')" required>
           <el-input v-model="profileDraft.name" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.priority')">
@@ -252,7 +259,7 @@
       :close-on-press-escape="false"
       :show-close="false"
       destroy-on-close>
-      <el-form label-width="150px">
+      <el-form label-width="180px">
         <el-form-item :label="$t('settings.sandbox.ruleName')" required>
           <el-input v-model="hostRuleDraft.name" />
         </el-form-item>
@@ -315,6 +322,12 @@ const workspaceAccessLabel = workspaceAccess => {
   if (workspaceAccess === 'read_write') return t('settings.sandbox.workspaceReadWrite')
   if (workspaceAccess === 'read_only') return t('settings.sandbox.workspaceReadOnly')
   return ''
+}
+const networkLabel = mode => {
+  if (mode === 'public') return t('settings.sandbox.networkPublic')
+  if (mode === 'host') return t('settings.sandbox.networkHost')
+  if (mode === 'allowlist') return t('settings.sandbox.networkAllowlist')
+  return t('settings.sandbox.networkNone')
 }
 const resetRuleListState = () => {
   activeRuleTab.value = 'profiles'
@@ -520,7 +533,7 @@ const applyHostRuleCommandPresets = presets => {
 const saveProfile = () => {
   const value = profileDraft.value
   if (!value.name.trim() || !value.image) {
-    showMessage(t('settings.sandbox.profileRequired'), 'error')
+    showMessage(t('settings.sandbox.sandboxRuleRequired'), 'error')
     return
   }
   value.imageSizeBytes = imageSizeForProfile(value)
@@ -540,7 +553,7 @@ const removeProfile = target => {
 const schemeSummary = scheme => {
   const profiles = scheme.config?.profiles?.length || 0
   const rules = scheme.config?.hostRules?.length || 0
-  return `${profiles} ${t('settings.sandbox.profiles')} · ${rules} ${t('settings.sandbox.hostRules')}`
+  return `${profiles} ${t('settings.sandbox.sandboxRules')} · ${rules} ${t('settings.sandbox.hostRules')}`
 }
 
 const openHostRuleEditor = rule => {
@@ -615,8 +628,8 @@ const isCatchAllPattern = pattern => ['.*', '^.*', '.*$', '^.*$'].includes(Strin
 const validateDraft = () => {
   if (!draft.value.name.trim()) return t('settings.sandbox.nameRequired')
   for (const profile of draft.value.config.profiles) {
-    if (!profile.name.trim() || !profile.image.trim()) return t('settings.sandbox.profileRequired')
-    if (!profile.commandPatterns?.length) return t('settings.sandbox.profileCommandPatternsRequired')
+    if (!profile.name.trim() || !profile.image.trim()) return t('settings.sandbox.sandboxRuleRequired')
+    if (!profile.commandPatterns?.length) return t('settings.sandbox.sandboxRuleCommandPatternsRequired')
   }
   for (const rule of draft.value.config.hostRules) {
     if (!rule.name.trim()) return t('settings.sandbox.ruleRequired')

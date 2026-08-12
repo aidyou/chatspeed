@@ -57,6 +57,27 @@ fn normalize_deepseek_reasoning_effort(body_json: &mut Value) {
     }
 }
 
+fn normalize_sensenova_reasoning_effort(body_json: &mut Value, model: &str) {
+    if !model
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("sensenova-")
+    {
+        return;
+    }
+
+    let Some(reasoning_effort) = body_json
+        .get_mut("reasoning_effort")
+        .and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return;
+    };
+
+    if reasoning_effort.eq_ignore_ascii_case("xhigh") {
+        body_json["reasoning_effort"] = Value::String("high".to_string());
+    }
+}
+
 fn normalize_deepseek_reasoning_replay(body_json: &mut Value) {
     if !deepseek_reasoning_enabled(body_json) {
         return;
@@ -124,6 +145,8 @@ pub fn preprocess_client_request_body(
     let mut body_json: Value = serde_json::from_slice(&client_request_body).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
+
+    normalize_sensenova_reasoning_effort(&mut body_json, &proxy_model.model);
 
     if should_relax_required_tool_choice(&proxy_model.base_url)
         && matches!(
@@ -219,6 +242,28 @@ mod tests {
             serde_json::from_slice(&processed).expect("processed body should be valid json");
 
         assert_eq!(processed_json["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn preprocess_sensenova_maps_xhigh_reasoning_effort_to_high() {
+        let body = json!({
+            "model": "sensenova-6.8-flash-lite",
+            "reasoning_effort": "xhigh",
+            "messages": [{ "role": "user", "content": "start" }]
+        });
+        let mut proxy_model = deepseek_proxy_model();
+        proxy_model.model = "sensenova-6.8-flash-lite".to_string();
+
+        let processed = preprocess_client_request_body(
+            Bytes::from(body.to_string()),
+            &ChatProtocol::OpenAI,
+            &proxy_model,
+        )
+        .expect("preprocess should succeed");
+        let processed_json: serde_json::Value =
+            serde_json::from_slice(&processed).expect("processed body should be valid json");
+
+        assert_eq!(processed_json["reasoning_effort"], "high");
     }
 
     #[test]

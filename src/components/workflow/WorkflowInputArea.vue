@@ -262,6 +262,7 @@
               </template>
             </el-dropdown>
 
+            <!-- sandbox -->
             <el-popover
               v-model:visible="sandboxPopoverVisible"
               placement="top"
@@ -375,7 +376,6 @@
 
             <!-- Auto-Approved Tools & Shell Commands Popover -->
             <el-popover
-              v-if="approvalLevel === 'default'"
               v-model:visible="autoApprovedPopoverVisible"
               placement="top"
               :width="400"
