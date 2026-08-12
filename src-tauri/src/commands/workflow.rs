@@ -1012,9 +1012,9 @@ fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<P
         vec![pattern_path.to_path_buf()]
     } else {
         allowed_roots
-            .iter()
-            .map(|root| root.join(pattern_path))
-            .collect()
+            .first()
+            .map(|root| vec![root.join(pattern_path)])
+            .unwrap_or_default()
     };
     let mut targets = std::collections::HashSet::new();
 
@@ -6734,6 +6734,45 @@ mod tests {
             attached.matches("<file_content path=").count(),
             MAX_AT_MENTION_TARGETS
         );
+    }
+
+    #[test]
+    fn test_inject_at_mentions_prefers_primary_root_for_ambiguous_relative_paths() {
+        let primary_root = tempdir().unwrap();
+        let secondary_root = tempdir().unwrap();
+        let primary_docs = primary_root.path().join("docs");
+        let secondary_docs = secondary_root.path().join("docs");
+        std::fs::create_dir(&primary_docs).unwrap();
+        std::fs::create_dir(&secondary_docs).unwrap();
+        std::fs::write(primary_docs.join("primary.txt"), "primary docs").unwrap();
+        std::fs::write(secondary_docs.join("secondary.txt"), "secondary docs").unwrap();
+
+        let secondary_docs_path = std::fs::canonicalize(&secondary_docs).unwrap();
+        let secondary_display_path = secondary_docs_path.to_string_lossy();
+        let prompt = format!(
+            "Write one file to @docs and explicitly inspect @\"{}\"",
+            secondary_display_path
+        );
+
+        let (normalized_prompt, attached) = inject_at_mentions(
+            &prompt,
+            &[
+                primary_root.path().to_string_lossy().to_string(),
+                secondary_root.path().to_string_lossy().to_string(),
+            ],
+        );
+
+        assert_eq!(
+            normalized_prompt,
+            format!(
+                "Write one file to @docs and explicitly inspect @{}",
+                secondary_display_path
+            )
+        );
+        assert!(attached.contains("<list_dir path=\"docs\">"));
+        assert!(attached.contains("primary.txt"));
+        assert!(attached.contains(&format!("<list_dir path=\"{}\">", secondary_display_path)));
+        assert!(attached.contains("secondary.txt"));
     }
 
     #[test]
