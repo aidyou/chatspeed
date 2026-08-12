@@ -27,9 +27,13 @@
 
 ### 🐞 Bug Fixes
 
+- **Workflow recovery and completion**:
+  - Fixed stale sub-agent state, queued messages, and task state after clearing context; recovery now handles sub-agent completion events reliably without letting an old context affect a new task.
+  - Fixed missing terminal states for tools cancelled during execution, and improved compatibility validation between completion reports and summaries.
+- **File access safety**: File previews, directory listing, and search now strictly respect authorized paths instead of silently ignoring path-validation errors.
 - **Configuration and protocols**:
   - Configuration transfers now tolerate stale references, and sandbox host-rule IDs are generated on the backend.
-  - Preserved OpenAI tool-call IDs in CCProxy responses.
+  - Preserved OpenAI tool-call IDs in CCProxy responses; Sensenova models now map unsupported `xhigh` reasoning effort to `high`.
 - **Maintenance**: Updated frontend and Rust dependencies to address reported vulnerabilities.
 
 ---
