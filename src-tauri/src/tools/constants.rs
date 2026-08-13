@@ -35,6 +35,7 @@ pub const TOOL_COMPLETE_WORKFLOW: &str = "complete_workflow";
 pub const TOOL_SUBMIT_RESULT: &str = "submit_result";
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
 pub const TOOL_MCP_TOOL_LOAD: &str = "mcp_tool_load";
+pub const TOOL_READ_HISTORY_MESSAGE: &str = "read_history_message";
 
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 
@@ -58,6 +59,7 @@ pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
             | TOOL_COMPLETE_WORKFLOW
             | TOOL_SUBMIT_RESULT
             | TOOL_SUBMIT_PLAN
+            | TOOL_READ_HISTORY_MESSAGE
     )
 }
 
@@ -75,6 +77,7 @@ pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
             | TOOL_COMPLETE_WORKFLOW
             | TOOL_SUBMIT_RESULT
             | TOOL_SKILL
+            | TOOL_READ_HISTORY_MESSAGE
     )
 }
 
@@ -100,9 +103,16 @@ mod tests {
             TOOL_PLAN_READ_NOTE,
             TOOL_PLAN_WRITE_NOTE,
             TOOL_PLAN_EDIT_NOTE,
+            TOOL_READ_HISTORY_MESSAGE,
         ] {
             assert!(is_core_workflow_builtin_tool(tool), "{tool} should be core");
         }
+    }
+
+    #[test]
+    fn workflow_history_read_is_internal_and_auto_execute() {
+        assert!(is_core_workflow_builtin_tool(TOOL_READ_HISTORY_MESSAGE));
+        assert!(is_auto_execute_workflow_tool(TOOL_READ_HISTORY_MESSAGE));
     }
 
     #[test]

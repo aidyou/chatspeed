@@ -190,6 +190,7 @@ impl ContextManager {
             .cloned();
         let latest_manual_clear_id = latest_manual_clear.as_ref().and_then(|message| message.id);
         let active_task_anchor_ids = Self::active_task_anchor_message_ids(messages);
+        let permanent_user_anchor_ids = Self::permanent_user_anchor_message_ids(messages);
         let mut compacted = Vec::new();
 
         if latest_manual_clear_id != latest_summary_id {
@@ -203,7 +204,9 @@ impl ContextManager {
                 .iter()
                 .filter(|message| {
                     message.id.is_some_and(|id| {
-                        id <= compressed_until_message_id && active_task_anchor_ids.contains(&id)
+                        permanent_user_anchor_ids.contains(&id)
+                            || (id <= compressed_until_message_id
+                                && active_task_anchor_ids.contains(&id))
                     })
                 })
                 .cloned(),
@@ -223,9 +226,24 @@ impl ContextManager {
         compacted
     }
 
-    fn is_user_authored_task_message(message: &WorkflowMessage) -> bool {
+    pub(crate) fn is_user_authored_task_message(message: &WorkflowMessage) -> bool {
+        let metadata = message.metadata.as_ref();
         message.role == "user"
             && message.step_type.as_deref() != Some("observe")
+            && message
+                .source_event_type
+                .as_deref()
+                .is_none_or(|source| source == "user_input_received")
+            && message.message_kind != "runtime_observation"
+            && message.message_subtype.as_deref() != Some("approved_plan")
+            && message.message_subtype.as_deref() != Some("final_review_feedback")
+            && !crate::workflow::react::runtime_observation::is_runtime_observation(metadata)
+            && !metadata.is_some_and(|metadata| {
+                metadata.get("review_display_state").is_some()
+                    || metadata.get("review_verdict").is_some()
+                    || metadata.get("runtime_observation").is_some()
+            })
+            && !message.message.contains("<SYSTEM_REMINDER>")
             && (!message.message.trim().is_empty()
                 || message
                     .attached_context
@@ -233,14 +251,41 @@ impl ContextManager {
                     .is_some_and(|attached| !attached.trim().is_empty()))
     }
 
-    fn active_task_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
-        let completion_start = Self::latest_successful_completion_index(messages)
+    fn current_approved_plan_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        let task_start = Self::latest_successful_completion_index(messages)
             .map(|index| index + 1)
             .unwrap_or(0);
+        messages[task_start..]
+            .iter()
+            .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .map(|index| task_start + index)
+    }
+
+    fn permanent_user_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
+        if Self::current_approved_plan_index(messages).is_some() {
+            return HashSet::new();
+        }
         let manual_clear_start = Self::latest_manual_clear_context_index(messages)
             .map(|index| index + 1)
             .unwrap_or(0);
-        let task_start = completion_start.max(manual_clear_start);
+        messages[manual_clear_start..]
+            .iter()
+            .find(|message| Self::is_user_authored_task_message(message))
+            .and_then(|message| message.id)
+            .into_iter()
+            .collect()
+    }
+
+    fn active_task_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
+        let task_start = Self::current_approved_plan_index(messages).unwrap_or_else(|| {
+            let completion_start = Self::latest_successful_completion_index(messages)
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            let manual_clear_start = Self::latest_manual_clear_context_index(messages)
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            completion_start.max(manual_clear_start)
+        });
 
         messages[task_start..]
             .iter()
@@ -260,9 +305,60 @@ impl ContextManager {
             .round() as usize
     }
 
+    fn pressure_fixed_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
+        let mut anchors = Self::active_task_anchor_message_ids(messages);
+        anchors.extend(Self::permanent_user_anchor_message_ids(messages));
+        anchors
+    }
+
+    fn pressure_todo_anchor_tokens(&self) -> f64 {
+        match self.main_store.get_todo_list_for_workflow(&self.session_id) {
+            Ok(todos) => crate::ccproxy::utils::token_estimator::estimate_tokens(
+                &Self::render_authoritative_todo_list(&todos),
+            ),
+            Err(error) => crate::ccproxy::utils::token_estimator::estimate_tokens(&format!(
+                "<CURRENT_TODO_LIST authoritative=\"unavailable\">\nUnable to read the authoritative todo list for this call: {}\n</CURRENT_TODO_LIST>",
+                error
+            )),
+        }
+    }
+
+    fn pressure_fixed_anchor_tokens(&self, anchor_ids: &HashSet<i64>) -> f64 {
+        self.messages
+            .iter()
+            .filter(|message| message.id.is_some_and(|id| anchor_ids.contains(&id)))
+            .map(Self::estimate_workflow_message_tokens)
+            .sum()
+    }
+
+    pub(crate) fn pressure_handoff_reserve_tokens(&self) -> f64 {
+        let prior_summary_tokens = Self::latest_summary_message(&self.messages)
+            .map(Self::estimate_workflow_message_tokens)
+            .unwrap_or(0.0);
+        let minimum_reserve = (self.max_tokens as f64 * 0.08).clamp(512.0, 2048.0);
+        let maximum_reserve = (self.max_tokens as f64 * 0.25).max(minimum_reserve);
+        // Grow from the actual previous handoff, but require it to decay when it would
+        // otherwise consume more than one quarter of the model context.
+        minimum_reserve
+            .max((prior_summary_tokens * 1.25).ceil())
+            .min(maximum_reserve)
+    }
+
+    fn pressure_retained_raw_tail_budget(&self) -> f64 {
+        let fixed_anchor_ids = Self::pressure_fixed_anchor_message_ids(&self.messages);
+        let fixed_anchor_tokens = self.pressure_fixed_anchor_tokens(&fixed_anchor_ids);
+        let todo_anchor_tokens = self.pressure_todo_anchor_tokens();
+        let expected_handoff_tokens = self.pressure_handoff_reserve_tokens();
+        let target_tail_tokens =
+            self.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        (target_tail_tokens - fixed_anchor_tokens - todo_anchor_tokens - expected_handoff_tokens)
+            .max(0.0)
+    }
+
     fn build_compression_candidate_preserving_latest_completion(
         &self,
         minimum_completions_after_summary: usize,
+        enforce_pressure_budget: bool,
     ) -> Option<(Vec<WorkflowMessage>, i64)> {
         let compressed_until_message_id =
             Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
@@ -284,11 +380,14 @@ impl ContextManager {
             return None;
         }
 
-        let target_completion_idx =
-            *completion_indices.get(completion_indices.len().saturating_sub(2))?;
+        let first_eligible_completion_idx = if enforce_pressure_budget {
+            *completion_indices.first()?
+        } else {
+            *completion_indices.get(completion_indices.len().saturating_sub(2))?
+        };
         let latest_completion_idx = *completion_indices.last()?;
 
-        if latest_completion_idx <= target_completion_idx {
+        if latest_completion_idx <= first_eligible_completion_idx {
             return None;
         }
 
@@ -301,22 +400,100 @@ impl ContextManager {
             return None;
         }
 
-        let compressed_until_id = self.messages[target_completion_idx].id?;
-
-        if !Self::is_safe_pressure_compression_boundary(&self.messages, target_completion_idx) {
-            return None;
-        }
-
         let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
-
-        if start_idx > target_completion_idx {
-            return None;
+        let retained_raw_tail_budget =
+            enforce_pressure_budget.then(|| self.pressure_retained_raw_tail_budget());
+        let mut fallback_completion_idx = None;
+        let mut budgeted_completion_idx = None;
+        for completion_idx in completion_indices[..completion_indices.len().saturating_sub(1)]
+            .iter()
+            .copied()
+            .filter(|idx| *idx >= first_eligible_completion_idx)
+        {
+            if start_idx > completion_idx
+                || !Self::is_safe_pressure_compression_boundary(&self.messages, completion_idx)
+            {
+                continue;
+            }
+            fallback_completion_idx.get_or_insert(completion_idx);
+            let retained_tail_tokens = self.messages[completion_idx + 1..]
+                .iter()
+                .map(Self::estimate_workflow_message_tokens)
+                .sum::<f64>();
+            if retained_raw_tail_budget.is_some_and(|budget| retained_tail_tokens <= budget) {
+                budgeted_completion_idx.get_or_insert(completion_idx);
+            }
+        }
+        let target_completion_idx = if enforce_pressure_budget {
+            budgeted_completion_idx.or(fallback_completion_idx)?
+        } else {
+            fallback_completion_idx?
+        };
+        let compressed_until_id = self.messages[target_completion_idx].id?;
+        let retained_tail_tokens = self.messages[target_completion_idx + 1..]
+            .iter()
+            .map(Self::estimate_workflow_message_tokens)
+            .sum::<f64>();
+        if let Some(retained_raw_tail_budget) = retained_raw_tail_budget {
+            log::info!(
+                "[Workflow][session={}][phase=compression] completed_task_pressure_budget raw_tail={} raw_tail_budget={} boundary={}",
+                self.session_id,
+                retained_tail_tokens.ceil(),
+                retained_raw_tail_budget.ceil(),
+                compressed_until_id
+            );
         }
 
         Some((
             self.messages[start_idx..=target_completion_idx].to_vec(),
             compressed_until_id,
         ))
+    }
+
+    pub(crate) fn render_authoritative_todo_list(todos: &[serde_json::Value]) -> String {
+        let items = todos
+            .iter()
+            .map(|todo| {
+                let id = todo
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("?");
+                let subject = todo
+                    .get("subject")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Untitled");
+                let status = todo
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown");
+                let description = if status == "in_progress" {
+                    todo.get("description")
+                        .and_then(|value| value.as_str())
+                        .map(|value| {
+                            format!(
+                                " description={}",
+                                value.chars().take(300).collect::<String>()
+                            )
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                format!(
+                    "- id={} status={} subject={}{}",
+                    id, status, subject, description
+                )
+            })
+            .collect::<Vec<_>>();
+        let body = if items.is_empty() {
+            "(empty)".to_string()
+        } else {
+            items.join("\n")
+        };
+        format!(
+            "<CURRENT_TODO_LIST authoritative=\"true\">\n{}\n</CURRENT_TODO_LIST>",
+            body
+        )
     }
 
     fn estimate_workflow_message_tokens(message: &WorkflowMessage) -> f64 {
@@ -432,8 +609,28 @@ impl ContextManager {
         }
 
         let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
-        let retained_token_budget =
+        let fixed_anchor_ids = Self::pressure_fixed_anchor_message_ids(&self.messages);
+        let fixed_anchor_tokens = self.pressure_fixed_anchor_tokens(&fixed_anchor_ids);
+        let todo_anchor_tokens = self.pressure_todo_anchor_tokens();
+        // Reserve space for the actual prior handoff size plus growth in newly retained evidence.
+        let expected_handoff_tokens = self.pressure_handoff_reserve_tokens();
+        let target_tail_tokens =
             self.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        let retained_token_budget = (target_tail_tokens
+            - fixed_anchor_tokens
+            - todo_anchor_tokens
+            - expected_handoff_tokens)
+            .max(0.0);
+        if fixed_anchor_tokens + todo_anchor_tokens + expected_handoff_tokens > target_tail_tokens {
+            log::warn!(
+                "[Workflow][session={}][phase=compression] fixed_anchor_budget_exceeded anchors={} todo_anchor={} expected_handoff={} target_tail={}; retaining the latest complete safe tool batch",
+                self.session_id,
+                fixed_anchor_tokens.ceil(),
+                todo_anchor_tokens.ceil(),
+                expected_handoff_tokens,
+                target_tail_tokens.ceil()
+            );
+        }
         let mut retained_tokens = 0.0;
         let mut candidate_boundary_idx = None;
         let mut fallback_boundary_idx = None;
@@ -453,14 +650,23 @@ impl ContextManager {
 
         let boundary_idx = candidate_boundary_idx.or(fallback_boundary_idx)?;
         let compressed_until_id = self.messages[boundary_idx].id?;
-        let active_task_anchor_ids = Self::active_task_anchor_message_ids(&self.messages);
+        let selected_tail_tokens = self.messages[boundary_idx + 1..]
+            .iter()
+            .map(Self::estimate_workflow_message_tokens)
+            .sum::<f64>();
+        log::info!(
+            "[Workflow][session={}][phase=compression] pressure_budget anchors={} todo_anchor={} expected_handoff={} raw_tail={} raw_tail_budget={} boundary={}",
+            self.session_id,
+            fixed_anchor_tokens.ceil(),
+            todo_anchor_tokens.ceil(),
+            expected_handoff_tokens,
+            selected_tail_tokens.ceil(),
+            retained_token_budget.ceil(),
+            compressed_until_id
+        );
         let mut candidate = self.messages[..start_idx]
             .iter()
-            .filter(|message| {
-                message
-                    .id
-                    .is_some_and(|id| active_task_anchor_ids.contains(&id))
-            })
+            .filter(|message| message.id.is_some_and(|id| fixed_anchor_ids.contains(&id)))
             .cloned()
             .collect::<Vec<_>>();
         candidate.extend(self.messages[start_idx..=boundary_idx].iter().cloned());
@@ -468,12 +674,12 @@ impl ContextManager {
     }
 
     pub fn build_pressure_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_preserving_latest_completion(2)
+        self.build_compression_candidate_preserving_latest_completion(2, true)
             .or_else(|| self.build_active_task_pressure_compression_candidate())
     }
 
     pub fn build_task_boundary_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
-        self.build_compression_candidate_preserving_latest_completion(3)
+        self.build_compression_candidate_preserving_latest_completion(3, false)
     }
 
     /// Test-only compatibility wrapper for blocking compression expectations.
@@ -550,6 +756,12 @@ impl ContextManager {
             {
                 return llm_content.to_string();
             }
+        }
+
+        if let Some(reference) =
+            super::user_context::reference_from_metadata(message.metadata.as_ref())
+        {
+            return format!("{}\n\n{}", message.message, reference.projection_marker());
         }
 
         Self::merge_attached_context(&message.message, message.attached_context.as_deref())
@@ -965,21 +1177,8 @@ impl ContextManager {
             .iter()
             .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))?;
 
-        let mut projection = current_task[..approved_plan_index]
-            .iter()
-            .filter(|message| {
-                message.role == "user"
-                    && message.step_type.as_deref() != Some("observe")
-                    && (!message.message.trim().is_empty()
-                        || message
-                            .attached_context
-                            .as_deref()
-                            .is_some_and(|attached| !attached.trim().is_empty()))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut projection = vec![current_task[approved_plan_index].clone()];
 
-        projection.push(current_task[approved_plan_index].clone());
         projection.extend(
             current_task[approved_plan_index + 1..]
                 .iter()
@@ -1010,19 +1209,14 @@ impl ContextManager {
                 continue;
             }
 
-            let step_type = message
-                .step_type
-                .as_deref()
-                .and_then(|value| value.parse().ok());
-
             let merged_content = Self::content_for_context_projection(message);
             let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
                 Self::approved_plan_context_projection(message)
-            } else if message.role == "user"
-                && step_type.as_ref() != Some(&StepType::Observe)
-                && !projected
-                    .iter()
-                    .any(|existing: &WorkflowAiContextMessage| existing.role == "user")
+            } else if Self::is_user_authored_task_message(message)
+                && !projected.iter().any(|existing: &WorkflowAiContextMessage| {
+                    existing.message_subtype.as_deref() != Some("approved_plan")
+                        && existing.role == "user"
+                })
             {
                 format!("<user_query>\n{}\n</user_query>", merged_content)
             } else {
@@ -1299,6 +1493,24 @@ impl ContextManager {
         ))
     }
 
+    pub async fn update_message_metadata(
+        &mut self,
+        message_id: i64,
+        metadata: serde_json::Value,
+    ) -> Result<(), WorkflowEngineError> {
+        let store = self.main_store.as_ref();
+        store.update_workflow_message_metadata(message_id, &metadata)?;
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == Some(message_id))
+        {
+            message.metadata = Some(metadata);
+        }
+        self.rebuild_context_projection_from_runtime_messages(false, true)
+            .await
+    }
+
     pub async fn compress(
         &mut self,
         summary: String,
@@ -1426,7 +1638,7 @@ impl ContextManager {
 
 #[cfg(test)]
 mod tests {
-    use super::ContextManager;
+    use super::{ContextManager, CONTEXT_PRESSURE_COMPRESSION_THRESHOLD};
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
     use crate::db::WorkflowAiContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
@@ -2463,6 +2675,125 @@ mod tests {
                 .id
                 .expect("completion message id missing")
         );
+        context
+            .compress(
+                json!({
+                    "schema_version": 2,
+                    "kind": "pressure_handoff",
+                    "as_of_boundary": {"compressed_until_message_id": compressed_until_id},
+                    "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
+                    "open_threads_at_boundary": [], "file_changes": [], "technical_invariants": [],
+                    "warnings_and_do_not_repeat": [], "environment_constraints": [],
+                    "credential_references": [], "review_rounds": []
+                })
+                .to_string(),
+                5,
+                compressed_until_id,
+            )
+            .await
+            .expect("pressure checkpoint should compact completed tasks");
+        assert!(
+            context
+                .get_messages_for_llm()
+                .iter()
+                .any(|message| message.role == "user" && message.message.contains("task 1")),
+            "the original main user question must remain a permanent projection anchor"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_task_pressure_candidate_bounds_large_multi_task_tail() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-completed-pressure-budget-test";
+        insert_workflow(&store, session_id);
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context = ContextManager::new(session_id.to_string(), store, 8_192, tsid_generator);
+
+        let mut completion_ids = Vec::new();
+        for task in 1..=3 {
+            context
+                .add_message(
+                    "user".to_string(),
+                    format!("task {task}"),
+                    None,
+                    None,
+                    None,
+                    task * 2,
+                    false,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to add task");
+            if task == 2 {
+                context
+                    .add_message(
+                        "assistant".to_string(),
+                        "large completed-task history ".repeat(1_000),
+                        None,
+                        None,
+                        Some(StepType::Think),
+                        task * 2,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await
+                    .expect("failed to add large history");
+            }
+            let completion = context
+                .add_message(
+                    "tool".to_string(),
+                    TASK_FINISHED.to_string(),
+                    None,
+                    None,
+                    Some(StepType::Observe),
+                    task * 2 + 1,
+                    false,
+                    None,
+                    Some(json!({
+                        "tool_name": TOOL_COMPLETE_WORKFLOW,
+                        "execution_status": "completed"
+                    })),
+                )
+                .await
+                .expect("failed to add completion")
+                .0;
+            completion_ids.push(completion.id.expect("completion id"));
+        }
+        context
+            .add_message(
+                "assistant".to_string(),
+                "starting the next task".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                8,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add active task marker");
+
+        let (_, compressed_until_id) = context
+            .build_blocking_compression_candidate()
+            .expect("pressure candidate should bound the large completed-task tail");
+        assert_eq!(
+            compressed_until_id, completion_ids[1],
+            "budgeting should compress through the second completed task rather than retain its large history"
+        );
+        let retained_tokens = context
+            .messages
+            .iter()
+            .skip_while(|message| message.id != Some(compressed_until_id))
+            .skip(1)
+            .map(ContextManager::estimate_workflow_message_tokens)
+            .sum::<f64>();
+        assert!(
+            retained_tokens <= context.pressure_retained_raw_tail_budget(),
+            "retained raw tail must fit the total pressure budget"
+        );
     }
 
     #[tokio::test]
@@ -2473,7 +2804,26 @@ mod tests {
 
         let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
         let mut context =
-            ContextManager::new(session_id.to_string(), store.clone(), 128, tsid_generator);
+            ContextManager::new(session_id.to_string(), store.clone(), 8192, tsid_generator);
+        store
+            .update_workflow_todo_list(
+                session_id,
+                &serde_json::to_string(&vec![
+                    json!({
+                        "id": "todo-1",
+                        "subject": "Keep current execution context bounded",
+                        "status": "in_progress",
+                        "description": "budget detail ".repeat(60)
+                    }),
+                    json!({
+                        "id": "todo-2",
+                        "subject": "Verify handoff",
+                        "status": "pending"
+                    }),
+                ])
+                .expect("todo json"),
+            )
+            .expect("store authoritative todo");
 
         let _ = context
             .add_message(
@@ -2489,6 +2839,21 @@ mod tests {
             )
             .await
             .expect("failed to add task");
+        let historical_message = context
+            .add_message(
+                "assistant".to_string(),
+                "Historical tool analysis ".repeat(1000),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add compressible history")
+            .0;
         let _ = context
             .add_message(
                 "assistant".to_string(),
@@ -2544,7 +2909,7 @@ mod tests {
                 .await
                 .expect("failed to add batched tool result");
         }
-        let tool_result = context
+        let _tool_result = context
             .add_message(
                 "tool".to_string(),
                 "final tool result".to_string(),
@@ -2579,31 +2944,79 @@ mod tests {
             .await
             .expect("failed to add active context");
 
-        let (_, compressed_until_id) = context
+        let (candidate, compressed_until_id) = context
             .build_pressure_compression_candidate()
             .expect("pressure compression should summarize earlier active-task context");
         assert_eq!(
             compressed_until_id,
-            tool_result.id.expect("tool result id missing")
+            historical_message
+                .id
+                .expect("historical message id missing"),
+            "the dynamic todo anchor cost should advance compression to an earlier safe boundary"
         );
-
-        for execution_status in ["approval_submitted", "running"] {
-            let mut unresolved_context = context.messages.clone();
-            let unresolved_tool = unresolved_context
-                .iter_mut()
-                .find(|message| message.id == tool_result.id)
-                .expect("tool result should remain in context");
-            unresolved_tool.metadata = Some(json!({
-                "tool_call_id": "tool-1",
-                "tool_name": "read_file",
-                "execution_status": execution_status
-            }));
-            context.messages = unresolved_context;
-            assert!(
-                context.build_pressure_compression_candidate().is_none(),
-                "pressure compression must not cut an {execution_status} tool exchange"
-            );
-        }
+        assert!(
+            candidate.iter().any(|message| message.role == "user"),
+            "the permanent user anchor must stay available to compression"
+        );
+        let todo_tokens = estimate_tokens(&ContextManager::render_authoritative_todo_list(
+            &store
+                .get_todo_list_for_workflow(session_id)
+                .expect("authoritative todo"),
+        ));
+        let boundary_idx = context
+            .messages
+            .iter()
+            .position(|message| message.id == Some(compressed_until_id))
+            .expect("compression boundary message");
+        let raw_tail_tokens = context.messages[boundary_idx + 1..]
+            .iter()
+            .map(ContextManager::estimate_workflow_message_tokens)
+            .sum::<f64>();
+        let permanent_anchor_tokens = context.messages[..boundary_idx]
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(ContextManager::estimate_workflow_message_tokens)
+            .sum::<f64>();
+        let pressure_target =
+            context.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        assert!(
+            permanent_anchor_tokens
+                + todo_tokens
+                + context.pressure_handoff_reserve_tokens()
+                + raw_tail_tokens
+                <= pressure_target,
+            "fixed anchors, dynamic todo, expected handoff, and selected safe tail must fit the pressure target"
+        );
+        let before = context.current_token_estimate();
+        context
+            .compress(
+                serde_json::json!({
+                    "schema_version": 2,
+                    "kind": "pressure_handoff",
+                    "as_of_boundary": {"compressed_until_message_id": compressed_until_id},
+                    "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
+                    "open_threads_at_boundary": [], "file_changes": [], "technical_invariants": [],
+                    "warnings_and_do_not_repeat": [], "environment_constraints": [],
+                    "credential_references": [], "review_rounds": []
+                })
+                .to_string(),
+                3,
+                compressed_until_id,
+            )
+            .await
+            .expect("v2 pressure checkpoint should rebuild the projection");
+        let after = context.current_token_estimate();
+        assert!(
+            after < before / 2,
+            "controlled large history must shrink materially: before={before}, after={after}"
+        );
+        assert!(
+            context
+                .get_messages_for_llm()
+                .iter()
+                .any(|message| message.role == "user"),
+            "the permanent user anchor must remain projected after compaction"
+        );
     }
 
     #[tokio::test]
@@ -3023,13 +3436,15 @@ mod tests {
             .filter_map(|message| message.id)
             .collect::<Vec<_>>();
 
-        assert_eq!(retained_ids, vec![1, 3, 5]);
+        assert_eq!(retained_ids, vec![3, 5]);
         let execution_projection = ContextManager::approved_plan_execution_projection(&compacted)
             .expect("approved plan should remain the active execution boundary");
-        assert_eq!(execution_projection.len(), 3);
-        assert_eq!(execution_projection[0].id, Some(1));
-        assert_eq!(execution_projection[1].id, Some(3));
-        assert_eq!(execution_projection[2].id, Some(5));
+        assert_eq!(execution_projection.len(), 2);
+        assert_eq!(execution_projection[0].id, Some(3));
+        assert_eq!(execution_projection[1].id, Some(5));
+        assert!(execution_projection
+            .iter()
+            .all(|message| message.message != "Ship the fix"));
     }
 
     #[test]
@@ -3467,7 +3882,7 @@ mod tests {
         assert!(llm_contents
             .iter()
             .any(|content| content.contains("Task four")));
-        assert!(!llm_contents
+        assert!(llm_contents
             .iter()
             .any(|content| content.contains("Task one")));
         assert!(!llm_contents
@@ -3779,6 +4194,63 @@ mod tests {
         assert!(llm_messages
             .iter()
             .any(|message| message.message.contains("Follow-up task")));
+    }
+
+    #[test]
+    fn user_anchor_provenance_excludes_provider_user_observations_and_approved_plans() {
+        let base = WorkflowMessage {
+            id: Some(1),
+            session_id: "provenance".to_string(),
+            role: "user".to_string(),
+            message: "Actual user question".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        assert!(ContextManager::is_user_authored_task_message(&base));
+
+        let runtime_observation = WorkflowMessage {
+            id: Some(2),
+            message: "Runtime-generated observation".to_string(),
+            message_kind: "runtime_observation".to_string(),
+            metadata: Some(runtime_observation_metadata(
+                RuntimeObservationType::AuditRejected,
+                json!({"llm_content": "review rejected"}),
+            )),
+            ..base.clone()
+        };
+        assert!(!ContextManager::is_user_authored_task_message(
+            &runtime_observation
+        ));
+
+        let approved_plan = WorkflowMessage {
+            id: Some(3),
+            message: "# APPROVED EXECUTION PLAN".to_string(),
+            message_subtype: Some("approved_plan".to_string()),
+            ..base.clone()
+        };
+        assert!(!ContextManager::is_user_authored_task_message(
+            &approved_plan
+        ));
+
+        let review_feedback = WorkflowMessage {
+            id: Some(4),
+            message: "review feedback".to_string(),
+            metadata: Some(json!({"review_display_state": "final_review_rejected"})),
+            ..base
+        };
+        assert!(!ContextManager::is_user_authored_task_message(
+            &review_feedback
+        ));
     }
 
     #[test]
@@ -4745,31 +5217,23 @@ mod tests {
             .await
             .expect("execution segment should start from durable transcript authority");
 
-        assert_eq!(context.ai_context_messages.len(), 3);
-        assert_eq!(context.ai_context_messages[0].role, "user");
+        assert_eq!(context.ai_context_messages.len(), 1);
         assert_eq!(
-            context.ai_context_messages[0].message,
-            "<user_query>\nShip the fix\n</user_query>"
-        );
-        assert_eq!(
-            context.ai_context_messages[1].message,
-            "Keep the change narrowly scoped"
-        );
-        assert_eq!(
-            context.ai_context_messages[2].message_subtype.as_deref(),
+            context.ai_context_messages[0].message_subtype.as_deref(),
             Some("approved_plan")
         );
-        assert_eq!(context.ai_context_messages[2].role, "user");
-        assert!(context.ai_context_messages[2]
+        assert_eq!(context.ai_context_messages[0].role, "user");
+        assert!(context.ai_context_messages[0]
             .message
             .contains("<approved_plan>\n1. edit files\n2. run tests\n</approved_plan>"));
-        assert!(!context.ai_context_messages[2]
+        assert!(!context.ai_context_messages[0]
             .message
             .contains("Inspect implementation options"));
-        assert!(context
-            .ai_context_messages
-            .iter()
-            .all(|message| !message.message.contains("Planning-only")));
+        assert!(context.ai_context_messages.iter().all(|message| !message
+            .message
+            .contains("Ship the fix")
+            && !message.message.contains("Keep the change narrowly scoped")
+            && !message.message.contains("Planning-only")));
 
         let _ = context
             .add_message(
@@ -4790,11 +5254,11 @@ mod tests {
             .await
             .expect("failed to append approval observation");
 
-        assert_eq!(context.ai_context_messages.len(), 3);
-        assert!(context
-            .ai_context_messages
-            .iter()
-            .all(|message| message.role == "user"));
+        assert_eq!(context.ai_context_messages.len(), 1);
+        assert_eq!(
+            context.ai_context_messages[0].message_subtype.as_deref(),
+            Some("approved_plan")
+        );
 
         let mut recovered = ContextManager::new(
             session_id.to_string(),
@@ -4806,14 +5270,15 @@ mod tests {
             .load_history()
             .await
             .expect("execution projection should recover from durable transcript");
-        assert_eq!(recovered.ai_context_messages.len(), 3);
-        assert!(recovered.ai_context_messages[2]
+        assert_eq!(recovered.ai_context_messages.len(), 1);
+        assert!(recovered.ai_context_messages[0]
             .message
             .contains("<approved_plan>"));
-        assert!(recovered
-            .ai_context_messages
-            .iter()
-            .all(|message| !message.message.contains("Planning-only")));
+        assert!(recovered.ai_context_messages.iter().all(|message| {
+            !message.message.contains("Ship the fix")
+                && !message.message.contains("Keep the change narrowly scoped")
+                && !message.message.contains("Planning-only")
+        }));
     }
 
     #[tokio::test]

@@ -400,6 +400,19 @@ impl LlmProcessor {
         }
     }
 
+    fn current_todo_prompt_from_store(&self, context: &ContextManager) -> String {
+        match context
+            .main_store
+            .get_todo_list_for_workflow(&self.session_id)
+        {
+            Ok(todos) => Self::render_current_todo_list(&todos),
+            Err(error) => format!(
+                "<CURRENT_TODO_LIST authoritative=\"unavailable\">\nUnable to read the authoritative todo list for this call: {}\n</CURRENT_TODO_LIST>",
+                error
+            ),
+        }
+    }
+
     /// Prepares and calls the LLM with the current context.
     /// Implements exponential backoff for 429 errors and drafting instructions for non-reasoning models.
     pub async fn call(
@@ -417,25 +430,24 @@ impl LlmProcessor {
         let raw_history = context.get_messages_for_llm();
 
         // 1. Context Normalization & Prompt Injection
-        let state_snapshot =
-            raw_history.iter().rev().find_map(|m| {
-                if m.role == "system" && m.metadata.as_ref().is_some_and(|_| {
-                    crate::workflow::react::context::ContextManager::is_compression_summary_message(
-                        m,
-                    )
-                }) {
-                    Some(m.message.clone())
-                } else {
-                    None
-                }
-            });
+        let state_snapshot = raw_history.iter().rev().find_map(|m| {
+            if m.role == "system"
+                && crate::workflow::react::context::ContextManager::is_compression_summary_message(
+                    m,
+                )
+            {
+                Some(m.message.clone())
+            } else {
+                None
+            }
+        });
 
-        // Extract the next pending todo item for progress display.
-        let next_pending_task = None::<String>;
+        let current_todo_list = self.current_todo_prompt_from_store(context);
 
         let mut history = self.normalize_history(raw_history);
         Self::append_runtime_reminder(&mut history, runtime_reminder);
-        let final_history = self.inject_prompts(history, state_snapshot, next_pending_task, policy);
+        let final_history =
+            self.inject_prompts(history, state_snapshot, Some(current_todo_list), policy);
 
         // 2. Retry Loop for transient LLM failures with exponential backoff
         let mut retry_count = 0;
@@ -1122,11 +1134,15 @@ impl LlmProcessor {
             .map(str::to_string)
     }
 
+    fn render_current_todo_list(todos: &[serde_json::Value]) -> String {
+        ContextManager::render_authoritative_todo_list(todos)
+    }
+
     fn inject_prompts(
         &self,
         mut history: Vec<serde_json::Value>,
         state_snapshot: Option<String>,
-        _next_pending_task: Option<String>,
+        current_todo_list: Option<String>,
         policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
         let mut stable_system_parts = Vec::new();
@@ -1270,6 +1286,9 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                 "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
                 snapshot
             ));
+        }
+        if let Some(current_todo_list) = current_todo_list {
+            dynamic_tail_parts.push(current_todo_list);
         }
 
         stable_system_parts.extend(dynamic_tail_parts);
@@ -1531,9 +1550,11 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 mod tests {
     use super::LlmProcessor;
     use crate::ai::traits::chat::MCPToolDeclaration;
-    use crate::db::Agent;
     use crate::db::WorkflowMessage;
+    use crate::db::{Agent, MainStore};
+    use crate::libs::tsid::TsidGenerator;
     use crate::tools::ToolScope;
+    use crate::workflow::react::context::ContextManager;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
     use crate::workflow::react::policy::ExecutionPolicy;
@@ -1793,6 +1814,59 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[1]["role"], "user");
         assert_eq!(history[1]["content"], reminder);
+    }
+
+    #[test]
+    fn current_todo_prompt_reads_latest_database_state_without_context_mutation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(MainStore::new(&dir.path().join("todo.db")).expect("store"));
+        let mut agent = test_agent();
+        agent.is_system = Some(false);
+        agent.disabled = Some(false);
+        store.add_agent(&agent).expect("agent");
+        store
+            .create_workflow("test-session", "query", &agent.id, None, None)
+            .expect("workflow");
+        let context = ContextManager::new(
+            "test-session".to_string(),
+            store.clone(),
+            4096,
+            Arc::new(TsidGenerator::new(1).expect("tsid")),
+        );
+        let transcript_len = context.messages.len();
+        store
+            .update_workflow_todo_list(
+                "test-session",
+                r#"[{"id":"1","subject":"first","status":"pending"}]"#,
+            )
+            .expect("first todo");
+        let processor = test_llm_processor();
+        assert!(processor
+            .current_todo_prompt_from_store(&context)
+            .contains("subject=first"));
+        store
+            .update_workflow_todo_list(
+                "test-session",
+                r#"[{"id":"2","subject":"second","status":"in_progress","description":"fresh"}]"#,
+            )
+            .expect("second todo");
+        let prompt = processor.current_todo_prompt_from_store(&context);
+        assert!(prompt.contains("subject=second"));
+        assert!(!prompt.contains("subject=first"));
+        assert_eq!(context.messages.len(), transcript_len);
+    }
+
+    #[test]
+    fn current_todo_list_is_compact_and_authoritative() {
+        let prompt = LlmProcessor::render_current_todo_list(&[
+            serde_json::json!({"id":"1","subject":"Inspect target","status":"completed","description":"not included"}),
+            serde_json::json!({"id":"2","subject":"Implement fix","status":"in_progress","description":"focused detail"}),
+        ]);
+        assert!(prompt.contains("<CURRENT_TODO_LIST authoritative=\"true\">"));
+        assert!(prompt.contains("id=1 status=completed subject=Inspect target"));
+        assert!(prompt
+            .contains("id=2 status=in_progress subject=Implement fix description=focused detail"));
+        assert!(!prompt.contains("not included"));
     }
 
     #[test]

@@ -325,9 +325,10 @@ It must not depend on whatever happened to remain in a previous projection.
 Current required carryover contract:
 
 - AI context must preserve the latest compression summary when one exists
-- AI context must preserve the most recent completed task after that summary
+- before the first rollup/checkpoint covers it, AI context must preserve the most recent completed task after that summary
+- after a rollup/checkpoint has durably covered that completed task, a later pressure compression may retain it only through the structured summary instead of preserving its raw dialogue
 - AI context must preserve the current unfinished task
-- older completed tasks may be rolled into summary, but must not silently replace the retained latest completed task
+- older completed tasks may be rolled into summary, but must not silently disappear from both the AI projection and durable transcript history
 
 Unless the compression algorithm is intentionally redesigned, changes that weaken this carryover contract are prohibited.
 
@@ -337,10 +338,11 @@ Compression behavior is not an implementation detail. It is part of the workflow
 
 Current required thresholds:
 
-- pressure compression must preserve the latest completed task and only compress older completed work
+- pressure compression before any rollup/checkpoint covers the latest completed task must preserve that task and only compress older completed work
+- once a durable rollup/checkpoint already covers the latest completed task, later pressure compression may remove its raw dialogue while preserving its structured carryover and durable message IDs
 - initial task-boundary rollup must not trigger until three completed tasks exist and a new active task has resumed
-- after a summary already exists, rollup must continue to preserve the latest completed task and only compress older completed work
-- the system must not collapse AI context to only the current task while removing both summary and latest completed-task carryover
+- after a summary already exists, rollup must preserve the current unfinished task and must not remove completed work from both the structured summary and durable transcript history
+- the system must not collapse AI context to only the current task while removing all structured completed-task carryover
 
 Do not change these thresholds or retention rules unless the workflow compression design itself is explicitly being revised.
 

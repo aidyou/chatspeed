@@ -38,6 +38,36 @@ pub fn normalize_preview_details(value: Value) -> Value {
     }
 }
 
+pub fn attach_normalized_display_path(
+    preview_args: &mut Value,
+    path_guard: &PathGuard,
+    is_planning_phase: bool,
+) {
+    let Some(preview_obj) = preview_args.as_object_mut() else {
+        return;
+    };
+    let Some(file_path) = preview_obj
+        .get("file_path")
+        .or_else(|| preview_obj.get("path"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let Ok(resolved_path) =
+        path_guard.validate(Path::new(file_path), is_planning_phase, false, false)
+    else {
+        return;
+    };
+    let display_path = path_guard
+        .get_primary_root()
+        .and_then(|root| resolved_path.strip_prefix(root).ok())
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .unwrap_or(resolved_path.as_path())
+        .to_string_lossy()
+        .replace('\\', "/");
+    preview_obj.insert("display_path".to_string(), json!(display_path));
+}
+
 pub fn attach_write_file_overwrite_old_content(
     preview_args: &mut Value,
     path_guard: &PathGuard,
@@ -347,13 +377,20 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn test_workspace(name: &str, unique: u128) -> std::path::PathBuf {
+        std::env::current_dir()
+            .expect("current directory")
+            .join("target/test-workspaces")
+            .join(format!("{name}_{unique}"))
+    }
+
     #[test]
     fn attach_display_context_resolves_relative_paths_from_primary_root() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("file_preview_test_{unique}"));
+        let root = test_workspace("file_preview", unique);
         let nested = root.join("src");
         fs::create_dir_all(&nested).unwrap();
         let file_path = nested.join("example.txt");
@@ -392,7 +429,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("file_preview_overwrite_test_{unique}"));
+        let root = test_workspace("file_preview_overwrite", unique);
         fs::create_dir_all(&root).unwrap();
         let file_path = root.join("demo.txt");
         fs::write(&file_path, "original content").unwrap();
@@ -414,6 +451,39 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalized_display_path_is_relative_for_primary_and_absolute_for_secondary_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let primary = test_workspace("file_preview_primary", unique);
+        let secondary = test_workspace("file_preview_secondary", unique);
+        fs::create_dir_all(primary.join("src")).unwrap();
+        fs::create_dir_all(&secondary).unwrap();
+        fs::write(primary.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(secondary.join("shared.rs"), "pub fn shared() {}\n").unwrap();
+        let guard = PathGuard::new(vec![primary.clone(), secondary.clone()], vec![], vec![]);
+
+        let mut primary_args = json!({"file_path": "src/./main.rs"});
+        attach_normalized_display_path(&mut primary_args, &guard, false);
+        assert_eq!(primary_args["display_path"], "src/main.rs");
+
+        let secondary_path = secondary.join("shared.rs");
+        let mut secondary_args = json!({"file_path": secondary_path});
+        attach_normalized_display_path(&mut secondary_args, &guard, false);
+        assert_eq!(
+            secondary_args["display_path"],
+            secondary
+                .join("shared.rs")
+                .to_string_lossy()
+                .replace('\\', "/")
+        );
+
+        let _ = fs::remove_dir_all(primary);
+        let _ = fs::remove_dir_all(secondary);
     }
 
     #[test]

@@ -58,11 +58,7 @@ fn normalize_deepseek_reasoning_effort(body_json: &mut Value) {
 }
 
 fn normalize_sensenova_reasoning_effort(body_json: &mut Value, model: &str) {
-    if !model
-        .trim()
-        .to_ascii_lowercase()
-        .starts_with("sensenova-")
-    {
+    if !model.trim().to_ascii_lowercase().starts_with("sensenova-") {
         return;
     }
 
