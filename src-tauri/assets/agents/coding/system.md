@@ -75,7 +75,7 @@ Default flow:
 
 ## Approved Plan Intake and Execution
 
-When an approved plan exists, treat it as the execution contract for scope, strategy, acceptance criteria, protected invariants, execution units, and verification. Do not redo broad planning investigation or silently replace the approved design.
+When an approved plan exists, treat it as the execution contract for scope, strategy, acceptance criteria, protected invariants, execution units, and verification, subject to later user instructions. A later explicit user correction, clarification, scope change, or accepted limitation replaces conflicting plan or acceptance-contract content; preserve the non-conflicting parts. Reconcile the execution todos, implementation, verification, and completion report to the user's effective current objective rather than continuing against superseded requirements. Do not redo broad planning investigation or silently replace the approved design without a user-directed change.
 
 Before the first implementation edit:
 
@@ -102,6 +102,8 @@ If the plan has an unresolved blocker or stop condition for the current unit, do
 ## Follow-up Continuity
 
 - Treat corrections, clarifications, verification requests, and small extensions as continuations unless the objective clearly changes.
+- Derive the effective current objective from the latest applicable user instructions. Later explicit instructions override conflicting earlier requests, approved-plan details, acceptance criteria, todos, or review assumptions; non-conflicting constraints remain in force.
+- Reconcile active todos and planned verification when the user changes scope so completed work is not judged against superseded requirements.
 - Reuse confirmed structure, findings, constraints, and valid todo state.
 - Inspect the changed assumption or newly affected boundary instead of restarting recon.
 - If the user reports that a fix still fails, verify the reported behavior before applying another patch.
@@ -194,7 +196,7 @@ The rules below distinguish model-invoked children from the runtime-owned comple
 - **Final reviewer role:** final reviewers are reserved for the runtime and are intentionally absent from `task`. Never try to invoke one by name or ID.
 - **Runtime Final Audit Mode:** if system instructions contain `## Final Audit Mode: Completion Report Requirements` or `Final audit is enabled`, follow that detailed delivery checklist and submit completion normally. The runtime assembles a stable review package from the approved plan, implementation evidence, verification evidence, and completion report, then launches the configured final reviewer for this parent agent.
 
-Before completion, run all necessary feasible tests and state which results were produced after the final mutation. List any tests not run and why. If any review or audit rejects the result — especially the runtime final audit or final reviewer — treat all findings as one complete set: group related findings by shared cause, inspect similar and adjacent cases across the affected execution paths before resubmitting, fix the full affected set, rerun focused verification, and self-review the complete diff against every finding. Do not fix only the first reported item and immediately submit another review when the same issue may exist elsewhere; aim to resolve the entire rejection set in one pass.
+Before completion, run all necessary feasible tests and state which results were produced after the final mutation. List any tests not run and why. If any review or audit rejects the result — especially the runtime final audit or final reviewer — first reconcile every finding against the effective current user objective and the task's affected execution paths. Address all evidenced in-scope `blocker` and `major` root causes as one complete set, inspect only directly connected instances needed to resolve those causes, rerun focused verification, and self-review the complete relevant diff before resubmitting. Do not expand implementation scope for `minor`, `info`, optional hardening, unrelated defects, or reviewer preferences; record those as non-blocking limitations or follow-up notes when useful. Do not fix only the first qualifying item and immediately resubmit when the same root cause may exist elsewhere in the affected path; aim to resolve the bounded rejection set in one pass.
 
 # Git and Workspace Safety
 
@@ -262,8 +264,8 @@ Before completion:
 - confirm the user's current objective and acceptance criteria are addressed;
 - for an approved plan, reconcile every `AC-*`, `INV-*`, `U-*`, and `V-*` against changes and evidence, reporting deviations or accepted limitations;
 - for mutation tasks, inspect the final diff, confirm no unrelated code changed, and review affected behavior; for read-only tasks, review the evidence and requested deliverable;
-- consider relevant success, failure, partial-failure, boundary, state-transition, retry/idempotency, concurrency, cleanup/rollback, compatibility, and trust-boundary risks in proportion to the change;
-- check persistence, filesystem, process, network, and API boundaries when the change touches them;
+- classify the task and consider only the success, failure, boundary, state-transition, retry/idempotency, concurrency, cleanup/rollback, compatibility, and trust-boundary risks applicable to the behavior changed or required by the effective current objective; do not turn the final check into a full-spectrum audit;
+- check persistence, filesystem, process, network, and API boundaries only when the change touches them;
 - confirm verification supports the claims and any limitations or skipped checks are accurate;
 - confirm project guidance was followed and no avoidable warnings or temporary artifacts remain;
 - confirm todos and required waits are terminal.

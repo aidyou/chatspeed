@@ -929,13 +929,13 @@ impl WorkflowExecutor {
         Ok(format!(
             "Review the parent workflow's completion package below. Perform an independent final review using the read-only inspection tools configured for your domain.\n\n\
 Return the final verdict ONLY by calling `submit_result`.\n\
-- `submit_result.result` MUST be a JSON object with this schema:\n\
+- `submit_result.result` MUST be a string containing a serialized JSON object with this schema:\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
-- `user_messages` is the authoritative current-task user input recovered from the durable transcript.\n\
-- `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan, or structured evidence.\n\
-- `previous_review_results` contains the newest review rounds that fit the context budget; use them to avoid repeating rejected reasoning and verify whether required fixes were addressed.\n\
-- If the work should not be allowed to finish, set `approved` to false and provide concrete required fixes.\n\
-- If the work is acceptable, set `approved` to true and keep findings minimal.\n\
+- `user_messages` is the authoritative chronological current-task input recovered from the durable transcript. Later explicit user instructions override conflicting earlier instructions, approved-plan content, or acceptance criteria; non-conflicting constraints remain applicable.\n\
+- `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan as updated by later user instructions, or structured evidence.\n\
+- `previous_review_results` contains the newest review rounds that fit the context budget; use them only to verify prior required fixes and keep re-review bounded, not to expand the review scope.\n\
+- If the work should not be allowed to finish, set `approved` to false and provide only concrete fixes for in-scope blocker or major findings.\n\
+- If no in-scope blocker or major remains, set `approved` to true; minor and info findings must not block approval.\n\
 - Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
 <final_review_package>\n{}\n</final_review_package>",
             payload_text
@@ -1072,14 +1072,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             .get("findings")
             .and_then(|value| value.as_array())
             .map(|items| {
-                items.iter()
+                items
+                    .iter()
                     .filter_map(|item| {
                         let detail = item.get("detail").and_then(|value| value.as_str())?.trim();
                         if detail.is_empty() {
                             return None;
                         }
+                        let severity = match item.get("severity").and_then(|value| value.as_str()) {
+                            Some("blocker") => "blocker",
+                            Some("major") => "major",
+                            Some("minor") => "minor",
+                            Some("info") => "info",
+                            _ => "major",
+                        };
                         Some(json!({
-                            "severity": item.get("severity").and_then(|value| value.as_str()).unwrap_or("major"),
+                            "severity": severity,
                             "file": item.get("file").cloned().unwrap_or(Value::Null),
                             "detail": detail
                         }))
@@ -1124,12 +1132,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 Some("blocker" | "major")
             )
         });
-        let approved = parsed
-            .get("approved")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
-            && !has_blocking_findings
-            && required_fixes.is_empty();
+        let has_only_non_blocking_findings = !findings.is_empty()
+            && findings.iter().all(|item| {
+                matches!(
+                    item.get("severity").and_then(|value| value.as_str()),
+                    Some("minor" | "info")
+                )
+            });
+        let reviewer_decision = parsed.get("approved").and_then(|value| value.as_bool());
+        let approved = match reviewer_decision {
+            Some(true) => !has_blocking_findings,
+            Some(false) => has_only_non_blocking_findings,
+            None => false,
+        };
+        if approved {
+            required_fixes.clear();
+        }
         let summary = parsed
             .get("summary")
             .and_then(|value| value.as_str())
@@ -3882,6 +3900,82 @@ mod tests {
         assert_eq!(evidence["failed_actions"].as_array().unwrap().len(), 1);
         assert_eq!(evidence["failed_actions"][0]["message_id"], 54);
         assert!(!evidence.to_string().contains("ordinary transcript text"));
+    }
+
+    #[test]
+    fn approved_review_ignores_non_blocking_required_fixes() {
+        let verdict = WorkflowExecutor::normalize_final_review_verdict(&json!({
+            "approved": true,
+            "summary": "Core behavior is ready",
+            "findings": [{
+                "severity": "minor",
+                "file": "src/runtime.rs",
+                "detail": "An optional log could be added"
+            }],
+            "required_fixes": ["Add the optional log"]
+        }));
+
+        assert_eq!(verdict["approved"], true);
+        assert_eq!(verdict["required_fixes"], json!([]));
+        assert_eq!(verdict["findings"][0]["severity"], "minor");
+    }
+
+    #[test]
+    fn non_blocking_findings_cannot_force_another_review_round() {
+        let verdict = WorkflowExecutor::normalize_final_review_verdict(&json!({
+            "approved": false,
+            "summary": "Optional cleanup remains",
+            "findings": [{
+                "severity": "info",
+                "file": null,
+                "detail": "A future refactor could simplify this code"
+            }],
+            "required_fixes": ["Perform the optional refactor"]
+        }));
+
+        assert_eq!(verdict["approved"], true);
+        assert_eq!(verdict["required_fixes"], json!([]));
+    }
+
+    #[test]
+    fn unknown_severity_is_normalized_to_major() {
+        let verdict = WorkflowExecutor::normalize_final_review_verdict(&json!({
+            "approved": true,
+            "summary": "Invalid severity",
+            "findings": [{
+                "severity": "critical",
+                "file": null,
+                "detail": "The severity is outside the review contract"
+            }],
+            "required_fixes": []
+        }));
+
+        assert_eq!(verdict["approved"], false);
+        assert_eq!(verdict["findings"][0]["severity"], "major");
+        assert_eq!(
+            verdict["required_fixes"],
+            json!(["The severity is outside the review contract"])
+        );
+    }
+
+    #[test]
+    fn blocking_finding_overrides_reviewers_approved_flag() {
+        let verdict = WorkflowExecutor::normalize_final_review_verdict(&json!({
+            "approved": true,
+            "summary": "Incorrect approval",
+            "findings": [{
+                "severity": "major",
+                "file": "src/runtime.rs",
+                "detail": "The requested result is incorrect"
+            }],
+            "required_fixes": []
+        }));
+
+        assert_eq!(verdict["approved"], false);
+        assert_eq!(
+            verdict["required_fixes"],
+            json!(["The requested result is incorrect"])
+        );
     }
 
     #[test]
