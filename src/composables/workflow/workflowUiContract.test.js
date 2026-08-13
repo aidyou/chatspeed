@@ -132,6 +132,19 @@ test('authorized root drag sorting stays on the existing structured allowed-path
   assert.match(engine, /guard\.update_allowed_roots\(paths\.clone\(\)\);[\s\S]*?self\.planning_root = Self::planning_root_for_allowed_paths\(&paths\)/)
 })
 
+test('MCP tool calls show their arguments and format only valid JSON results', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+
+  assert.match(messageList, /const isMcpToolMessage = message => isWorkflowMcpTool\(getMessageToolName\(message\)\)/)
+  assert.match(messageList, /class="mcp-tool-arguments"/)
+  assert.match(messageList, /getFormattedMcpToolArguments\(tool\)/)
+  assert.match(messageList, /getFormattedMcpToolArguments\(message\)/)
+  assert.match(messageList, /JSON\.stringify\(JSON\.parse\(value\), null, 2\)/)
+  assert.match(messageList, /catch \{\s*return value\s*\}/)
+  assert.match(messageList, /getMcpToolContentForDisplay\(tool\)/)
+  assert.match(messageList, /getMcpToolContentForDisplay\(message\)/)
+})
+
 test('ask-user responses stay in the workflow chain but are hidden from the transcript UI', async () => {
   const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine] =
     await Promise.all([

@@ -356,7 +356,7 @@ const COMMAND_PRESETS = {
   elixir: ['^elixir(?:\\s|$)', '^iex(?:\\s|$)', '^mix(?:\\s|$)'],
   erlang: ['^erl(?:\\s|$)', '^erlc(?:\\s|$)', '^rebar3(?:\\s|$)'],
   git: ['^git(?:\\s|$)'],
-  go: ['^go(?:\\s|$)'],
+  go: ['^go(?:\\s|$)','^gofmt(?:\\s|$)','^godoc(?:\\s|$)', '^gopls(?:\\s|$)', '^dlv(?:\\s|$)'],
   java: ['^java(?:\\s|$)', '^javac(?:\\s|$)', '^mvn(?:\\s|$)', '^mvnw(?:\\s|$)', '^gradle(?:\\s|$)', '^gradlew(?:\\s|$)'],
   kotlin: ['^kotlin(?:\\s|$)', '^kotlinc(?:\\s|$)'],
   lua: ['^lua(?:\\s|$)', '^luajit(?:\\s|$)', '^luarocks(?:\\s|$)'],

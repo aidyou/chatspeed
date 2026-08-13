@@ -228,6 +228,12 @@
                       v-html="getHighlightedBashCommand(tool)"></code></pre>
                   </div>
                   <div
+                    v-if="isMcpToolMessage(tool) && getFormattedMcpToolArguments(tool)"
+                    class="mcp-tool-arguments">
+                    <div class="mcp-tool-arguments__label">{{ $t('workflow.taskLedger.arguments') }}</div>
+                    <pre class="raw-content">{{ getFormattedMcpToolArguments(tool) }}</pre>
+                  </div>
+                  <div
                     v-if="
                       tool.metadata?.tool_call_id &&
                       workflowStore.getToolStream(tool.metadata.tool_call_id).length > 0
@@ -281,7 +287,9 @@
                   </div>
                   <MarkdownSimple
                     v-else-if="
-                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'markdown'
+                      shouldShowToolRawContent(tool) &&
+                      tool.toolDisplay?.displayType === 'markdown' &&
+                      !isMcpToolMessage(tool)
                     "
                     :content="removeSystemReminder(tool.message)" />
                   <pre
@@ -289,7 +297,7 @@
                       shouldShowToolRawContent(tool) && !isDuplicateBashCommandContent(tool)
                     "
                     class="raw-content"
-                    >{{ removeSystemReminder(tool.message) }}</pre
+                    >{{ getMcpToolContentForDisplay(tool) }}</pre
                   >
                 </div>
               </div>
@@ -410,7 +418,9 @@
                       :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
                     <MarkdownSimple
                       v-else-if="
-                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'markdown'
+                        shouldShowExplorationToolRawContent(tool) &&
+                        tool.displayType === 'markdown' &&
+                        !isMcpToolMessage(tool)
                       "
                       :content="removeSystemReminder(tool.message)" />
                     <pre
@@ -419,7 +429,7 @@
                         !isDuplicateBashCommandContent(tool)
                       "
                       class="raw-content"
-                      >{{ removeSystemReminder(tool.message) }}</pre
+                      >{{ getMcpToolContentForDisplay(tool) }}</pre
                     >
                   </div>
                 </div>
@@ -671,6 +681,12 @@
                     class="hljs"
                     v-html="getHighlightedBashCommand(message)"></code></pre>
                 </div>
+                <div
+                  v-if="isMcpToolMessage(message) && getFormattedMcpToolArguments(message)"
+                  class="mcp-tool-arguments">
+                  <div class="mcp-tool-arguments__label">{{ $t('workflow.taskLedger.arguments') }}</div>
+                  <pre class="raw-content">{{ getFormattedMcpToolArguments(message) }}</pre>
+                </div>
                 <!-- Tool Stream Output (for bash commands) -->
                 <div
                   v-if="
@@ -770,7 +786,8 @@
                   v-else-if="
                     !isApprovalPending(message) &&
                     shouldShowToolRawContent(message) &&
-                    message.toolDisplay.displayType === 'markdown'
+                    message.toolDisplay.displayType === 'markdown' &&
+                    !isMcpToolMessage(message)
                   "
                   :content="removeSystemReminder(message.message)" />
                 <pre
@@ -780,7 +797,7 @@
                     !isDuplicateBashCommandContent(message)
                   "
                   class="raw-content"
-                  >{{ removeSystemReminder(message.message) }}</pre
+                  >{{ getMcpToolContentForDisplay(message) }}</pre
                 >
                 <ApprovalDialog
                   v-if="shouldShowApprovalDialog(message)"
@@ -1460,9 +1477,13 @@ const getToolDetailClass = message => {
   return normalizedToolName
 }
 
-const getToolCallArguments = message => {
+const getRawToolCallArguments = message => {
   const toolCall = message?.metadata?.tool_call || {}
-  const rawArgs = toolCall.function?.arguments ?? toolCall.arguments
+  return toolCall.function?.arguments ?? toolCall.arguments
+}
+
+const getToolCallArguments = message => {
+  const rawArgs = getRawToolCallArguments(message)
   if (typeof rawArgs === 'string') {
     try {
       return JSON.parse(rawArgs)
@@ -1471,6 +1492,37 @@ const getToolCallArguments = message => {
     }
   }
   return typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : null
+}
+
+const isMcpToolMessage = message => isWorkflowMcpTool(getMessageToolName(message))
+
+const formatJsonIfValid = value => {
+  if (typeof value !== 'string') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value ?? '')
+    }
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+const getFormattedMcpToolArguments = message => {
+  if (!isMcpToolMessage(message)) return ''
+
+  const rawArgs = getRawToolCallArguments(message)
+  if (rawArgs === undefined || rawArgs === null || rawArgs === '') return ''
+  return formatJsonIfValid(rawArgs)
+}
+
+const getMcpToolContentForDisplay = message => {
+  const content = props.removeSystemReminder(message?.message || '')
+  return isMcpToolMessage(message) ? formatJsonIfValid(content) : content
 }
 
 const isBashToolCall = message =>
@@ -3637,6 +3689,17 @@ defineExpose({
   color: var(--cs-text-color-secondary);
   font-size: var(--cs-font-size-xs);
   white-space: nowrap;
+}
+
+.mcp-tool-arguments {
+  margin-bottom: var(--cs-space-sm);
+}
+
+.mcp-tool-arguments__label {
+  margin-bottom: var(--cs-space-2xs);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  font-weight: 600;
 }
 
 .tool-detail--expanded {

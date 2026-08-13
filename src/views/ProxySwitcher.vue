@@ -178,21 +178,36 @@
                 </div>
 
                 <div class="models-grid">
-                  <el-checkbox
+                  <el-tooltip
                     v-for="model in provider.models"
                     :key="model.id"
-                    :model-value="isTargetSelected(provider.id, model.id)"
-                    :label="model.id"
-                    border
-                    class="model-checkbox"
-                    @change="
-                      checked => handleTargetSelectionChange(checked, provider.id, model.id)
-                    ">
-                    {{ model.id }}
-                  </el-checkbox>
+                    :content="model.id"
+                    placement="top"
+                    :hide-after="0"
+                    :enterable="false">
+                    <el-checkbox
+                      :model-value="isTargetSelected(provider.id, model.id)"
+                      :label="model.id"
+                      border
+                      class="model-checkbox"
+                      @change="
+                        checked => handleTargetSelectionChange(checked, provider.id, model.id)
+                      ">
+                      {{ model.id }}
+                    </el-checkbox>
+                  </el-tooltip>
                 </div>
               </div>
             </el-scrollbar>
+          </div>
+
+          <div class="model-selector-footer">
+            <el-button
+              type="primary"
+              :loading="isSavingSelectedTargets"
+              @click="handleConfirmSelectedTargets">
+              {{ $t('common.confirm') }}
+            </el-button>
           </div>
         </div>
       </el-drawer>
@@ -412,7 +427,7 @@ const modelDrawerVisible = ref(false)
 const selectedTargets = ref([])
 const searchQuery = ref('')
 const filterByChecked = ref(false)
-const saveTimer = ref(null)
+const isSavingSelectedTargets = ref(false)
 const serverStatsToday = ref({})
 const serverStatsTimer = ref(null)
 const isRefreshingServerStats = ref(false)
@@ -1033,10 +1048,10 @@ const isTargetSelected = (providerId, modelId) => {
 }
 
 const saveSelectedTargets = async targets => {
-  if (!selectedProxyGroup.value || !selectedProxyAlias.value) return
+  if (!selectedProxyGroup.value || !selectedProxyAlias.value) return false
   if (targets.length === 0) {
     showMessage(t('settings.proxy.validation.targetsRequired'), 'warning')
-    return
+    return false
   }
 
   try {
@@ -1050,19 +1065,22 @@ const saveSelectedTargets = async targets => {
       group: selectedProxyGroup.value,
       alias: selectedProxyAlias.value
     })
+    return true
   } catch (error) {
     showMessage(t('settings.proxy.saveFailed', { error: formatError(error) }), 'error')
+    return false
   }
 }
 
-const queueSaveSelectedTargets = () => {
-  if (saveTimer.value) {
-    clearTimeout(saveTimer.value)
+const handleConfirmSelectedTargets = async () => {
+  if (isSavingSelectedTargets.value) return
+
+  isSavingSelectedTargets.value = true
+  const saved = await saveSelectedTargets([...selectedTargets.value])
+  isSavingSelectedTargets.value = false
+  if (saved) {
+    modelDrawerVisible.value = false
   }
-  saveTimer.value = setTimeout(() => {
-    saveSelectedTargets([...selectedTargets.value])
-    saveTimer.value = null
-  }, 250)
 }
 
 const handleTargetSelectionChange = (isChecked, providerId, modelId) => {
@@ -1070,16 +1088,12 @@ const handleTargetSelectionChange = (isChecked, providerId, modelId) => {
     if (!isTargetSelected(providerId, modelId)) {
       selectedTargets.value.push({ id: providerId, model: modelId })
     }
-  } else {
-    if (selectedTargets.value.length <= 1) {
-      showMessage(t('settings.proxy.validation.targetsRequired'), 'warning')
-      return
-    }
-    selectedTargets.value = selectedTargets.value.filter(
-      target => !(target.id === providerId && target.model === modelId)
-    )
+    return
   }
-  queueSaveSelectedTargets()
+
+  selectedTargets.value = selectedTargets.value.filter(
+    target => !(target.id === providerId && target.model === modelId)
+  )
 }
 
 const areAllModelsFromProviderSelected = provider => {
@@ -1094,17 +1108,11 @@ const isAnyModelFromProviderSelected = provider => {
 
 const handleSelectAllModelsFromProvider = (provider, checked) => {
   if (!checked) {
-    const nextTargets = selectedTargets.value.filter(
+    selectedTargets.value = selectedTargets.value.filter(
       target =>
         target.id !== provider.id ||
         !(provider.models || []).some(model => model.id === target.model)
     )
-    if (nextTargets.length === 0) {
-      showMessage(t('settings.proxy.validation.targetsRequired'), 'warning')
-      return
-    }
-    selectedTargets.value = nextTargets
-    queueSaveSelectedTargets()
     return
   }
 
@@ -1113,7 +1121,6 @@ const handleSelectAllModelsFromProvider = (provider, checked) => {
       selectedTargets.value.push({ id: provider.id, model: model.id })
     }
   })
-  queueSaveSelectedTargets()
 }
 
 const ensureVisible = () => {
@@ -1559,16 +1566,20 @@ onMounted(async () => {
 }
 
 .model-selector-panel {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   background-color: var(--cs-bg-color);
 }
 
 .model-selector-header {
+  flex-shrink: 0;
   min-height: 44px;
   padding: 0 var(--cs-space);
-  margin: auto calc(-1 * var(--el-drawer-padding-primary));
+  margin: 0;
   border-bottom: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
   display: flex;
@@ -1599,6 +1610,7 @@ onMounted(async () => {
 }
 
 .model-selector-toolbar {
+  flex-shrink: 0;
   padding: var(--cs-space-sm);
   display: flex;
   align-items: center;
@@ -1610,6 +1622,7 @@ onMounted(async () => {
 }
 
 .selected-status {
+  flex-shrink: 0;
   padding: 0 var(--cs-space-sm) var(--cs-space-xs);
   display: flex;
   align-items: center;
@@ -1623,14 +1636,31 @@ onMounted(async () => {
   }
 }
 
+.model-selector-footer {
+  flex-shrink: 0;
+  padding: var(--cs-space-sm);
+  border-top: 1px solid var(--cs-border-color);
+  display: flex;
+  justify-content: flex-end;
+  background-color: var(--cs-bg-color-light);
+
+  .el-button {
+    min-width: 96px;
+  }
+}
+
 .providers-list {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
   padding: 0 var(--cs-space-sm) var(--cs-space-sm);
+  display: flex;
+  flex-direction: column;
 }
 
 .providers-scrollbar {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .provider-card {
@@ -1823,7 +1853,11 @@ onMounted(async () => {
   color: var(--cs-text-color-secondary);
   font-size: 13px;
 }
-:deep(.el-drawer__body) {
-  padding-top: 0;
+:deep(.proxy-model-drawer .el-drawer__body) {
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 </style>
