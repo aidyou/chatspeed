@@ -1863,6 +1863,25 @@ impl MainStore {
         })
     }
 
+    pub fn get_workflow_message_by_id_and_role(
+        &self,
+        session_id: &str,
+        message_id: i64,
+        role: &str,
+    ) -> Result<Option<WorkflowMessage>, StoreError> {
+        let session_id = session_id.to_string();
+        let role = role.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflow_messages WHERE session_id = ?1 AND id = ?2 AND role = ?3",
+                params![session_id, message_id, role],
+                |row| Ok(WorkflowMessage::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
     pub fn get_tail_rewind_kind(
         &self,
         session_id: &str,
@@ -3352,6 +3371,51 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add window test message")
+    }
+
+    #[test]
+    fn workflow_message_lookup_is_scoped_by_session_and_role() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-history-read");
+        for session_id in ["history-session-a", "history-session-b"] {
+            store
+                .create_workflow(
+                    session_id,
+                    "Initial query",
+                    "agent-history-read",
+                    None,
+                    None,
+                )
+                .expect("failed to create workflow");
+        }
+        let user_message = add_window_test_message(&store, "history-session-a", "user body", false);
+        let tool_message = add_window_test_message(&store, "history-session-a", "tool body", true);
+
+        let fetched = store
+            .get_workflow_message_by_id_and_role(
+                "history-session-a",
+                user_message.id.expect("user message id"),
+                "user",
+            )
+            .expect("lookup user message")
+            .expect("user message should exist");
+        assert_eq!(fetched.message, "user body");
+        assert!(store
+            .get_workflow_message_by_id_and_role(
+                "history-session-b",
+                user_message.id.expect("user message id"),
+                "user",
+            )
+            .expect("cross-session lookup")
+            .is_none());
+        assert!(store
+            .get_workflow_message_by_id_and_role(
+                "history-session-a",
+                tool_message.id.expect("tool message id"),
+                "user",
+            )
+            .expect("wrong-role lookup")
+            .is_none());
     }
 
     #[tokio::test]

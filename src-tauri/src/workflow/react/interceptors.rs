@@ -1215,6 +1215,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     "title": "Complete Workflow",
                     "summary": pending.completion_summary,
                     "review_display_state": "final_review_approved",
+                    "review_summary": summary,
+                    "review_verdict": review_verdict,
                     "execution_status": "completed",
                     "is_error": false,
                     "display_type": "text"

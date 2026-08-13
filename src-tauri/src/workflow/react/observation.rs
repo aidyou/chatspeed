@@ -881,6 +881,38 @@ mod tests {
     }
 
     #[test]
+    fn reinforce_history_message_persists_large_database_result() {
+        let raw_content = serde_json::to_string(&json!({
+            "message_id": 42,
+            "role": "user",
+            "message": "attachment",
+            "attached_context": "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT + 1_000)
+        }))
+        .unwrap();
+        let tool_call = json!({
+            "function": {
+                "name": crate::tools::TOOL_READ_HISTORY_MESSAGE,
+                "arguments": {"message_id":42,"role":"user"}
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({ "content": raw_content.clone() })),
+            None,
+            None,
+        );
+
+        assert!(reinforced
+            .content
+            .contains("<truncated_content path=\"/tmp/"));
+        let path = persisted_path(&reinforced.content);
+        let physical_path = resolve_ai_temp_path(Path::new(&path));
+        assert_eq!(fs::read_to_string(&physical_path).unwrap(), raw_content);
+        fs::remove_file(physical_path).unwrap();
+    }
+
+    #[test]
     fn reinforce_other_tool_previews_compacted_json_and_persists_pretty_original() {
         let value = json!({ "payload": "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT + 1_000) });
         let pretty_content = serde_json::to_string_pretty(&value).unwrap();

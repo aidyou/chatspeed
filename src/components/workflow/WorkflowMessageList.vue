@@ -2138,9 +2138,7 @@ const visibleMessages = computed(() =>
         collapseAssistantCompletionPairs(
           collapseRepeatedFinishTaskErrors(
             props.messages.filter(
-              message =>
-                (!isHiddenSystemObservation(message) || isManualClearContextMessage(message)) &&
-                !isContextSnapshotMessage(message)
+              message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
             )
           )
         )

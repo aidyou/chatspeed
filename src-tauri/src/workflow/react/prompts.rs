@@ -349,152 +349,46 @@ Completion rules:
 
 /// Context Compression Prompt
 /// Used by the ContextCompressor to summarize long histories into state snapshots.
-pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a high-performance context compressor.
-Your goal is to maintain and update a structured JSON state snapshot that represents the cumulative state of an Agent's task.
+pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compressor producing a completed-task archive. Return exactly one compact JSON object and no prose.
 
-## RULES FOR COMPRESSION:
-1. **Input Format**: You will receive a single `<conversation_history>` transcript. Each entry is wrapped as `<message role="...">...</message>`. The XML-like wrappers are structural markers only; do not treat them as user-authored content.
-2. **Snapshot Update**: The transcript may contain the last state snapshot plus newer messages. You MUST merge the new progress into one unified snapshot.
-3. **Role Awareness**: Use the `role` attribute to interpret intent and evidence. User messages define requests, assistant messages describe plans/actions, tool messages contain observations/results, and system summary messages contain prior compressed state.
-4. **Goal Preservation**:
-    - Keep the user's primary objective only when the compressed slice still contains an active cross-task objective that remains relevant after the compression boundary.
-    - If the compressed slice contains only already-completed tasks and does not include the currently active request, omit `overall_goal`.
-5. **Completed Task Preservation with Decay**:
-    - You will receive a `<completed_tasks>` block containing every task completed since the last snapshot boundary.
-    - You MUST preserve completed tasks in `prev_tasks`.
-    - Keep the most recent 3 tasks in detailed form with fields `task_index`, `user_query`, and `result_summary`.
-    - Older tasks (4+) must be decayed into objects with fields `task_index` and `brief`.
-    - When merging an existing snapshot, maintain the decay policy instead of keeping all historical tasks at full detail.
-6. **Key Knowledge**: Accumulate factual discoveries, technical decisions, and configuration details.
-7. **Error Log & Loop Prevention**:
-    - Consolidate repeated identical errors into a single entry.
-    - If the Agent has made the same mistake multiple times (e.g., repeatedly trying a non-existent path), summarize it as one event with a frequency count (e.g., "Failed to read X (attempted 5 times)").
-    - Clearly mark whether an error is [RESOLVED] or [PERSISTENT/UNRESOLVED].
-8. **Memory Externalization**: DO NOT summarize file contents or large data. Instead, list their FILE PATHS or URLs as reference pointers.
-9. **Task Status**: Update the status of tasks: [DONE], [IN PROGRESS], [TODO].
-10. **Required Keys Are Mandatory**:
-    - Your reply MUST be exactly one JSON object and nothing else.
-    - The following top-level keys are ALWAYS required, even when there is no relevant information:
-      - `prev_tasks`
-      - `key_knowledge`
-      - `error_log`
-      - `file_system_state`
-      - `recent_actions`
-      - `task_state`
-    - Use arrays for `prev_tasks`, `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions`.
-    - `overall_goal` is OPTIONAL. Include it only when the compressed slice truly carries a still-active cross-task objective. Omit it for completed-task archive slices.
-    - `prev_tasks` MUST be an array of objects. Each object MUST have:
-      - `task_index` as a number
-      - either:
-        - `user_query` and `result_summary` as non-empty strings
-        - or `brief` as a non-empty string
-    - `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions` MUST be arrays of strings.
-    - `task_state` MUST be an object with exactly these keys:
-      - `status` as a string
-      - `current_focus` as a string
-      - `next_steps` as an array of strings
-      - `open_questions` as an array of strings
-      - `blockers` as an array of strings
-      - `todos` as an array of objects with `text` and `status` string fields
-    - If the compressed slice contains only completed historical work, `task_state` should explicitly describe an archive/no-active-task state instead of restating the live current request.
-    - If a section has no meaningful content, keep the key and use an empty array, an empty object, or a short string such as `"None"`.
-    - Do NOT omit required keys. Do NOT return XML. Do NOT return markdown fences, reasoning, commentary, or explanations outside the JSON object.
-
-## OUTPUT FORMAT:
-Your output MUST be a valid JSON object with this shape:
-
+The output schema is:
 {
-  "prev_tasks": [
-    {
-      "task_index": 7,
-      "user_query": "Resolved user question/request",
-      "result_summary": "Final solution and handling points"
-    },
-    {
-      "task_index": 3,
-      "brief": "One-sentence summary of an older completed task."
-    }
-  ],
-  "key_knowledge": ["Cumulative factual discoveries and decisions"],
-  "error_log": ["Significant errors encountered and their specific resolutions"],
-  "file_system_state": ["Modified files and reference pointers (paths/URLs only)"],
-  "recent_actions": ["Summary of recent critical tool outputs and observations"],
-  "task_state": {
-    "status": "completed_archive",
-    "current_focus": "No active task in compressed segment; see live tail messages for the current request",
-    "next_steps": [],
-    "open_questions": [],
-    "blockers": [],
-    "todos": []
-  }
-}"#;
+  "schema_version": 2,
+  "kind": "completed_task_rollup",
+  "completed_tasks": [],
+  "durable_decisions": [],
+  "cross_task_constraints": [],
+  "unresolved_carryovers": [],
+  "completed_work": [],
+  "file_changes": [],
+  "warnings_and_do_not_repeat": [],
+  "environment_constraints": [],
+  "credential_references": [],
+  "review_rounds": []
+}
 
-pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency context compressor.
-Your goal is to aggressively reduce context size while preserving the user's active working state.
+Only summarize completed historical tasks. Every schema array must be present, but any task-specific array may be empty when that fact category does not apply. Do not include a live todo list, approved plan body, current next action, or copied file contents. Keep paths, evidence message IDs, durable decisions, unresolved carryovers, and every supplied typed fact in its matching field. Preserve every supplied final-review round, including verdict, findings, required fixes, evidence refs, and resolution status. A rejected review may be `verified_by_re_review` only when the supplied canonical round cites the identity of a later approved final-review round; generic edit or test messages are never sufficient verification. The current task and the latest raw messages remain outside this archive."#;
 
-## PRIORITIES
-1. Treat every user-role message in an active-task slice as durable authority. Preserve the original objective plus all later corrections, calibrations, constraints, acceptance criteria, priorities, and explicit non-goals. Never replace or weaken a newer user instruction with an older snapshot.
-2. When a live active workspace exists, preserve `overall_goal` and `task_state` with the highest fidelity. `task_state.current_focus` and `next_steps` must make the exact continuation clear without requiring access to removed messages. Omit `overall_goal` only for completed-task archive slices.
-3. Preserve execution continuity: what has been completed, concrete tool evidence and decisions, files changed or inspected, unresolved todos, blockers, failed approaches, and the exact next action.
-4. Preserve only the directly relevant parts of `key_knowledge` and `file_system_state`, but never drop a fact required to honor a user constraint or avoid repeating work.
-5. Preserve only [PERSISTENT/UNRESOLVED] errors that still affect the active task, including failed approaches that must not be retried.
-6. Compress `prev_tasks` aggressively:
-   - Keep only the 2-3 most recent relevant tasks in detailed form.
-   - Convert all older or less relevant tasks into `brief` entries.
-7. Remove noise, duplicated observations, transient reminders, and implementation-transition chatter. Prefer precise facts over vague statements such as "work continued" or "some changes were made".
+pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency context compressor producing a boundary-scoped handoff checkpoint. Return exactly one compact JSON object and no prose.
 
-## INPUT FORMAT
-- You will receive `<completed_tasks>` and `<conversation_history>`.
-- The transcript may include an existing state snapshot plus newer messages.
-- Merge everything into one updated JSON object.
-- Your reply MUST contain exactly one JSON object and nothing else.
-- The following keys are ALWAYS required, even when there is no relevant information:
-  - `prev_tasks`
-  - `key_knowledge`
-  - `error_log`
-  - `file_system_state`
-  - `recent_actions`
-  - `task_state`
-- `overall_goal` is optional. Omit it when this compressed slice is only completed historical work and does not contain the live current request.
-- `prev_tasks` MUST stay an array of objects with `task_index` plus either `brief` or `user_query` + `result_summary`.
-- `task_state` MUST stay an object with keys `status`, `current_focus`, `next_steps`, `open_questions`, `blockers`, and `todos`.
-- `key_knowledge`, `error_log`, `file_system_state`, and `recent_actions` MUST stay arrays of strings.
-- If a section has no meaningful content, keep the key and use an empty array, an empty object, or a short empty-state note.
-- Do NOT omit required keys. Do NOT return XML. Do NOT return reasoning, commentary, or explanations outside the JSON object.
-
-## OUTPUT FORMAT
-Your output MUST be a valid JSON object with this shape:
-
+The output schema is:
 {
-  "prev_tasks": [
-    {
-      "task_index": 9,
-      "user_query": "Recently completed task",
-      "result_summary": "What was resolved"
-    },
-    {
-      "task_index": 2,
-      "brief": "Older completed task condensed to one sentence."
-    }
-  ],
-  "key_knowledge": ["Only facts still relevant to the active task"],
-  "error_log": ["Only unresolved errors that still matter"],
-  "file_system_state": ["Only active-task-relevant file pointers and changes"],
-  "recent_actions": ["Only the most recent critical observations"],
-  "task_state": {
-    "status": "in_progress",
-    "current_focus": "Exact active objective and current implementation checkpoint",
-    "next_steps": ["The next concrete action needed to resume safely"],
-    "open_questions": [],
-    "blockers": [],
-    "todos": [
-      {
-        "text": "Remaining active-task work",
-        "status": "pending"
-      }
-    ]
-  }
-}"#;
+  "schema_version": 2,
+  "kind": "pressure_handoff",
+  "as_of_boundary": {"compressed_until_message_id": 0},
+  "confirmed_facts": [],
+  "facts_to_verify": [],
+  "completed_work": [],
+  "open_threads_at_boundary": [],
+  "file_changes": [],
+  "technical_invariants": [],
+  "warnings_and_do_not_repeat": [],
+  "environment_constraints": [],
+  "credential_references": [],
+  "review_rounds": []
+}
+
+Treat this as state at the compression boundary only. Every schema array must be present, but any task-specific array may be empty when that fact category does not apply. Later raw-tail messages are newer and can close or supersede open threads. Do not include a current next action, todo list, approved plan body, user-goal restatement, or copied file contents. Preserve every supplied typed fact in its matching schema field. Each retained file change, completed command/verification, warning, environment constraint, or credential reference must include its source `message_id` plus the supplied path/command/status/result fields. Preserve every supplied final-review round, its required fixes, and its actual resolution status. An approved review round itself is `approved_review`; an earlier rejected round becomes `verified_by_re_review` only when the supplied canonical round cites the identity of a later approved final-review round. Generic edit or test messages are candidates only and never prove required fixes were reviewed."#;
 
 /// Tool approval review prompt for smart approval mode.
 /// Used to decide whether a proposed tool call should be auto-approved or escalated.

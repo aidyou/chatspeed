@@ -29,7 +29,8 @@ use crate::workflow::react::{
     error::WorkflowEngineError,
     events::WorkflowEvent,
     file_preview::{
-        attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
+        attach_display_context, attach_normalized_display_path,
+        attach_write_file_overwrite_old_content, normalize_preview_details,
     },
     gateway::Gateway,
     intelligence::IntelligenceManager,
@@ -342,6 +343,7 @@ impl WorkflowExecutor {
         if tool_name == crate::tools::TOOL_WRITE_FILE {
             attach_write_file_overwrite_old_content(&mut preview_args, &guard, is_planning_phase);
         }
+        attach_normalized_display_path(&mut preview_args, &guard, is_planning_phase);
         attach_display_context(&mut preview_args, false, &guard, is_planning_phase);
         Some(normalize_preview_details(preview_args))
     }
@@ -817,6 +819,7 @@ impl WorkflowExecutor {
         compression_candidate: Vec<WorkflowMessage>,
         compressed_until_message_id: i64,
         reason: &str,
+        mode: CompressionMode,
     ) -> Result<bool, WorkflowEngineError> {
         if self.last_compression_boundary_id == Some(compressed_until_message_id) {
             log::info!(
@@ -840,9 +843,19 @@ impl WorkflowExecutor {
         })
         .await?;
 
+        let max_output_tokens = self
+            .context
+            .pressure_handoff_reserve_tokens()
+            .ceil()
+            .clamp(512.0, u32::MAX as f64) as u32;
         let compression_result = self
             .compressor
-            .compress(&compression_candidate, CompressionMode::Blocking)
+            .compress(
+                &compression_candidate,
+                mode,
+                compressed_until_message_id,
+                max_output_tokens,
+            )
             .await;
 
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
@@ -928,6 +941,7 @@ impl WorkflowExecutor {
                         compression_candidate,
                         compressed_until_message_id,
                         "context_pressure",
+                        CompressionMode::Blocking,
                     )
                     .await?
                 {
@@ -955,6 +969,7 @@ impl WorkflowExecutor {
                     compression_candidate,
                     compressed_until_message_id,
                     "task_boundary",
+                    CompressionMode::Rollup,
                 )
                 .await;
         }
@@ -2138,7 +2153,23 @@ impl WorkflowExecutor {
             }
         }
 
-        // 5. Todo Manager Tools (Session Persistent)
+        // 5. Workflow state tools. Historical transcript reads are main-agent only;
+        // child agents receive explicit parent handoffs instead of unrestricted parent history.
+        if !self.is_child_agent_workflow()
+            && self.subagent_type.is_none()
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::System)
+        {
+            tm.register_tool(Arc::new(ReadHistoryMessage {
+                session_id: self.session_id.clone(),
+                main_store: self.context.main_store.clone(),
+            }))
+            .await?;
+        }
+
+        // 6. Todo Manager Tools (Session Persistent)
         if self
             .policy
             .allowed_categories
@@ -4581,6 +4612,7 @@ impl WorkflowExecutor {
                                 compression_candidate,
                                 compressed_until_message_id,
                                 "context_pressure",
+                                CompressionMode::Blocking,
                             )
                             .await?;
                     } else {
@@ -6605,6 +6637,45 @@ impl WorkflowExecutor {
             )
             .await?;
 
+        if ContextManager::is_user_authored_task_message(&msg) {
+            if let (Some(message_id), Some(attached)) = (
+                msg.id,
+                msg.attached_context
+                    .as_deref()
+                    .filter(|value| !value.is_empty()),
+            ) {
+                match super::user_context::externalize_long_attached_context(
+                    &self.planning_root,
+                    &self.session_id,
+                    message_id,
+                    attached,
+                )
+                .await
+                {
+                    Ok(Some(reference)) => {
+                        let updated_metadata = super::user_context::merge_reference_metadata(
+                            msg.metadata.clone(),
+                            &reference,
+                        );
+                        self.context
+                            .update_message_metadata(message_id, updated_metadata.clone())
+                            .await?;
+                        metadata = Some(updated_metadata);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!(
+                            "[Workflow][session={}][phase=user_context] externalization_failed path=.cs/{}/user_question.md message_id={} error={}",
+                            self.session_id,
+                            self.session_id,
+                            message_id,
+                            error
+                        );
+                    }
+                }
+            }
+        }
+
         self.dispatch_ui_payload(GatewayPayload::Message {
             message_id: msg.id.map(|id| id.to_string()),
             role: role.clone(),
@@ -8058,6 +8129,109 @@ mod recovery_tests {
         (dir, Arc::new(store))
     }
 
+    fn test_agent(id: &str) -> Agent {
+        Agent::new(
+            id.to_string(),
+            "Workflow Test Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn externalization_write_failure_keeps_durable_attachment_and_inline_projection() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "externalization-write-failure";
+        let agent = test_agent("externalization-write-failure-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let blocked_root = temp_dir.path().join("blocked-root");
+        std::fs::write(&blocked_root, "not a directory").expect("failed to create blocked root");
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![blocked_root],
+            temp_dir.path().join("app-data"),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(31).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+        let attached = "attached context ".repeat(2_000);
+        executor
+            .add_message_and_notify_internal(
+                "user".to_string(),
+                "preserve this main question".to_string(),
+                Some(attached.clone()),
+                None,
+                Some(StepType::Think),
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("message persistence must survive archive failure");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot");
+        let persisted = snapshot
+            .messages
+            .iter()
+            .find(|message| message.role == "user")
+            .expect("user message should be durable");
+        assert_eq!(
+            persisted.attached_context.as_deref(),
+            Some(attached.as_str())
+        );
+        assert!(
+            crate::workflow::react::user_context::reference_from_metadata(
+                persisted.metadata.as_ref()
+            )
+            .is_none()
+        );
+        assert!(executor.context.messages.iter().any(|message| {
+            message.role == "user" && message.message.contains("preserve this main question")
+        }));
+        assert!(executor
+            .context
+            .get_messages_for_llm()
+            .iter()
+            .any(|message| message.message.contains(&attached)));
+    }
+
     #[tokio::test]
     async fn manual_clear_context_resets_live_executor_task_state() {
         let (_temp_dir, store) = create_test_store();
@@ -8420,14 +8594,16 @@ mod recovery_tests {
 
         assert_eq!(executor.policy.phase, ExecutionPhase::Implementation);
         assert_eq!(executor.state, WorkflowState::Thinking);
-        assert_eq!(executor.context.ai_context_messages.len(), 2);
+        assert_eq!(executor.context.ai_context_messages.len(), 1);
         assert!(executor.context.ai_context_messages.iter().all(|message| {
-            !message.message.contains("Planning-only") && message.role == "user"
+            !message.message.contains("Planning-only")
+                && !message.message.contains("Ship the fix")
+                && message.role == "user"
         }));
-        assert!(executor.context.ai_context_messages[1]
+        assert!(executor.context.ai_context_messages[0]
             .message
             .contains("<approved_plan>\n1. Edit the file\n2. Run focused tests\n</approved_plan>"));
-        assert!(executor.context.ai_context_messages[1]
+        assert!(executor.context.ai_context_messages[0]
             .message
             .contains("<acceptance_contract>"));
         assert!(observed_payloads
