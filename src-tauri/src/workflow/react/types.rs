@@ -128,6 +128,8 @@ pub enum GatewayPayload {
     /// Compression summary has been persisted and the message projection changed.
     CompressionApplied {
         compressed_until_message_id: i64,
+        current_context_tokens: usize,
+        max_context_tokens: usize,
     },
     /// Current runtime context token estimate after compaction/rebuild.
     ContextUsage {
@@ -690,6 +692,20 @@ mod tests {
         assert_eq!(serialized["type"], "task_completed");
         assert_eq!(serialized["tool_call_id"], "call_complete_123");
         assert_eq!(serialized["segment_id"], 7);
+    }
+
+    #[test]
+    fn test_compression_applied_gateway_payload_serialization() {
+        let payload = GatewayPayload::CompressionApplied {
+            compressed_until_message_id: 42,
+            current_context_tokens: 2048,
+            max_context_tokens: 8192,
+        };
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(serialized["type"], "compression_applied");
+        assert_eq!(serialized["compressed_until_message_id"], 42);
+        assert_eq!(serialized["current_context_tokens"], 2048);
+        assert_eq!(serialized["max_context_tokens"], 8192);
     }
 
     #[test]

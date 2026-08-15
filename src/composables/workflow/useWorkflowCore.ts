@@ -1201,6 +1201,12 @@ export function useWorkflowCore({
                     }
                 } else if (payload.type === 'compression_applied') {
                     markSessionLiveFromNonTerminalEvent()
+                    setCompressionStatus(sessionId, false, '')
+                    workflowStore.setCurrentContextTokens(
+                        sessionId,
+                        payload.current_context_tokens,
+                        payload.max_context_tokens
+                    )
                     if (workflowStore.currentWorkflowId === sessionId) {
                         workflowStore.loadMessages(sessionId).catch((error) => {
                             console.warn(
@@ -1272,6 +1278,7 @@ export function useWorkflowCore({
         ).toLowerCase()
 
         if (previousWorkflowId && previousWorkflowId !== id) {
+            setCompressionStatus(previousWorkflowId, false, '')
             clearPendingApprovalEntries(previousWorkflowId, 'approval')
             for (const entry of previousInlineApprovals) {
                 if (entry?.sessionId !== previousWorkflowId || !entry?.id) continue

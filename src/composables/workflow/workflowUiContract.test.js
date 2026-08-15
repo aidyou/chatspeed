@@ -203,6 +203,26 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
 })
 
+test('applied compression clears the indicator and updates context usage', async () => {
+  const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+
+  assert.match(
+    workflowCore,
+    /payload\.type === 'compression_applied'[\s\S]*?setCompressionStatus\(sessionId, false, ''\)[\s\S]*?setCurrentContextTokens\([\s\S]*?payload\.current_context_tokens[\s\S]*?payload\.max_context_tokens/,
+    'a persisted compression must clear the loading indicator and apply its authoritative usage'
+  )
+})
+
+test('switching workflows clears an unobserved compression indicator from the previous session', async () => {
+  const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+
+  assert.match(
+    workflowCore,
+    /if \(previousWorkflowId && previousWorkflowId !== id\) \{\s*setCompressionStatus\(previousWorkflowId, false, ''\)[\s\S]*?currentSessionId\.value = id/,
+    'switching away must discard compression UI state whose completion event is no longer observed'
+  )
+})
+
 test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {
   const [messageList, enLocale, jaLocale, zhHansLocale, zhHantLocale] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),

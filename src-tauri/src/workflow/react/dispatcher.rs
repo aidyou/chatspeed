@@ -65,6 +65,8 @@ fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
                 | GatewayPayload::ToolCompleted { .. }
                 | GatewayPayload::ToolFailed { .. }
                 | GatewayPayload::TaskCompleted { .. }
+                | GatewayPayload::CompressionStatus { .. }
+                | GatewayPayload::CompressionApplied { .. }
                 | GatewayPayload::Error { .. }
         ),
     }
@@ -634,6 +636,28 @@ mod tests {
 
         fn delivery_guarantee(&self) -> SinkDeliveryGuarantee {
             self.delivery_guarantee
+        }
+    }
+
+    #[test]
+    fn compression_events_require_reliable_delivery() {
+        for payload in [
+            GatewayPayload::CompressionStatus {
+                is_compressing: true,
+                message: "Compressing".to_string(),
+            },
+            GatewayPayload::CompressionApplied {
+                compressed_until_message_id: 42,
+                current_context_tokens: 2048,
+                max_context_tokens: 8192,
+            },
+        ] {
+            assert!(dispatch_event_requires_reliable_delivery(
+                &DispatchEvent::Ui {
+                    session_id: "test-session".to_string(),
+                    payload,
+                }
+            ));
         }
     }
 

@@ -1058,7 +1058,7 @@
     position: absolute;
     inset: var(--cs-space-xs) auto var(--cs-space-xs) var(--cs-space-xs);
     width: 1px;
-    border-radius: var(--cs-border-radius-full);
+    border-radius: var(--cs-border-radius);
     background: linear-gradient(
       180deg,
       transparent,
@@ -1088,7 +1088,7 @@
     min-height: 26px;
     padding: 4px var(--cs-space-sm);
     border: 1px solid color-mix(in srgb, var(--cost-analysis-accent) 22%, var(--cs-border-color-light));
-    border-radius: var(--cs-border-radius-full);
+    border-radius: var(--cs-border-radius);
     background: color-mix(in srgb, var(--cs-bg-color) 92%, transparent);
     color: var(--cs-text-color-primary);
     line-height: 1.4;

@@ -800,14 +800,18 @@ impl WorkflowExecutor {
         self.background_compression_boundary_id = None;
         self.background_compression_retry_state
             .remove(&compressed_until_message_id);
+        let current_context_tokens = self.context.current_token_estimate();
+        self.save_snapshot().await?;
         log::info!(
             "[Workflow][session={}][phase=compression] Persisted summary through boundary {}. current_context_tokens={}",
             self.session_id,
             compressed_until_message_id,
-            self.context.current_token_estimate()
+            current_context_tokens
         );
         self.dispatch_ui_payload(GatewayPayload::CompressionApplied {
             compressed_until_message_id,
+            current_context_tokens,
+            max_context_tokens: self.context.max_tokens,
         })
         .await?;
         self.dispatch_context_usage().await?;

@@ -3470,7 +3470,7 @@ defineExpose({
   width: var(--cs-size-xl);
   height: var(--cs-size-xl);
   border: none;
-  border-radius: var(--cs-border-radius-full);
+  border-radius: var(--cs-border-radius);
   background: transparent;
   color: var(--cs-text-color-secondary);
   cursor: pointer;
@@ -3600,7 +3600,7 @@ defineExpose({
   height: var(--cs-size-xl);
   padding: 0;
   border: 0;
-  border-radius: var(--cs-border-radius-full);
+  border-radius: var(--cs-border-radius);
   background: var(--cs-bg-color-light);
   color: var(--cs-text-color-secondary);
   cursor: pointer;
@@ -3732,7 +3732,7 @@ defineExpose({
 .tool-group__error-count {
   flex: 0 0 auto;
   padding: 1px var(--cs-space-xs);
-  border-radius: var(--cs-border-radius-full);
+  border-radius: var(--cs-border-radius-sm);
   font-size: var(--cs-font-size-xs);
   font-weight: 600;
   line-height: 1.6;
@@ -3766,7 +3766,7 @@ defineExpose({
   margin-left: 10px;
   padding: 0;
   border: 0;
-  border-radius: var(--cs-border-radius-full);
+  border-radius: var(--cs-border-radius);
   background: transparent;
   color: var(--cs-text-color-secondary);
   cursor: pointer;
@@ -3806,7 +3806,7 @@ defineExpose({
   flex: 0 0 auto;
   padding: 2px var(--cs-space-xs);
   border: 1px solid var(--cs-border-color);
-  border-radius: var(--cs-border-radius-full);
+  border-radius: var(--cs-border-radius);
   color: var(--cs-text-color-secondary);
   font-size: var(--cs-font-size-xs);
   white-space: nowrap;
