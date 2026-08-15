@@ -895,6 +895,75 @@ impl WorkflowExecutor {
         }
     }
 
+    /// Compresses a stopped workflow without entering recovery or the normal execution loop.
+    /// The transcript remains authoritative and the persisted terminal state is never changed.
+    pub(crate) async fn run_terminal_manual_compression(
+        &mut self,
+    ) -> Result<bool, WorkflowEngineError> {
+        let terminal_state = {
+            let store = self.context.main_store.as_ref();
+            let snapshot = store.get_workflow_snapshot(&self.session_id)?;
+            snapshot
+                .workflow
+                .status
+                .parse::<WorkflowState>()
+                .map_err(|_| {
+                    WorkflowEngineError::General(format!(
+                        "Cannot manually compress workflow with invalid persisted state '{}'",
+                        snapshot.workflow.status
+                    ))
+                })?
+        };
+        if !matches!(
+            terminal_state,
+            WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
+        ) {
+            return Err(WorkflowEngineError::General(format!(
+                "Manual terminal compression requires a stopped workflow, found {terminal_state}"
+            )));
+        }
+
+        self.state = terminal_state.clone();
+        self.context.load_history().await?;
+        let Some((compression_candidate, compressed_until_message_id)) =
+            self.context.build_manual_compression_candidate()
+        else {
+            log::info!(
+                "[Workflow][session={}][phase=compression] Manual terminal compression skipped because no new safe boundary is available",
+                self.session_id
+            );
+            self.dispatch_ui_payload(GatewayPayload::Notification {
+                message: t!("workflow.manual_compression_unavailable").to_string(),
+                category: Some("warning".to_string()),
+            })
+            .await?;
+            return Ok(false);
+        };
+
+        log::info!(
+            "[Workflow][session={}][phase=compression] Running terminal-only manual checkpoint through boundary={} state={}",
+            self.session_id,
+            compressed_until_message_id,
+            terminal_state
+        );
+        let compressed = self
+            .run_blocking_compression(
+                compression_candidate,
+                compressed_until_message_id,
+                "manual_terminal_request",
+                CompressionMode::Blocking,
+            )
+            .await?;
+        self.state = terminal_state;
+        log::info!(
+            "[Workflow][session={}][phase=compression] Terminal-only manual checkpoint finished applied={} state={}",
+            self.session_id,
+            compressed,
+            self.state
+        );
+        Ok(compressed)
+    }
+
     fn workflow_completion_is_resolving(
         last_message: Option<&WorkflowMessage>,
         pending_final_review: Option<&crate::workflow::react::types::PendingFinalReview>,
@@ -6638,40 +6707,26 @@ impl WorkflowExecutor {
             .await?;
 
         if ContextManager::is_user_authored_task_message(&msg) {
-            if let (Some(message_id), Some(attached)) = (
-                msg.id,
-                msg.attached_context
-                    .as_deref()
-                    .filter(|value| !value.is_empty()),
-            ) {
-                match super::user_context::externalize_long_attached_context(
-                    &self.planning_root,
-                    &self.session_id,
+            if let Some(message_id) = msg.id {
+                if let Some(reference) = super::user_context::reference_large_user_context(
                     message_id,
-                    attached,
-                )
-                .await
-                {
-                    Ok(Some(reference)) => {
-                        let updated_metadata = super::user_context::merge_reference_metadata(
-                            msg.metadata.clone(),
-                            &reference,
-                        );
-                        self.context
-                            .update_message_metadata(message_id, updated_metadata.clone())
-                            .await?;
-                        metadata = Some(updated_metadata);
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        log::warn!(
-                            "[Workflow][session={}][phase=user_context] externalization_failed path=.cs/{}/user_question.md message_id={} error={}",
-                            self.session_id,
-                            self.session_id,
-                            message_id,
-                            error
-                        );
-                    }
+                    &msg.message,
+                    msg.attached_context.as_deref(),
+                ) {
+                    let updated_metadata = super::user_context::merge_reference_metadata(
+                        msg.metadata.clone(),
+                        &reference,
+                    );
+                    self.context
+                        .update_message_metadata(message_id, updated_metadata.clone())
+                        .await?;
+                    metadata = Some(updated_metadata);
+                    log::info!(
+                        "[Workflow][session={}][phase=user_context] projected large user input through authoritative database reference message_id={} tokens={}",
+                        self.session_id,
+                        message_id,
+                        reference.token_estimate
+                    );
                 }
             }
         }
@@ -7092,6 +7147,38 @@ impl WorkflowExecutor {
         sig_json: &Value,
         sig_type_enum: Option<SignalType>,
     ) -> Result<bool, WorkflowEngineError> {
+        if sig_type_enum == Some(SignalType::ManualCompress) {
+            if let Some((compression_candidate, compressed_until_message_id)) =
+                self.context.build_pressure_compression_candidate()
+            {
+                self.run_blocking_compression(
+                    compression_candidate,
+                    compressed_until_message_id,
+                    "manual_request",
+                    CompressionMode::Blocking,
+                )
+                .await?;
+            } else {
+                log::info!(
+                    "[Workflow][session={}][phase=compression] Manual pressure compression skipped because no safe segment is available",
+                    self.session_id
+                );
+                self.dispatch_ui_payload(GatewayPayload::Notification {
+                    message: t!("workflow.manual_compression_unavailable").to_string(),
+                    category: Some("warning".to_string()),
+                })
+                .await?;
+            }
+            if sig_json
+                .get("resume_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                self.update_state(WorkflowState::Completed).await?;
+            }
+            return Ok(true);
+        }
+
         if sig_type_enum == Some(SignalType::UpdatePhase) {
             let Some((phase_str, phase)) = Self::parse_phase_from_signal(sig_json) else {
                 return Ok(false);
@@ -8156,7 +8243,7 @@ mod recovery_tests {
     }
 
     #[tokio::test]
-    async fn externalization_write_failure_keeps_durable_attachment_and_inline_projection() {
+    async fn large_user_context_uses_database_reference_without_workspace_storage() {
         let (temp_dir, store) = create_test_store();
         let session_id = "externalization-write-failure";
         let agent = test_agent("externalization-write-failure-agent");
@@ -8165,8 +8252,6 @@ mod recovery_tests {
             .create_workflow(session_id, "test", &agent.id, None, None)
             .expect("failed to create test workflow");
 
-        let blocked_root = temp_dir.path().join("blocked-root");
-        std::fs::write(&blocked_root, "not a directory").expect("failed to create blocked root");
         let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
             payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
@@ -8178,7 +8263,7 @@ mod recovery_tests {
             gateway,
             Arc::new(UnusedSubAgentFactory),
             agent,
-            vec![blocked_root],
+            vec![temp_dir.path().to_path_buf()],
             temp_dir.path().join("app-data"),
             None,
             None,
@@ -8202,7 +8287,7 @@ mod recovery_tests {
                 None,
             )
             .await
-            .expect("message persistence must survive archive failure");
+            .expect("message persistence must preserve authoritative user input");
 
         let snapshot = store
             .get_workflow_snapshot(session_id)
@@ -8216,20 +8301,98 @@ mod recovery_tests {
             persisted.attached_context.as_deref(),
             Some(attached.as_str())
         );
-        assert!(
-            crate::workflow::react::user_context::reference_from_metadata(
-                persisted.metadata.as_ref()
-            )
-            .is_none()
+        let reference = crate::workflow::react::user_context::reference_from_metadata(
+            persisted.metadata.as_ref(),
+        )
+        .expect("large input should carry an authoritative database reference");
+        assert_eq!(
+            reference.message_id,
+            persisted.id.expect("durable message id")
         );
-        assert!(executor.context.messages.iter().any(|message| {
-            message.role == "user" && message.message.contains("preserve this main question")
-        }));
-        assert!(executor
+        assert!(reference.token_estimate > 2_048);
+        let projected = executor
             .context
             .get_messages_for_llm()
-            .iter()
-            .any(|message| message.message.contains(&attached)));
+            .into_iter()
+            .find(|message| message.role == "user")
+            .expect("user message should remain in the AI projection");
+        assert!(projected.message.contains("preserve this main question"));
+        assert!(projected.message.contains("USER_CONTEXT_REFERENCE"));
+        assert!(projected.message.contains("read_history_message"));
+        assert!(!projected.message.contains("path=\".cs/"));
+        assert!(
+            projected.message.chars().count() < attached.chars().count(),
+            "AI projection must be bounded while workflow_messages retains the full attachment"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_manual_compression_without_candidate_keeps_terminal_lifecycle() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "terminal-manual-compression-no-candidate";
+        let agent = test_agent("terminal-manual-compression-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "Completed task", &agent.id, None, None)
+            .expect("failed to create test workflow");
+        store
+            .update_workflow_status(session_id, "completed")
+            .expect("failed to mark workflow completed");
+
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(32).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+
+        let applied = executor
+            .run_terminal_manual_compression()
+            .await
+            .expect("terminal manual compression should not enter normal recovery");
+
+        assert!(!applied);
+        assert_eq!(executor.state, WorkflowState::Completed);
+        assert_eq!(
+            store
+                .get_workflow(session_id)
+                .expect("failed to read workflow")
+                .expect("workflow should exist")
+                .status,
+            "completed"
+        );
+        assert!(
+            store
+                .get_workflow_snapshot(session_id)
+                .expect("failed to read workflow snapshot")
+                .messages
+                .is_empty(),
+            "a skipped terminal compression must not append transcript messages"
+        );
+        assert!(
+            payloads
+                .lock()
+                .expect("payload lock")
+                .iter()
+                .all(|payload| !matches!(payload, GatewayPayload::State { .. })),
+            "terminal-only compression must not publish a lifecycle transition"
+        );
     }
 
     #[tokio::test]

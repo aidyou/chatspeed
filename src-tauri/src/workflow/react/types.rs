@@ -286,6 +286,8 @@ pub enum WorkflowSignal {
         #[serde(alias = "autoCompress", alias = "enabled")]
         auto_compress: bool,
     },
+    /// Run pressure compression immediately using the current context projection.
+    ManualCompress,
     /// Update runtime approval level configuration
     UpdateApprovalLevel {
         #[serde(alias = "approvalLevel", alias = "level")]
@@ -371,6 +373,7 @@ impl WorkflowSignal {
             (WorkflowSignal::RebroadcastPending, _) => true,
             (WorkflowSignal::UpdateFinalAudit { .. }, _) => true,
             (WorkflowSignal::UpdateAutoCompress { .. }, _) => true,
+            (WorkflowSignal::ManualCompress, _) => true,
             (WorkflowSignal::UpdateApprovalLevel { .. }, _) => true,
             (WorkflowSignal::UpdatePhase { .. }, _) => true,
             (WorkflowSignal::UpdateAllowedPaths { .. }, _) => true,
@@ -408,6 +411,7 @@ impl WorkflowSignal {
             WorkflowSignal::RebroadcastPending => "rebroadcast_pending",
             WorkflowSignal::UpdateFinalAudit { .. } => "update_final_audit",
             WorkflowSignal::UpdateAutoCompress { .. } => "update_auto_compress",
+            WorkflowSignal::ManualCompress => "manual_compress",
             WorkflowSignal::UpdateApprovalLevel { .. } => "update_approval_level",
             WorkflowSignal::UpdatePhase { .. } => "update_phase",
             WorkflowSignal::UpdateAllowedPaths { .. } => "update_allowed_paths",
@@ -911,6 +915,10 @@ mod tests {
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(matches!(signal, WorkflowSignal::Stop));
 
+        let json = r#"{"type":"manual_compress"}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(matches!(signal, WorkflowSignal::ManualCompress));
+
         let json = r#"{"type":"remove_queued_user_message","queued_user_message_id":"queue_1"}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(matches!(
@@ -965,6 +973,10 @@ mod tests {
         };
         assert!(child_complete.is_valid_for(Some(&WaitReason::SubAgent)));
         assert!(!child_complete.is_valid_for(Some(&WaitReason::Approval)));
+
+        let manual_compress = WorkflowSignal::ManualCompress;
+        assert!(manual_compress.is_valid_for(None));
+        assert!(manual_compress.is_valid_for(Some(&WaitReason::Approval)));
 
         let update_paths = WorkflowSignal::UpdateAllowedPaths {
             paths: vec!["/tmp/project".to_string()],

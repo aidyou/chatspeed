@@ -9,6 +9,7 @@ use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
+use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::{Gateway, TauriGateway};
 use crate::workflow::react::intelligence::IntelligenceManager;
@@ -27,7 +28,7 @@ use crate::workflow::react::runtime_observation::{
 use crate::workflow::react::security::workspace_walk_builder;
 #[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
-use crate::workflow::react::signals::SignalType;
+use crate::workflow::react::signals::{stash_runtime_signal, SignalType};
 use crate::workflow::react::types::{
     ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WaitReason,
     WorkflowSignal, WorkflowState,
@@ -3785,6 +3786,14 @@ fn compat_is_terminal_snapshot_status(status: &str) -> bool {
     )
 }
 
+fn should_run_terminal_manual_compression(
+    signal: Option<&WorkflowSignal>,
+    snapshot_status: &str,
+) -> bool {
+    matches!(signal, Some(WorkflowSignal::ManualCompress))
+        && compat_is_terminal_snapshot_status(snapshot_status)
+}
+
 fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
     matches!(
         compat_snapshot_workflow_state(status),
@@ -4372,6 +4381,88 @@ pub async fn workflow_start(
     Ok(session_id)
 }
 
+async fn run_terminal_manual_compression(
+    app: &AppHandle,
+    main_store: Arc<MainStore>,
+    chat_state: Arc<ChatState>,
+    tsid_generator: Arc<TsidGenerator>,
+    gateway: Arc<TauriGateway>,
+    factory: Arc<dyn SubAgentFactory>,
+    session_id: &str,
+    workflow_snapshot: &WorkflowSnapshot,
+) -> Result<bool, String> {
+    let mut agent_config = main_store
+        .get_agent(&workflow_snapshot.workflow.agent_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("Agent {} not found", workflow_snapshot.workflow.agent_id))?;
+    let agent_config_value = workflow_snapshot
+        .workflow
+        .agent_config
+        .as_ref()
+        .and_then(|config| serde_json::from_str::<Value>(config).ok())
+        .unwrap_or_else(|| json!({}));
+    if let Some(config) = workflow_snapshot.workflow.agent_config.as_deref() {
+        agent_config.merge_config(config);
+    }
+    let allowed_paths = workflow_snapshot
+        .workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+        .and_then(|config| config.allowed_paths)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir().unwrap_or_default().join(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    let policy = match agent_config_value
+        .get("phase")
+        .and_then(|value| value.as_str())
+        .and_then(|phase| {
+            use std::str::FromStr;
+            crate::workflow::react::policy::ExecutionPhase::from_str(phase).ok()
+        }) {
+        Some(crate::workflow::react::policy::ExecutionPhase::Planning) => {
+            crate::workflow::react::policy::ExecutionPolicy::planning_strict()
+        }
+        Some(crate::workflow::react::policy::ExecutionPhase::Implementation) => {
+            crate::workflow::react::policy::ExecutionPolicy::implementation()
+        }
+        Some(crate::workflow::react::policy::ExecutionPhase::Standard) | None => {
+            crate::workflow::react::policy::ExecutionPolicy::standard()
+        }
+    };
+    let auto_compress_enabled = workflow_auto_compress_enabled(&agent_config_value);
+    let global_tool_manager = chat_state.tool_manager.clone();
+    let mut executor = WorkflowExecutor::new(
+        session_id.to_string(),
+        main_store,
+        chat_state,
+        gateway as Arc<dyn Gateway>,
+        factory,
+        agent_config,
+        allowed_paths,
+        app.path().app_data_dir().unwrap_or_default(),
+        None,
+        None,
+        tsid_generator,
+        global_tool_manager,
+        auto_compress_enabled,
+        policy,
+    );
+
+    executor
+        .run_terminal_manual_compression()
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn workflow_approve_plan(
     app: AppHandle,
@@ -4477,7 +4568,7 @@ pub async fn workflow_signal(
         &signal,
         &allowed_paths_from_workflow_snapshot(&workflow_snapshot),
     );
-    let recovery_context = restore_context_for_signal(main_store_arc, &session_id);
+    let recovery_context = restore_context_for_signal(main_store_arc.clone(), &session_id);
 
     // Phase 1: Check manager first (primary path)
     let has_live_session =
@@ -4830,10 +4921,40 @@ pub async fn workflow_signal(
 
                 return Ok("Workflow resumed and rebroadcast pending triggered".to_string());
             } else if matches!(
-                workflow_signal,
-                Some(WorkflowSignal::Continue | WorkflowSignal::Stop)
+                workflow_signal.as_ref(),
+                Some(
+                    WorkflowSignal::Continue
+                        | WorkflowSignal::Stop
+                        | WorkflowSignal::ManualCompress
+                )
             ) {
-                let can_resume = effective_wait_reason == Some(WaitReason::Confirmation)
+                let is_manual_compress = matches!(
+                    workflow_signal.as_ref(),
+                    Some(WorkflowSignal::ManualCompress)
+                );
+                if should_run_terminal_manual_compression(
+                    workflow_signal.as_ref(),
+                    &workflow_snapshot.workflow.status,
+                ) {
+                    let applied = run_terminal_manual_compression(
+                        &app,
+                        main_store_arc.clone(),
+                        chat_state.inner().clone(),
+                        tsid_generator.inner().clone(),
+                        gateway_arc.clone(),
+                        factory.inner().clone(),
+                        &session_id,
+                        &workflow_snapshot,
+                    )
+                    .await?;
+                    return Ok(if applied {
+                        "Terminal workflow compressed without resuming execution".to_string()
+                    } else {
+                        "Terminal workflow has no new safe segment to compress".to_string()
+                    });
+                }
+                let can_resume = is_manual_compress
+                    || effective_wait_reason == Some(WaitReason::Confirmation)
                     || (recovery_context.is_none()
                         && matches!(
                             compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
@@ -4855,10 +4976,21 @@ pub async fn workflow_signal(
                 }
 
                 log::info!(
-                    "[Workflow] Session {} is paused, resuming to process {} signal",
+                    "[Workflow] Session {} is resuming to process {} signal",
                     session_id,
                     val["type"]
                 );
+
+                if is_manual_compress {
+                    stash_runtime_signal(
+                        &session_id,
+                        serde_json::json!({
+                            "type": "manual_compress",
+                            "resume_only": true,
+                        })
+                        .to_string(),
+                    );
+                }
 
                 workflow_start(
                     app,
@@ -4876,6 +5008,10 @@ pub async fn workflow_signal(
                     None,
                 )
                 .await?;
+
+                if is_manual_compress {
+                    return Ok("Workflow resumed and manual compression triggered".to_string());
+                }
 
                 let mut retries = 5;
                 let mut last_error = None;
@@ -7288,6 +7424,30 @@ mod tests {
         assert!(!can_resume_user_message_from_recovery(
             Some(&running),
             "executing"
+        ));
+    }
+
+    #[test]
+    fn terminal_manual_compression_routes_without_recovery_only_for_stopped_sessions() {
+        assert!(should_run_terminal_manual_compression(
+            Some(&WorkflowSignal::ManualCompress),
+            "completed"
+        ));
+        assert!(should_run_terminal_manual_compression(
+            Some(&WorkflowSignal::ManualCompress),
+            "error"
+        ));
+        assert!(should_run_terminal_manual_compression(
+            Some(&WorkflowSignal::ManualCompress),
+            "cancelled"
+        ));
+        assert!(!should_run_terminal_manual_compression(
+            Some(&WorkflowSignal::ManualCompress),
+            "executing"
+        ));
+        assert!(!should_run_terminal_manual_compression(
+            Some(&WorkflowSignal::Continue),
+            "completed"
         ));
     }
 

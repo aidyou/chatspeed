@@ -185,6 +185,65 @@ test('ask-user responses stay in the workflow chain but are hidden from the tran
   )
 })
 
+test('workflow quick actions expose manual compression through the slash-command handler', async () => {
+  const [inputArea, workflowView, signalTypes] = await Promise.all([
+    readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/composables/workflow/signalTypes.ts', 'utf8')
+  ])
+
+  assert.match(
+    inputArea,
+    /<el-dropdown-item command="manualCompress">[\s\S]*?<cs name="compress"[\s\S]*?manualCompressShort/,
+    'the quick-actions menu must place the manual compression action beside attachments'
+  )
+  assert.match(inputArea, /emit\('trigger-manual-compress'\)/)
+  assert.match(workflowView, /@trigger-manual-compress="triggerManualCompression"/)
+  assert.match(workflowView, /type: SIGNAL_TYPES\.MANUAL_COMPRESS/)
+  assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
+})
+
+test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {
+  const [messageList, enLocale, jaLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8'),
+    readFile('src/i18n/locales/ja.json', 'utf8'),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8'),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8')
+  ])
+
+  assert.match(messageList, /const getContextSnapshotV2Kind = snapshot =>/)
+  assert.match(messageList, /\['pressure_handoff', 'completed_task_rollup'\]/)
+  assert.match(messageList, /const formatV2ContextSnapshot = snapshot =>/)
+  assert.match(messageList, /snapshot\.user_directives/)
+  assert.match(messageList, /snapshot\.boundary_open_items/)
+  assert.match(messageList, /snapshot\.unresolved_carryovers/)
+  assert.match(messageList, /snapshot\.completed_work/)
+  assert.match(messageList, /snapshot\.file_changes/)
+  assert.match(messageList, /snapshot\.review_rounds/)
+  assert.match(messageList, /const formatBoundaryOpenItems = items =>/)
+  assert.match(messageList, /const formatReviewRound = review =>/)
+  assert.match(messageList, /const findings = snapshotMarkdownList\(review\.findings\)/)
+  assert.match(messageList, /const requiredFixes = snapshotMarkdownList\(review\.required_fixes\)/)
+  assert.match(messageList, /const evidence = snapshotMarkdownList\(review\.evidence_refs\)/)
+  assert.match(messageList, /\.filter\(section => section\?\.\[1\]\)/)
+  assert.match(messageList, /const v2Display = formatV2ContextSnapshot\(parsed\)/)
+  assert.match(messageList, /kind === 'pressure_handoff'/)
+  assert.match(messageList, /kind === 'completed_task_rollup'/)
+  assert.match(
+    messageList,
+    /\['Overall Goal', jsonSnapshotSectionText\(parsed\.overall_goal\)\]/,
+    'legacy JSON snapshots must retain their formatter'
+  )
+  assert.match(messageList, /if \(!content\.includes\('<state_snapshot'\)\) return content/)
+
+  for (const locale of [enLocale, jaLocale, zhHansLocale, zhHantLocale]) {
+    assert.match(locale, /"contextSnapshot": \{[\s\S]*?"pressureHandoff"/)
+    assert.match(locale, /"contextSnapshot": \{[\s\S]*?"completedTaskRollup"/)
+    assert.match(locale, /"contextSnapshot": \{[\s\S]*?"reviewStatus"/)
+  }
+})
+
 test('sandbox profile suggestions inherit the effective scheme runtime preference', async () => {
   const sandboxSettings = await readFile('src/components/setting/Sandbox.vue', 'utf8')
 

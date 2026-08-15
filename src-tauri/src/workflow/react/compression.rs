@@ -11,7 +11,6 @@ use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::{
     BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
 };
-use crate::workflow::react::user_context::reference_from_metadata;
 
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -64,16 +63,16 @@ impl ContextCompressor {
             .iter()
             .rposition(ContextManager::is_compression_summary_message);
 
-        // 2. Slice history from the last summary point to now. For active-task
-        // compression, prepend every raw user input from before the summary so
-        // each round sees the durable objective and later calibrations again.
+        // 2. Compress only the incremental boundary history. The active LLM projection
+        // separately carries the original request or approved plan, current raw tail, and
+        // todos; repeating user anchors here wastes pressure-handoff budget.
         let incremental_messages = if let Some(idx) = last_summary_idx {
             &messages[idx..]
         } else {
             messages
         };
         let compression_input =
-            Self::compression_input_messages_with_user_anchors(messages, last_summary_idx);
+            Self::incremental_compression_input_messages(messages, last_summary_idx);
 
         // 3. Layer 1: Purification (Filter out noise)
         let purified_history: Vec<serde_json::Value> = compression_input
@@ -82,17 +81,7 @@ impl ContextCompressor {
                 if Self::should_skip_message_for_compression(m) {
                     return None;
                 }
-                let merged_content =
-                    if let Some(reference) = reference_from_metadata(m.metadata.as_ref()) {
-                        format!("{}\n\n{}", m.message, reference.projection_marker())
-                    } else {
-                        match m.attached_context.as_deref() {
-                            Some(attached) if !attached.trim().is_empty() => {
-                                format!("{}\n\n{}", m.message, attached)
-                            }
-                            _ => m.message.clone(),
-                        }
-                    };
+                let merged_content = ContextManager::content_for_context_projection(m);
                 let content = Self::sanitize_message_content_for_compression(&merged_content);
                 let keep = Self::should_keep_message_content_for_compression(m, &content);
                 keep.then(|| {
@@ -113,6 +102,7 @@ impl ContextCompressor {
         let completed_tasks = Self::render_completed_tasks(incremental_messages);
         let review_rounds = Self::render_canonical_review_rounds(messages, incremental_messages);
         let fact_pack = Self::render_fact_pack(messages, incremental_messages);
+        let canonical_file_changes = Self::file_changes_from_fact_pack(&fact_pack);
 
         // 4. Strategic Summary (LLM Call)
         let user_prompt = match mode {
@@ -130,8 +120,10 @@ impl ContextCompressor {
                 &completed_tasks,
                 &review_rounds,
                 &fact_pack,
+                &canonical_file_changes,
                 &user_prompt,
                 mode,
+                compressed_until_message_id,
                 max_output_tokens,
             )
             .await?;
@@ -144,8 +136,10 @@ impl ContextCompressor {
         completed_tasks: &str,
         review_rounds: &str,
         fact_pack: &str,
+        canonical_file_changes: &[String],
         user_prompt: &str,
         mode: CompressionMode,
+        compressed_until_message_id: i64,
         max_output_tokens: u32,
     ) -> Result<String, WorkflowEngineError> {
         let transcript = Self::render_history_as_transcript(&history_json);
@@ -211,18 +205,27 @@ impl ContextCompressor {
                 .await
             {
                 Ok(result) => {
-                    let normalized = Self::normalize_summary_result(&result);
+                    // File paths are deterministic tool-observation evidence. Normalize them
+                    // before validation so a weak compressor cannot waste a retry by listing a
+                    // read-only or retained-tail path; semantic shape remains validated below.
+                    let normalized = Self::inject_runtime_handoff_fields(
+                        &Self::normalize_summary_result(&result),
+                        review_rounds,
+                        canonical_file_changes,
+                        mode,
+                        compressed_until_message_id,
+                    );
+                    let normalized =
+                        Self::normalize_handoff_file_changes(&normalized, canonical_file_changes);
                     let validation_error = match Self::validate_compression_result(
                         &normalized,
                         completed_tasks,
                         review_rounds,
                         fact_pack,
                         mode,
-                        Self::boundary_id_from_prompt(user_prompt),
+                        compressed_until_message_id,
                     ) {
-                        Ok(validated) => {
-                            return Ok(Self::normalize_handoff_file_changes(&validated))
-                        }
+                        Ok(validated) => return Ok(validated),
                         Err(err) => err,
                     };
 
@@ -264,33 +267,12 @@ impl ContextCompressor {
         }
     }
 
-    fn compression_input_messages_with_user_anchors<'a>(
+    fn incremental_compression_input_messages<'a>(
         messages: &'a [WorkflowMessage],
         last_summary_idx: Option<usize>,
     ) -> Vec<&'a WorkflowMessage> {
-        let Some(summary_idx) = last_summary_idx else {
-            return messages.iter().collect();
-        };
-
-        let current_task_has_approved_plan = messages
-            .iter()
-            .skip(
-                messages
-                    .iter()
-                    .rposition(ContextManager::is_successful_completion_message)
-                    .map(|index| index + 1)
-                    .unwrap_or(0),
-            )
-            .any(|message| message.message_subtype.as_deref() == Some("approved_plan"));
-        let mut input = messages[..summary_idx]
-            .iter()
-            .filter(|message| {
-                !current_task_has_approved_plan
-                    && ContextManager::is_user_authored_task_message(message)
-            })
-            .collect::<Vec<_>>();
-        input.extend(messages[summary_idx..].iter());
-        input
+        let start_idx = last_summary_idx.unwrap_or(0);
+        messages[start_idx..].iter().collect()
     }
 
     fn sanitize_message_content_for_compression(content: &str) -> String {
@@ -381,19 +363,30 @@ impl ContextCompressor {
             return json!({});
         };
         let mut compact = serde_json::Map::new();
-        for key in [
-            "tool_name",
-            "execution_status",
-            "approval_status",
-            "review_display_state",
-            "review_summary",
-            "review_verdict",
-            "tool_call_id",
-            "path",
-            "command",
-        ] {
+        for key in ["review_display_state", "review_summary", "review_verdict"] {
             if let Some(value) = metadata.get(key) {
                 compact.insert(key.to_string(), value.clone());
+            }
+        }
+        if matches!(
+            metadata.get("execution_status").and_then(Value::as_str),
+            Some("failed" | "rejected" | "interrupted")
+        ) {
+            compact.insert(
+                "execution_status".to_string(),
+                metadata
+                    .get("execution_status")
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        }
+        if message.is_error {
+            if let Some(error_type) = metadata
+                .get("error_type")
+                .cloned()
+                .or_else(|| message.error_type.as_ref().map(|value| json!(value)))
+            {
+                compact.insert("error_type".to_string(), error_type);
             }
         }
         serde_json::Value::Object(compact)
@@ -741,44 +734,10 @@ impl ContextCompressor {
             .cloned()
     }
 
-    fn tool_command(metadata: &Value, arguments: Option<&Value>) -> Option<Value> {
-        arguments
-            .and_then(|arguments| arguments.get("command").or_else(|| arguments.get("cmd")))
-            .or_else(|| {
-                metadata
-                    .get("details")
-                    .and_then(|details| details.get("command"))
-            })
-            .or_else(|| metadata.get("command"))
-            .cloned()
-    }
-
-    fn tool_result_excerpt(metadata: &Value, message: &WorkflowMessage) -> Option<Value> {
-        metadata
-            .get("llm_content")
-            .or_else(|| metadata.get("summary"))
-            .or_else(|| {
-                metadata
-                    .get("details")
-                    .and_then(|details| details.get("summary"))
-            })
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| Value::String(value.chars().take(2_000).collect()))
-            .or_else(|| {
-                (!message.message.trim().is_empty())
-                    .then(|| Value::String(message.message.chars().take(2_000).collect()))
-            })
-    }
-
     fn is_file_mutation_tool(tool_name: Option<&str>) -> bool {
         matches!(
             tool_name,
-            Some(crate::tools::TOOL_EDIT_FILE)
-                | Some(crate::tools::TOOL_WRITE_FILE)
-                | Some(crate::tools::TOOL_PLAN_EDIT_NOTE)
-                | Some(crate::tools::TOOL_PLAN_WRITE_NOTE)
+            Some(crate::tools::TOOL_EDIT_FILE) | Some(crate::tools::TOOL_WRITE_FILE)
         )
     }
 
@@ -812,18 +771,30 @@ impl ContextCompressor {
     }
 
     fn render_fact_pack(
-        _all_messages: &[WorkflowMessage],
+        all_messages: &[WorkflowMessage],
         incremental_messages: &[WorkflowMessage],
     ) -> String {
-        // Only facts introduced after the latest checkpoint are strict carry-forward inputs.
-        // The previous checkpoint remains in the transcript and may decay semantically, while
-        // exact historical evidence stays recoverable through read_history_message(message_id).
-        let mut facts = Vec::new();
-        let mut file_changes = std::collections::BTreeMap::new();
+        // The handoff is an AI-to-AI status transfer, not a tool-event archive. File paths are
+        // the only deterministic evidence that must survive outside semantic work summaries.
+        // Start from the prior canonical handoff so a later pressure/rollup checkpoint does not
+        // discard successful mutations already covered by an earlier checkpoint.
+        let mut file_changes = std::collections::BTreeSet::new();
+        if let Some(previous_handoff) = all_messages
+            .iter()
+            .rev()
+            .find(|message| ContextManager::is_compression_summary_message(message))
+            .and_then(Self::parse_v2_handoff)
+        {
+            file_changes.extend(
+                previous_handoff
+                    .get("file_changes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Self::normalize_handoff_path),
+            );
+        }
         for message in incremental_messages {
-            let Some(message_id) = message.id else {
-                continue;
-            };
             let Some(metadata) = message.metadata.as_ref() else {
                 continue;
             };
@@ -841,7 +812,8 @@ impl ContextCompressor {
                     })
                 });
             let arguments = Self::structured_tool_arguments(metadata);
-            if !message.is_error
+            if message.role == "tool"
+                && !message.is_error
                 && execution_status.as_str() == Some("completed")
                 && Self::is_file_mutation_tool(metadata.get("tool_name").and_then(Value::as_str))
             {
@@ -849,85 +821,25 @@ impl ContextCompressor {
                     .as_ref()
                     .and_then(Self::normalize_handoff_path)
                 {
-                    let should_replace = file_changes
-                        .get(&path)
-                        .and_then(|fact: &Value| fact.get("message_id"))
-                        .and_then(Value::as_i64)
-                        .is_none_or(|existing_id| message_id > existing_id);
-                    if should_replace {
-                        file_changes.insert(
-                            path.clone(),
-                            json!({
-                                "handoff_field": "file_changes",
-                                "message_id": message_id,
-                                "payload": {
-                                    "path": path,
-                                    "tool_name": metadata.get("tool_name").cloned().unwrap_or_default(),
-                                    "execution_status": execution_status,
-                                },
-                            }),
-                        );
-                    }
-                }
-            }
-            if let Some(command) = Self::tool_command(metadata, arguments.as_ref()) {
-                facts.push(json!({
-                    "handoff_field": "completed_work",
-                    "message_id": message_id,
-                    "payload": {
-                        "command": command,
-                        "tool_name": metadata.get("tool_name").cloned().unwrap_or_default(),
-                        "execution_status": execution_status,
-                        "result_excerpt": Self::tool_result_excerpt(metadata, message),
-                    },
-                }));
-            }
-            if message.is_error || matches!(execution_status.as_str(), Some("failed" | "rejected"))
-            {
-                facts.push(json!({
-                    "handoff_field": "warnings_and_do_not_repeat",
-                    "message_id": message_id,
-                    "payload": {
-                        "tool_name": metadata.get("tool_name").cloned().unwrap_or_default(),
-                        "execution_status": execution_status,
-                        "error_type": metadata.get("error_type").cloned().or_else(|| message.error_type.as_ref().map(|value| json!(value))).unwrap_or_default(),
-                        "result_excerpt": Self::tool_result_excerpt(metadata, message),
-                    },
-                }));
-            }
-            for (metadata_key, handoff_field) in [
-                ("environment_constraint", "environment_constraints"),
-                ("credential_reference", "credential_references"),
-            ] {
-                if let Some(value) = metadata.get(metadata_key).cloned() {
-                    facts.push(json!({
-                        "handoff_field": handoff_field,
-                        "message_id": message_id,
-                        "payload": {metadata_key: value},
-                    }));
+                    file_changes.insert(path);
                 }
             }
         }
-        facts.extend(file_changes.into_values());
-        let mut unique = std::collections::BTreeMap::new();
-        for fact in facts {
-            let key = (
-                fact.get("handoff_field")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                fact.get("message_id")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_default(),
-            );
-            unique.entry(key).or_insert(fact);
-        }
-        let facts = unique.into_values().collect::<Vec<_>>();
-        if facts.is_empty() {
-            "None".to_string()
-        } else {
-            serde_json::to_string(&facts).unwrap_or_else(|_| "None".to_string())
-        }
+        let paths = file_changes.into_iter().collect::<Vec<_>>();
+        serde_json::to_string(&json!({ "file_changes": paths }))
+            .unwrap_or_else(|_| "{\"file_changes\":[]}".to_string())
+    }
+
+    fn file_changes_from_fact_pack(fact_pack: &str) -> Vec<String> {
+        serde_json::from_str::<Value>(fact_pack)
+            .ok()
+            .and_then(|facts| facts.get("file_changes").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|path| Self::normalize_handoff_path(&path))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn is_successful_completion_message(message: &WorkflowMessage) -> bool {
@@ -969,56 +881,149 @@ impl ContextCompressor {
             .replace('>', "&gt;")
     }
 
-    fn normalize_handoff_file_changes(result: &str) -> String {
+    fn normalize_handoff_file_changes(result: &str, canonical_file_changes: &[String]) -> String {
         let Ok(mut handoff) = serde_json::from_str::<Value>(result) else {
             return result.to_string();
         };
-        let Some(file_changes) = handoff
-            .get("file_changes")
-            .and_then(Value::as_array)
-            .cloned()
-        else {
+        // Tool observations are scoped to this boundary; a worktree diff can include unrelated work.
+        let canonical_paths = canonical_file_changes
+            .iter()
+            .filter_map(|path| Self::normalize_handoff_path(&Value::String(path.clone())))
+            .collect::<std::collections::BTreeSet<_>>();
+        handoff["file_changes"] = json!(canonical_paths);
+        if handoff.get("kind").and_then(Value::as_str) == Some("pressure_handoff") {
+            // Normalize legacy constraint fields at this compatibility boundary so new handoffs
+            // have one unambiguous field without invalidating old persisted summaries.
+            let mut constraints = std::collections::BTreeSet::new();
+            for field in [
+                "constraints_and_guards",
+                "technical_invariants",
+                "warnings_and_do_not_repeat",
+                "environment_constraints",
+            ] {
+                if let Some(entries) = handoff.get(field).and_then(Value::as_array) {
+                    constraints.extend(
+                        entries
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|entry| !entry.is_empty()),
+                    );
+                }
+            }
+            handoff["constraints_and_guards"] = json!(constraints);
+            if let Some(object) = handoff.as_object_mut() {
+                object.remove("technical_invariants");
+                object.remove("warnings_and_do_not_repeat");
+                object.remove("environment_constraints");
+            }
+
+            let user_directives = handoff
+                .get("user_directives")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|directive| !directive.is_empty())
+                .collect::<std::collections::BTreeSet<_>>();
+            handoff["user_directives"] = json!(user_directives);
+
+            let mut boundary_open_items = std::collections::BTreeSet::new();
+            if let Some(items) = handoff.get("boundary_open_items").and_then(Value::as_array) {
+                for item in items {
+                    if let (Some(kind), Some(summary)) = (
+                        item.get("kind").and_then(Value::as_str),
+                        item.get("summary").and_then(Value::as_str),
+                    ) {
+                        boundary_open_items
+                            .insert((kind.trim().to_string(), summary.trim().to_string()));
+                    }
+                }
+            }
+            for (field, kind) in [
+                ("facts_to_verify", "verification"),
+                ("open_threads_at_boundary", "remediation"),
+            ] {
+                if let Some(entries) = handoff.get(field).and_then(Value::as_array) {
+                    for summary in entries.iter().filter_map(Value::as_str).map(str::trim) {
+                        if !summary.is_empty() {
+                            boundary_open_items.insert((kind.to_string(), summary.to_string()));
+                        }
+                    }
+                }
+            }
+            handoff["boundary_open_items"] = json!(boundary_open_items
+                .into_iter()
+                .map(|(kind, summary)| json!({"kind": kind, "summary": summary}))
+                .collect::<Vec<_>>());
+            if let Some(object) = handoff.as_object_mut() {
+                object.remove("facts_to_verify");
+                object.remove("open_threads_at_boundary");
+                object.remove("unresolved_items");
+                object.remove("credential_references");
+            }
+        }
+        serde_json::to_string(&handoff).unwrap_or_else(|_| result.to_string())
+    }
+
+    fn inject_runtime_handoff_fields(
+        result: &str,
+        review_rounds: &str,
+        canonical_file_changes: &[String],
+        mode: CompressionMode,
+        compressed_until_message_id: i64,
+    ) -> String {
+        let Ok(mut handoff) = serde_json::from_str::<Value>(result) else {
+            return result.to_string();
+        };
+        let Some(object) = handoff.as_object_mut() else {
             return result.to_string();
         };
 
-        let mut normalized = std::collections::BTreeMap::new();
-        for mut change in file_changes {
-            if change.get("execution_status").and_then(Value::as_str) != Some("completed") {
-                continue;
-            }
-            let Some(path) = change.get("path").and_then(Self::normalize_handoff_path) else {
-                continue;
-            };
-            change["path"] = json!(path);
-            let message_id = change
-                .get("message_id")
-                .or_else(|| change.get("evidence_ref"))
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let should_replace = normalized
-                .get(&path)
-                .and_then(|existing: &Value| {
-                    existing
-                        .get("message_id")
-                        .or_else(|| existing.get("evidence_ref"))
-                })
-                .and_then(Value::as_i64)
-                .is_none_or(|existing_id| message_id > existing_id);
-            if should_replace {
-                normalized.insert(path, change);
-            }
+        let canonical_paths = canonical_file_changes
+            .iter()
+            .filter_map(|path| Self::normalize_handoff_path(&Value::String(path.clone())))
+            .collect::<std::collections::BTreeSet<_>>();
+        let canonical_review_rounds = if review_rounds == "None" {
+            Value::Array(Vec::new())
+        } else {
+            serde_json::from_str(review_rounds).unwrap_or_else(|_| Value::Array(Vec::new()))
+        };
+
+        object.insert("schema_version".to_string(), json!(2));
+        object.insert(
+            "kind".to_string(),
+            json!(match mode {
+                CompressionMode::Blocking => "pressure_handoff",
+                CompressionMode::Rollup => "completed_task_rollup",
+            }),
+        );
+        object.insert("file_changes".to_string(), json!(canonical_paths));
+        object.insert("review_rounds".to_string(), canonical_review_rounds);
+        if matches!(mode, CompressionMode::Blocking) {
+            object.insert(
+                "as_of_boundary".to_string(),
+                json!({ "compressed_until_message_id": compressed_until_message_id }),
+            );
         }
-        handoff["file_changes"] = Value::Array(normalized.into_values().collect());
         serde_json::to_string(&handoff).unwrap_or_else(|_| result.to_string())
     }
 
     fn normalize_summary_result(result: &str) -> String {
         let trimmed = result.trim();
+        let trimmed = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```JSON"))
+            .or_else(|| trimmed.strip_prefix("```"))
+            .map_or(trimmed, |fenced| {
+                fenced.trim().trim_end_matches("```").trim()
+            });
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
             if let Some(content) = parsed.get("content") {
                 match content {
                     serde_json::Value::String(text) => {
-                        return text.trim().to_string();
+                        return Self::normalize_summary_result(text);
                     }
                     serde_json::Value::Object(_) => {
                         if let Ok(text) = serde_json::to_string_pretty(content) {
@@ -1112,13 +1117,6 @@ impl ContextCompressor {
             .map_err(|error| format!("failed to normalize snapshot json: {}", error))
     }
 
-    fn boundary_id_from_prompt(user_prompt: &str) -> i64 {
-        user_prompt
-            .rsplit_once("compressed_until_message_id is ")
-            .and_then(|(_, value)| value.trim_end_matches('.').parse().ok())
-            .unwrap_or_default()
-    }
-
     fn validate_compression_result(
         normalized: &str,
         _completed_tasks: &str,
@@ -1189,30 +1187,23 @@ impl ContextCompressor {
                 "pressure_handoff",
                 vec![
                     "as_of_boundary",
+                    "user_directives",
                     "confirmed_facts",
-                    "facts_to_verify",
+                    "boundary_open_items",
                     "completed_work",
-                    "open_threads_at_boundary",
                     "file_changes",
-                    "technical_invariants",
-                    "warnings_and_do_not_repeat",
-                    "environment_constraints",
-                    "credential_references",
+                    "constraints_and_guards",
                     "review_rounds",
                 ],
             ),
             CompressionMode::Rollup => (
                 "completed_task_rollup",
                 vec![
-                    "completed_tasks",
-                    "durable_decisions",
-                    "cross_task_constraints",
+                    "confirmed_facts",
                     "unresolved_carryovers",
                     "completed_work",
                     "file_changes",
-                    "warnings_and_do_not_repeat",
-                    "environment_constraints",
-                    "credential_references",
+                    "constraints_and_guards",
                     "review_rounds",
                 ],
             ),
@@ -1231,10 +1222,86 @@ impl ContextCompressor {
         }
         for field in &required_fields {
             let field = *field;
-            if !object.get(field).is_some_and(serde_json::Value::is_array)
-                && field != "as_of_boundary"
+            if field != "as_of_boundary"
+                && !object.get(field).is_some_and(serde_json::Value::is_array)
             {
                 return Err(format!("{field} must be an array"));
+            }
+        }
+        if let Some(items) = object
+            .get("boundary_open_items")
+            .and_then(serde_json::Value::as_array)
+        {
+            for (index, item) in items.iter().enumerate() {
+                let kind = item
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|kind| matches!(*kind, "verification" | "decision" | "remediation"))
+                    .ok_or_else(|| format!("boundary_open_items[{index}].kind is invalid"))?;
+                let _ = kind;
+                Self::validate_non_empty_string_field(
+                    item.get("summary").ok_or_else(|| {
+                        format!("boundary_open_items[{index}].summary is required")
+                    })?,
+                    &format!("boundary_open_items[{index}].summary"),
+                )?;
+            }
+        }
+        match mode {
+            CompressionMode::Blocking => {
+                Self::validate_semantic_string_arrays(
+                    object,
+                    &[
+                        "user_directives",
+                        "confirmed_facts",
+                        "completed_work",
+                        "constraints_and_guards",
+                    ],
+                )?;
+                Self::validate_semantic_entry_limits(
+                    object,
+                    &[
+                        ("user_directives", 2),
+                        ("confirmed_facts", 4),
+                        ("boundary_open_items", 3),
+                        ("completed_work", 2),
+                        ("constraints_and_guards", 3),
+                    ],
+                )?;
+            }
+            CompressionMode::Rollup => {
+                Self::validate_semantic_string_arrays(
+                    object,
+                    &[
+                        "confirmed_facts",
+                        "completed_work",
+                        "unresolved_carryovers",
+                        "constraints_and_guards",
+                    ],
+                )?;
+                Self::validate_semantic_entry_limits(
+                    object,
+                    &[
+                        ("confirmed_facts", 4),
+                        ("unresolved_carryovers", 3),
+                        ("completed_work", 2),
+                        ("constraints_and_guards", 3),
+                    ],
+                )?;
+                for obsolete in [
+                    "completed_tasks",
+                    "durable_decisions",
+                    "cross_task_constraints",
+                    "warnings_and_do_not_repeat",
+                    "environment_constraints",
+                    "credential_references",
+                ] {
+                    if object.contains_key(obsolete) {
+                        return Err(format!(
+                            "{obsolete} is not part of the semantic rollup contract"
+                        ));
+                    }
+                }
             }
         }
         for prohibited in [
@@ -1352,50 +1419,70 @@ impl ContextCompressor {
         object: &serde_json::Map<String, serde_json::Value>,
         fact_pack: &str,
     ) -> Result<(), String> {
-        if fact_pack == "None" {
-            return Ok(());
-        }
-        let facts = serde_json::from_str::<Vec<serde_json::Value>>(fact_pack)
+        let facts = serde_json::from_str::<Value>(fact_pack)
             .map_err(|_| "handoff fact pack must be JSON".to_string())?;
-        for fact in facts {
-            let handoff_field = fact
-                .get("handoff_field")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "handoff fact is missing handoff_field".to_string())?;
-            let message_id = fact
-                .get("message_id")
-                .and_then(serde_json::Value::as_i64)
-                .ok_or_else(|| "handoff fact is missing message_id".to_string())?;
-            let payload = fact
-                .get("payload")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| "handoff fact is missing payload".to_string())?;
-            let candidates = object
-                .get(handoff_field)
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| format!("{handoff_field} must be an array"))?;
-            let retained = candidates.iter().any(|candidate| {
-                let candidate = candidate.as_object();
-                candidate.is_some_and(|candidate| {
-                    candidate
-                        .get("message_id")
-                        .and_then(serde_json::Value::as_i64)
-                        == Some(message_id)
-                        && payload
-                            .iter()
-                            .all(|(key, value)| candidate.get(key) == Some(value))
-                })
-            });
-            if !retained {
-                return Err(format!(
-                    "{handoff_field} omitted or rewrote typed fact from message_id {message_id}"
-                ));
+        let canonical_paths = facts
+            .get("file_changes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "handoff fact pack file_changes must be an array".to_string())?;
+        if !canonical_paths.iter().all(Value::is_string) {
+            return Err("handoff fact pack file_changes must contain paths".to_string());
+        }
+
+        let output_paths = object
+            .get("file_changes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "file_changes must be an array".to_string())?;
+        if !output_paths.iter().all(Value::is_string) {
+            return Err("file_changes must be a compact array of paths".to_string());
+        }
+        let canonical_paths = canonical_paths
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        if !output_paths
+            .iter()
+            .filter_map(Value::as_str)
+            .all(|path| canonical_paths.contains(path))
+        {
+            return Err("file_changes contains a path outside the canonical fact pack".to_string());
+        }
+        Ok(())
+    }
+
+    fn validate_semantic_string_arrays(
+        object: &serde_json::Map<String, serde_json::Value>,
+        fields: &[&str],
+    ) -> Result<(), String> {
+        for field in fields {
+            let entries = object
+                .get(*field)
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("{field} must be an array"))?;
+            for (index, entry) in entries.iter().enumerate() {
+                Self::validate_non_empty_string_field(entry, &format!("{field}[{index}]"))?;
             }
         }
         Ok(())
     }
 
-    #[cfg(test)]
+    fn validate_semantic_entry_limits(
+        object: &serde_json::Map<String, serde_json::Value>,
+        limits: &[(&str, usize)],
+    ) -> Result<(), String> {
+        for (field, maximum) in limits {
+            let count = object
+                .get(*field)
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .ok_or_else(|| format!("{field} must be an array"))?;
+            if count > *maximum {
+                return Err(format!("{field} must contain at most {maximum} entries"));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_non_empty_string_field(
         value: &serde_json::Value,
         field: &str,
@@ -1520,12 +1607,18 @@ impl ContextCompressor {
 
     fn build_retry_instruction(validation_error: &str, mode: CompressionMode) -> String {
         let schema = match mode {
-            CompressionMode::Blocking => "schema_version=2, kind=pressure_handoff, as_of_boundary, confirmed_facts, facts_to_verify, completed_work, open_threads_at_boundary, file_changes, technical_invariants, warnings_and_do_not_repeat, environment_constraints, credential_references, review_rounds",
-            CompressionMode::Rollup => "schema_version=2, kind=completed_task_rollup, completed_tasks, durable_decisions, cross_task_constraints, unresolved_carryovers, completed_work, file_changes, warnings_and_do_not_repeat, environment_constraints, credential_references, review_rounds",
+            CompressionMode::Blocking => "user_directives, confirmed_facts, boundary_open_items, completed_work, constraints_and_guards",
+            CompressionMode::Rollup => {
+                "confirmed_facts, completed_work, unresolved_carryovers, constraints_and_guards"
+            }
+        };
+        let item_shapes = match mode {
+            CompressionMode::Blocking => "user_directives, confirmed_facts, completed_work, and constraints_and_guards must be compact string arrays; boundary_open_items must contain only {kind, summary}. Limits: user_directives=2, confirmed_facts=4, boundary_open_items=3, completed_work=2, constraints_and_guards=3.",
+            CompressionMode::Rollup => "confirmed_facts, completed_work, unresolved_carryovers, and constraints_and_guards must be compact string arrays. Limits: confirmed_facts=4, unresolved_carryovers=3, completed_work=2, constraints_and_guards=3.",
         };
         format!(
-            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one v2 JSON object and nothing else. Required fields: {}. Do not emit legacy state_snapshot, prev_tasks, task_state, todos, next_action, approved_plan, or overall_goal. Do NOT return XML, reasoning-only text, markdown fences, or explanations.</SYSTEM_REMINDER>",
-            validation_error, schema
+            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one semantic JSON object and nothing else. Required semantic fields: {}. Required item shapes: {} The runtime adds schema_version, kind, boundary, canonical file_changes, and review_rounds; do not emit those system-owned fields. Every listed array key must be present, but any semantic array may be []; never invent a verification, change, constraint, directive, open item, or review to fill one. Do not emit legacy state_snapshot, prev_tasks, task_state, todos, next_action, approved_plan, or overall_goal. Do NOT return XML, reasoning-only text, markdown fences, or explanations.</SYSTEM_REMINDER>",
+            validation_error, schema, item_shapes
         )
     }
 
@@ -1541,25 +1634,295 @@ impl ContextCompressor {
 #[cfg(test)]
 mod tests {
     use super::{CompressionMode, ContextCompressor};
-    use crate::{db::WorkflowMessage, workflow::react::constants::TASK_FINISHED};
+    use crate::{
+        db::WorkflowMessage,
+        workflow::react::{
+            constants::TASK_FINISHED,
+            prompts::{BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT},
+        },
+    };
     use serde_json::{json, Value};
 
     #[test]
-    fn normalize_handoff_file_changes_filters_failures_and_keeps_latest_normalized_path() {
+    fn normalize_handoff_file_changes_replaces_model_output_with_canonical_paths() {
         let handoff = json!({
             "schema_version": 2,
             "file_changes": [
-                {"message_id": 10, "path": "./src/feature.rs", "execution_status": "completed"},
-                {"message_id": 12, "path": "src/tmp/../feature.rs", "execution_status": "completed"},
-                {"message_id": 13, "path": "src/failed.rs", "execution_status": "failed"}
-            ]
+                "src/fabricated.rs"
+            ],
+            "completed_work": ["Inspected and updated the implementation"]
         })
         .to_string();
-        let normalized = ContextCompressor::normalize_handoff_file_changes(&handoff);
+        let normalized = ContextCompressor::normalize_handoff_file_changes(
+            &handoff,
+            &[
+                "./src/feature.rs".to_string(),
+                "src/feature.rs".to_string(),
+                "src/tmp/../other.rs".to_string(),
+            ],
+        );
         let value: Value = serde_json::from_str(&normalized).expect("normalized handoff");
-        assert_eq!(value["file_changes"].as_array().map(Vec::len), Some(1));
-        assert_eq!(value["file_changes"][0]["message_id"], 12);
-        assert_eq!(value["file_changes"][0]["path"], "src/feature.rs");
+        assert_eq!(
+            value["file_changes"],
+            json!(["src/feature.rs", "src/other.rs"])
+        );
+        assert_eq!(
+            value["completed_work"],
+            json!(["Inspected and updated the implementation"])
+        );
+    }
+
+    #[test]
+    fn retry_instruction_uses_semantic_completed_work_contract() {
+        let blocking = ContextCompressor::build_retry_instruction(
+            "completed_work must contain at most 2 entries",
+            CompressionMode::Blocking,
+        );
+        assert!(blocking
+            .contains("completed_work, and constraints_and_guards must be compact string arrays"));
+        assert!(blocking.contains("completed_work=2"));
+        assert!(!blocking.contains("{summary:string, files:string[]}"));
+
+        let rollup = ContextCompressor::build_retry_instruction(
+            "completed_work must be an array",
+            CompressionMode::Rollup,
+        );
+        assert!(rollup.contains("completed_work, unresolved_carryovers"));
+        assert!(rollup.contains("completed_work=2"));
+    }
+
+    #[test]
+    fn runtime_injects_rollup_mechanical_fields() {
+        let semantic = json!({
+            "confirmed_facts": ["The local guard is required"],
+            "completed_work": ["Added the guard"],
+            "unresolved_carryovers": [],
+            "constraints_and_guards": []
+        })
+        .to_string();
+        let injected = ContextCompressor::inject_runtime_handoff_fields(
+            &semantic,
+            "None",
+            &["src/feature.rs".to_string()],
+            CompressionMode::Rollup,
+            42,
+        );
+        let value: Value = serde_json::from_str(&injected).expect("injected rollup");
+        assert_eq!(value["schema_version"], json!(2));
+        assert_eq!(value["kind"], json!("completed_task_rollup"));
+        assert_eq!(value["file_changes"], json!(["src/feature.rs"]));
+        assert_eq!(value["review_rounds"], json!([]));
+        assert!(value.get("as_of_boundary").is_none());
+    }
+
+    #[test]
+    fn runtime_injects_pressure_mechanical_fields() {
+        let semantic = json!({
+            "user_directives": ["Keep the current API contract"],
+            "confirmed_facts": ["The local guard is required"],
+            "boundary_open_items": [{"kind": "verification", "summary": "Run the runtime check"}],
+            "completed_work": ["Added the guard"],
+            "constraints_and_guards": []
+        })
+        .to_string();
+        let injected = ContextCompressor::inject_runtime_handoff_fields(
+            &semantic,
+            "None",
+            &["src/feature.rs".to_string()],
+            CompressionMode::Blocking,
+            42,
+        );
+        let value: Value = serde_json::from_str(&injected).expect("injected pressure handoff");
+        assert_eq!(value["schema_version"], json!(2));
+        assert_eq!(value["kind"], json!("pressure_handoff"));
+        assert_eq!(
+            value["as_of_boundary"],
+            json!({"compressed_until_message_id": 42})
+        );
+        assert_eq!(value["file_changes"], json!(["src/feature.rs"]));
+        assert_eq!(value["review_rounds"], json!([]));
+    }
+
+    #[test]
+    fn normalize_handoff_constraints_consolidates_legacy_fields() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "file_changes": [],
+            "user_directives": ["Keep the existing API contract"],
+            "facts_to_verify": ["Verify the production migration"],
+            "open_threads_at_boundary": ["Repair the historical records"],
+            "technical_invariants": ["guard local identity"],
+            "warnings_and_do_not_repeat": ["do not bulk delete"],
+            "environment_constraints": ["php is unavailable"]
+        })
+        .to_string();
+        let normalized = ContextCompressor::normalize_handoff_file_changes(&handoff, &[]);
+        let value: Value = serde_json::from_str(&normalized).expect("normalized handoff");
+        assert_eq!(
+            value["constraints_and_guards"],
+            json!([
+                "do not bulk delete",
+                "guard local identity",
+                "php is unavailable"
+            ])
+        );
+        assert!(value.get("technical_invariants").is_none());
+        assert!(value.get("warnings_and_do_not_repeat").is_none());
+        assert!(value.get("environment_constraints").is_none());
+        assert_eq!(
+            value["user_directives"],
+            json!(["Keep the existing API contract"])
+        );
+        assert_eq!(
+            value["boundary_open_items"],
+            json!([
+                {"kind": "remediation", "summary": "Repair the historical records"},
+                {"kind": "verification", "summary": "Verify the production migration"}
+            ])
+        );
+        assert!(value.get("facts_to_verify").is_none());
+        assert!(value.get("open_threads_at_boundary").is_none());
+    }
+
+    #[test]
+    fn minimal_pressure_handoff_accepts_all_empty_semantic_arrays() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "user_directives": [],
+            "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": [],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+        assert!(ContextCompressor::validate_compression_result(
+            &handoff,
+            "None",
+            "None",
+            "{\"file_changes\":[]}",
+            CompressionMode::Blocking,
+            42,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn pressure_handoff_prompt_does_not_imply_task_specific_required_items() {
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"boundary_open_items\": []"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"completed_work\": []"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("The runtime, not you, adds schema version, kind, compression boundary"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains(
+            "user_directives`: an explicit later user correction, preference, or decision"
+        ));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("confirmed_facts`: evidence-backed behavior, root causes, or decisions"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("boundary_open_items`: material work unresolved at this boundary"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("completed_work`: compact strings for outcomes actually completed"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains(
+            "constraints_and_guards`: future-facing rules, prohibited actions, or static limitations"
+        ));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("scan both the completed-task summaries and conversation history"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains(
+            "external interface or third-party contract marked unconfirmed must be a `verification` item"
+        ));
+    }
+
+    #[test]
+    fn rollup_prompt_requires_compact_semantic_units() {
+        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
+            .contains("This is an AI-to-AI memory checkpoint, not a tool-event archive"));
+        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
+            .contains("The runtime, not you, adds schema version, kind"));
+        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT.contains("Return only this semantic schema"));
+        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
+            .contains("completed_work`: compact strings for completed outcomes"));
+        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
+            .contains("Do not emit or restate those system-owned fields"));
+    }
+
+    #[test]
+    fn rollup_v2_requires_compact_semantic_strings_and_canonical_paths() {
+        let fact_pack = json!({"file_changes": ["src/feature.rs"]}).to_string();
+        let rollup = json!({
+            "schema_version": 2,
+            "kind": "completed_task_rollup",
+            "confirmed_facts": ["Cached sessions require local user validation"],
+            "unresolved_carryovers": ["Run the runtime check"],
+            "completed_work": ["Added the local-user guard"],
+            "file_changes": ["src/feature.rs"],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+        assert!(ContextCompressor::validate_compression_result(
+            &rollup,
+            "None",
+            "None",
+            &fact_pack,
+            CompressionMode::Rollup,
+            0,
+        )
+        .is_ok());
+
+        let mut transcript_archive: Value = serde_json::from_str(&rollup).expect("rollup json");
+        transcript_archive["completed_tasks"] = json!([]);
+        assert!(ContextCompressor::validate_compression_result(
+            &transcript_archive.to_string(),
+            "None",
+            "None",
+            &fact_pack,
+            CompressionMode::Rollup,
+            0,
+        )
+        .is_err());
+
+        let mut non_canonical_path: Value = serde_json::from_str(&rollup).expect("rollup json");
+        non_canonical_path["file_changes"] = json!(["src/invented.rs"]);
+        assert!(ContextCompressor::validate_compression_result(
+            &non_canonical_path.to_string(),
+            "None",
+            "None",
+            &fact_pack,
+            CompressionMode::Rollup,
+            0,
+        )
+        .is_err());
+
+        let mut legacy_work_unit: Value = serde_json::from_str(&rollup).expect("rollup json");
+        legacy_work_unit["completed_work"] = json!([{
+            "summary": "Added the local-user guard",
+            "files": ["src/feature.rs"]
+        }]);
+        assert!(ContextCompressor::validate_compression_result(
+            &legacy_work_unit.to_string(),
+            "None",
+            "None",
+            &fact_pack,
+            CompressionMode::Rollup,
+            0,
+        )
+        .is_err());
+
+        let mut excessive_constraints: Value = serde_json::from_str(&rollup).expect("rollup json");
+        excessive_constraints["constraints_and_guards"] = json!(["one", "two", "three", "four"]);
+        assert!(ContextCompressor::validate_compression_result(
+            &excessive_constraints.to_string(),
+            "None",
+            "None",
+            &fact_pack,
+            CompressionMode::Rollup,
+            0,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1567,6 +1930,16 @@ mod tests {
         let raw = r#"{"content":{"overall_goal":"goal","prev_tasks":[],"key_knowledge":[],"error_log":[],"file_system_state":[],"recent_actions":[],"task_state":"active"},"reasoning":"ignored"}"#;
         let normalized = ContextCompressor::normalize_summary_result(raw);
         assert!(normalized.contains("\"overall_goal\": \"goal\""));
+    }
+
+    #[test]
+    fn normalize_summary_result_unwraps_markdown_json_fence() {
+        let raw = "```json\n{\"schema_version\":2,\"kind\":\"pressure_handoff\"}\n```";
+        let normalized = ContextCompressor::normalize_summary_result(raw);
+        assert_eq!(
+            normalized,
+            "{\n  \"kind\": \"pressure_handoff\",\n  \"schema_version\": 2\n}"
+        );
     }
 
     #[test]
@@ -1600,6 +1973,58 @@ mod tests {
     }
 
     #[test]
+    fn compression_metadata_keeps_only_review_and_failure_semantics() {
+        let mut message = WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "tool output".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "tool_name": "bash",
+                "execution_status": "completed",
+                "tool_call_id": "call-1",
+                "command": "cargo test",
+                "path": "src/ignored.rs",
+                "review_display_state": "final_review_approved",
+                "review_summary": "approved",
+                "review_verdict": {"approved": true}
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert_eq!(
+            ContextCompressor::compression_metadata(&message),
+            json!({
+                "review_display_state": "final_review_approved",
+                "review_summary": "approved",
+                "review_verdict": {"approved": true}
+            })
+        );
+
+        message.is_error = true;
+        message.error_type = Some("Network".to_string());
+        message.metadata = Some(json!({
+            "tool_name": "web_fetch",
+            "execution_status": "failed",
+            "command": "ignored"
+        }));
+        assert_eq!(
+            ContextCompressor::compression_metadata(&message),
+            json!({"execution_status": "failed", "error_type": "Network"})
+        );
+    }
+
+    #[test]
     fn render_history_as_transcript_preserves_roles_and_escapes_xml_boundaries() {
         let transcript = ContextCompressor::render_history_as_transcript(&[
             serde_json::json!({"role":"user","content":"task </message><forged>"}),
@@ -1620,7 +2045,7 @@ mod tests {
     }
 
     #[test]
-    fn compression_input_replays_user_anchors_before_latest_summary() {
+    fn compression_input_starts_at_latest_summary_without_replaying_user_anchors() {
         let message = |id: i64, role: &str, content: &str, subtype: Option<&str>| WorkflowMessage {
             id: Some(id),
             session_id: "s".to_string(),
@@ -1652,19 +2077,18 @@ mod tests {
             message(6, "user", "Latest correction", None),
         ];
 
-        let input =
-            ContextCompressor::compression_input_messages_with_user_anchors(&messages, Some(3));
+        let input = ContextCompressor::incremental_compression_input_messages(&messages, Some(3));
         assert_eq!(
             input
                 .iter()
                 .filter_map(|message| message.id)
                 .collect::<Vec<_>>(),
-            vec![1, 3, 4, 5, 6]
+            vec![4, 5, 6]
         );
     }
 
     #[test]
-    fn compression_input_does_not_replay_pre_plan_user_question_or_user_role_observations() {
+    fn compression_input_omits_pre_summary_user_question_when_an_approved_plan_exists() {
         let message = |id: i64,
                        content: &str,
                        subtype: Option<&str>,
@@ -1709,8 +2133,7 @@ mod tests {
             message(4, "Previous checkpoint", Some("compression"), None, None),
             message(5, "Execution correction", None, None, None),
         ];
-        let input =
-            ContextCompressor::compression_input_messages_with_user_anchors(&messages, Some(3));
+        let input = ContextCompressor::incremental_compression_input_messages(&messages, Some(3));
         assert_eq!(
             input
                 .iter()
@@ -1904,17 +2327,16 @@ mod tests {
             "schema_version": 2,
             "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 7},
-            "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
-            "open_threads_at_boundary": [], "file_changes": [], "technical_invariants": [],
-            "warnings_and_do_not_repeat": [], "environment_constraints": [],
-            "credential_references": [], "review_rounds": []
+            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [], "file_changes": [], "constraints_and_guards": [],
+            "review_rounds": []
         })
         .to_string();
         assert!(ContextCompressor::validate_compression_result(
             &pressure,
             "None",
             "None",
-            "None",
+            "{\"file_changes\":[]}",
             CompressionMode::Blocking,
             7,
         )
@@ -1923,17 +2345,15 @@ mod tests {
         let rollup = json!({
             "schema_version": 2,
             "kind": "completed_task_rollup",
-            "completed_tasks": [], "durable_decisions": [], "cross_task_constraints": [],
-            "unresolved_carryovers": [], "completed_work": [], "file_changes": [],
-            "warnings_and_do_not_repeat": [], "environment_constraints": [],
-            "credential_references": [], "review_rounds": []
+            "confirmed_facts": [], "unresolved_carryovers": [], "completed_work": [],
+            "file_changes": [], "constraints_and_guards": [], "review_rounds": []
         })
         .to_string();
         assert!(ContextCompressor::validate_compression_result(
             &rollup,
             "None",
             "None",
-            "None",
+            "{\"file_changes\":[]}",
             CompressionMode::Rollup,
             7,
         )
@@ -1955,19 +2375,14 @@ mod tests {
             "schema_version": 2,
             "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 42},
-            "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
-            "open_threads_at_boundary": [],
-            "file_changes": [{"message_id": 44, "path": "src/example.rs", "execution_status": "completed"}],
-            "technical_invariants": [], "warnings_and_do_not_repeat": [], "environment_constraints": [],
-            "credential_references": [],
+            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": ["src/example.rs"],
+            "constraints_and_guards": [],
             "review_rounds": serde_json::from_str::<serde_json::Value>(&input_rounds).expect("round json")
         })
         .to_string();
-        let fact_pack = json!([{
-            "handoff_field": "file_changes", "message_id": 44,
-            "payload": {"path": "src/example.rs", "execution_status": "completed"}
-        }])
-        .to_string();
+        let fact_pack = json!({"file_changes": ["src/example.rs"]}).to_string();
         assert!(ContextCompressor::validate_compression_result(
             &handoff,
             "None",
@@ -1977,7 +2392,6 @@ mod tests {
             42,
         )
         .is_ok());
-
         let erased_fix = handoff.replace("add test", "");
         assert!(ContextCompressor::validate_compression_result(
             &erased_fix,
@@ -2077,18 +2491,14 @@ mod tests {
         let second_handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 51},
-            "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
-            "open_threads_at_boundary": [],
-            "file_changes": [{"message_id": 44, "path": "src/example.rs", "execution_status": "completed"}],
-            "technical_invariants": [], "warnings_and_do_not_repeat": [], "environment_constraints": [], "credential_references": [],
+            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": ["src/example.rs"],
+            "constraints_and_guards": [],
             "review_rounds": prior_handoff["review_rounds"].clone()
         })
         .to_string();
-        let fact_pack = json!([{
-            "handoff_field": "file_changes", "message_id": 44,
-            "payload": {"path": "src/example.rs", "execution_status": "completed"}
-        }])
-        .to_string();
+        let fact_pack = json!({"file_changes": ["src/example.rs"]}).to_string();
         assert!(ContextCompressor::validate_compression_result(
             &second_handoff,
             "None",
@@ -2101,29 +2511,19 @@ mod tests {
     }
 
     #[test]
-    fn typed_fact_pack_requires_matching_field_and_payload() {
+    fn v2_handoff_accepts_string_completed_work_and_rejects_legacy_objects() {
         let handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 42},
-            "confirmed_facts": [], "facts_to_verify": [],
-            "completed_work": [{"message_id": 11, "command": "cargo test", "execution_status": "completed"}],
-            "open_threads_at_boundary": [],
-            "file_changes": [{"message_id": 10, "path": "src/lib.rs", "execution_status": "completed"}],
-            "technical_invariants": [],
-            "warnings_and_do_not_repeat": [{"message_id": 12, "tool_name": "bash", "execution_status": "failed"}],
-            "environment_constraints": [{"message_id": 13, "environment_constraint": "sandboxed"}],
-            "credential_references": [{"message_id": 14, "credential_reference": "env:API_KEY"}],
+            "user_directives": [], "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": ["Validated the workflow compression change"],
+            "file_changes": ["src/lib.rs"],
+            "constraints_and_guards": [],
             "review_rounds": []
         })
         .to_string();
-        let facts = json!([
-            {"handoff_field": "file_changes", "message_id": 10, "payload": {"path": "src/lib.rs", "execution_status": "completed"}},
-            {"handoff_field": "completed_work", "message_id": 11, "payload": {"command": "cargo test", "execution_status": "completed"}},
-            {"handoff_field": "warnings_and_do_not_repeat", "message_id": 12, "payload": {"tool_name": "bash", "execution_status": "failed"}},
-            {"handoff_field": "environment_constraints", "message_id": 13, "payload": {"environment_constraint": "sandboxed"}},
-            {"handoff_field": "credential_references", "message_id": 14, "payload": {"credential_reference": "env:API_KEY"}}
-        ])
-        .to_string();
+        let facts = json!({"file_changes": ["src/lib.rs"]}).to_string();
         assert!(ContextCompressor::validate_compression_result(
             &handoff,
             "None",
@@ -2133,8 +2533,13 @@ mod tests {
             42,
         )
         .is_ok());
+        let mut legacy_work_unit: Value = serde_json::from_str(&handoff).expect("handoff json");
+        legacy_work_unit["completed_work"] = json!([{
+            "summary": "Validated the workflow compression change",
+            "files": ["src/lib.rs"]
+        }]);
         assert!(ContextCompressor::validate_compression_result(
-            &handoff.replace("cargo test", "cargo check"),
+            &legacy_work_unit.to_string(),
             "None",
             "None",
             &facts,
@@ -2142,11 +2547,11 @@ mod tests {
             42,
         )
         .is_err());
-        let mut missing_warning: serde_json::Value =
+        let mut malformed_files: serde_json::Value =
             serde_json::from_str(&handoff).expect("handoff json");
-        missing_warning["warnings_and_do_not_repeat"] = json!([]);
+        malformed_files["file_changes"] = json!([{"path": "src/lib.rs"}]);
         assert!(ContextCompressor::validate_compression_result(
-            &missing_warning.to_string(),
+            &malformed_files.to_string(),
             "None",
             "None",
             &facts,
@@ -2157,13 +2562,12 @@ mod tests {
     }
 
     #[test]
-    fn fact_pack_only_keeps_latest_successful_file_change_per_normalized_path() {
+    fn fact_pack_uses_only_successful_file_mutations_in_compressed_task_segment() {
         let message = |id: i64,
                        tool_name: &str,
                        display_path: Option<&str>,
                        execution_status: &str,
-                       is_error: bool,
-                       command: Option<&str>| WorkflowMessage {
+                       is_error: bool| WorkflowMessage {
             id: Some(id),
             session_id: "s".to_string(),
             role: "tool".to_string(),
@@ -2176,7 +2580,6 @@ mod tests {
             metadata: Some(json!({
                 "tool_name": tool_name,
                 "details": display_path.map(|path| json!({"display_path": path})),
-                "tool_call": {"function": {"arguments": command.map(|value| json!({"command": value})).unwrap_or_default()}},
                 "execution_status": execution_status,
                 "llm_content": "focused result"
             })),
@@ -2188,58 +2591,104 @@ mod tests {
             created_at: None,
         };
         let messages = vec![
-            message(
-                41,
-                "bash",
-                Some("src/read-only.rs"),
-                "completed",
-                false,
-                Some("cargo test -p chatspeed"),
-            ),
+            message(41, "bash", Some("src/read-only.rs"), "completed", false),
             message(
                 42,
                 "read_file",
                 Some("src/read-only.rs"),
                 "completed",
                 false,
-                None,
             ),
             message(
                 43,
+                "plan_edit_note",
+                Some("work/plan.md"),
+                "completed",
+                false,
+            ),
+            message(
+                44,
                 "edit_file",
                 Some("./src/feature.rs"),
                 "completed",
                 false,
-                None,
             ),
             message(
-                44,
+                45,
                 "write_file",
                 Some("src/tmp/../feature.rs"),
                 "completed",
                 false,
-                None,
             ),
-            message(45, "edit_file", Some("src/failed.rs"), "failed", true, None),
+            message(46, "edit_file", Some("src/failed.rs"), "failed", true),
+            // This successful mutation belongs to a later retained task. Passing the full
+            // history must not leak it into the rollup/pressure candidate's fact pack.
+            message(
+                47,
+                "write_file",
+                Some("src/retained-task.rs"),
+                "completed",
+                false,
+            ),
         ];
-        let facts: Vec<serde_json::Value> =
+        let facts: Value = serde_json::from_str(&ContextCompressor::render_fact_pack(
+            &messages,
+            &messages[..6],
+        ))
+        .expect("fact pack json");
+        assert_eq!(facts["file_changes"], json!(["src/feature.rs"]));
+    }
+
+    #[test]
+    fn fact_pack_carries_forward_prior_handoff_file_changes() {
+        let summary = WorkflowMessage {
+            id: Some(41),
+            session_id: "s".to_string(),
+            role: "system".to_string(),
+            message: "## Previous Context Snapshot\n{\"schema_version\":2,\"kind\":\"pressure_handoff\",\"file_changes\":[\"src/archived.rs\"]}".to_string(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({"compressed_until_message_id": 40})),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let new_mutation = WorkflowMessage {
+            id: Some(42),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "write_file result".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "tool_name": "write_file",
+                "details": {"display_path": "src/current.rs"},
+                "execution_status": "completed"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let messages = vec![summary, new_mutation];
+        let facts: Value =
             serde_json::from_str(&ContextCompressor::render_fact_pack(&messages, &messages))
                 .expect("fact pack json");
-        let file_changes = facts
-            .iter()
-            .filter(|fact| fact["handoff_field"] == "file_changes")
-            .collect::<Vec<_>>();
-        assert_eq!(file_changes.len(), 1);
-        assert_eq!(file_changes[0]["message_id"], 44);
-        assert_eq!(file_changes[0]["payload"]["path"], "src/feature.rs");
-        assert_eq!(file_changes[0]["payload"]["tool_name"], "write_file");
-        assert!(facts.iter().any(|fact| {
-            fact["handoff_field"] == "completed_work"
-                && fact["payload"]["command"] == "cargo test -p chatspeed"
-        }));
-        assert!(facts.iter().any(|fact| {
-            fact["handoff_field"] == "warnings_and_do_not_repeat" && fact["message_id"] == 45
-        }));
+        assert_eq!(
+            facts["file_changes"],
+            json!(["src/archived.rs", "src/current.rs"])
+        );
     }
 
     #[test]
@@ -2361,9 +2810,8 @@ mod tests {
         let handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 20},
-            "confirmed_facts": [], "facts_to_verify": [], "completed_work": [],
-            "open_threads_at_boundary": [], "file_changes": [], "technical_invariants": [],
-            "warnings_and_do_not_repeat": [], "environment_constraints": [], "credential_references": [],
+            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [], "file_changes": [], "constraints_and_guards": [],
             "review_rounds": serde_json::from_str::<serde_json::Value>(&review_rounds).expect("rounds json")
         })
         .to_string();
@@ -2371,7 +2819,7 @@ mod tests {
             &handoff,
             "None",
             &review_rounds,
-            "None",
+            "{\"file_changes\":[]}",
             CompressionMode::Blocking,
             20,
         )
@@ -2383,7 +2831,7 @@ mod tests {
             &valid_handoff,
             "None",
             &valid_review_rounds,
-            "None",
+            "{\"file_changes\":[]}",
             CompressionMode::Blocking,
             20,
         )
@@ -2401,18 +2849,12 @@ mod tests {
             "resolution_status": "open"
         }])
         .to_string();
-        let fact_pack = json!([{
-            "handoff_field": "file_changes",
-            "message_id": 18,
-            "payload": {"path": "src/example.rs", "execution_status": "completed"}
-        }])
-        .to_string();
+        let fact_pack = json!({"file_changes": ["src/example.rs"]}).to_string();
         let rollup = json!({
             "schema_version": 2, "kind": "completed_task_rollup",
-            "completed_tasks": [], "durable_decisions": [], "cross_task_constraints": [],
-            "unresolved_carryovers": [], "completed_work": [],
-            "file_changes": [{"message_id": 18, "path": "src/example.rs", "execution_status": "completed"}],
-            "warnings_and_do_not_repeat": [], "environment_constraints": [], "credential_references": [],
+            "confirmed_facts": [], "unresolved_carryovers": [], "completed_work": [],
+            "file_changes": ["src/example.rs"],
+            "constraints_and_guards": [],
             "review_rounds": serde_json::from_str::<serde_json::Value>(&review_rounds).expect("rounds json")
         })
         .to_string();

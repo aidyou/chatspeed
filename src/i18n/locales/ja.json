@@ -1238,6 +1238,7 @@
     "commandAutoCompressDesc": "自動ロールアップ圧縮を切り替える",
     "commandClearDesc": "現在のワークフローのコンテキストをクリア",
     "commandFinalAuditDesc": "最終監査モードを切り替える",
+    "commandManualCompressDesc": "現在のワークフローコンテキストを今すぐ圧縮",
     "commandMcpDesc": "MCP 設定を開く",
     "commandModelsDesc": "モデル選択ウィンドウを開く",
     "commandNewDesc": "新しいワークフローセッションを作成",
@@ -1247,6 +1248,32 @@
     "commandSkillsConfigDesc": "ワークフロー Skills 設定を開く",
     "completionSound": "完了通知音",
     "confirmDeleteWorkflow": "このワークフローを削除してもよろしいですか？この操作は元に戻せません。",
+    "contextSnapshot": {
+      "boundaryOpenItems": "境界時点の未解決項目",
+      "completedTaskRollup": "完了タスクアーカイブ",
+      "completedWork": "完了した作業",
+      "confirmedFacts": "確認済みの事実",
+      "constraintsAndGuards": "制約と保護条件",
+      "evidence": "根拠",
+      "fileChanges": "ファイル変更",
+      "findings": "指摘事項",
+      "openItemKinds": {
+        "decision": "判断",
+        "remediation": "修正",
+        "verification": "検証"
+      },
+      "pressureHandoff": "コンテキスト引き継ぎ",
+      "requiredFixes": "必要な修正",
+      "reviewRound": "レビュー {id}: {status}",
+      "reviewRounds": "レビュー履歴",
+      "reviewStatus": {
+        "approved": "承認済み",
+        "open": "未解決",
+        "verified": "再レビューで検証済み"
+      },
+      "unresolvedCarryovers": "未解決の引き継ぎ事項",
+      "userDirectives": "ユーザー指示"
+    },
     "continue": "続行",
     "deleteLastMessage": "最後のステップを削除",
     "deleteLastMessageConfirm": "現在の最後のステップを削除しますか？削除されるのはこのワークフローの最後の操作単位だけで、実行済みのファイル変更、コマンド、その他の外部副作用は元に戻りません。",
@@ -1300,6 +1327,9 @@
       "inheritTitle": "現在のワークフロー設定を継承",
       "title": "新しいワークフローを作成"
     },
+    "manualCompressFailed": "コンテキストの圧縮に失敗しました：{error}",
+    "manualCompressNoSession": "圧縮できるワークフローセッションがありません",
+    "manualCompressShort": "コンテキストを圧縮",
     "noAgentError": "利用可能なエージェントがありません。先に設定で作成してください。",
     "noAutoApprovedItems": "自動承認項目はありません",
     "notificationSound": "通知音",

@@ -315,6 +315,7 @@ workflow:
     verification_not_run: テスト未実行|テストは実行されていません|未テスト|未検証
     verification_passed: テスト成功|テストに合格|すべてのテストに合格|検証成功|検証済み
   compression_in_progress: コンテキストを圧縮しています...
+  manual_compression_unavailable: 現在、安全に圧縮できるコンテキスト区間はありません
   dependency_not_found: ノード '%{node_id}' が依存するノード '%{id}' が存在しません
   duplicate_node_id: '重複するノード ID: %{id}'
   edge_reference_missing: エッジ参照が存在しません：%{from} -> %{to}

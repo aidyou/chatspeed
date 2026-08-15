@@ -1366,6 +1366,116 @@ const jsonSnapshotSectionText = value => {
   return ''
 }
 
+const getContextSnapshotV2Kind = snapshot => {
+  if (snapshot?.schema_version !== 2) return ''
+  return ['pressure_handoff', 'completed_task_rollup'].includes(snapshot?.kind)
+    ? snapshot.kind
+    : ''
+}
+
+const snapshotEntryText = value => {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number') return String(value)
+  if (value && typeof value === 'object') return JSON.stringify(value)
+  return ''
+}
+
+const snapshotMarkdownList = values => {
+  if (!Array.isArray(values)) return ''
+  return values
+    .map(snapshotEntryText)
+    .filter(Boolean)
+    .map(value => `- ${value}`)
+    .join('\n')
+}
+
+const getBoundaryOpenItemKindLabel = kind => {
+  const labels = {
+    verification: 'workflow.contextSnapshot.openItemKinds.verification',
+    decision: 'workflow.contextSnapshot.openItemKinds.decision',
+    remediation: 'workflow.contextSnapshot.openItemKinds.remediation'
+  }
+  return labels[kind] ? t(labels[kind]) : String(kind || '')
+}
+
+const formatBoundaryOpenItems = items => {
+  if (!Array.isArray(items)) return ''
+  return items
+    .map(item => {
+      const summary = typeof item?.summary === 'string' ? item.summary.trim() : ''
+      return summary ? `- **${getBoundaryOpenItemKindLabel(item.kind)}:** ${summary}` : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+const getReviewRoundStatusLabel = review => {
+  const status =
+    review?.resolution_status || (review?.verdict?.approved === true ? 'approved_review' : 'open')
+  const key = {
+    approved_review: 'approved',
+    verified_by_re_review: 'verified',
+    open: 'open'
+  }[status]
+  return key ? t(`workflow.contextSnapshot.reviewStatus.${key}`) : String(status)
+}
+
+const formatReviewRound = review => {
+  if (!review || typeof review !== 'object') return ''
+
+  const title = t('workflow.contextSnapshot.reviewRound', {
+    id: snapshotEntryText(review.id) || '?',
+    status: getReviewRoundStatusLabel(review)
+  })
+  const verdictSummary = snapshotEntryText(review.verdict?.summary)
+  const findings = snapshotMarkdownList(review.findings)
+  const requiredFixes = snapshotMarkdownList(review.required_fixes)
+  const evidence = snapshotMarkdownList(review.evidence_refs)
+  const sections = [
+    verdictSummary,
+    findings ? `**${t('workflow.contextSnapshot.findings')}**\n${findings}` : '',
+    requiredFixes ? `**${t('workflow.contextSnapshot.requiredFixes')}**\n${requiredFixes}` : '',
+    evidence ? `**${t('workflow.contextSnapshot.evidence')}**\n${evidence}` : ''
+  ].filter(Boolean)
+
+  return [`#### ${title}`, ...sections].join('\n\n')
+}
+
+const formatV2ContextSnapshot = snapshot => {
+  const kind = getContextSnapshotV2Kind(snapshot)
+  if (!kind) return ''
+
+  const sections = [
+    kind === 'pressure_handoff'
+      ? [t('workflow.contextSnapshot.userDirectives'), snapshotMarkdownList(snapshot.user_directives)]
+      : null,
+    [t('workflow.contextSnapshot.confirmedFacts'), snapshotMarkdownList(snapshot.confirmed_facts)],
+    kind === 'pressure_handoff'
+      ? [t('workflow.contextSnapshot.boundaryOpenItems'), formatBoundaryOpenItems(snapshot.boundary_open_items)]
+      : [
+          t('workflow.contextSnapshot.unresolvedCarryovers'),
+          snapshotMarkdownList(snapshot.unresolved_carryovers)
+        ],
+    [t('workflow.contextSnapshot.completedWork'), snapshotMarkdownList(snapshot.completed_work)],
+    [t('workflow.contextSnapshot.fileChanges'), snapshotMarkdownList(snapshot.file_changes)],
+    [
+      t('workflow.contextSnapshot.constraintsAndGuards'),
+      snapshotMarkdownList(snapshot.constraints_and_guards)
+    ],
+    [
+      t('workflow.contextSnapshot.reviewRounds'),
+      Array.isArray(snapshot.review_rounds)
+        ? snapshot.review_rounds.map(formatReviewRound).filter(Boolean).join('\n\n')
+        : ''
+    ]
+  ].filter(section => section?.[1])
+
+  return sections
+    .map(([title, value]) => `### ${title}\n\n${value}`)
+    .join('\n\n')
+    .trim()
+}
+
 const formatContextSnapshotForDisplay = message => {
   const content = getContextSnapshotContent(message)
   if (!content) return content
@@ -1373,6 +1483,9 @@ const formatContextSnapshotForDisplay = message => {
   if (content.trim().startsWith('{')) {
     try {
       const parsed = JSON.parse(content)
+      const v2Display = formatV2ContextSnapshot(parsed)
+      if (v2Display) return v2Display
+
       const sections = [
         ['Overall Goal', jsonSnapshotSectionText(parsed.overall_goal)],
         ['Previous Tasks', jsonSnapshotSectionText(parsed.prev_tasks)],
@@ -1448,6 +1561,14 @@ const getContextSnapshotTitle = message => {
   if (content.trim().startsWith('{')) {
     try {
       const parsed = JSON.parse(content)
+      const kind = getContextSnapshotV2Kind(parsed)
+      if (kind === 'pressure_handoff') {
+        return t('workflow.contextSnapshot.pressureHandoff')
+      }
+      if (kind === 'completed_task_rollup') {
+        return t('workflow.contextSnapshot.completedTaskRollup')
+      }
+
       const taskState = jsonSnapshotSectionText(parsed.task_state)
       if (taskState) {
         return `Context Snapshot · ${taskState.split('\n')[0]}`

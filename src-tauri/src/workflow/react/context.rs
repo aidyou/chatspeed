@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
+const UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT: usize = 20_000;
 
 /// ContextManager manages durable transcript history plus the AI-only context projection cache.
 pub struct ContextManager {
@@ -335,7 +336,7 @@ impl ContextManager {
         let prior_summary_tokens = Self::latest_summary_message(&self.messages)
             .map(Self::estimate_workflow_message_tokens)
             .unwrap_or(0.0);
-        let minimum_reserve = (self.max_tokens as f64 * 0.08).clamp(512.0, 2048.0);
+        let minimum_reserve = (self.max_tokens as f64 * 0.08).max(512.0);
         let maximum_reserve = (self.max_tokens as f64 * 0.25).max(minimum_reserve);
         // Grow from the actual previous handoff, but require it to decay when it would
         // otherwise consume more than one quarter of the model context.
@@ -425,7 +426,7 @@ impl ContextManager {
             }
         }
         let target_completion_idx = if enforce_pressure_budget {
-            budgeted_completion_idx.or(fallback_completion_idx)?
+            budgeted_completion_idx?
         } else {
             fallback_completion_idx?
         };
@@ -496,6 +497,45 @@ impl ContextManager {
         )
     }
 
+    fn is_file_mutation_message(message: &WorkflowMessage) -> bool {
+        matches!(
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_name"))
+                .and_then(|tool_name| tool_name.as_str()),
+            Some(
+                crate::tools::TOOL_EDIT_FILE
+                    | crate::tools::TOOL_WRITE_FILE
+                    | crate::tools::TOOL_PLAN_EDIT_NOTE
+                    | crate::tools::TOOL_PLAN_WRITE_NOTE
+            )
+        )
+    }
+
+    fn bounded_projection_preview(content: &str) -> String {
+        let char_count = content.chars().count();
+        if char_count <= UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT {
+            return content.to_string();
+        }
+
+        let head_limit = UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT * 2 / 3;
+        let tail_limit = UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT - head_limit;
+        let head = content.chars().take(head_limit).collect::<String>();
+        let tail = content
+            .chars()
+            .rev()
+            .take(tail_limit)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!(
+            "{head}\n\n<CONTEXT_PROJECTION_TRUNCATED omitted_chars=\"{}\">\nThis historical observation exceeded the AI context safety limit. Preserve tool-call protocol and inspect a saved output reference, a narrower query, or the affected workspace file when omitted detail is required.\n</CONTEXT_PROJECTION_TRUNCATED>\n\n{tail}",
+            char_count.saturating_sub(UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT)
+        )
+    }
+
     fn estimate_workflow_message_tokens(message: &WorkflowMessage) -> f64 {
         let mut total = crate::ccproxy::utils::token_estimator::estimate_tokens(
             &Self::content_for_context_projection(message),
@@ -523,30 +563,36 @@ impl ContextManager {
             return true;
         };
 
-        let assistant_tool_call_ids = messages[assistant_idx]
+        let Some(tool_calls) = messages[assistant_idx]
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.get("tool_calls"))
-            .and_then(|tool_calls| tool_calls.as_array())
-            .map(|tool_calls| {
-                tool_calls
-                    .iter()
-                    .filter_map(|tool_call| {
-                        tool_call
-                            .get("id")
-                            .and_then(|value| value.as_str())
-                            .or_else(|| {
-                                tool_call
-                                    .get("tool_call_id")
-                                    .and_then(|value| value.as_str())
-                            })
-                            .map(str::to_string)
-                    })
-                    .collect::<HashSet<_>>()
-            })
-            .unwrap_or_default();
-        if assistant_tool_call_ids.is_empty() {
+        else {
             return true;
+        };
+        let Some(tool_calls) = tool_calls.as_array() else {
+            return false;
+        };
+        if tool_calls.is_empty() {
+            return true;
+        }
+        let mut assistant_tool_call_ids = HashSet::with_capacity(tool_calls.len());
+        for tool_call in tool_calls {
+            let Some(tool_call_id) = tool_call
+                .get("id")
+                .and_then(|value| value.as_str())
+                .or_else(|| {
+                    tool_call
+                        .get("tool_call_id")
+                        .and_then(|value| value.as_str())
+                })
+                .map(str::trim)
+                .filter(|tool_call_id| !tool_call_id.is_empty())
+            else {
+                // Without an ID we cannot prove that the retained tail contains every result.
+                return false;
+            };
+            assistant_tool_call_ids.insert(tool_call_id.to_string());
         }
 
         let resolved_tool_call_ids = messages[assistant_idx + 1..=boundary_idx]
@@ -591,13 +637,11 @@ impl ContextManager {
         }
 
         message.role == "assistant"
-            && !message
+            && message
                 .metadata
                 .as_ref()
                 .and_then(|metadata| metadata.get("tool_calls"))
-                .is_some_and(|tool_calls| {
-                    tool_calls.is_array() && !tool_calls.as_array().is_some_and(Vec::is_empty)
-                })
+                .is_none_or(|tool_calls| tool_calls.as_array().is_some_and(Vec::is_empty))
     }
 
     fn build_active_task_pressure_compression_candidate(
@@ -623,7 +667,7 @@ impl ContextManager {
             .max(0.0);
         if fixed_anchor_tokens + todo_anchor_tokens + expected_handoff_tokens > target_tail_tokens {
             log::warn!(
-                "[Workflow][session={}][phase=compression] fixed_anchor_budget_exceeded anchors={} todo_anchor={} expected_handoff={} target_tail={}; retaining the latest complete safe tool batch",
+                "[Workflow][session={}][phase=compression] fixed_anchor_budget_exceeded anchors={} todo_anchor={} expected_handoff={} target_tail={}; no pressure boundary will be selected until the projection has a safe fitting boundary",
                 self.session_id,
                 fixed_anchor_tokens.ceil(),
                 todo_anchor_tokens.ceil(),
@@ -633,7 +677,6 @@ impl ContextManager {
         }
         let mut retained_tokens = 0.0;
         let mut candidate_boundary_idx = None;
-        let mut fallback_boundary_idx = None;
 
         for index in (start_idx + 1..self.messages.len()).rev() {
             retained_tokens += Self::estimate_workflow_message_tokens(&self.messages[index]);
@@ -641,14 +684,23 @@ impl ContextManager {
             if boundary_idx >= start_idx
                 && Self::is_safe_pressure_compression_boundary(&self.messages, boundary_idx)
             {
-                fallback_boundary_idx.get_or_insert(boundary_idx);
                 if retained_tokens <= retained_token_budget {
                     candidate_boundary_idx = Some(boundary_idx);
                 }
             }
         }
 
-        let boundary_idx = candidate_boundary_idx.or(fallback_boundary_idx)?;
+        let boundary_idx = match candidate_boundary_idx {
+            Some(boundary_idx) => boundary_idx,
+            None => {
+                log::info!(
+                    "[Workflow][session={}][phase=compression] pressure_tail_over_budget raw_tail_budget={}; deferring checkpoint until the bounded projection has a safe fitting boundary",
+                    self.session_id,
+                    retained_token_budget.ceil()
+                );
+                return None;
+            }
+        };
         let compressed_until_id = self.messages[boundary_idx].id?;
         let selected_tail_tokens = self.messages[boundary_idx + 1..]
             .iter()
@@ -676,6 +728,27 @@ impl ContextManager {
     pub fn build_pressure_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
         self.build_compression_candidate_preserving_latest_completion(2, true)
             .or_else(|| self.build_active_task_pressure_compression_candidate())
+    }
+
+    /// Manual compression is allowed for a stopped workflow, including one whose latest safe
+    /// boundary is the successful completion observation. It intentionally does not apply the
+    /// live-tail retention rule because no active task is being resumed in this operation.
+    pub fn build_manual_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
+        let compressed_until_message_id =
+            Self::latest_summary_boundary_id(&self.messages).unwrap_or(0);
+        let start_idx = Self::latest_summary_index(&self.messages).unwrap_or(0);
+        let boundary_idx = (start_idx + 1..self.messages.len()).rev().find(|index| {
+            self.messages[*index]
+                .id
+                .is_some_and(|id| id > compressed_until_message_id)
+                && Self::is_safe_pressure_compression_boundary(&self.messages, *index)
+        })?;
+        let compressed_until_id = self.messages[boundary_idx].id?;
+
+        Some((
+            self.messages[start_idx..=boundary_idx].to_vec(),
+            compressed_until_id,
+        ))
     }
 
     pub fn build_task_boundary_compression_candidate(&self) -> Option<(Vec<WorkflowMessage>, i64)> {
@@ -746,7 +819,7 @@ impl ContextManager {
         }
     }
 
-    fn content_for_context_projection(message: &WorkflowMessage) -> String {
+    pub(crate) fn content_for_context_projection(message: &WorkflowMessage) -> String {
         if message.role == "tool" {
             if let Some(llm_content) = message
                 .metadata
@@ -754,6 +827,9 @@ impl ContextManager {
                 .and_then(|meta| meta.get("llm_content"))
                 .and_then(|value| value.as_str())
             {
+                if !Self::is_file_mutation_message(message) {
+                    return Self::bounded_projection_preview(llm_content);
+                }
                 return llm_content.to_string();
             }
         }
@@ -761,10 +837,24 @@ impl ContextManager {
         if let Some(reference) =
             super::user_context::reference_from_metadata(message.metadata.as_ref())
         {
-            return format!("{}\n\n{}", message.message, reference.projection_marker());
+            return reference.projection_content(&message.message);
         }
 
-        Self::merge_attached_context(&message.message, message.attached_context.as_deref())
+        let merged =
+            Self::merge_attached_context(&message.message, message.attached_context.as_deref());
+        if message.role != "user"
+            && !Self::is_summary_message(message)
+            && !Self::is_file_mutation_message(message)
+        {
+            return Self::bounded_projection_preview(&merged);
+        }
+        merged
+    }
+
+    fn compression_summary_context_projection(content: &str) -> String {
+        format!(
+            "<CONTEXT_HANDOFF_PRECEDENCE>\nThis checkpoint describes only the compression boundary. Dynamic todo and later raw-tail messages are newer authority. Do not continue, verify, or repeat a boundary-open item until checking whether later context has resolved or superseded it.\n</CONTEXT_HANDOFF_PRECEDENCE>\n\n{content}"
+        )
     }
 
     fn approved_plan_context_projection(message: &WorkflowMessage) -> String {
@@ -1212,6 +1302,8 @@ impl ContextManager {
             let merged_content = Self::content_for_context_projection(message);
             let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
                 Self::approved_plan_context_projection(message)
+            } else if Self::is_compression_summary_message(message) {
+                Self::compression_summary_context_projection(&merged_content)
             } else if Self::is_user_authored_task_message(message)
                 && !projected.iter().any(|existing: &WorkflowAiContextMessage| {
                     existing.message_subtype.as_deref() != Some("approved_plan")
@@ -1638,7 +1730,10 @@ impl ContextManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContextManager, CONTEXT_PRESSURE_COMPRESSION_THRESHOLD};
+    use super::{
+        ContextManager, CONTEXT_PRESSURE_COMPRESSION_THRESHOLD,
+        UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT,
+    };
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
     use crate::db::WorkflowAiContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
@@ -1651,6 +1746,14 @@ mod tests {
     use crate::workflow::react::types::{ExecutionContext, StepType};
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn compression_summary_projection_marks_later_context_as_authoritative() {
+        let projected = ContextManager::compression_summary_context_projection("checkpoint");
+        assert!(projected.contains("CONTEXT_HANDOFF_PRECEDENCE"));
+        assert!(projected.contains("Dynamic todo and later raw-tail messages are newer authority"));
+        assert!(projected.ends_with("checkpoint"));
+    }
 
     fn setup_store() -> (tempfile::TempDir, Arc<MainStore>) {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -1713,6 +1816,113 @@ mod tests {
         let actual = ContextManager::estimate_context_message_tokens(&message);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn pressure_handoff_reserve_scales_with_large_context_windows() {
+        let (_dir, store) = setup_store();
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let context = ContextManager::new(
+            "large-context-reserve".to_string(),
+            store,
+            372_000,
+            tsid_generator,
+        );
+
+        assert_eq!(context.pressure_handoff_reserve_tokens(), 29_760.0);
+    }
+
+    #[test]
+    fn legacy_unbounded_tool_projection_is_capped_without_mutating_file_results() {
+        let mut tool_message = WorkflowMessage {
+            id: Some(41),
+            session_id: "session".to_string(),
+            role: "tool".to_string(),
+            message: "display result".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "tool_name": "bash",
+                "execution_status": "completed",
+                "llm_content": "x".repeat(UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT + 2_000)
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let bounded = ContextManager::content_for_context_projection(&tool_message);
+        assert!(bounded.contains("CONTEXT_PROJECTION_TRUNCATED"));
+        assert!(
+            bounded.chars().count() < UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT + 2_000,
+            "legacy llm_content must not be replayed unbounded"
+        );
+
+        tool_message.metadata = Some(json!({
+            "tool_name": crate::tools::TOOL_EDIT_FILE,
+            "execution_status": "completed",
+            "llm_content": "x".repeat(UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT + 2_000)
+        }));
+        let mutation_projection = ContextManager::content_for_context_projection(&tool_message);
+        assert!(!mutation_projection.contains("CONTEXT_PROJECTION_TRUNCATED"));
+        assert_eq!(
+            mutation_projection.chars().count(),
+            UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT + 2_000,
+            "file mutation results keep their tool-specific renderable projection"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_candidate_can_cover_a_terminal_completion() {
+        let (_dir, store) = setup_store();
+        let session_id = "manual-terminal-compression";
+        insert_workflow(&store, session_id);
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context = ContextManager::new(session_id.to_string(), store, 8_192, tsid_generator);
+
+        context
+            .add_message(
+                "user".to_string(),
+                "Finish the existing task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user request");
+        let completion = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "execution_status": "completed"
+                })),
+            )
+            .await
+            .expect("failed to add completion")
+            .0;
+
+        let (_, compressed_until_id) = context
+            .build_manual_compression_candidate()
+            .expect("manual terminal compression should include the completed task");
+        assert_eq!(compressed_until_id, completion.id.expect("completion id"));
     }
 
     #[tokio::test]
@@ -3020,6 +3230,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_pressure_candidate_defers_when_latest_safe_tool_batch_exceeds_budget() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-active-pressure-oversized-tail";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            8_192,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+        context
+            .add_message(
+                "user".to_string(),
+                "Continue the active task".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Compressible analysis before the latest tool batch".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add historical analysis");
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Inspecting the oversized result".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "tool-oversized",
+                        "function": { "name": "read_file" }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add assistant tool call");
+        context
+            .add_message(
+                "tool".to_string(),
+                "bounded tool observation".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                1,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "tool-oversized",
+                    "tool_name": "read_file",
+                    "execution_status": "completed",
+                    "llm_content": "oversized observation ".repeat(4_000)
+                })),
+            )
+            .await
+            .expect("failed to add oversized tool result");
+
+        assert!(
+            context.build_pressure_compression_candidate().is_none(),
+            "an oversized complete tail must defer instead of compressing older history"
+        );
+        let projected = context.get_messages_for_llm();
+        let assistant_index = projected
+            .iter()
+            .position(|message| {
+                message.role == "assistant"
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("tool_calls"))
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|calls| {
+                            calls.iter().any(|call| {
+                                call.get("id").and_then(|value| value.as_str())
+                                    == Some("tool-oversized")
+                            })
+                        })
+            })
+            .expect("assistant tool call must remain in the projection");
+        let tool_result = projected
+            .get(assistant_index + 1)
+            .expect("paired tool result must remain after its assistant tool call");
+        assert_eq!(tool_result.role, "tool");
+        assert_eq!(
+            tool_result
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_call_id"))
+                .and_then(|value| value.as_str()),
+            Some("tool-oversized")
+        );
+        assert!(tool_result.message.contains("CONTEXT_PROJECTION_TRUNCATED"));
+    }
+
+    #[tokio::test]
     async fn compression_does_not_split_completion_from_remaining_tool_batch() {
         let (_dir, store) = setup_store();
         let session_id = "session-atomic-tool-batch-compression-test";
@@ -3158,6 +3484,58 @@ mod tests {
                 .and_then(|tool_calls| tool_calls.as_array())
                 .is_none_or(Vec::is_empty)),
             "the projected context must not contain unresolved assistant tool calls"
+        );
+    }
+
+    #[test]
+    fn pressure_boundary_rejects_unidentified_or_malformed_tool_batches() {
+        let message = |id: i64, role: &str, metadata: serde_json::Value| WorkflowMessage {
+            id: Some(id),
+            session_id: "unidentified-tool-batch".to_string(),
+            role: role.to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let unidentified_batch = vec![
+            message(
+                1,
+                "assistant",
+                json!({"tool_calls": [{"function": {"name": "read_file"}}]}),
+            ),
+            message(
+                2,
+                "tool",
+                json!({
+                    "tool_call_id": "unmatched-result",
+                    "tool_name": "read_file",
+                    "execution_status": "completed"
+                }),
+            ),
+        ];
+        assert!(
+            !ContextManager::is_safe_pressure_compression_boundary(&unidentified_batch, 1),
+            "a tool batch without call IDs cannot prove that its retained tail is complete"
+        );
+
+        let malformed_batch = vec![message(
+            3,
+            "assistant",
+            json!({"tool_calls": {"id": "not-an-array"}}),
+        )];
+        assert!(
+            !ContextManager::is_safe_pressure_compression_boundary(&malformed_batch, 0),
+            "malformed tool-call metadata must be treated as an unresolved protocol batch"
         );
     }
 
@@ -3540,13 +3918,14 @@ mod tests {
             ),
         ];
 
-        let first_compacted = ContextManager::rebuild_compacted_messages(&first_round, 128);
+        let max_tokens = 4_096;
+        let first_compacted = ContextManager::rebuild_compacted_messages(&first_round, max_tokens);
         let (_dir, store) = setup_store();
         let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
         let mut context = ContextManager::new(
             "multi-round-active-compression".to_string(),
             store,
-            128,
+            max_tokens,
             tsid_generator,
         );
         context.messages = first_compacted;
@@ -3563,12 +3942,17 @@ mod tests {
             candidate_user_inputs,
             vec![
                 "Original long-running objective",
-                "Calibration: do not change the public API",
-                "Correction: verification must cover retries"
+                "Calibration: do not change the public API"
             ],
-            "every pressure-compression round must receive all raw user inputs from the active task"
+            "the original task anchor and earlier calibration remain projection anchors"
         );
-        assert_eq!(second_boundary_id, 8);
+        assert_eq!(second_boundary_id, 6);
+        assert!(
+            second_candidate
+                .iter()
+                .all(|message| message.message != "Correction: verification must cover retries"),
+            "a later user correction must remain in the raw tail instead of being duplicated into the handoff"
+        );
 
         let mut second_round = context.messages.clone();
         second_round.push(message(
@@ -3579,14 +3963,14 @@ mod tests {
             Some("compression"),
             Some(json!({"compressed_until_message_id": second_boundary_id})),
         ));
-        context.messages = ContextManager::rebuild_compacted_messages(&second_round, 128);
+        context.messages = ContextManager::rebuild_compacted_messages(&second_round, max_tokens);
 
         let projection = context.projection_source_messages();
         let projection_ids = projection
             .iter()
             .filter_map(|message| message.id)
             .collect::<Vec<_>>();
-        assert_eq!(projection_ids, vec![1, 3, 7, 10, 9]);
+        assert_eq!(projection_ids, vec![1, 3, 10, 7, 8, 9]);
         assert_eq!(
             projection
                 .iter()

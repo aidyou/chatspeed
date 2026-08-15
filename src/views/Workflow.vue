@@ -284,6 +284,7 @@
               @toggle-auto-approve-plan="toggleAutoApprovePlanWithFeedback"
               @toggle-final-audit-mode="toggleFinalAuditModeWithFeedback"
               @toggle-auto-compress="toggleAutoCompressWithFeedback"
+              @trigger-manual-compress="triggerManualCompression"
               @update-approval-level="approvalLevel = $event"
               @update-selected-agent="onSelectedAgentChange"
               @clear-context-frame="onClearContextFrame"
@@ -379,6 +380,7 @@ import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
 import { useWorkflowPaths } from '@/composables/workflow/useWorkflowPaths'
 import { useWorkflowInput } from '@/composables/workflow/useWorkflowInput'
 import { useWorkflowCore } from '@/composables/workflow/useWorkflowCore'
+import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
 import { useTerminal } from '@/composables/workflow/useTerminal'
 import { useWorkflowCodeEditor } from '@/composables/workflow/useWorkflowCodeEditor.js'
 import {
@@ -780,7 +782,7 @@ const builtinCommands = computed(() => {
     },
     {
       name: 'compress',
-      description: t('workflow.commandAutoCompressDesc'),
+      description: t('workflow.commandManualCompressDesc'),
       type: 'command',
       group: 'chatspeed'
     }
@@ -1678,6 +1680,26 @@ const openImageAttachmentDialogWithFeedback = async () => {
   return true
 }
 
+const triggerManualCompression = async () => {
+  const sessionId = currentWorkflowId.value
+  if (!sessionId) {
+    showMessage(t('workflow.manualCompressNoSession'), 'warning')
+    return false
+  }
+
+  try {
+    await invokeWrapper('workflow_signal', {
+      sessionId,
+      signal: JSON.stringify({ type: SIGNAL_TYPES.MANUAL_COMPRESS })
+    })
+    return true
+  } catch (error) {
+    console.error('Failed to trigger manual context compression:', error)
+    showMessage(t('workflow.manualCompressFailed', { error: String(error) }), 'error')
+    return false
+  }
+}
+
 const handleWorkflowSlashCommand = async command => {
   const cmd = command.trim().toLowerCase()
 
@@ -1703,7 +1725,7 @@ const handleWorkflowSlashCommand = async command => {
   }
 
   if (cmd === '/compress') {
-    return toggleAutoCompressWithFeedback()
+    return await triggerManualCompression()
   }
 
   if (cmd === '/attach') {

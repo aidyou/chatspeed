@@ -320,6 +320,7 @@ workflow:
     verification_not_run: tests were not run|tests not run|test was not run|not tested|verification was not run|not verified|unverified
     verification_passed: tests passed|test passed|all tests pass|verification passed|verification succeeded|verified successfully
   compression_in_progress: Compressing context...
+  manual_compression_unavailable: No safe context segment is available to compress yet
   dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
   duplicate_node_id: 'Duplicate node ID: %{id}'
   edge_reference_missing: 'Edge reference does not exist: %{from} -> %{to}'

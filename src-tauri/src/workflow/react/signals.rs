@@ -90,6 +90,7 @@ pub enum SignalType {
     LegacyRequestConfirmBroadcast,
     UpdateFinalAudit,
     UpdateAutoCompress,
+    ManualCompress,
     UpdateApprovalLevel,
     UpdatePhase,
     UpdateAllowedPaths,
@@ -118,6 +119,7 @@ impl SignalType {
             "request_confirm_broadcast" => Some(SignalType::LegacyRequestConfirmBroadcast),
             "update_final_audit" => Some(SignalType::UpdateFinalAudit),
             "update_auto_compress" => Some(SignalType::UpdateAutoCompress),
+            "manual_compress" => Some(SignalType::ManualCompress),
             "update_approval_level" => Some(SignalType::UpdateApprovalLevel),
             "update_phase" => Some(SignalType::UpdatePhase),
             "update_allowed_paths" => Some(SignalType::UpdateAllowedPaths),
@@ -148,6 +150,7 @@ impl SignalType {
             SignalType::LegacyRequestConfirmBroadcast => "request_confirm_broadcast",
             SignalType::UpdateFinalAudit => "update_final_audit",
             SignalType::UpdateAutoCompress => "update_auto_compress",
+            SignalType::ManualCompress => "manual_compress",
             SignalType::UpdateApprovalLevel => "update_approval_level",
             SignalType::UpdatePhase => "update_phase",
             SignalType::UpdateAllowedPaths => "update_allowed_paths",
@@ -299,8 +302,17 @@ mod tests {
     use super::{
         remove_stashed_user_message, restore_stashed_user_message_tombstones, stash_runtime_signal,
         stash_user_message, take_stashed_runtime_signal, take_stashed_runtime_signals,
-        take_stashed_user_messages, MAX_STASHED_ITEMS_PER_SESSION,
+        take_stashed_user_messages, SignalType, MAX_STASHED_ITEMS_PER_SESSION,
     };
+
+    #[test]
+    fn manual_compress_signal_type_round_trips() {
+        assert_eq!(
+            SignalType::from_str("manual_compress"),
+            Some(SignalType::ManualCompress)
+        );
+        assert_eq!(SignalType::ManualCompress.as_str(), "manual_compress");
+    }
 
     #[test]
     fn stashed_user_messages_are_deduplicated_and_removable() {

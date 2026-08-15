@@ -179,7 +179,13 @@
                       <span class="dropdown-text">{{ $t('chat.addAttachment') }}</span>
                     </span>
                   </el-dropdown-item>
-                  <div v-if="canAttachImages" class="quick-actions-divider" />
+                  <el-dropdown-item command="manualCompress">
+                    <cs name="compress" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-text">{{ $t('workflow.manualCompressShort') }}</span>
+                    </span>
+                  </el-dropdown-item>
+                  <div class="quick-actions-divider" />
                   <div class="quick-actions-section-title">
                     {{ $t('workflow.quickActionsConfiguration') }}
                   </div>
@@ -820,6 +826,7 @@ const emit = defineEmits([
   'toggle-auto-approve-plan',
   'toggle-final-audit-mode',
   'toggle-auto-compress',
+  'trigger-manual-compress',
   'update-approval-level',
   'update-selected-agent',
   'clear-context-frame',
@@ -1422,6 +1429,12 @@ const handleQuickActionCommand = command => {
   if (command === 'attachment') {
     quickActionsDropdownRef.value?.handleClose?.()
     emit('open-image-dialog')
+    return
+  }
+
+  if (command === 'manualCompress') {
+    quickActionsDropdownRef.value?.handleClose?.()
+    emit('trigger-manual-compress')
     return
   }
 

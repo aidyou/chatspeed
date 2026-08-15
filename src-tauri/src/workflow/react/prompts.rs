@@ -351,44 +351,45 @@ Completion rules:
 /// Used by the ContextCompressor to summarize long histories into state snapshots.
 pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compressor producing a completed-task archive. Return exactly one compact JSON object and no prose.
 
-The output schema is:
+Return only this semantic schema:
 {
-  "schema_version": 2,
-  "kind": "completed_task_rollup",
-  "completed_tasks": [],
-  "durable_decisions": [],
-  "cross_task_constraints": [],
-  "unresolved_carryovers": [],
-  "completed_work": [],
-  "file_changes": [],
-  "warnings_and_do_not_repeat": [],
-  "environment_constraints": [],
-  "credential_references": [],
-  "review_rounds": []
-}
-
-Only summarize completed historical tasks. Every schema array must be present, but any task-specific array may be empty when that fact category does not apply. Do not include a live todo list, approved plan body, current next action, or copied file contents. Keep paths, evidence message IDs, durable decisions, unresolved carryovers, and every supplied typed fact in its matching field. Preserve every supplied final-review round, including verdict, findings, required fixes, evidence refs, and resolution status. A rejected review may be `verified_by_re_review` only when the supplied canonical round cites the identity of a later approved final-review round; generic edit or test messages are never sufficient verification. The current task and the latest raw messages remain outside this archive."#;
-
-pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are an emergency context compressor producing a boundary-scoped handoff checkpoint. Return exactly one compact JSON object and no prose.
-
-The output schema is:
-{
-  "schema_version": 2,
-  "kind": "pressure_handoff",
-  "as_of_boundary": {"compressed_until_message_id": 0},
   "confirmed_facts": [],
-  "facts_to_verify": [],
   "completed_work": [],
-  "open_threads_at_boundary": [],
-  "file_changes": [],
-  "technical_invariants": [],
-  "warnings_and_do_not_repeat": [],
-  "environment_constraints": [],
-  "credential_references": [],
-  "review_rounds": []
+  "unresolved_carryovers": [],
+  "constraints_and_guards": []
 }
 
-Treat this as state at the compression boundary only. Every schema array must be present, but any task-specific array may be empty when that fact category does not apply. Later raw-tail messages are newer and can close or supersede open threads. Do not include a current next action, todo list, approved plan body, user-goal restatement, or copied file contents. Preserve every supplied typed fact in its matching schema field. Each retained file change, completed command/verification, warning, environment constraint, or credential reference must include its source `message_id` plus the supplied path/command/status/result fields. Preserve every supplied final-review round, its required fixes, and its actual resolution status. An approved review round itself is `approved_review`; an earlier rejected round becomes `verified_by_re_review` only when the supplied canonical round cites the identity of a later approved final-review round. Generic edit or test messages are candidates only and never prove required fixes were reviewed."#;
+The runtime, not you, adds schema version, kind, compression boundary, canonical successful file changes, and supplied structured review rounds. Do not emit or restate those system-owned fields. Only summarize completed historical tasks. The current task and latest raw messages remain outside this archive: do not include a live todo list, approved plan body, current next action, copied file contents, commands, tool names, statuses, result excerpts, or raw output.
+
+This is an AI-to-AI memory checkpoint, not a tool-event archive. Use these mutually exclusive responsibilities:
+- `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on. Do not describe edits, pending work, or limitations here.
+- `completed_work`: compact strings for completed outcomes. Combine related changes or deliverables. Never record a tool call, command, result excerpt, execution status, or an artifact inventory; the runtime separately carries deterministic artifacts when available.
+- `unresolved_carryovers`: genuinely unfinished historical verification, decisions, or remediation. An item is allowed only when the history explicitly says that check, decision, or repair is still required or uncompleted; a possible future defense-in-depth improvement is prohibited. State the actual remaining check or repair, not only its environmental reason. Do not restate current-tail work that may already have resolved it.
+- `constraints_and_guards`: future-facing must-preserve rules, prohibited actions, or static limitations. Do not duplicate a fact, completed outcome, or unfinished check; an unavailable capability may explain an unresolved check only when the capability itself remains relevant later.
+
+Be deliberately small: one concise sentence per entry, at most 4 `confirmed_facts`, 2 `completed_work`, 3 `unresolved_carryovers`, and 3 `constraints_and_guards`. Preserve every material supplied fact in its best-fitting field, but do not repeat it across fields. Before returning, retain a material historical verification, decision, or remediation only when later raw-tail context has not resolved it. Omit details useful only for replaying a tool call. Return only the semantic schema JSON object and no prose."#;
+
+pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compressor producing a boundary-scoped handoff checkpoint. Return exactly one compact JSON object and no prose.
+
+Return only this semantic schema:
+{
+  "user_directives": [],
+  "confirmed_facts": [],
+  "boundary_open_items": [],
+  "completed_work": [],
+  "constraints_and_guards": []
+}
+
+The runtime, not you, adds schema version, kind, compression boundary, deterministic artifacts, and supplied structured review rounds. Do not emit or restate those system-owned fields. This handoff describes only the compression boundary; later raw-tail messages and dynamic todo are newer authority. Do not include a current next action, user-goal restatement, plan body, copied content, tool transcript, command, or raw output.
+
+Use each field only for its stated purpose:
+- `user_directives`: an explicit later user correction, preference, or decision that still constrains future work; never infer it from the original request.
+- `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on; not edits, pending work, or limitations.
+- `boundary_open_items`: material work unresolved at this boundary, each `{"kind":"verification"|"decision"|"remediation","summary":"..."}`. State the actual remaining check or repair, not only its reason. Later raw tail may supersede it.
+- `completed_work`: compact strings for outcomes actually completed; combine related deliverables and omit routine investigation.
+- `constraints_and_guards`: future-facing rules, prohibited actions, or static limitations that affect later work; do not duplicate facts, completed outcomes, or unresolved items.
+
+Every array must be present but may be empty. Keep at most 2 `user_directives`, 4 `confirmed_facts`, 3 `boundary_open_items`, 2 `completed_work`, and 3 `constraints_and_guards`. Before returning, scan both the completed-task summaries and conversation history for every item explicitly described as unrun, unconfirmed, awaiting decision, or needing repair, and confirm each is either a boundary open item or resolved by later raw-tail context. A concrete external interface or third-party contract marked unconfirmed must be a `verification` item, even when the implementation defensively handles it. Do not promote a possible explanation or risk into an open item unless it is explicitly unresolved. If the limit conflicts, retain an explicitly unrun validation, unconfirmed external contract, or remaining remediation before speculative investigation. Finally check all array counts. Do not output this self-review. Return only the semantic schema JSON object."#;
 
 /// Tool approval review prompt for smart approval mode.
 /// Used to decide whether a proposed tool call should be auto-approved or escalated.

@@ -1238,6 +1238,7 @@
     "commandAutoCompressDesc": "切换自动滚动压缩",
     "commandClearDesc": "清空当前工作流上下文",
     "commandFinalAuditDesc": "切换终审模式",
+    "commandManualCompressDesc": "立即压缩当前工作流上下文",
     "commandMcpDesc": "打开 MCP 设置",
     "commandModelsDesc": "打开模型选择窗口",
     "commandNewDesc": "创建新的工作流会话",
@@ -1247,6 +1248,32 @@
     "commandSkillsConfigDesc": "打开工作流技能设置",
     "completionSound": "完成提示音",
     "confirmDeleteWorkflow": "确定要删除这个工作流吗？此操作无法撤销。",
+    "contextSnapshot": {
+      "boundaryOpenItems": "边界处未决事项",
+      "completedTaskRollup": "已完成任务归档",
+      "completedWork": "已完成工作",
+      "confirmedFacts": "已确认事实",
+      "constraintsAndGuards": "约束与保护条件",
+      "evidence": "证据",
+      "fileChanges": "文件变更",
+      "findings": "审查发现",
+      "openItemKinds": {
+        "decision": "决策",
+        "remediation": "修复",
+        "verification": "验证"
+      },
+      "pressureHandoff": "上下文交接",
+      "requiredFixes": "必需修复",
+      "reviewRound": "审查 {id}：{status}",
+      "reviewRounds": "审查记录",
+      "reviewStatus": {
+        "approved": "已批准",
+        "open": "未解决",
+        "verified": "已通过复审验证"
+      },
+      "unresolvedCarryovers": "未决交接事项",
+      "userDirectives": "用户指示"
+    },
     "continue": "继续执行",
     "deleteLastMessage": "删除最后一步",
     "deleteLastMessageConfirm": "删除当前最后一步？这只会删除该工作流的最后一个交互单元，不会撤销已执行的文件、命令或其他外部副作用。",
@@ -1300,6 +1327,9 @@
       "inheritTitle": "继承当前工作流配置",
       "title": "创建新工作流"
     },
+    "manualCompressFailed": "压缩上下文失败：{error}",
+    "manualCompressNoSession": "当前没有可压缩的工作流会话",
+    "manualCompressShort": "压缩上下文",
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "noAutoApprovedItems": "没有自动审批的项目",
     "notificationSound": "声音通知",

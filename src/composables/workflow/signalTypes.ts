@@ -10,6 +10,7 @@ export const SIGNAL_TYPES = {
   REBROADCAST_PENDING: 'rebroadcast_pending',
   UPDATE_FINAL_AUDIT: 'update_final_audit',
   UPDATE_AUTO_COMPRESS: 'update_auto_compress',
+  MANUAL_COMPRESS: 'manual_compress',
   UPDATE_APPROVAL_LEVEL: 'update_approval_level',
   UPDATE_PHASE: 'update_phase',
   UPDATE_ALLOWED_PATHS: 'update_allowed_paths',

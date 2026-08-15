@@ -313,6 +313,7 @@ workflow:
     verification_not_run: 測試尚未執行|測試未執行|未執行測試|未測試|尚未測試|未驗證|沒有驗證
     verification_passed: 測試通過|測試全部通過|全部測試通過|驗證通過|測試成功|驗證成功|已驗證
   compression_in_progress: 上下文壓縮中，請稍後...
+  manual_compression_unavailable: 目前沒有可安全壓縮的上下文片段
   dependency_not_found: 節點 '%{node_id}' 相依的節點 '%{id}' 不存在
   duplicate_node_id: '重複的節點 ID: %{id}'
   edge_reference_missing: 邊參考不存在：%{from} -> %{to}
