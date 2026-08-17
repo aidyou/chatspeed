@@ -285,6 +285,24 @@ impl WorkflowExecutor {
             )
     }
 
+    fn tool_observation_execution_status(
+        tool_name: &str,
+        state: &WorkflowState,
+        reinforced: &ReinforcedResult,
+    ) -> &'static str {
+        if reinforced.is_error {
+            "failed"
+        } else if reinforced.approval_status.as_deref() == Some("pending") {
+            "pending_approval"
+        } else if reinforced.approval_status.as_deref() == Some("rejected") {
+            "rejected"
+        } else if tool_name == TOOL_ASK_USER && *state == WorkflowState::AwaitingUser {
+            "waiting"
+        } else {
+            "completed"
+        }
+    }
+
     fn execution_duration_ms(started_at: Instant) -> u64 {
         started_at
             .elapsed()
@@ -4360,15 +4378,9 @@ impl WorkflowExecutor {
                         .unwrap_or("unknown");
 
                     // Build metadata with approval_status if present
-                    let mut execution_status = if reinforced.is_error {
-                        "failed".to_string()
-                    } else if reinforced.approval_status.as_deref() == Some("pending") {
-                        "pending_approval".to_string()
-                    } else if reinforced.approval_status.as_deref() == Some("rejected") {
-                        "rejected".to_string()
-                    } else {
-                        "completed".to_string()
-                    };
+                    let mut execution_status =
+                        Self::tool_observation_execution_status(tool_name, &self.state, reinforced)
+                            .to_string();
 
                     let stored_original_call =
                         Self::sanitize_completion_tool_call_for_storage(original_call.clone());
@@ -8127,6 +8139,52 @@ mod recovery_tests {
         assert!(WorkflowExecutor::should_expose_tool_duration(
             crate::tools::TOOL_READ_FILE
         ));
+    }
+
+    #[test]
+    fn tool_observation_metadata_keeps_unanswered_ask_user_waiting() {
+        let successful = ReinforcedResult {
+            content: "[]".to_string(),
+            llm_content: None,
+            title: "Ask User".to_string(),
+            summary: "Waiting for user".to_string(),
+            is_error: false,
+            error_type: None,
+            display_type: "choice".to_string(),
+            approval_status: None,
+            observation_kind: None,
+        };
+
+        assert_eq!(
+            WorkflowExecutor::tool_observation_execution_status(
+                TOOL_ASK_USER,
+                &WorkflowState::AwaitingUser,
+                &successful,
+            ),
+            "waiting"
+        );
+        assert_eq!(
+            WorkflowExecutor::tool_observation_execution_status(
+                TOOL_ASK_USER,
+                &WorkflowState::Thinking,
+                &successful,
+            ),
+            "completed"
+        );
+
+        let failed = ReinforcedResult {
+            is_error: true,
+            error_type: Some("InvalidAskUserPayload".to_string()),
+            ..successful
+        };
+        assert_eq!(
+            WorkflowExecutor::tool_observation_execution_status(
+                TOOL_ASK_USER,
+                &WorkflowState::AwaitingUser,
+                &failed,
+            ),
+            "failed"
+        );
     }
 
     struct TerminalStatusGateway {

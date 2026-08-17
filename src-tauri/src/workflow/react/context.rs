@@ -1738,7 +1738,7 @@ mod tests {
     use crate::db::WorkflowAiContextMessage;
     use crate::db::{Agent, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
-    use crate::tools::TOOL_COMPLETE_WORKFLOW;
+    use crate::tools::{TOOL_ASK_USER, TOOL_COMPLETE_WORKFLOW};
     use crate::workflow::react::constants::TASK_FINISHED;
     use crate::workflow::react::runtime_observation::{
         runtime_observation_metadata, RuntimeObservationType,
@@ -3226,6 +3226,139 @@ mod tests {
                 .iter()
                 .any(|message| message.role == "user"),
             "the permanent user anchor must remain projected after compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn compression_keeps_waiting_ask_user_in_raw_tail() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-waiting-ask-user";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            8_192,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid generator")),
+        );
+        context
+            .add_message(
+                "user".to_string(),
+                "Choose an implementation path".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message");
+        let (safe_boundary, _) = context
+            .add_message(
+                "assistant".to_string(),
+                "Completed prior analysis.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add safe boundary");
+        context
+            .add_message(
+                "assistant".to_string(),
+                "Need a decision.".to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_calls": [{
+                        "id": "ask-user-1",
+                        "function": { "name": TOOL_ASK_USER }
+                    }]
+                })),
+            )
+            .await
+            .expect("failed to add ask_user call");
+        let choices = r#"[{"title":"Select a path","options":["A","B"]}]"#;
+        let (ask_user, _) = context
+            .add_message(
+                "tool".to_string(),
+                choices.to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_call_id": "ask-user-1",
+                    "tool_name": TOOL_ASK_USER,
+                    "execution_status": "waiting",
+                    "display_type": "choice"
+                })),
+            )
+            .await
+            .expect("failed to add waiting ask_user observation");
+
+        let ask_user_idx = context
+            .messages
+            .iter()
+            .position(|message| message.id == ask_user.id)
+            .expect("waiting ask_user should be in runtime messages");
+        assert!(
+            !ContextManager::is_safe_pressure_compression_boundary(&context.messages, ask_user_idx),
+            "an unanswered ask_user must not be a compression boundary"
+        );
+
+        context
+            .compress(
+                "<state_snapshot>compressed earlier analysis</state_snapshot>".to_string(),
+                3,
+                safe_boundary.id.expect("safe boundary id missing"),
+            )
+            .await
+            .expect("compression should preserve the waiting tail");
+
+        let persisted = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load persisted transcript");
+        let persisted_ask_user = persisted
+            .messages
+            .iter()
+            .find(|message| message.id == ask_user.id)
+            .expect("waiting ask_user must remain durable after compression");
+        assert_eq!(persisted_ask_user.message, choices);
+        assert_eq!(
+            persisted_ask_user
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_call_id"))
+                .and_then(|value| value.as_str()),
+            Some("ask-user-1")
+        );
+        assert_eq!(
+            persisted_ask_user
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("execution_status"))
+                .and_then(|value| value.as_str()),
+            Some("waiting")
+        );
+        assert!(
+            context
+                .messages
+                .iter()
+                .any(|message| message.id == ask_user.id),
+            "the compacted runtime context must retain the waiting ask_user tail"
         );
     }
 
