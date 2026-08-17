@@ -132,6 +132,31 @@ test('authorized root drag sorting stays on the existing structured allowed-path
   assert.match(engine, /guard\.update_allowed_roots\(paths\.clone\(\)\);[\s\S]*?self\.planning_root = Self::planning_root_for_allowed_paths\(&paths\)/)
 })
 
+test('empty new workflows require an authorized directory before accepting input', async () => {
+  const [inputArea, workflowView, workflowPaths] = await Promise.all([
+    readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowPaths.ts', 'utf8')
+  ])
+
+  assert.match(inputArea, /:readonly="requiresAuthorizedPathSelection"/)
+  assert.match(
+    inputArea,
+    /Boolean\(props\.currentWorkflowId && props\.currentWorkflow\)[\s\S]*?!props\.currentWorkflow\.userQuery\?\.trim\(\)[\s\S]*?props\.currentPaths\.length === 0/
+  )
+  assert.match(inputArea, /@click="handleInputClick"/)
+  assert.match(
+    inputArea,
+    /const handleInputClick = async \(\) => \{[\s\S]*?await props\.onAddAuthorizedPath\?\.\(\)[\s\S]*?await nextTick\(\)[\s\S]*?!requiresAuthorizedPathSelection\.value[\s\S]*?inputRef\.value\?\.focus\(\)/
+  )
+  assert.match(workflowView, /:current-paths="currentPaths"[\s\S]*?:on-add-authorized-path="onAddPath"/)
+  assert.match(workflowView, /displayAllowedPath,[\s\S]*?onAddPath,[\s\S]*?onAddPathFromTree/)
+  assert.match(
+    workflowPaths,
+    /const onAddPath = async \(\) => \{[\s\S]*?await open\([\s\S]*?directory: true[\s\S]*?pendingPaths\.value\.push\(selected\)/
+  )
+})
+
 test('MCP tool calls show their arguments and format only valid JSON results', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
 

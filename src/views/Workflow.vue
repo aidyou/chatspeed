@@ -246,6 +246,8 @@
               :wait-reason="waitReason"
               :current-workflow="currentWorkflow"
               :current-workflow-id="currentWorkflowId"
+              :current-paths="currentPaths"
+              :on-add-authorized-path="onAddPath"
               :selected-agent="selectedAgent"
               :can-edit-agent="canEditCurrentWorkflowAgent"
               :show-planning-mode-toggle="showPlanningModeToggle"
@@ -662,6 +664,7 @@ const {
   currentPaths,
   canEditPaths,
   displayAllowedPath,
+  onAddPath,
   onAddPathFromTree,
   onRemovePathFromTree,
   onReorderPathsFromTree

@@ -94,7 +94,9 @@
         v-model="inputMessage"
         type="textarea"
         :autosize="{ minRows: 1, maxRows: 10 }"
-        :placeholder="$t('chat.inputMessagePlaceholder', { at: '/' })"
+        :readonly="requiresAuthorizedPathSelection"
+        :placeholder="inputPlaceholder"
+        @click="handleInputClick"
         @keydown="onInputKeyDown"
         @compositionstart="onCompositionStart"
         @compositionend="onCompositionEnd"
@@ -693,6 +695,14 @@ const props = defineProps({
   },
   currentWorkflowId: {
     type: String,
+    default: null
+  },
+  currentPaths: {
+    type: Array,
+    default: () => []
+  },
+  onAddAuthorizedPath: {
+    type: Function,
     default: null
   },
   selectedAgent: {
@@ -1369,6 +1379,27 @@ const createWorkflowInheritCurrent = ref(true)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 const isInputExpanded = ref(false)
+const requiresAuthorizedPathSelection = computed(
+  () =>
+    Boolean(props.currentWorkflowId && props.currentWorkflow) &&
+    !props.currentWorkflow.userQuery?.trim() &&
+    props.currentPaths.length === 0
+)
+const inputPlaceholder = computed(() =>
+  requiresAuthorizedPathSelection.value
+    ? t('settings.agent.authorizedPathSelectionPrompt')
+    : t('chat.inputMessagePlaceholder', { at: '/' })
+)
+
+const handleInputClick = async () => {
+  if (!requiresAuthorizedPathSelection.value) return
+
+  await props.onAddAuthorizedPath?.()
+  await nextTick()
+  if (!requiresAuthorizedPathSelection.value) {
+    inputRef.value?.focus()
+  }
+}
 
 watch(inputMessage, value => {
   if (value.trim() === '') {

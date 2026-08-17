@@ -189,6 +189,7 @@
       "approvalLevelDefault": "Follow Agent Configuration",
       "approvalLevelFull": "Full Open (High Risk)",
       "approvalLevelSmart": "Smart Approval (Only Intercept Risky Operations)",
+      "authorizedPathSelectionPrompt": "Select a project, working, or authorized directory before the agent can work properly.",
       "authorizedPaths": "Authorized Directories",
       "authorizedPathsAdd": "Add Directory",
       "authorizedPathsTip": "The agent will only be able to read and write files in these directories (and their subdirectories).",

@@ -189,6 +189,7 @@
       "approvalLevelDefault": "按智能体配置",
       "approvalLevelFull": "全开 (高风险)",
       "approvalLevelSmart": "智能审批 (只拦截风险操作)",
+      "authorizedPathSelectionPrompt": "请先选择项目目录/工作目录/授权目录，否则智能体无法正常工作",
       "authorizedPaths": "授权目录",
       "authorizedPathsAdd": "添加目录",
       "authorizedPathsTip": "智能体将只能读写这些目录（及其子目录）下的文件。如果不配置，部分文件操作工具可能无法使用。",

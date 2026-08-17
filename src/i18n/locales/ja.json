@@ -189,6 +189,7 @@
       "approvalLevelDefault": "エージェント設定に従う",
       "approvalLevelFull": "フルオープン（高リスク）",
       "approvalLevelSmart": "スマート承認（書き込み操作のみインターセプト）",
+      "authorizedPathSelectionPrompt": "エージェントが正常に動作するには、先にプロジェクト、作業、または許可済みディレクトリを選択してください。",
       "authorizedPaths": "許可されたディレクトリ",
       "authorizedPathsAdd": "ディレクトリを追加",
       "authorizedPathsTip": "エージェントはこれらのディレクトリ（およびサブディレクトリ）内のファイルのみを読み書きできます。",
