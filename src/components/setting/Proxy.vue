@@ -391,7 +391,7 @@
                     >
                   </div>
                 </template>
-                <div class="models-grid">
+                <div class="models-flex">
                   <template v-for="model in provider.models" :key="model.id">
                     <el-checkbox
                       :model-value="isTargetSelected(provider.id, model.id)"
@@ -1369,8 +1369,6 @@ const genTableData = () => {
 }
 
 .providers-list-container {
-  border: 1px solid var(--cs-border-color);
-  border-radius: var(--cs-border-radius-sm);
   margin-bottom: var(--cs-space-md);
   min-height: 150px;
   /* Removed flex:1 and max-height from here to let el-scrollbar handle it */
@@ -1390,8 +1388,8 @@ const genTableData = () => {
 
 .provider-card {
   margin-bottom: var(--cs-space-sm);
-  background-color: var(--cs-color-primary-soft);
-  border: 1px solid var(--cs-border-color-light);
+  background-color: var(--cs-bg-color-light);
+  border: 1px solid var(--cs-border-color);
 
   &:last-child {
     margin-bottom: 0;
@@ -1400,6 +1398,7 @@ const genTableData = () => {
   :deep(.el-card__header) {
     padding: var(--cs-space-sm) var(--cs-space-md);
     background-color: var(--cs-secondary-bg-color);
+    border-bottom: 1px solid var(--cs-border-color);
   }
 
   :deep(.el-card__body) {
@@ -1431,7 +1430,7 @@ const genTableData = () => {
   }
 }
 
-.models-grid {
+.models-flex {
   display: flex;
   flex-wrap: wrap;
   gap: var(--cs-space-xs);

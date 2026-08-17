@@ -1588,7 +1588,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--cs-space-md);
-  background-color: var(--cs-color-primary-soft);
+  background-color: var(--cs-bg-color-light);
   border: 1px solid var(--cs-border-color-light);
   border-radius: var(--cs-border-radius-md);
   padding: var(--cs-space);

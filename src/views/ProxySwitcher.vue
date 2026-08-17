@@ -177,15 +177,10 @@
                   </el-checkbox>
                 </div>
 
-                <div class="models-grid">
-                  <el-tooltip
+                <div class="models-flex">
+                    <el-checkbox
                     v-for="model in provider.models"
                     :key="model.id"
-                    :content="model.id"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false">
-                    <el-checkbox
                       :model-value="isTargetSelected(provider.id, model.id)"
                       :label="model.id"
                       border
@@ -195,7 +190,6 @@
                       ">
                       {{ model.id }}
                     </el-checkbox>
-                  </el-tooltip>
                 </div>
               </div>
             </el-scrollbar>
@@ -656,7 +650,9 @@ const calculateServerStatsFromRows = (rows, proxyAlias, providerFilter = '') => 
 }
 
 const shouldRefreshServerStats = () =>
-  activeTab.value === 'servers' && document.visibilityState === 'visible' && hasChatCompletionProxy.value
+  activeTab.value === 'servers' &&
+  document.visibilityState === 'visible' &&
+  hasChatCompletionProxy.value
 
 const refreshTodayServerStats = async () => {
   if (!shouldRefreshServerStats() || isRefreshingServerStats.value) return
@@ -738,7 +734,9 @@ const renderTrendChart = async () => {
       selectedTrendMetric.value === 'tokens'
         ? [
             getComputedStyle(document.documentElement).getPropertyValue('--cs-info-color').trim(),
-            getComputedStyle(document.documentElement).getPropertyValue('--cs-success-color').trim(),
+            getComputedStyle(document.documentElement)
+              .getPropertyValue('--cs-success-color')
+              .trim(),
             getComputedStyle(document.documentElement).getPropertyValue('--cs-warning-color').trim()
           ]
         : getComputedStyle(document.documentElement).getPropertyValue('--cs-success-color').trim(),
@@ -759,7 +757,9 @@ const renderTrendChart = async () => {
         line: {
           style: {
             lineDash: [4, 4],
-            stroke: getComputedStyle(document.documentElement).getPropertyValue('--cs-chart-axis-color').trim()
+            stroke: getComputedStyle(document.documentElement)
+              .getPropertyValue('--cs-chart-axis-color')
+              .trim()
           }
         }
       },
@@ -1562,12 +1562,12 @@ onMounted(async () => {
   border-top-left-radius: var(--cs-border-radius-lg);
   border-top-right-radius: var(--cs-border-radius-lg);
 
-  .el-drawer__body{
-      padding-bottom: var(--cs-space-xs);
+  .el-drawer__body {
+    padding-bottom: var(--cs-space-xs);
   }
-  .el-drawer__footer{
-      height:62px;
-      padding-top:var(--cs-space-xs);
+  .el-drawer__footer {
+    height: 62px;
+    padding-top: var(--cs-space-xs);
   }
 }
 
@@ -1691,23 +1691,22 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
-.models-grid {
+.models-flex {
   padding: var(--cs-space-sm);
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  display: flex;
   gap: var(--cs-space-xs);
-}
+  flex-wrap: wrap;
 
-.model-checkbox {
-  width: 100%;
-  margin-right: 0;
-  overflow: hidden;
-
-  :deep(.el-checkbox__label) {
-    min-width: 0;
+  .model-checkbox {
+    margin-right: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+
+    :deep(.el-checkbox__label) {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 }
 
