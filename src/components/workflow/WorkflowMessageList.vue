@@ -2118,11 +2118,15 @@ const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false
   const thoughtCount = thoughts.length
   const errorCount = messages.filter(isToolGroupErrorMessage).length
   const seedMessage = messages[0] || thoughts[0] || {}
+  const firstActivity = [...thoughts, ...messages].reduce((earliest, item) => {
+    if (!earliest) return item
+    return (item?.groupOrder ?? index) < (earliest?.groupOrder ?? index) ? item : earliest
+  }, null)
 
   return {
     ...seedMessage,
     role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId(messages.length > 0 ? messages : thoughts, index),
+    displayId: getCollapsedToolGroupExpandId([firstActivity || seedMessage], index),
     metadata: {
       ...(seedMessage?.metadata || {}),
       message_kind: 'tool_group',
@@ -2345,16 +2349,9 @@ const hasSubsequentVisibleOutput = message => {
   return visibleMessages.value.slice(index + 1).some(item => item.role !== 'user')
 }
 
-const hasStreamingThoughtCompleted = computed(() => {
-  if (props.chatState.content) return true
-
-  const message = lastVisibleMessage.value
-  if (!message || message.role === 'user') return false
-
-  if (message.role === 'tool') return true
-
-  return hasThoughtCompleted(message)
-})
+const hasStreamingThoughtCompleted = computed(
+  () => props.chatState?.reasoningStatus === 'done'
+)
 
 const hasThoughtCompleted = message => {
   if (!message) return false

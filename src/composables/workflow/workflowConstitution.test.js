@@ -414,6 +414,37 @@ assert.doesNotMatch(
 )
 assert.doesNotMatch(workflowCore, /confirmationWaiting|showConfirmationDialog/)
 const workflowStore = readProjectFile('src/stores/workflow.js')
+const terminalResumeProjection = sourceSection(
+  workflowCore,
+  'const onSendMessage = async',
+  'const removeQueuedMessage = async'
+)
+assert.match(
+  terminalResumeProjection,
+  /client_message_id: clientMessageId/,
+  'terminal-session resume must assign a stable local-to-persisted user-message identity'
+)
+assert.match(
+  terminalResumeProjection, /workflowStore\.addMessage\(\{[\s\S]*id: `temporary_\$\{clientMessageId\}`/)
+assert.match(
+  terminalResumeProjection, /removeCurrentWorkflowMessages\([\s\S]*client_message_id === clientMessageId/)
+assert.match(
+  workflowStore, /incomingClientMessageId = message\.metadata\?\.client_message_id/)
+assert.match(
+  workflowStore, /m\.metadata\?\.client_message_id === incomingClientMessageId/)
+assert.doesNotMatch(
+  workflowStore,
+  /startsNewTaskAfterPartialHistory|messages\.value = \[\][\s\S]*hiddenCompletedTaskCount\.value \+=/
+)
+const streamingReasoningContract = sourceSection(
+  workflowChat,
+  'const refreshDerivedChatState',
+  '// Handle retry status'
+)
+assert.match(streamingReasoningContract, /hadStreamingReasoning/)
+assert.match(streamingReasoningContract, /source === 'reasoning' \|\| hasOpenThink \|\| hadStreamingReasoning/)
+assert.match(messageList, /const hasStreamingThoughtCompleted = computed\([\s\S]*reasoningStatus === 'done'/)
+
 const queuedMessageRouting = sourceSection(
   workflowCore,
   'const flushDeferredQueuedMessages',

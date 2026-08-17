@@ -1,5 +1,3 @@
-use crate::ai::chat::openai::OpenAIChat;
-use crate::ai::interaction::chat_completion::AiChatEnum;
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{
     Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
@@ -197,10 +195,6 @@ fn spawn_workflow_title_generation_if_missing(
     Ok(())
 }
 
-fn is_user_authored_workflow_message(message: &WorkflowMessage) -> bool {
-    message.role == "user" && message.step_type.as_deref() != Some("observe")
-}
-
 fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
     if message.role != "tool" || message.is_error {
         return false;
@@ -252,45 +246,6 @@ fn prompt_with_new_segment_completion_scope(clean_prompt: &str) -> String {
         "{}\n\n{}",
         clean_prompt, NEW_SEGMENT_AFTER_COMPLETION_REMINDER
     )
-}
-
-fn extract_completion_summary_from_tool_message(message: &WorkflowMessage) -> Option<String> {
-    if !is_successful_completion_tool_message(message) {
-        return None;
-    }
-
-    let metadata_summary = message
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.get("summary"))
-        .and_then(|summary| summary.as_str())
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-        .map(str::to_string);
-    if metadata_summary.is_some() {
-        return metadata_summary;
-    }
-
-    let tool_call = message
-        .metadata
-        .as_ref()
-        .and_then(|meta| meta.get("tool_call"))?;
-    let args_value = tool_call.get("arguments").or_else(|| {
-        tool_call
-            .get("function")
-            .and_then(|function| function.get("arguments"))
-    })?;
-    let parsed_args = if let Some(args_text) = args_value.as_str() {
-        serde_json::from_str::<serde_json::Value>(args_text).ok()
-    } else {
-        Some(args_value.clone())
-    }?;
-    parsed_args
-        .get("summary")
-        .and_then(|summary| summary.as_str())
-        .map(str::trim)
-        .filter(|summary| !summary.is_empty())
-        .map(str::to_string)
 }
 
 fn rollback_workflow_agent_config(
@@ -396,58 +351,6 @@ fn raw_workflow_agent_config(store: &MainStore, session_id: &str) -> Result<Agen
     )
 }
 
-fn previous_completed_task_context(messages: &[WorkflowMessage]) -> Option<(String, String)> {
-    let scoped_messages = latest_manual_clear_context_index(messages)
-        .map(|index| &messages[index + 1..])
-        .unwrap_or(messages);
-    let completion_indices: Vec<usize> = scoped_messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| {
-            if is_successful_completion_tool_message(message) {
-                Some(index)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let last_completion_index = *completion_indices.last()?;
-    let segment_start = completion_indices
-        .iter()
-        .rev()
-        .nth(1)
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let segment = &scoped_messages[segment_start..=last_completion_index];
-
-    let previous_query = segment
-        .iter()
-        .find(|message| is_user_authored_workflow_message(message))
-        .map(|message| message.message.trim().to_string())
-        .filter(|value| !value.is_empty())?;
-
-    let previous_summary = segment
-        .iter()
-        .rev()
-        .find_map(extract_completion_summary_from_tool_message)
-        .or_else(|| {
-            segment
-                .iter()
-                .rev()
-                .find(|message| message.role == "assistant")
-                .map(|message| message.message.trim().to_string())
-        })
-        .filter(|value| !value.is_empty())?;
-
-    Some((previous_query, previous_summary))
-}
-
-fn latest_manual_clear_context_index(messages: &[WorkflowMessage]) -> Option<usize> {
-    messages.iter().rposition(|message| {
-        crate::workflow::react::context::ContextManager::is_manual_clear_context_message(message)
-    })
-}
-
 fn wait_reason_blocks_manual_clear(wait_reason: Option<&WaitReason>) -> bool {
     matches!(
         wait_reason,
@@ -527,118 +430,6 @@ fn workflow_auto_compress_enabled(config: &Value) -> bool {
                 .and_then(|value| value.as_bool())
         })
         .unwrap_or(true)
-}
-
-fn extract_first_json_object(raw: &str) -> Option<&str> {
-    let trimmed = raw.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Some(trimmed);
-    }
-
-    let fenced = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .unwrap_or(trimmed)
-        .trim();
-    let fenced = fenced.strip_suffix("```").unwrap_or(fenced).trim();
-    if fenced.starts_with('{') && fenced.ends_with('}') {
-        return Some(fenced);
-    }
-
-    let start = trimmed.find('{')?;
-    let end = trimmed.rfind('}')?;
-    (start < end).then_some(&trimmed[start..=end])
-}
-
-async fn classify_related_task_summary(
-    chat_state: Arc<ChatState>,
-    main_store: Arc<MainStore>,
-    session_id: &str,
-    provider_id: i64,
-    model_name: &str,
-    previous_query: &str,
-    previous_summary: &str,
-    new_query: &str,
-) -> Result<Option<String>, String> {
-    if model_name.trim().is_empty()
-        || previous_query.trim().is_empty()
-        || previous_summary.trim().is_empty()
-        || new_query.trim().is_empty()
-    {
-        return Ok(None);
-    }
-
-    let chat_interface = {
-        let mut chats_guard = chat_state.chats.lock().await;
-        chats_guard
-            .entry(crate::ccproxy::ChatProtocol::OpenAI)
-            .or_default()
-            .entry(format!("{}_planning_relation", session_id))
-            .or_insert_with(|| crate::create_chat!(main_store))
-            .clone()
-    };
-
-    let messages = vec![
-        json!({
-            "role": "system",
-            "content": "You classify whether a new request continues a previously completed task.\nReturn JSON only with shape: {\"relation\":\"same_task|related_task|new_task\",\"summary_for_planner\":\"...\"}.\nUse `same_task` when the new request continues or revises the same task.\nUse `related_task` when it is strongly related and previous completed work should inform the next plan.\nUse `new_task` when prior work should not be carried forward.\nIf relation is `same_task` or `related_task`, write `summary_for_planner` as a concise markdown summary of the previous completed task that is directly useful for planning the new request. Otherwise return an empty string."
-        }),
-        json!({
-            "role": "user",
-            "content": format!(
-                "<previous_user_query>\n{}\n</previous_user_query>\n<previous_completed_summary>\n{}\n</previous_completed_summary>\n<new_user_query>\n{}\n</new_user_query>",
-                previous_query, previous_summary, new_query
-            )
-        }),
-    ];
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    chat_interface
-        .chat(
-            provider_id,
-            model_name,
-            format!("{}_planning_relation", session_id),
-            messages,
-            None,
-            None,
-            move |chunk| {
-                let _ = tx.try_send(chunk);
-            },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut response = String::new();
-    while let Some(chunk) = rx.recv().await {
-        match chunk.r#type {
-            crate::ai::traits::chat::MessageType::Text => response.push_str(&chunk.chunk),
-            crate::ai::traits::chat::MessageType::Finished => break,
-            crate::ai::traits::chat::MessageType::Error => return Err(chunk.chunk.clone()),
-            _ => {}
-        }
-    }
-
-    #[derive(Deserialize)]
-    struct TaskRelationResponse {
-        relation: String,
-        summary_for_planner: String,
-    }
-
-    let parsed = extract_first_json_object(&response)
-        .and_then(|json_text| serde_json::from_str::<TaskRelationResponse>(json_text).ok());
-
-    let Some(parsed) = parsed else {
-        return Ok(None);
-    };
-
-    if matches!(parsed.relation.as_str(), "same_task" | "related_task") {
-        let summary = parsed.summary_for_planner.trim().to_string();
-        if !summary.is_empty() {
-            return Ok(Some(summary));
-        }
-    }
-
-    Ok(None)
 }
 
 fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessage> {
@@ -3375,32 +3166,10 @@ async fn append_initial_prompt_to_executor(
     clean_prompt: &str,
     attached_context: &str,
     message_metadata: Option<Value>,
-    related_task_summary: Option<&str>,
     begin_new_segment: bool,
 ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
     if begin_new_segment {
         executor.begin_new_context_segment().await?;
-    }
-
-    if let Some(previous_summary) = related_task_summary {
-        executor
-            .add_message_and_notify(
-                "system".into(),
-                format!(
-                    "# Related Previous Task Context\n<previous_task_summary>\n{}\n</previous_task_summary>",
-                    previous_summary
-                ),
-                None,
-                None,
-                None,
-                false,
-                None,
-                Some(json!({
-                    "type": "summary",
-                    "subtype": "related_previous_task"
-                })),
-            )
-            .await?;
     }
 
     let att_opt = if attached_context.is_empty() {
@@ -3452,7 +3221,6 @@ async fn try_resume_completed_live_session(
     clean_prompt: &str,
     attached_context: &str,
     message_metadata: Option<Value>,
-    related_task_summary: Option<&str>,
     gateway: &Arc<TauriGateway>,
     workflow_manager: &Arc<WorkflowManager>,
     main_store: &Arc<MainStore>,
@@ -3499,7 +3267,6 @@ async fn try_resume_completed_live_session(
             clean_prompt,
             attached_context,
             message_metadata,
-            related_task_summary,
             true,
         )
         .await
@@ -3957,7 +3724,6 @@ pub async fn workflow_start(
         initial_message_metadata,
         allowed_paths,
         workflow_status,
-        existing_messages,
     ) = {
         let store = &*main_store_arc;
         let snapshot = store
@@ -4000,7 +3766,6 @@ pub async fn workflow_start(
             initial_metadata.clone(),
             paths,
             wf.status.clone(),
-            snapshot.messages,
         )
     };
 
@@ -4047,34 +3812,6 @@ pub async fn workflow_start(
 
     let is_terminal_workflow = compat_is_terminal_snapshot_status(&workflow_status);
 
-    let related_task_summary = if planning_mode && initial_prompt.is_some() && is_terminal_workflow
-    {
-        let previous_context = previous_completed_task_context(&existing_messages);
-        let planning_model = agent_config
-            .models
-            .as_ref()
-            .and_then(|models| models.plan.as_ref().or(models.act.as_ref()));
-        if let (Some((previous_query, previous_summary)), Some(model)) =
-            (previous_context, planning_model)
-        {
-            classify_related_task_summary(
-                chat_state_arc.clone(),
-                main_store_arc.clone(),
-                &session_id,
-                model.id,
-                &model.model,
-                &previous_query,
-                &previous_summary,
-                &clean_prompt,
-            )
-            .await?
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     if initial_prompt.is_some() {
         if try_resume_completed_live_session(
             &session_id,
@@ -4082,7 +3819,6 @@ pub async fn workflow_start(
             &clean_prompt,
             &attached_context,
             initial_message_metadata.clone(),
-            related_task_summary.as_deref(),
             &gateway_arc,
             &workflow_manager_arc,
             &main_store_arc,
@@ -4242,7 +3978,6 @@ pub async fn workflow_start(
                 &clean_prompt,
                 &attached_context,
                 initial_message_metadata.clone(),
-                related_task_summary.as_deref(),
                 is_terminal_workflow,
             )
             .await
@@ -7460,81 +7195,6 @@ mod tests {
             Some(&stale_context),
             "awaiting_user"
         ));
-    }
-
-    #[test]
-    fn test_previous_completed_task_context_prefers_structured_tool_summary() {
-        let messages = vec![
-            WorkflowMessage {
-                id: Some(1),
-                session_id: "session-1".to_string(),
-                role: "user".to_string(),
-                message: "Fix the captcha modal".to_string(),
-                reasoning: None,
-                message_kind: "message".to_string(),
-                message_subtype: None,
-                segment_id: 1,
-                source_event_type: None,
-                metadata: None,
-                attached_context: None,
-                step_type: Some("think".to_string()),
-                step_index: 1,
-                is_error: false,
-                error_type: None,
-                created_at: None,
-            },
-            WorkflowMessage {
-                id: Some(2),
-                session_id: "session-1".to_string(),
-                role: "assistant".to_string(),
-                message: "Stale assistant recap that should not win".to_string(),
-                reasoning: None,
-                message_kind: "message".to_string(),
-                message_subtype: None,
-                segment_id: 1,
-                source_event_type: None,
-                metadata: None,
-                attached_context: None,
-                step_type: Some("think".to_string()),
-                step_index: 2,
-                is_error: false,
-                error_type: None,
-                created_at: None,
-            },
-            WorkflowMessage {
-                id: Some(3),
-                session_id: "session-1".to_string(),
-                role: "tool".to_string(),
-                message: "".to_string(),
-                reasoning: None,
-                message_kind: "message".to_string(),
-                message_subtype: None,
-                segment_id: 1,
-                source_event_type: None,
-                metadata: Some(json!({
-                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
-                    "execution_status": "completed",
-                    "approval_status": "approved",
-                    "summary": "Structured completion summary",
-                    "tool_call": {
-                        "function": {
-                            "name": crate::tools::TOOL_COMPLETE_WORKFLOW,
-                            "arguments": "{\"summary\":\"Structured completion summary\"}"
-                        }
-                    }
-                })),
-                attached_context: None,
-                step_type: Some("observe".to_string()),
-                step_index: 3,
-                is_error: false,
-                error_type: None,
-                created_at: None,
-            },
-        ];
-
-        let result = previous_completed_task_context(&messages).expect("expected previous task");
-        assert_eq!(result.0, "Fix the captcha modal");
-        assert_eq!(result.1, "Structured completion summary");
     }
 
     #[test]

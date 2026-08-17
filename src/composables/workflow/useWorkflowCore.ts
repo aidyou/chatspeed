@@ -1676,10 +1676,42 @@ export function useWorkflowCore({
                     return false
                 }
             } else {
-                // Engine is stopped (Completed, Error, or Cancelled).
-                // DO NOT add message manually here, workflow_start will handle it and broadcast via events.
+                // Terminal-session startup may rebuild a runtime or perform optional planning
+                // relation analysis. Keep a client-scoped provisional projection until the
+                // backend persists the same client_message_id and replaces it in addMessage.
+                const clientMessageId = `client_message_${Date.now()}_${Math.random()
+                    .toString(36)
+                    .slice(2, 8)}`
+                const initialMetadata = {
+                    ...(options.metadata && typeof options.metadata === 'object' ? options.metadata : {}),
+                    client_message_id: clientMessageId
+                }
+                const shouldProjectLocally =
+                    targetIsCurrentSession && initialMetadata.ui_visibility !== 'hide'
+                if (shouldProjectLocally) {
+                    workflowStore.addMessage({
+                        id: `temporary_${clientMessageId}`,
+                        sessionId: targetSessionId,
+                        role: 'user',
+                        message,
+                        reasoning: null,
+                        stepType: null,
+                        stepIndex: Number.MAX_SAFE_INTEGER,
+                        isError: false,
+                        errorType: null,
+                        metadata: initialMetadata
+                    })
+                }
+
+                const removeProvisionalMessage = () => {
+                    if (!shouldProjectLocally) return
+                    workflowStore.removeCurrentWorkflowMessages(
+                        candidate => candidate?.metadata?.client_message_id === clientMessageId
+                    )
+                }
+
                 try {
-                    // Ensure event listener is setup for this session
+                    // Ensure event listener is setup before the authoritative persistence event.
                     if (targetIsCurrentSession) {
                         await setupWorkflowEvents(targetSessionId)
                     }
@@ -1688,7 +1720,7 @@ export function useWorkflowCore({
                         sessionId: targetSessionId,
                         agentId: targetAgentId,
                         initialPrompt: message,
-                        initialMetadata: options.metadata || null,
+                        initialMetadata,
                         initialAttachedContext: options.attachedContext || null,
                         planningMode: targetPlanningMode
                     })
@@ -1699,31 +1731,33 @@ export function useWorkflowCore({
                 } catch (error) {
                     const errorText = String(error)
                     if (errorText.includes('Session is stopping')) {
+                        removeProvisionalMessage()
                         showMessage(
                             t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
                             'warning'
                         )
                         return false
                     }
-                    // Recovery path: session is already active in manager, route as user_message signal.
+                    // Recovery path: session is already active in manager, route the same
+                    // client identity through the canonical user-message signal.
                     if (errorText.includes('Session already exists')) {
                         try {
                             if (targetIsCurrentSession) {
                                 workflowStore.setHasLiveSession(true)
                             }
-                            await sendUserMessageSignal(
-                                targetSessionId,
-                                message,
-                                null,
-                                options
-                            )
+                            await sendUserMessageSignal(targetSessionId, message, null, {
+                                ...options,
+                                metadata: initialMetadata
+                            })
                             return true
                         } catch (signalError) {
+                            removeProvisionalMessage()
                             console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)
                             showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
                             return false
                         }
                     }
+                    removeProvisionalMessage()
                     console.error('Failed to resume workflow:', error)
                     showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
                     return false

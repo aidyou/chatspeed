@@ -179,6 +179,11 @@ export function useWorkflowMessages(options = {}) {
       return `${workflowId}:subagent:${subAgentId}:${message?.role || 'message'}`
     }
 
+    const clientMessageId = pickPreferredText(meta.client_message_id)
+    if (clientMessageId) {
+      return `${workflowId}:client:${clientMessageId}:${message?.role || 'message'}`
+    }
+
     const persistedId = pickPreferredText(message?.id)
     if (persistedId) {
       const messageKind = pickPreferredText(meta.message_kind, meta.messageKind) || message?.messageKind || message?.role || 'message'

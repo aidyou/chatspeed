@@ -1521,24 +1521,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
     message = normalizeWorkflowMessage(message, currentWorkflowId.value);
 
-    const canStartNewTaskAfterPartialHistory =
-      message.role === 'user' &&
-      message.metadata?.queue_status !== 'queued' &&
-      hiddenEarlierMessageCount.value > 0;
-    const loadedCompletedTaskCount = canStartNewTaskAfterPartialHistory
-      ? messages.value.filter(isCompletedWorkflowTaskBoundary).length
-      : 0;
-    const startsNewTaskAfterPartialHistory =
-      canStartNewTaskAfterPartialHistory &&
-      (loadedCompletedTaskCount > 0 || lastTaskCompletion.value?.sessionId === currentWorkflowId.value);
-    if (startsNewTaskAfterPartialHistory) {
-      messages.value = [];
-      messageWindowBeforeId.value = message.id ?? null;
-      hiddenEarlierMessageCount.value = 0;
-      hiddenCompletedTaskCount.value += Math.max(1, loadedCompletedTaskCount);
-      lastTaskCompletion.value = null;
-    }
-
     if (message.role === 'user') {
       const queuedId = message.metadata?.queued_user_message_id;
       const queueStatus = message.metadata?.queue_status;
@@ -1596,6 +1578,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const incomingPersistedMessageId = getWorkflowPersistedMessageId(message);
     const incomingToolCallId = message.metadata?.tool_call_id;
     const incomingQueuedUserMessageId = message.metadata?.queued_user_message_id;
+    const incomingClientMessageId = message.metadata?.client_message_id;
     const index = messages.value.findIndex((m) => {
       if (
         incomingPersistedMessageId &&
@@ -1613,6 +1596,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
       if (
         incomingQueuedUserMessageId &&
         m.metadata?.queued_user_message_id === incomingQueuedUserMessageId
+      ) {
+        return true;
+      }
+      if (
+        incomingClientMessageId &&
+        m.metadata?.client_message_id === incomingClientMessageId
       ) {
         return true;
       }
@@ -1643,8 +1632,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
       }
     }
 
-    if (messageWindowBeforeId.value == null && message.id != null) {
-      messageWindowBeforeId.value = message.id;
+    // Local provisional messages have non-persisted IDs and must never become
+    // pagination cursors. Only the durable numeric message ID is valid here.
+    if (messageWindowBeforeId.value == null && incomingPersistedMessageId) {
+      messageWindowBeforeId.value = incomingPersistedMessageId;
     }
 
     // 更新 Task Ledger

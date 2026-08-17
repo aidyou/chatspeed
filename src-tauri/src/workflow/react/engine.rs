@@ -2862,7 +2862,7 @@ impl WorkflowExecutor {
 
                     let workflow_signal = WorkflowSignal::parse(&signal_str);
 
-                    if matches!(wait_reason_enum, Some(WaitReason::Approval)) {
+                    if !matches!(wait_reason_enum, Some(WaitReason::UserInput)) {
                         if let RuntimeSignal::UserMessage {
                             content,
                             attached_context,
@@ -2871,9 +2871,10 @@ impl WorkflowExecutor {
                         } = parse_runtime_signal(&signal_str)
                         {
                             log::info!(
-                            "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while awaiting approval",
-                            self.session_id
-                        );
+                                "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while wait_reason={:?}",
+                                self.session_id,
+                                wait_reason_enum
+                            );
                             self.enqueue_user_message(
                                 content,
                                 attached_context,
@@ -4172,6 +4173,17 @@ impl WorkflowExecutor {
                         self.update_state(WorkflowState::Thinking).await?;
                         continue;
                     }
+                }
+
+                // A queued message may have been admitted while a sub-agent was awaited.
+                // Its canonical application belongs immediately after that completion Observe,
+                // before beginning the next Think step.
+                let queued_applied = self.flush_queued_user_messages().await?;
+                if queued_applied {
+                    self.current_step = 0;
+                    self.consecutive_no_tool_calls = 0;
+                    self.loop_detector.reset_tool_call_history();
+                    self.loop_detector.reset_no_tool_response_history();
                 }
 
                 self.current_step += 1;
@@ -5788,6 +5800,15 @@ impl WorkflowExecutor {
                 }
                 break;
             }
+        }
+
+        // Signals received while a tool future was active are stashed by await_with_stop.
+        // Drain them before recording observations so accepted user messages become durable
+        // queued input at this turn's observe boundary, rather than missing this flush.
+        if self.check_stop_signal(signal_rx).await? {
+            return Err(WorkflowEngineError::Cancelled(
+                t!("workflow.cancelled").to_string(),
+            ));
         }
 
         // --- 4. Stage 3: Protocol Finalization ---
@@ -7522,8 +7543,8 @@ impl WorkflowExecutor {
                     if let Some(signal) = signal {
                         let current_wait_reason = self.current_wait_reason();
                         if !signal.is_valid_for(current_wait_reason.as_ref()) {
-                            log::warn!(
-                                "[Workflow][session={}][phase=signal][event=signal_rejected_non_waiting] Signal '{}' arrived while state={:?}, wait_reason={:?}; ignoring until the workflow reaches a compatible wait state",
+                            log::info!(
+                                "[Workflow][session={}][phase=signal][event=signal_deferred_non_waiting] Signal '{}' arrived while state={:?}, wait_reason={:?}; preserving it for the compatible wait state",
                                 self.session_id,
                                 signal.type_name(),
                                 self.state,
@@ -7588,6 +7609,20 @@ impl WorkflowExecutor {
                     retry_state
                 );
                 continue;
+            }
+
+            // This active drain owns user messages, stop, runtime configuration, and
+            // compression signals only. Preserve every remaining typed signal in FIFO
+            // order so its canonical waiting handler can consume it later.
+            if matches!(parse_runtime_signal(&s), RuntimeSignal::Other { .. }) {
+                if let Some(signal) = WorkflowSignal::parse(&s) {
+                    log::debug!(
+                        "[Workflow][session={}][phase=signal][event=signal_deferred] Deferring '{}' until its compatible wait state",
+                        self.session_id,
+                        signal.type_name()
+                    );
+                    stash_runtime_signal(&self.session_id, s);
+                }
             }
         }
 
@@ -9484,6 +9519,182 @@ mod recovery_tests {
             .expect("entered wait should persist execution context");
         assert_eq!(context.state, RuntimeState::Waiting);
         assert_eq!(context.wait_reason, Some(WaitReason::UserInput));
+    }
+
+    #[tokio::test]
+    async fn user_message_arriving_while_awaiting_sub_agent_is_persisted_in_canonical_queue() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "awaiting-sub-agent-queue";
+        let agent = test_agent("awaiting-sub-agent-queue-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(15).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingSubAgent;
+
+        let (signal_tx, signal_rx) = mpsc::channel(2);
+        executor.attach_signal_rx(signal_rx);
+        signal_tx
+            .send(
+                serde_json::json!({
+                    "type": "user_message",
+                    "content": "queue this while the child runs",
+                    "queued_user_message_id": "awaiting-sub-agent-user-1"
+                })
+                .to_string(),
+            )
+            .await
+            .expect("failed to send queued user message");
+        signal_tx
+            .send(serde_json::json!({ "type": "stop" }).to_string())
+            .await
+            .expect("failed to send stop signal");
+
+        executor
+            .run_loop()
+            .await
+            .expect("wait loop should stop cleanly");
+
+        let context = store
+            .get_execution_context(session_id)
+            .expect("failed to read execution context")
+            .expect("queued state should be persisted");
+        assert_eq!(context.queued_user_messages.len(), 1);
+        assert_eq!(
+            context.queued_user_messages[0].queued_user_message_id,
+            "awaiting-sub-agent-user-1"
+        );
+        assert_eq!(
+            context.queued_user_messages[0].content,
+            "queue this while the child runs"
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_user_message_applies_after_sub_agent_completion_observe() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "sub-agent-observe-queue-order";
+        let agent = test_agent("sub-agent-observe-queue-order-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(16).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingSubAgent;
+
+        executor
+            .enqueue_user_message(
+                "follow-up after child".to_string(),
+                None,
+                None,
+                Some("sub-agent-queue-order-1".to_string()),
+            )
+            .await
+            .expect("message should queue while awaiting child");
+        assert!(!executor
+            .flush_queued_user_messages()
+            .await
+            .expect("queue flush should be deferred while waiting"));
+
+        executor
+            .add_message_and_notify_internal(
+                "user".to_string(),
+                "Sub-agent completed".to_string(),
+                None,
+                None,
+                Some(StepType::Observe),
+                false,
+                None,
+                Some(serde_json::json!({
+                    "observation_type": "sub_agent_completion",
+                    "sub_agent_id": "child-queue-order"
+                })),
+            )
+            .await
+            .expect("sub-agent completion observe should persist");
+        executor
+            .update_state(WorkflowState::Thinking)
+            .await
+            .expect("sub-agent completion should resume thinking");
+        assert!(executor
+            .flush_queued_user_messages()
+            .await
+            .expect("queue should flush after completion observe"));
+
+        let messages = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load messages")
+            .messages;
+        let completion_index = messages
+            .iter()
+            .position(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("observation_type"))
+                    .and_then(|value| value.as_str())
+                    == Some("sub_agent_completion")
+            })
+            .expect("sub-agent completion observe should be present");
+        let queued_user_index = messages
+            .iter()
+            .position(|message| {
+                message.role == "user"
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("queued_user_message_id"))
+                        .and_then(|value| value.as_str())
+                        == Some("sub-agent-queue-order-1")
+            })
+            .expect("applied queued message should be present");
+        assert!(
+            completion_index < queued_user_index,
+            "queued user input must apply after the sub-agent completion Observe"
+        );
     }
 
     #[tokio::test]

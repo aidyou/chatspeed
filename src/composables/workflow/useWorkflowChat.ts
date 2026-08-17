@@ -101,15 +101,10 @@ export function useWorkflowChat({ currentWorkflowId }) {
     let reasoningStatus = 'idle'
 
     if (combinedReasoning) {
-      if (source === 'reasoning' || hasOpenThink) {
-        reasoningStatus = 'streaming'
-      } else if (content.trim()) {
-        reasoningStatus = 'done'
-      } else if (hadStreamingReasoning) {
-        reasoningStatus = 'streaming'
-      } else {
-        reasoningStatus = 'done'
-      }
+      // Visible text can arrive before a provider finishes its explicit reasoning stream.
+      // Once reasoning is streaming, only a finalized message/reset may close it.
+      reasoningStatus =
+        source === 'reasoning' || hasOpenThink || hadStreamingReasoning ? 'streaming' : 'done'
     }
 
     chatState.value.content = content
