@@ -2266,13 +2266,19 @@ const collectContiguousToolMessages = (messages, startIndex) => {
 
 const collectToolActivityMessage = (message, index, thoughts, tools) => {
   if (isThinkOnlyAssistantMessage(message)) {
-    thoughts.push(buildGroupedThoughtItem(message, index, index))
+    thoughts.push(buildGroupedThoughtItem(message, index, message.groupOrder ?? index))
     return
   }
 
   if (isCollapsedToolGroupMessage(message)) {
     ;(message.groupedThoughts || []).forEach((thought, thoughtIndex) => {
-      thoughts.push(buildGroupedThoughtItem(thought, `${index}_${thoughtIndex}`, index + thoughtIndex / 1000))
+      thoughts.push(
+        buildGroupedThoughtItem(
+          thought,
+          `${index}_${thoughtIndex}`,
+          thought.groupOrder ?? index + thoughtIndex / 1000
+        )
+      )
     })
     ;(message.groupedTools || []).forEach((tool, toolIndex) => {
       if (getCollapsibleToolGroupKind(tool)) {

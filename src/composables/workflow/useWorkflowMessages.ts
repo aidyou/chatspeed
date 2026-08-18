@@ -813,7 +813,7 @@ export function useWorkflowMessages(options = {}) {
     }
 
     // --- PASS 1: Single scan to collect all states (O(N)) ---
-    const processedMsgs = rawMsgs.map(m => {
+    const processedMsgs = rawMsgs.map((m, sourceOrder) => {
       let meta = m.metadata
       // Note: metadata is already an object (serde_json::Value from Rust)
       // No need to parse, but we should handle null/undefined
@@ -882,7 +882,7 @@ export function useWorkflowMessages(options = {}) {
         }
       }
 
-      return { ...m, metadata: meta } // Cache parsed meta for Pass 2
+      return { ...m, metadata: meta, sourceOrder } // Cache parsed meta and durable order for Pass 2
     })
 
     // --- PASS 2: Filter and Transform (O(N)) ---
@@ -1022,8 +1022,8 @@ export function useWorkflowMessages(options = {}) {
           ...message,
           groupOrder:
             message.role === 'tool'
-              ? toolGroupOrderById.get(String(message.metadata?.tool_call_id || '').trim()) ?? idx
-              : message.groupOrder,
+              ? toolGroupOrderById.get(String(message.metadata?.tool_call_id || '').trim()) ?? message.sourceOrder
+              : message.groupOrder ?? message.sourceOrder,
           displayId,
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),

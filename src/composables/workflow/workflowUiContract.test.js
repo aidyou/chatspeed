@@ -453,7 +453,7 @@ test('tool activity grouping keeps only explicit independent segments as boundar
   )
   assert.match(
     workflowMessages,
-    /message\.role === 'tool'[\s\S]*?toolGroupOrderById\.get\(String\(message\.metadata\?\.tool_call_id \|\| ''\)\.trim\(\)\) \?\? idx/,
+    /message\.role === 'tool'[\s\S]*?toolGroupOrderById\.get\(String\(message\.metadata\?\.tool_call_id \|\| ''\)\.trim\(\)\) \?\? message\.sourceOrder/,
     'completed tool messages must carry the same original order even after their assistant declaration is filtered'
   )
   assert.match(
@@ -465,5 +465,25 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     messageList,
     /tools\.push\(\{ \.\.\.message, groupOrder: message\.groupOrder \?\? index \}\)/,
     'tool collection must not overwrite a stable order with a transient projection index'
+  )
+  assert.match(
+    workflowMessages,
+    /const processedMsgs = rawMsgs\.map\(\(m, sourceOrder\) => \{[\s\S]*?sourceOrder \}/,
+    'each live message must retain its durable transcript position through the display projection'
+  )
+  assert.match(
+    workflowMessages,
+    /message\.role === 'tool'[\s\S]*?\?\? message\.sourceOrder[\s\S]*?: message\.groupOrder \?\? message\.sourceOrder/,
+    'thoughts and tools must share the same durable order axis while tool calls retain declaration order'
+  )
+  assert.match(
+    messageList,
+    /thoughts\.push\([\s\S]*?thought\.groupOrder \?\? index \+ thoughtIndex \/ 1000/,
+    'nested tool groups must retain each thought’s durable order instead of replacing it with a transient group index'
+  )
+  assert.match(
+    messageList,
+    /thoughts\.push\(buildGroupedThoughtItem\(message, index, message\.groupOrder \?\? index\)\)/,
+    'grouped thoughts must use their durable order instead of the transient filtered-list index'
   )
 })
