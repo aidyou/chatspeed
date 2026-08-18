@@ -2254,6 +2254,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
     pub(crate) async fn handle_ask_user_intercept(
         &mut self,
+        tool_call_id: &str,
         args: &serde_json::Value,
     ) -> Result<Option<ReinforcedResult>, WorkflowEngineError> {
         let groups = if let Some(groups) = args.as_array() {
@@ -2321,6 +2322,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        self.awaiting_user_tool_call_id = Some(tool_call_id.to_string());
         self.update_state(WorkflowState::AwaitingUser).await?;
         let content =
             serde_json::to_string(&normalized_groups).unwrap_or_else(|_| "[]".to_string());

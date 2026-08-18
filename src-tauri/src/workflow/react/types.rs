@@ -526,6 +526,139 @@ pub struct QueuedUserMessage {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// The deterministic precedence used when several user directives belong to one task.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectiveTaskDirectivePrecedence {
+    LaterDirectivesOverrideConflicts,
+}
+
+impl Default for EffectiveTaskDirectivePrecedence {
+    fn default() -> Self {
+        Self::LaterDirectivesOverrideConflicts
+    }
+}
+
+/// One durable user instruction contributing to the current task objective.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectiveTaskDirective {
+    pub source_message_id: i64,
+    pub content: String,
+}
+
+/// Runtime-owned lifecycle state for the compact current-goal handoff.
+///
+/// The model may phrase `current_goal`, but the source IDs and completion
+/// evidence are assigned by the runtime from durable workflow messages.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGoalStatus {
+    Active,
+    Complete,
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskGoalState {
+    #[serde(default = "default_task_goal_state_version")]
+    pub version: u8,
+    pub status: TaskGoalStatus,
+    #[serde(default)]
+    pub current_goal: Option<String>,
+    #[serde(default)]
+    pub source_message_ids: Vec<i64>,
+    /// Runtime-projected bounded text of the latest effective user directive.
+    /// It is a guard against a model reinterpreting an older directive as the
+    /// current execution mode after a compression boundary.
+    #[serde(default)]
+    pub latest_directive: Option<TaskGoalSourcePreview>,
+    #[serde(default)]
+    pub completion_evidence_message_id: Option<i64>,
+}
+
+fn default_task_goal_state_version() -> u8 {
+    1
+}
+
+/// Bounded source material supplied to a compression model and persisted only
+/// as a hidden projection aid. Durable workflow messages remain authoritative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskGoalLedger {
+    pub source_message_ids: Vec<i64>,
+    pub source_previews: Vec<TaskGoalSourcePreview>,
+    pub previous_state: Option<TaskGoalState>,
+    pub requires_active_goal: bool,
+    pub completion_evidence_message_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskGoalSourcePreview {
+    pub source_message_id: i64,
+    pub content: String,
+}
+
+/// Structured task authority persisted with runtime recovery state.
+///
+/// The transcript remains the durable record of the conversation. This structure records the
+/// already-classified user directives that define the active task so compression and recovery do
+/// not need to infer scope from a generated summary or a later LLM request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectiveTaskObjective {
+    #[serde(default = "default_effective_task_objective_version")]
+    pub version: u8,
+    pub initial_source_message_id: i64,
+    pub latest_source_message_id: i64,
+    #[serde(default)]
+    pub directive_precedence: EffectiveTaskDirectivePrecedence,
+    #[serde(default)]
+    pub directives: Vec<EffectiveTaskDirective>,
+}
+
+fn default_effective_task_objective_version() -> u8 {
+    1
+}
+
+impl EffectiveTaskObjective {
+    pub fn new(source_message_id: i64, content: String) -> Self {
+        Self {
+            version: default_effective_task_objective_version(),
+            initial_source_message_id: source_message_id,
+            latest_source_message_id: source_message_id,
+            directive_precedence: EffectiveTaskDirectivePrecedence::default(),
+            directives: vec![EffectiveTaskDirective {
+                source_message_id,
+                content,
+            }],
+        }
+    }
+
+    pub fn append_directive(&mut self, source_message_id: i64, content: String) {
+        if let Some(existing) = self
+            .directives
+            .iter_mut()
+            .find(|directive| directive.source_message_id == source_message_id)
+        {
+            existing.content = content;
+        } else {
+            self.directives.push(EffectiveTaskDirective {
+                source_message_id,
+                content,
+            });
+            self.directives
+                .sort_by_key(|directive| directive.source_message_id);
+        }
+        self.latest_source_message_id = source_message_id;
+    }
+
+    #[cfg(test)]
+    pub fn source_message_ids(&self) -> Vec<i64> {
+        self.directives
+            .iter()
+            .map(|directive| directive.source_message_id)
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionContext {
     pub session_id: String,
@@ -548,6 +681,12 @@ pub struct ExecutionContext {
     pub version: String,
     #[serde(default)]
     pub waiting_on_sub_agent_id: Option<String>,
+    /// Canonical `ask_user` call currently awaiting a user response.
+    #[serde(default)]
+    pub awaiting_user_tool_call_id: Option<String>,
+    /// Structured current-task authority used to rebuild compression handoffs.
+    #[serde(default)]
+    pub effective_task_objective: Option<EffectiveTaskObjective>,
     #[serde(default)]
     pub sub_agent_sessions: Vec<String>,
     #[serde(default)]
@@ -578,6 +717,8 @@ impl ExecutionContext {
         self.pending_tools.clear();
         self.last_action_summary = None;
         self.waiting_on_sub_agent_id = None;
+        self.awaiting_user_tool_call_id = None;
+        self.effective_task_objective = None;
         self.sub_agent_sessions.clear();
         self.pending_sub_agent_completions.clear();
         self.pending_final_review = None;
@@ -603,6 +744,8 @@ impl ExecutionContext {
             last_event_id: None,
             version: Self::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -757,6 +900,8 @@ mod tests {
         assert!(ctx.last_event_id.is_none());
         assert_eq!(ctx.version, "1.4.0");
         assert!(ctx.waiting_on_sub_agent_id.is_none());
+        assert!(ctx.awaiting_user_tool_call_id.is_none());
+        assert!(ctx.effective_task_objective.is_none());
         assert!(ctx.sub_agent_sessions.is_empty());
         assert!(ctx.pending_sub_agent_completions.is_empty());
         assert!(ctx.pending_final_review.is_none());
@@ -786,6 +931,9 @@ mod tests {
                 3,
                 5,
             ));
+        let mut objective = EffectiveTaskObjective::new(101, "Audit the workflow".to_string());
+        objective.append_directive(102, "Implement the confirmed fixes".to_string());
+        ctx.effective_task_objective = Some(objective);
 
         let json = serde_json::to_string(&ctx).unwrap();
         let deserialized: ExecutionContext = serde_json::from_str(&json).unwrap();
@@ -810,6 +958,22 @@ mod tests {
         let context: ExecutionContext = serde_json::from_value(legacy).unwrap();
 
         assert!(context.pending_completion_reports.is_empty());
+        assert!(context.effective_task_objective.is_none());
+    }
+
+    #[test]
+    fn effective_task_objective_preserves_directive_identity_and_precedence() {
+        let mut objective = EffectiveTaskObjective::new(11, "Audit only".to_string());
+        objective.append_directive(12, "Implement the confirmed fixes".to_string());
+        objective.append_directive(13, "Keep the scope focused".to_string());
+
+        assert_eq!(objective.initial_source_message_id, 11);
+        assert_eq!(objective.latest_source_message_id, 13);
+        assert_eq!(objective.source_message_ids(), vec![11, 12, 13]);
+        assert_eq!(
+            objective.directive_precedence,
+            EffectiveTaskDirectivePrecedence::LaterDirectivesOverrideConflicts
+        );
     }
 
     #[test]

@@ -54,6 +54,8 @@ fn restore_execution_context_from_manual_clear_marker(
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -179,6 +181,7 @@ pub struct WorkflowMessagePage {
     pub before_message_id: Option<i64>,
     pub hidden_message_count: usize,
     pub hidden_completed_task_count: usize,
+    pub has_more_in_current_task: bool,
 }
 
 fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
@@ -231,6 +234,7 @@ fn is_workflow_ui_task_boundary(message: &WorkflowMessage) -> bool {
 
 struct WorkflowUiMessagePageSelection {
     messages: Vec<WorkflowMessage>,
+    has_more_in_current_task: bool,
 }
 
 fn select_workflow_ui_message_page(
@@ -261,8 +265,13 @@ fn select_workflow_ui_message_page(
         has_content = true;
     }
 
+    let has_more_in_current_task = messages_descending
+        .get(selected_len)
+        .is_some_and(|message| !is_workflow_ui_task_boundary(message));
+
     WorkflowUiMessagePageSelection {
         messages: messages_descending.into_iter().take(selected_len).collect(),
+        has_more_in_current_task,
     }
 }
 
@@ -1631,6 +1640,7 @@ impl MainStore {
             })?;
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
             let selection = select_workflow_ui_message_page(descending, message_limit);
+            let has_more_in_current_task = selection.has_more_in_current_task;
             let mut messages = selection.messages;
             messages.reverse();
 
@@ -1638,6 +1648,7 @@ impl MainStore {
                 before_message_id: messages.first().and_then(|message| message.id),
                 hidden_message_count: total_message_count.saturating_sub(messages.len()),
                 hidden_completed_task_count: 0,
+                has_more_in_current_task,
                 messages,
             })
         })
@@ -1670,6 +1681,7 @@ impl MainStore {
                 })?;
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
             let selection = select_workflow_ui_message_page(descending, message_limit);
+            let has_more_in_current_task = selection.has_more_in_current_task;
             let mut messages = selection.messages;
             messages.reverse();
 
@@ -1680,6 +1692,7 @@ impl MainStore {
                     .or(Some(before_message_id)),
                 hidden_message_count: total_message_count.saturating_sub(messages.len()),
                 hidden_completed_task_count: 0,
+                has_more_in_current_task,
                 messages,
             })
         })
@@ -1891,7 +1904,26 @@ impl MainStore {
             let transaction = conn.transaction()?;
             let messages = {
                 let mut statement = transaction.prepare(
-                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
+                    "SELECT
+                        id,
+                        '' AS session_id,
+                        role,
+                        '' AS message,
+                        NULL AS reasoning,
+                        message_kind,
+                        message_subtype,
+                        segment_id,
+                        source_event_type,
+                        metadata,
+                        NULL AS attached_context,
+                        step_type,
+                        step_index,
+                        is_error,
+                        error_type,
+                        NULL AS created_at
+                     FROM workflow_messages
+                     WHERE session_id = ?1
+                     ORDER BY id ASC",
                 )?;
                 let rows = statement
                     .query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
@@ -1899,7 +1931,23 @@ impl MainStore {
             };
             let events = {
                 let mut statement = transaction.prepare(
-                    "SELECT * FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC",
+                    "SELECT
+                        id,
+                        '' AS session_id,
+                        event_type,
+                        '' AS event_version,
+                        event_data,
+                        NULL AS created_at
+                     FROM workflow_events
+                     WHERE session_id = ?1
+                       AND event_type IN (
+                           'wait_entered',
+                           'user_input_received',
+                           'approval_requested',
+                           'approval_resolved',
+                           'tool_started'
+                       )
+                     ORDER BY id ASC",
                 )?;
                 let rows = statement.query_map(params![session_id], |row| {
                     Ok(WorkflowEventRecord::from(row))
@@ -2516,6 +2564,8 @@ impl MainStore {
                     last_event_id: None,
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
                     waiting_on_sub_agent_id: Some(completion.sub_agent_id.clone()),
+                    awaiting_user_tool_call_id: None,
+                    effective_task_objective: None,
                     sub_agent_sessions: vec![completion.sub_agent_id.clone()],
                     pending_sub_agent_completions: Vec::new(),
                     pending_final_review: None,
@@ -3773,6 +3823,44 @@ mod tests {
         assert_eq!(
             earlier.messages[2].message_subtype.as_deref(),
             Some("manual_clear_context")
+        );
+        assert!(
+            !earlier.has_more_in_current_task,
+            "the marker page must not automatically top up into the older completed task"
+        );
+    }
+
+    #[test]
+    fn test_workflow_message_page_marks_only_unbroken_active_task_as_extendable() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-current-task-page");
+        store
+            .create_workflow(
+                "current-task-page-session",
+                "Current task page query",
+                "agent-current-task-page",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        for index in 1..=302 {
+            add_window_test_message(
+                &store,
+                "current-task-page-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("current-task-page-session", 300)
+            .expect("failed to load current task page");
+        assert_eq!(recent.messages.len(), 300);
+        assert_eq!(recent.messages[0].message, "active-message-3");
+        assert!(
+            recent.has_more_in_current_task,
+            "a 301st ordinary message in the same task must permit a top-up page"
         );
     }
 

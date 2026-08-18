@@ -32,7 +32,7 @@ export function useWorkflowApproval({
     rejectionMessage = '',
     sessionId = currentWorkflowId.value
   }) => {
-    if (!toolCallId || !sessionId) {
+    if (!toolCallId || !sessionId || workflowStore.isApprovalSubmitted(sessionId, toolCallId)) {
       return
     }
     approvalLoading.value = true

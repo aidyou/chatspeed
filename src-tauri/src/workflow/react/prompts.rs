@@ -373,23 +373,25 @@ pub const BLOCKING_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compr
 
 Return only this semantic schema:
 {
-  "user_directives": [],
+  "task_state": {
+    "status": "active",
+    "current_goal": "short current goal"
+  },
   "confirmed_facts": [],
   "boundary_open_items": [],
   "completed_work": [],
   "constraints_and_guards": []
 }
 
-The runtime, not you, adds schema version, kind, compression boundary, deterministic artifacts, and supplied structured review rounds. Do not emit or restate those system-owned fields. This handoff describes only the compression boundary; later raw-tail messages and dynamic todo are newer authority. Do not include a current next action, user-goal restatement, plan body, copied content, tool transcript, command, or raw output.
+Return exactly and only the five semantic fields in the schema above. `task_state` is the only goal field: it has exactly `status` and `current_goal`. Its `status` must be `active`, `complete`, or `none`; use `null` for `current_goal` only with `none`. The runtime supplies a task-goal source ledger. Its `latest_directive` is the highest-precedence user intent at this boundary; use it to determine the current execution mode, even if older source previews requested only an audit. If `latest_directive` asks to modify, implement, optimize, or repair, `current_goal` must describe that active implementation work, never a read-only audit. When `previous_task_state.status` is `active`, later directives are refinements by default: preserve every still-unresolved component of its `current_goal` and add the latest refinement. Do not narrow the goal to only the newest correction unless that directive explicitly replaces or abandons the preceding work. Do not create source IDs, completion evidence, todo state, a next action, effective task objective, plan body, copied content, tool transcript, command, or raw output. For an `active` ledger, you must return `status: "active"` with one concise goal. You may return `complete` or `none` only when the ledger supplies successful completion evidence after the latest user directive.
 
 Use each field only for its stated purpose:
-- `user_directives`: an explicit later user correction, preference, or decision that still constrains future work; never infer it from the original request.
 - `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on; not edits, pending work, or limitations.
 - `boundary_open_items`: material work unresolved at this boundary, each `{"kind":"verification"|"decision"|"remediation","summary":"..."}`. State the actual remaining check or repair, not only its reason. Later raw tail may supersede it.
 - `completed_work`: compact strings for outcomes actually completed; combine related deliverables and omit routine investigation.
 - `constraints_and_guards`: future-facing rules, prohibited actions, or static limitations that affect later work; do not duplicate facts, completed outcomes, or unresolved items.
 
-Every array must be present but may be empty. Keep at most 2 `user_directives`, 4 `confirmed_facts`, 3 `boundary_open_items`, 2 `completed_work`, and 3 `constraints_and_guards`. Before returning, scan both the completed-task summaries and conversation history for every item explicitly described as unrun, unconfirmed, awaiting decision, or needing repair, and confirm each is either a boundary open item or resolved by later raw-tail context. A concrete external interface or third-party contract marked unconfirmed must be a `verification` item, even when the implementation defensively handles it. Do not promote a possible explanation or risk into an open item unless it is explicitly unresolved. If the limit conflicts, retain an explicitly unrun validation, unconfirmed external contract, or remaining remediation before speculative investigation. Finally check all array counts. Do not output this self-review. Return only the semantic schema JSON object."#;
+Every array must be present but may be empty. Keep `current_goal` under 800 characters, and at most 4 `confirmed_facts`, 3 `boundary_open_items`, 2 `completed_work`, and 3 `constraints_and_guards`. Before returning, scan both the completed-task summaries and conversation history for every item explicitly described as unrun, unconfirmed, awaiting decision, or needing repair, and confirm each is either a boundary open item or resolved by later raw-tail context. A concrete external interface or third-party contract marked unconfirmed must be a `verification` item, even when the implementation defensively handles it. Do not promote a possible explanation or risk into an open item unless it is explicitly unresolved. If the limit conflicts, retain an explicitly unrun validation, unconfirmed external contract, or remaining remediation before speculative investigation. Finally check all array counts. Do not output this self-review. Return only the semantic schema JSON object."#;
 
 /// Tool approval review prompt for smart approval mode.
 /// Used to decide whether a proposed tool call should be auto-approved or escalated.

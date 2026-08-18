@@ -2588,6 +2588,8 @@ mod tests {
                     last_event_id: None,
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
                     waiting_on_sub_agent_id: None,
+                    awaiting_user_tool_call_id: None,
+                    effective_task_objective: None,
                     sub_agent_sessions: vec![task_id.to_string()],
                     pending_sub_agent_completions: vec![SubAgentCompletion {
                         sub_agent_id: task_id.to_string(),
@@ -2845,6 +2847,8 @@ mod tests {
                     last_event_id: None,
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
                     waiting_on_sub_agent_id: None,
+                    awaiting_user_tool_call_id: None,
+                    effective_task_objective: None,
                     sub_agent_sessions: Vec::new(),
                     pending_sub_agent_completions: vec![SubAgentCompletion {
                         sub_agent_id: task_id.to_string(),

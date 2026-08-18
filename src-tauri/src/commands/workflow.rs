@@ -453,7 +453,7 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
     let mut merged = Vec::with_capacity(messages.len());
 
     for (idx, message) in messages.iter().enumerate() {
-        let mut next_message = message.clone();
+        let next_message = message.clone();
 
         if let Some(meta) = next_message.metadata.as_ref() {
             if let Some(tool_call_id) = meta.get("tool_call_id").and_then(|v| v.as_str()) {
@@ -470,27 +470,10 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
         }
 
         if next_message.role == "assistant" {
-            if let Some(meta) = next_message.metadata.as_mut() {
-                if let Some(tool_calls) = meta.get_mut("tool_calls").and_then(|v| v.as_array_mut())
-                {
-                    tool_calls.retain(|call| {
-                        let call_id = call
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| call.get("tool_call_id").and_then(|v| v.as_str()));
-
-                        match call_id {
-                            Some(id) => !latest_tool_message_index.contains_key(id),
-                            None => true,
-                        }
-                    });
-
-                    if tool_calls.is_empty() {
-                        meta.as_object_mut().map(|obj| obj.remove("tool_calls"));
-                    }
-                }
-            }
-
+            // Tool declarations remain in the projection even after a dedicated
+            // observation supersedes the pending placeholder. They preserve the
+            // durable tool_call_id chain and the original in-batch tool order;
+            // the frontend decides whether a declaration needs its own card.
             let has_text = !next_message.message.trim().is_empty()
                 || next_message
                     .reasoning
@@ -1865,6 +1848,8 @@ fn reconcile_durable_child_completion(
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: Some(child_id.to_string()),
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: vec![child_id.to_string()],
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -2093,6 +2078,8 @@ fn reconcile_child_workflows(
                             last_event_id: None,
                             version: ExecutionContext::CURRENT_VERSION.to_string(),
                             waiting_on_sub_agent_id: None,
+                            awaiting_user_tool_call_id: None,
+                            effective_task_objective: None,
                             sub_agent_sessions: Vec::new(),
                             pending_sub_agent_completions: Vec::new(),
                             pending_final_review: None,
@@ -2152,6 +2139,8 @@ fn reconcile_child_workflows(
                     last_event_id: None,
                     version: ExecutionContext::CURRENT_VERSION.to_string(),
                     waiting_on_sub_agent_id: None,
+                    awaiting_user_tool_call_id: None,
+                    effective_task_objective: None,
                     sub_agent_sessions: Vec::new(),
                     pending_sub_agent_completions: Vec::new(),
                     pending_final_review: None,
@@ -2454,6 +2443,8 @@ async fn hydrate_execution_context_for_snapshot(
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -2530,6 +2521,8 @@ async fn begin_new_context_frame_for_cold_session(
             last_event_id: None,
             version: crate::workflow::react::types::ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -2821,6 +2814,7 @@ pub async fn get_workflow_snapshot(
         message_window_before_id,
         hidden_earlier_message_count,
         hidden_completed_task_count,
+        has_more_in_current_task,
     ) = tokio::task::spawn_blocking(move || -> Result<_, String> {
         let store = &*snapshot_store;
         let mut workflow = store
@@ -2838,6 +2832,7 @@ pub async fn get_workflow_snapshot(
             message_page.before_message_id,
             message_page.hidden_message_count,
             message_page.hidden_completed_task_count,
+            message_page.has_more_in_current_task,
         ))
     })
     .await
@@ -2902,6 +2897,10 @@ pub async fn get_workflow_snapshot(
             "hiddenCompletedTaskCount".to_string(),
             json!(hidden_completed_task_count),
         );
+        obj.insert(
+            "hasMoreInCurrentTask".to_string(),
+            json!(has_more_in_current_task),
+        );
         obj.insert("hasLiveSession".to_string(), json!(has_live_session));
         obj.insert(
             "hasBlockingLiveSession".to_string(),
@@ -2951,6 +2950,7 @@ pub async fn get_earlier_workflow_message_page(
         "messages": merged_messages,
         "beforeMessageId": serialize_workflow_message_page_cursor(page.before_message_id),
         "hiddenEarlierMessageCount": page.hidden_message_count,
+        "hasMoreInCurrentTask": page.has_more_in_current_task,
     }))
 }
 

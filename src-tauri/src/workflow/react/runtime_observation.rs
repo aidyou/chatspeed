@@ -10,6 +10,9 @@ pub const MESSAGE_KIND_RUNTIME_OBSERVATION: &str = "runtime_observation";
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeObservationType {
     CompressionTodoSnapshot,
+    EffectiveTaskObjective,
+    CurrentTaskGoal,
+    CurrentTaskUserContext,
     SubAgentCompletion,
     SubAgentInterrupted,
     CompletionRejected,
@@ -175,6 +178,18 @@ fn default_visibility(
 ) {
     match observation_type {
         RuntimeObservationType::CompressionTodoSnapshot => (
+            RuntimeObservationLlmVisibility::PreservePosition,
+            RuntimeObservationUiVisibility::Hide,
+        ),
+        RuntimeObservationType::EffectiveTaskObjective => (
+            RuntimeObservationLlmVisibility::PreservePosition,
+            RuntimeObservationUiVisibility::Hide,
+        ),
+        RuntimeObservationType::CurrentTaskGoal => (
+            RuntimeObservationLlmVisibility::PreservePosition,
+            RuntimeObservationUiVisibility::Hide,
+        ),
+        RuntimeObservationType::CurrentTaskUserContext => (
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Hide,
         ),

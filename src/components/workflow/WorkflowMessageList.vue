@@ -25,7 +25,7 @@
 
     <template v-else>
       <a
-      v-if="props.hiddenEarlierMessageCount > 0"
+      v-if="hasHiddenEarlierMessages"
       class="history-window-indicator"
       @click="revealEarlierMessages">
       <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
@@ -33,7 +33,7 @@
     </a>
     <a
       v-if="
-        props.hiddenEarlierMessageCount <= 0 && props.hiddenCompletedTaskGroupCount > 0
+        hasHiddenEarlierMessages === false && props.hiddenCompletedTaskGroupCount > 0
       "
       class="history-window-indicator"
       @click="revealEarlierTaskGroup">
@@ -214,7 +214,7 @@
                 class="cli-tool-call collapsed-tool-group__item"
                 :class="[
                   tool.toolDisplay?.toolType || 'tool-system',
-                  tool.toolDisplay?.isError ? 'status-error' : 'status-success'
+                  getToolRenderStatusClass(tool)
                 ]"
                 :style="{ order: tool.renderOrder ?? toolIndex }">
                 <div
@@ -480,7 +480,7 @@
             class="cli-tool-call"
             :class="[
               message.toolDisplay.toolType || 'tool-system',
-              message.toolDisplay.isError ? 'status-error' : 'status-success'
+              getToolRenderStatusClass(message)
             ]">
             <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
               <div
@@ -814,6 +814,7 @@
                             :autosize="{ minRows: 1, maxRows: 6 }"
                             :placeholder="$t('workflow.askUser.supplementPlaceholder')"
                             :disabled="!canAnswerAskUser(message) || askUserSubmitting"
+                            @focus="selectAskUserOtherIfUnset(message, group.title)"
                             @update:model-value="
                               value => setAskUserSupplement(message, group.title, value)
                             " />
@@ -855,7 +856,10 @@
                   :details="getApprovalDetailsPayload(message)"
                   :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
                   :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
-                  :loading="approvalLoading && activeApprovalId === message.metadata?.tool_call_id"
+                  :loading="
+                    props.isBatchApprovalSubmitting ||
+                    (approvalLoading && activeApprovalId === message.metadata?.tool_call_id)
+                  "
                   :pending-count="inlineBulkApprovalCount"
                   @update:rejection-message="
                     value => setApprovalDraft(message.metadata?.tool_call_id, value)
@@ -1111,11 +1115,15 @@ import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
-  excludeLeadingManualClearContextMarkers,
-  getWorkflowToolGroupRenderOrders,
+  getWorkflowAskUserResponseItems,
+  isCollapsedWorkflowToolGroupMessage,
+  isWorkflowContextSnapshotMessage,
   isWorkflowCompletionMessage,
+  isWorkflowExplorationBatchMessage,
+  isWorkflowManualClearContextMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
+  projectWorkflowMessageList,
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
 import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
@@ -1131,6 +1139,7 @@ const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const OTHER_ASK_USER_VALUE = '__other__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
+const MAX_VISIBLE_WORKFLOW_MESSAGES = 300
 const STREAMING_REASONING_ID = '__streaming_reasoning__'
 
 const props = defineProps({
@@ -1190,6 +1199,10 @@ const props = defineProps({
   activeApprovalId: {
     type: String,
     default: ''
+  },
+  isBatchApprovalSubmitting: {
+    type: Boolean,
+    default: false
   },
   currentWorkflowId: {
     type: String,
@@ -1259,6 +1272,7 @@ const emit = defineEmits([
   'approve-all-tool',
   'approve-all-pending',
   'reject-tool',
+  'message-projection-count',
   'submit-ask-user',
   'remove-queued-message'
 ])
@@ -1270,6 +1284,7 @@ const approvedSubmissionIds = new Set()
 const userMessageOverflowMap = ref({})
 const userMessageCollapsedHeightMap = ref({})
 const isRevealingEarlierTaskGroup = ref(false)
+const visibleMessageLimit = ref(MAX_VISIBLE_WORKFLOW_MESSAGES)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
 let userMessageResizeObserver = null
@@ -1315,11 +1330,24 @@ const revealEarlierTaskGroup = () => {
 }
 
 const revealEarlierMessages = () => {
-  if (isRevealingEarlierTaskGroup.value || props.hiddenEarlierMessageCount <= 0) return
+  if (isRevealingEarlierTaskGroup.value) return
 
   const container = messagesRef.value
   const previousScrollHeight = container?.scrollHeight || 0
   const previousScrollTop = container?.scrollTop || 0
+
+  if (hasCollapsedMessageOverflow.value) {
+    visibleMessageLimit.value += MAX_VISIBLE_WORKFLOW_MESSAGES
+    nextTick(() => {
+      if (container) {
+        const nextScrollHeight = container.scrollHeight
+        container.scrollTop = previousScrollTop + (nextScrollHeight - previousScrollHeight)
+      }
+    })
+    return
+  }
+
+  if (props.hiddenEarlierMessageCount <= 0) return
 
   isRevealingEarlierTaskGroup.value = true
   emit('reveal-earlier-messages', () => {
@@ -1333,31 +1361,10 @@ const revealEarlierMessages = () => {
   })
 }
 
-const isHiddenSystemObservation = message => {
-  const uiVisibility = message?.metadata?.ui_visibility
-  if (uiVisibility === 'hide') return true
-  if (message?.metadata?.message_kind === 'runtime_observation') {
-    return false
-  }
-  if (message?.metadata?.error_type === 'SubAgentInterrupted') return true
-  if (message?.role !== 'user') return false
-  if ((message.stepType || '').toLowerCase() !== 'observe') return false
-  if (getAskUserResponseItems(message).length > 0) return false
-  return props.removeSystemReminder(message.message || '').trim() === ''
-}
-
-const getWorkflowMessageKind = message => message?.messageKind
-const getWorkflowMessageSubtype = message => message?.messageSubtype
-
-const isManualClearContextMessage = message =>
-  message?.role === 'system' &&
-  getWorkflowMessageKind(message) === 'summary' &&
-  getWorkflowMessageSubtype(message) === 'manual_clear_context'
-
-const isContextSnapshotMessage = message =>
-  message?.role === 'system' &&
-  getWorkflowMessageKind(message) === 'summary' &&
-  !isManualClearContextMessage(message)
+const isManualClearContextMessage = isWorkflowManualClearContextMessage
+const isContextSnapshotMessage = isWorkflowContextSnapshotMessage
+const isCollapsedToolGroupMessage = isCollapsedWorkflowToolGroupMessage
+const isExplorationBatchMessage = isWorkflowExplorationBatchMessage
 
 const getContextSnapshotContent = message => {
   const content = props.removeSystemReminder(message?.message || '')
@@ -1864,536 +1871,25 @@ const getApprovalDetailsPayload = message => {
 
 const isFinishTaskMessage = message => isWorkflowCompletionMessage(message)
 
-const isFinishTaskErrorMessage = message => {
-  if (!message || message.role !== 'tool') return false
-  return isFinishTaskMessage(message) && !!message.toolDisplay?.isError
-}
-
-const isSameFinishTaskError = (left, right) => {
-  if (!isFinishTaskErrorMessage(left) || !isFinishTaskErrorMessage(right)) return false
-  return (
-    props.removeSystemReminder(left.message || '') ===
-      props.removeSystemReminder(right.message || '') &&
-    (left.toolDisplay?.summary || '') === (right.toolDisplay?.summary || '')
-  )
-}
-
-const collapseRepeatedFinishTaskErrors = messages => {
-  const collapsed = []
-
-  for (let index = 0; index < messages.length; ) {
-    const current = messages[index]
-
-    if (!isFinishTaskErrorMessage(current)) {
-      collapsed.push(current)
-      index += 1
-      continue
-    }
-
-    let count = 1
-    let nextIndex = index + 1
-    while (nextIndex < messages.length && isSameFinishTaskError(current, messages[nextIndex])) {
-      count += 1
-      nextIndex += 1
-    }
-
-    if (count > 1) {
-      collapsed.push({
-        ...current,
-        displayId: `${current.displayId || current.id || `finish_task_${index}`}_collapsed_${count}`,
-        metadata: {
-          ...(current.metadata || {}),
-          finish_task_error_count: count
-        }
-      })
-    } else {
-      collapsed.push(current)
-    }
-
-    index = nextIndex
-  }
-
-  return collapsed
-}
-
-const isCompletionReportMessage = message =>
-  message?.role === 'assistant' && message?.metadata?.message_kind === 'completion_report'
-
-const isThinkOnlyAssistantMessage = message => {
-  if (message?.role !== 'assistant') return false
-  const content = props.removeSystemReminder(message?.message || '').trim()
-  const reasoning = String(message?.reasoning || '').trim()
-  return !content && !!reasoning
-}
-
-const collapseAssistantCompletionPairs = messages => {
-  const collapsed = []
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const current = messages[index]
-    const next = messages[index + 1]
-
-    if (
-      isThinkOnlyAssistantMessage(current) &&
-      isCompletionReportMessage(next) &&
-      String(current.stepIndex || '') === String(next.stepIndex || '')
-    ) {
-      continue
-    }
-
-    collapsed.push(current)
-  }
-
-  return collapsed
-}
-
-const COLLAPSIBLE_READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'web_fetch'])
-const COLLAPSIBLE_SEARCH_TOOL_NAMES = new Set(['grep', 'glob', 'web_search'])
-const COLLAPSIBLE_COMMAND_TOOL_NAMES = new Set(['bash'])
-const COLLAPSIBLE_MUTATION_TOOL_NAMES = new Set(['edit_file', 'write_file'])
-const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
-  'ask_user',
-  'submit_plan',
-  'complete_workflow',
-  'sub_agent_run',
-  'sub_agent_stop'
-])
-const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
-const TOOL_GROUP_LABEL_KEYS = {
-  bash: 'workflow.toolGroups.runCommand',
-  edit_file: 'workflow.toolGroups.editFile',
-  glob: 'workflow.toolGroups.fileSearch',
-  grep: 'workflow.toolGroups.fileSearch',
-  list_dir: 'workflow.toolGroups.readFile',
-  read_file: 'workflow.toolGroups.readFile',
-  skill: 'workflow.toolGroups.useSkill',
-  sub_agent_output: 'workflow.toolGroups.fetchSubAgentResult',
-  web_fetch: 'workflow.toolGroups.readWeb',
-  web_search: 'workflow.toolGroups.fileSearch',
-  write_file: 'workflow.toolGroups.editFile'
-}
-
-const isCollapsedToolGroupMessage = message => message?.metadata?.message_kind === 'tool_group'
-
-const getCollapsedToolGroupExpandId = (messages, index) => {
-  const first = messages[0]
-  const firstId = first?.displayId || first?.id || `tool_group_${index}`
-  const firstToolCallId = String(first?.metadata?.tool_call_id || '').trim()
-  return `tool_group:${firstToolCallId || firstId}`
-}
-
-const getToolGroupThoughtSummary = count => {
-  if (!count) return ''
-  return t('workflow.toolGroups.thoughtChangeCount', { count })
-}
-
-const getToolGroupErrorSummary = count => {
-  if (!count) return ''
-  return t('workflow.toolGroups.errorCount', { count })
-}
-
-const isToolGroupErrorMessage = message => !!(message?.toolDisplay?.isError || message?.isRejected)
-
-const truncateToolGroupText = (value, maxLength = 48) => {
-  const text = String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!text) return ''
-  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text
-}
-
-const getReadOnlyToolCategory = toolName => {
-  if (COLLAPSIBLE_READ_TOOL_NAMES.has(toolName)) return 'read'
-  if (COLLAPSIBLE_SEARCH_TOOL_NAMES.has(toolName)) return 'search'
-  return null
-}
-
-const getToolGroupLabel = message => {
-  const toolName = getMessageToolName(message)
-  if (TODO_TOOL_NAMES.has(toolName)) return t('workflow.toolGroups.taskChanges')
-  if (isWorkflowMcpTool(toolName)) return t('workflow.toolGroups.callMcp')
-  return t(TOOL_GROUP_LABEL_KEYS[toolName] || 'workflow.toolGroups.useTool')
-}
-
-const buildToolGroupSummary = messages => {
-  const counts = new Map()
-
-  messages.forEach(message => {
-    const label = getToolGroupLabel(message)
-    if (!label) return
-    counts.set(label, (counts.get(label) || 0) + 1)
-  })
-
-  return truncateToolGroupText(
-    Array.from(counts, ([label, count]) => `${label} x${count}`).join(' · '),
-    120
-  )
-}
-
-const isToolWaitingApproval = message => isApprovalPending(message)
-
-const isCollapsibleToolMessage = message => {
-  if (message?.role !== 'tool') return false
-  const toolName = getMessageToolName(message)
-  return !!toolName && !NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) && !isToolWaitingApproval(message)
-}
-
-const isCollapsibleReadOnlyToolMessage = message => {
-  const toolName = getMessageToolName(message)
-  return (
-    isCollapsibleToolMessage(message) &&
-    !TODO_TOOL_NAMES.has(toolName) &&
-    getReadOnlyToolCategory(toolName) !== null
-  )
-}
-
-const isCollapsibleTodoToolMessage = message =>
-  isCollapsibleToolMessage(message) && TODO_TOOL_NAMES.has(getMessageToolName(message))
-
-const isCollapsibleCommandToolMessage = message =>
-  isCollapsibleToolMessage(message) &&
-  COLLAPSIBLE_COMMAND_TOOL_NAMES.has(getMessageToolName(message))
-
-const isCollapsibleMutationToolMessage = message =>
-  isCollapsibleToolMessage(message) &&
-  COLLAPSIBLE_MUTATION_TOOL_NAMES.has(getMessageToolName(message))
-
-const isCollapsibleMcpToolMessage = message => {
-  const toolName = getMessageToolName(message)
-  return isCollapsibleToolMessage(message) && isWorkflowMcpTool(toolName)
-}
-
-const isCollapsibleSubAgentResultToolMessage = message =>
-  isCollapsibleToolMessage(message) && getMessageToolName(message) === 'sub_agent_output'
-
-const getCollapsibleToolGroupKind = message => {
-  if (isCollapsibleReadOnlyToolMessage(message)) return 'readonly_tools'
-  if (isCollapsibleTodoToolMessage(message)) return 'todo_tools'
-  if (isCollapsibleCommandToolMessage(message)) return 'command_tools'
-  if (isCollapsibleMutationToolMessage(message)) return 'mutation_tools'
-  if (isCollapsibleSubAgentResultToolMessage(message)) return 'sub_agent_result_tools'
-  if (isCollapsibleMcpToolMessage(message)) return 'mcp_tools'
-  return isCollapsibleToolMessage(message) ? 'other_tools' : null
-}
-
-const getToolCallId = call => String(call?.id || call?.tool_call_id || '').trim()
-
-const buildPendingToolGroupItem = (call, groupOrder) => {
-  const toolCallId = getToolCallId(call)
-  const toolName = String(call?.toolName || '').trim()
-  const argumentsValue = call?.arguments ?? {}
-
-  return {
-    id: `pending_tool:${toolCallId}`,
-    groupOrder,
-    displayId: `pending_tool:${toolCallId}`,
-    role: 'tool',
-    message: '',
-    isRejected: !!call?.isRejected,
-    isApproved: false,
-    metadata: {
-      tool_call_id: toolCallId,
-      tool_name: toolName,
-      tool_call: {
-        id: toolCallId,
-        function: {
-          name: toolName,
-          arguments: argumentsValue
-        }
-      },
-      approval_status: 'approved',
-      execution_status: 'running'
-    },
-    toolDisplay: {
-      icon: call?.icon || 'tool',
-      toolType: call?.toolType || 'tool-system',
-      action: call?.action || toolName,
-      target: call?.target || '',
-      summary: call?.summary || '',
-      isError: !!call?.isRejected
-    }
-  }
-}
-
-const projectPendingToolGroups = messages => {
-  const projected = []
-
-  messages.forEach((message, index) => {
-    const pendingCalls = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls : []
-    const groupedTools = pendingCalls
-      .map((call, callIndex) =>
-        buildPendingToolGroupItem(
-          call,
-          call.groupOrder ?? index + (callIndex + 1) / (pendingCalls.length + 1)
-        )
-      )
-      .filter(tool => getCollapsibleToolGroupKind(tool))
-
-    if (groupedTools.length === 0) {
-      projected.push(message)
-      return
-    }
-
-    const groupedToolIds = new Set(groupedTools.map(tool => tool.metadata.tool_call_id))
-    const remainingPendingCalls = pendingCalls.filter(call => !groupedToolIds.has(getToolCallId(call)))
-    const hasAssistantContent = Boolean(
-      String(message?.message || '').trim() || String(message?.reasoning || '').trim()
-    )
-
-    if (message?.role !== 'assistant' || hasAssistantContent || remainingPendingCalls.length > 0) {
-      projected.push({
-        ...message,
-        pendingToolCalls: remainingPendingCalls
-      })
-    }
-
-    projected.push(buildToolGroupMessage(groupedTools, index, [], true))
-  })
-
-  return projected
-}
-
-const TOOL_GROUP_ICONS = {
-  command_tools: 'bash',
-  mcp_tools: 'mcp',
-  mutation_tools: 'edit',
-  readonly_tools: 'search',
-  sub_agent_result_tools: 'skill-relation-chart',
-  todo_tools: 'todo'
-}
-
-const getToolGroupIcon = (kind, messages) => {
-  if (messages.some(isCollapsibleMutationToolMessage)) return TOOL_GROUP_ICONS.mutation_tools
-  return TOOL_GROUP_ICONS[kind] || 'tool'
-}
-
-const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false) => {
-  const kinds = new Set(messages.map(getCollapsibleToolGroupKind).filter(Boolean))
-  const [singleKind] = kinds
-  const kind = messages.length > 0 && kinds.size === 1 ? singleKind : 'mixed_tools'
-  const thoughtCount = thoughts.length
-  const errorCount = messages.filter(isToolGroupErrorMessage).length
-  const seedMessage = messages[0] || thoughts[0] || {}
-  const firstActivity = [...thoughts, ...messages].reduce((earliest, item) => {
-    if (!earliest) return item
-    return (item?.groupOrder ?? index) < (earliest?.groupOrder ?? index) ? item : earliest
-  }, null)
-  const { thoughtOrders, toolOrders } = getWorkflowToolGroupRenderOrders(thoughts, messages)
-  const groupedThoughts = thoughts.map((thought, thoughtIndex) => ({
-    ...thought,
-    renderOrder: thoughtOrders[thoughtIndex]
-  }))
-  const groupedTools = messages.map((tool, toolIndex) => ({
-    ...tool,
-    renderOrder: toolOrders[toolIndex]
-  }))
-
-  return {
-    ...seedMessage,
-    role: 'assistant',
-    displayId: getCollapsedToolGroupExpandId([firstActivity || seedMessage], index),
-    metadata: {
-      ...(seedMessage?.metadata || {}),
-      message_kind: 'tool_group',
-      tool_group_kind: kind,
-      tool_group_thought_count: thoughtCount,
-      tool_group_is_ongoing: isOngoing
-    },
-    groupDisplay: {
-      icon: getToolGroupIcon(kind, messages),
-      thoughtSummary: getToolGroupThoughtSummary(thoughtCount),
-      errorSummary: getToolGroupErrorSummary(errorCount),
-      summary: buildToolGroupSummary(messages)
-    },
-    groupedThoughts,
-    groupedTools
-  }
-}
-
-const isToolGroupBoundaryMessage = message => {
-  if (!message) return true
-  if (isCollapsedToolGroupMessage(message)) return false
-  if (message.role === 'user') return true
-  if (isContextSnapshotMessage(message) || isManualClearContextMessage(message)) return true
-  if (isCompletionReportMessage(message) || isFinishTaskMessage(message)) return true
-  if (isExplorationBatchMessage(message)) return true
-  if (message.role === 'assistant') {
-    return (
-      !isThinkOnlyAssistantMessage(message) && !!props.removeSystemReminder(message?.message || '').trim()
-    )
-  }
-  if (message.role === 'tool') {
-    if (!getCollapsibleToolGroupKind(message)) return true
-  }
-  return false
-}
-
-const isToolGroupOngoingBoundaryMessage = message => {
-  if (!message) return false
-  if (isCollapsedToolGroupMessage(message)) return false
-  if (message.role === 'user') return true
-  if (isContextSnapshotMessage(message) || isManualClearContextMessage(message)) return true
-  if (isCompletionReportMessage(message) || isFinishTaskMessage(message)) return true
-  if (isExplorationBatchMessage(message)) return true
-  if (message.role === 'assistant') {
-    return (
-      !isThinkOnlyAssistantMessage(message) && !!props.removeSystemReminder(message?.message || '').trim()
-    )
-  }
-  if (message.role === 'tool') {
-    if (isApprovalPending(message)) return true
-    if (!getCollapsibleToolGroupKind(message)) return true
-  }
-  return false
-}
-
-const hasOngoingToolGroupAfter = (messages, startIndex) => {
-  for (let index = startIndex; index < messages.length; index += 1) {
-    if (isToolGroupOngoingBoundaryMessage(messages[index])) return false
-  }
-  return true
-}
-
-const isStandaloneOngoingThoughtRun = (messages, startIndex) => {
-  for (let index = startIndex; index < messages.length; index += 1) {
-    const message = messages[index]
-    if (isToolGroupOngoingBoundaryMessage(message)) return false
-    if (getCollapsibleToolGroupKind(message) || isCollapsedToolGroupMessage(message)) return false
-    if (!isThinkOnlyAssistantMessage(message)) return false
-  }
-  return true
-}
-
-const buildGroupedThoughtItem = (message, index, order = index) => ({
-  ...message,
-  displayId: `${message?.displayId || message?.id || `thought_${index}`}:tool_group_thought`,
-  groupOrder: order,
-  sourceMessage: message
+const pendingApprovalIdSet = computed(() => {
+  const ids = (props.pendingApprovalIds || []).map(id => String(id || '').trim()).filter(Boolean)
+  return new Set(ids)
 })
 
-const getToolActivitySeedKind = message =>
-  isThinkOnlyAssistantMessage(message) ||
-  getCollapsibleToolGroupKind(message) ||
-  isCollapsedToolGroupMessage(message)
-
-const collectContiguousToolMessages = (messages, startIndex) => {
-  const tools = []
-  let nextIndex = startIndex
-  while (nextIndex < messages.length && getCollapsibleToolGroupKind(messages[nextIndex])) {
-    tools.push(messages[nextIndex])
-    nextIndex += 1
-  }
-  return { tools, nextIndex }
-}
-
-const collectToolActivityMessage = (message, index, thoughts, tools) => {
-  if (isThinkOnlyAssistantMessage(message)) {
-    thoughts.push(buildGroupedThoughtItem(message, index, message.groupOrder ?? index))
-    return
-  }
-
-  if (isCollapsedToolGroupMessage(message)) {
-    ;(message.groupedThoughts || []).forEach((thought, thoughtIndex) => {
-      thoughts.push(
-        buildGroupedThoughtItem(
-          thought,
-          `${index}_${thoughtIndex}`,
-          thought.groupOrder ?? index + thoughtIndex / 1000
-        )
-      )
-    })
-    ;(message.groupedTools || []).forEach((tool, toolIndex) => {
-      if (getCollapsibleToolGroupKind(tool)) {
-        tools.push({ ...tool, groupOrder: tool.groupOrder ?? index + (toolIndex + 1) / 1000 })
-      }
-    })
-    return
-  }
-
-  if (getCollapsibleToolGroupKind(message)) {
-    tools.push({ ...message, groupOrder: message.groupOrder ?? index })
-  }
-}
-
-const collapseToolActivityGroups = messages => {
-  const collapsed = []
-
-  for (let index = 0; index < messages.length; ) {
-    const current = messages[index]
-
-    if (getToolActivitySeedKind(current)) {
-      if (getCollapsibleToolGroupKind(current)) {
-        const contiguousGroup = collectContiguousToolMessages(messages, index)
-        const nextMessage = messages[contiguousGroup.nextIndex]
-        if (!isThinkOnlyAssistantMessage(nextMessage) && !isCollapsedToolGroupMessage(nextMessage)) {
-          collapsed.push(
-            buildToolGroupMessage(
-              contiguousGroup.tools,
-              index,
-              [],
-              hasOngoingToolGroupAfter(messages, contiguousGroup.nextIndex)
-            )
-          )
-          index = contiguousGroup.nextIndex
-          continue
-        }
-      }
-
-      const thoughts = []
-      const tools = []
-      let nextIndex = index
-      const currentIsPendingThought = isThinkOnlyAssistantMessage(current)
-
-      if (currentIsPendingThought && isStandaloneOngoingThoughtRun(messages, index)) {
-        while (
-          nextIndex < messages.length &&
-          isThinkOnlyAssistantMessage(messages[nextIndex]) &&
-          isStandaloneOngoingThoughtRun(messages, nextIndex)
-        ) {
-          collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
-          nextIndex += 1
-        }
-        collapsed.push(buildToolGroupMessage([], index, thoughts, true))
-        index = nextIndex
-        continue
-      }
-
-      while (nextIndex < messages.length && !isToolGroupBoundaryMessage(messages[nextIndex])) {
-        collectToolActivityMessage(messages[nextIndex], nextIndex, thoughts, tools)
-        nextIndex += 1
-      }
-
-      if (tools.length > 0) {
-        collapsed.push(
-          buildToolGroupMessage(tools, index, thoughts, hasOngoingToolGroupAfter(messages, nextIndex))
-        )
-        index = nextIndex
-        continue
-      }
-    }
-
-    collapsed.push(current)
-    index += 1
-  }
-
-  return collapsed
-}
-
-const visibleMessages = computed(() =>
-  excludeLeadingManualClearContextMarkers(
-    collapseToolActivityGroups(
-      projectPendingToolGroups(
-        collapseAssistantCompletionPairs(
-          collapseRepeatedFinishTaskErrors(
-            props.messages.filter(
-              message => !isHiddenSystemObservation(message) || isManualClearContextMessage(message)
-            )
-          )
-        )
-      )
-    )
-  )
+const collapsedMessages = computed(() =>
+  projectWorkflowMessageList(props.messages, {
+    pendingApprovalIds: pendingApprovalIdSet.value,
+    removeSystemReminder: props.removeSystemReminder,
+    translate: t
+  })
 )
+const hasCollapsedMessageOverflow = computed(
+  () => collapsedMessages.value.length > visibleMessageLimit.value
+)
+const hasHiddenEarlierMessages = computed(
+  () => hasCollapsedMessageOverflow.value || props.hiddenEarlierMessageCount > 0
+)
+const visibleMessages = computed(() => collapsedMessages.value.slice(-visibleMessageLimit.value))
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
@@ -2408,6 +1904,8 @@ const isStreamingThoughtMergedIntoToolGroup = message =>
   message === lastVisibleMessage.value &&
   isCollapsedToolGroupMessage(message) &&
   (message.groupedTools?.length || 0) > 0
+const getToolGroupThoughtSummary = count =>
+  count ? t('workflow.toolGroups.thoughtChangeCount', { count }) : ''
 const getCollapsedToolGroupThoughtSummary = message => {
   const groupedThoughtCount = Array.isArray(message?.groupedThoughts)
     ? message.groupedThoughts.length
@@ -2431,10 +1929,6 @@ const toggleReasoningForMessage = message => {
   const messageId = String(message?.displayId || message?.id || '')
   if (messageId) emit('toggle-reasoning', messageId)
 }
-const pendingApprovalIdSet = computed(() => {
-  const ids = (props.pendingApprovalIds || []).map(id => String(id || '').trim()).filter(Boolean)
-  return new Set(ids)
-})
 const getVisibleMessageIndex = message =>
   visibleMessages.value.findIndex(item => item.displayId === message?.displayId)
 const getMessageToolCallId = message => String(message?.metadata?.tool_call_id || '').trim()
@@ -2498,6 +1992,11 @@ const isToolGroupItemRunning = tool => {
   if (isToolAwaitingExecution(tool)) return true
   const toolCallId = String(tool?.metadata?.tool_call_id || '').trim()
   return !!toolCallId && approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(tool)
+}
+
+const getToolRenderStatusClass = message => {
+  if (message?.toolDisplay?.isError || message?.isRejected) return 'status-error'
+  return isToolGroupItemRunning(message) ? 'status-running' : 'status-success'
 }
 
 const isCollapsedToolGroupRunning = message => {
@@ -2565,8 +2064,6 @@ const getErrorAlertContent = message => {
     .replace(/^\[?error\]?:\s*/i, '')
     .trim()
 }
-
-const isExplorationBatchMessage = message => message?.metadata?.message_kind === 'exploration_batch'
 
 const getExplorationBatchSummary = message => {
   const batch = message?.explorationBatch
@@ -2652,45 +2149,39 @@ const setApprovalDraft = (toolCallId, value) => {
 }
 
 const onApproveTool = toolCallId => {
-  if (toolCallId) approvedSubmissionIds.add(toolCallId)
+  if (!toolCallId || props.isBatchApprovalSubmitting) return
+  approvedSubmissionIds.add(toolCallId)
   emit('approve-tool', toolCallId)
 }
 
 const onApproveAllTool = toolCallId => {
-  if (toolCallId) approvedSubmissionIds.add(toolCallId)
+  if (!toolCallId || props.isBatchApprovalSubmitting) return
+  approvedSubmissionIds.add(toolCallId)
   emit('approve-all-tool', toolCallId)
 }
 
 const onRejectTool = toolCallId => {
+  if (!toolCallId || props.isBatchApprovalSubmitting) return
   approvedSubmissionIds.delete(toolCallId)
   emit('reject-tool', toolCallId, getApprovalDraft(toolCallId))
 }
 
 const onApproveAllPending = toolCallId => {
-  for (const pendingToolCallId of getVisiblePendingApprovalIds()) {
+  if (props.isBatchApprovalSubmitting) return
+  const pendingToolCallIds = getVisiblePendingApprovalIds()
+  for (const pendingToolCallId of pendingToolCallIds) {
     approvedSubmissionIds.add(pendingToolCallId)
   }
   emit('approve-all-pending', {
     startingToolCallId: toolCallId,
-    orderedToolCallIds: getVisiblePendingApprovalIds()
+    orderedToolCallIds: pendingToolCallIds
   })
 }
 
 const getChoiceKey = message =>
   message.metadata?.tool_call_id || message.displayId || message.id || ''
 
-const getAskUserResponseItems = message => {
-  const content = message?.askUserResponse || message?.message || ''
-  const match = content.match(/<ask_user_response>\s*([\s\S]*?)\s*<\/ask_user_response>/i)
-  if (!match) return []
-
-  try {
-    const parsed = JSON.parse(match[1])
-    return Array.isArray(parsed) ? parsed : []
-  } catch (error) {
-    return []
-  }
-}
+const getAskUserResponseItems = getWorkflowAskUserResponseItems
 
 const formatAskUserAnswer = item => {
   if (!item) return ''
@@ -3087,6 +2578,11 @@ const setAskUserSupplement = (message, title, value) => {
   }))
 }
 
+const selectAskUserOtherIfUnset = (message, title) => {
+  if (getAskUserSelection(message, title)) return
+  setAskUserSelection(message, title, OTHER_ASK_USER_VALUE)
+}
+
 const getMessageIdentity = message => ({
   toolCallId: String(message?.metadata?.tool_call_id || '').trim(),
   displayId: String(message?.displayId || '').trim(),
@@ -3201,7 +2697,10 @@ const submitAskUserResponse = message => {
     return
   }
 
-  emit('submit-ask-user', result.content)
+  emit('submit-ask-user', {
+    content: result.content,
+    toolCallId: getMessageToolCallId(message)
+  })
 }
 
 const performScrollToBottom = (force = false, frameBudget = 3) => {
@@ -3270,13 +2769,18 @@ const streamingLayoutState = computed(() => {
 })
 
 watch(
-  visibleMessages,
-  () => {
+  [visibleMessages, collapsedMessages],
+  ([messages, collapsed]) => {
+    emit('message-projection-count', {
+      visible: messages.length,
+      total: collapsed.length,
+      hasOverflow: collapsed.length > visibleMessageLimit.value
+    })
     performScrollToBottom()
     scheduleMeasureUserMessageOverflow()
     syncMessageContentResizeObserver()
   },
-  { flush: 'post' }
+  { flush: 'post', immediate: true }
 )
 
 watch(
@@ -3292,6 +2796,7 @@ watch(
   () => props.currentWorkflowId,
   () => {
     isRevealingEarlierTaskGroup.value = false
+    visibleMessageLimit.value = MAX_VISIBLE_WORKFLOW_MESSAGES
     shouldAutoScroll.value = true
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}

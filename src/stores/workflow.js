@@ -14,7 +14,12 @@ import {
 import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
-import { getWorkflowPersistedMessageId, inferWorkflowToolExecutionStatus, mergeWorkflowMessagePages } from '@/composables/workflow/messageProjectionRules';
+import {
+  getWorkflowPersistedMessageId,
+  hasIncompleteWorkflowToolCallChain,
+  inferWorkflowToolExecutionStatus,
+  mergeWorkflowMessagePages
+} from '@/composables/workflow/messageProjectionRules';
 import {
   appendMissingPendingToolMessages,
   clearExecutionContextPendingTools,
@@ -146,6 +151,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const messageWindowBeforeId = ref(null);
   const hiddenEarlierMessageCount = ref(0);
   const hiddenCompletedTaskCount = ref(0);
+  const hasMoreInCurrentTask = ref(false);
   const todoList = ref([]);
   const messageQueue = ref([]);
   const isRunning = ref(false);
@@ -1264,6 +1270,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageWindowBeforeId.value = null;
     hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = 0;
+    hasMoreInCurrentTask.value = false;
     currentWorkflowId.value = workflowId;
     lastTaskCompletion.value = null;
     messageQueue.value = [];
@@ -1324,6 +1331,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
+      hasMoreInCurrentTask.value = snapshot.hasMoreInCurrentTask === true;
       clearApprovalSubmissionsForSession(workflowId);
       isLoadingMessages.value = false;
 
@@ -1869,6 +1877,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       hiddenCompletedTaskCount.value = Number(snapshot.hiddenCompletedTaskCount) || 0;
+      hasMoreInCurrentTask.value = snapshot.hasMoreInCurrentTask === true;
 
       // 重建 Task Ledger
       if (taskLedgerEnabled.value) {
@@ -1879,11 +1888,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   };
 
-  const loadEarlierMessages = async () => {
+  const loadEarlierMessages = async ({ withinCurrentTask = false } = {}) => {
     const workflowId = currentWorkflowId.value;
     const beforeMessageId = messageWindowBeforeId.value;
     const requestRevision = messageLoadRevision;
-    if (!workflowId || !beforeMessageId || hiddenEarlierMessageCount.value <= 0) return false;
+    if (
+      !workflowId ||
+      !beforeMessageId ||
+      hiddenEarlierMessageCount.value <= 0 ||
+      (withinCurrentTask && !hasMoreInCurrentTask.value)
+    ) return false;
 
     const page = await invokeWrapper('get_earlier_workflow_message_page', {
       sessionId: workflowId,
@@ -1903,6 +1917,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messages.value = mergeWorkflowMessagePages(earlierMessages, messages.value);
     messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId;
     hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0;
+    hasMoreInCurrentTask.value = page.hasMoreInCurrentTask === true;
     return earlierMessages.length > 0;
   };
 
@@ -1931,8 +1946,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageWindowBeforeId.value = window.beforeMessageId ?? beforeMessageId;
     hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = Number(window.hiddenCompletedTaskCount) || 0;
+    hasMoreInCurrentTask.value = false;
     return earlierMessages.length > 0;
   };
+
+  const hasIncompleteMessageToolChain = computed(() =>
+    hasIncompleteWorkflowToolCallChain(messages.value)
+  );
 
   const clearCurrentWorkflow = () => {
     if (currentWorkflowId.value) {
@@ -1947,6 +1967,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageWindowBeforeId.value = null;
     hiddenEarlierMessageCount.value = 0;
     hiddenCompletedTaskCount.value = 0;
+    hasMoreInCurrentTask.value = false;
     todoList.value = [];
     isRunning.value = false;
     waitReason.value = null;
@@ -1994,6 +2015,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messageWindowBeforeId,
     hiddenEarlierMessageCount,
     hiddenCompletedTaskCount,
+    hasMoreInCurrentTask,
+    hasIncompleteMessageToolChain,
     todoList,
     messageQueue,
     isRunning,

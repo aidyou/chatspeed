@@ -8,6 +8,10 @@ This document defines the mandatory development rules for `src-tauri/src/workflo
 
 Its purpose is to prevent architectural drift, avoid parallel logic branches, and keep workflow behavior aligned with `work/plan.md`.
 
+## Related Design Records
+
+- [Compression Objective Handoff](COMPRESSION_OBJECTIVE_HANDOFF.md): confirmed objective-authority loss across context compression and the invariants required before repairing it.
+
 ## 1. Core Intent
 
 The workflow runtime must remain a **single-state-machine system**:

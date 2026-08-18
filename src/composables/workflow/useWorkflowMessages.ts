@@ -10,6 +10,7 @@ import {
   isWorkflowManualClearContextMessage,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
+  resolveAskUserResponse,
   selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups
 } from './messageProjectionRules'
@@ -39,7 +40,7 @@ export function useWorkflowMessages(options = {}) {
   const workflowStore = useWorkflowStore()
   const visibleTaskGroupCount =
     options.visibleTaskGroupCount || ref(DEFAULT_VISIBLE_TASK_GROUPS)
-  const visibleTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
+  const loadedTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
 
   const expandedMessages = ref(new Set())
   const expandedReasonings = ref(new Set())
@@ -61,6 +62,17 @@ export function useWorkflowMessages(options = {}) {
       .replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '')
       .trimEnd()
   }
+
+  const isHiddenAskUserResponse = message =>
+    message?.role === 'user' &&
+    (message?.metadata?.ui_visibility || message?.metadata?.uiVisibility) === 'hide' &&
+    (message?.metadata?.ask_user_response === true ||
+      /<ask_user_response>\s*[\s\S]*?<\/ask_user_response>/i.test(message?.message || ''))
+
+  const isApprovedPlanAnchor = message =>
+    message?.role === 'system' &&
+    (message?.messageKind || message?.message_kind) === 'summary' &&
+    (message?.messageSubtype || message?.message_subtype) === 'approved_plan'
 
   const isHiddenSystemObservation = message => {
     const uiVisibility = message?.metadata?.ui_visibility || message?.metadata?.uiVisibility
@@ -86,7 +98,19 @@ export function useWorkflowMessages(options = {}) {
   }
 
   const getMessageToolCallId = message =>
-    String(message?.metadata?.tool_call_id || message?.metadata?.toolCallId || '')
+    String(message?.metadata?.tool_call_id || message?.metadata?.toolCallId || '').trim()
+
+  const askUserResponsesByToolCallId = computed(() => {
+    const responses = new Map()
+
+    for (const message of workflowStore.messages || []) {
+      if (!isHiddenAskUserResponse(message)) continue
+      const toolCallId = getMessageToolCallId(message)
+      if (toolCallId) responses.set(toolCallId, message.message || '')
+    }
+
+    return responses
+  })
 
   const isAcceptedFinishTaskMessage = message => {
     if (message?.role !== 'tool' || !isFinishTaskMessage(message)) return false
@@ -115,6 +139,7 @@ export function useWorkflowMessages(options = {}) {
   const filteredWorkflowMessages = computed(() =>
     dedupeQueuedUserMessageProjection(
       (workflowStore.messages || []).filter(message => {
+        if (isApprovedPlanAnchor(message) || isHiddenAskUserResponse(message)) return false
         if (isHiddenSystemObservation(message) && !isSubAgentCompletionObservation(message)) {
           return false
         }
@@ -267,7 +292,8 @@ export function useWorkflowMessages(options = {}) {
       isApproved: !!message?.isApproved,
       toolDisplay: message?.toolDisplay || null,
       pendingToolCalls: message?.pendingToolCalls || [],
-      subAgentCard: message?.subAgentCard || null
+      subAgentCard: message?.subAgentCard || null,
+      askUserResponse: message?.askUserResponse || ''
     })
 
   const reuseUnchangedEnhancedMessages = (cachedEntry, nextMessages) => {
@@ -398,7 +424,7 @@ export function useWorkflowMessages(options = {}) {
   watch(
     [() => workflowStore.currentWorkflowId, taskMessageWindowAnchor],
     () => {
-      visibleTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
+      loadedTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
     },
     { flush: 'sync' }
   )
@@ -406,7 +432,7 @@ export function useWorkflowMessages(options = {}) {
   const visibleTaskMessageWindow = computed(() =>
     selectVisibleWorkflowMessageWindow(
       visibleTaskGroupsState.value.groups,
-      visibleTaskMessageCount.value
+      loadedTaskMessageCount.value
     )
   )
 
@@ -415,16 +441,16 @@ export function useWorkflowMessages(options = {}) {
   )
 
   const hiddenEarlierMessageCount = computed(
-    () =>
-      (workflowStore.hiddenEarlierMessageCount || 0) +
-      loadedHiddenEarlierMessageCount.value
+    () => (workflowStore.hiddenEarlierMessageCount || 0) + loadedHiddenEarlierMessageCount.value
   )
 
-  const revealEarlierMessages = () => {
+  const expandLoadedTaskMessageWindow = () => {
     if (loadedHiddenEarlierMessageCount.value <= 0) return false
-    visibleTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
+    loadedTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
     return true
   }
+
+  const revealEarlierMessages = () => expandLoadedTaskMessageWindow()
 
   const visibleCompletedTaskGroupCount = computed(
     () => visibleTaskGroupsState.value.groups.filter(group => group.isCompleted).length
@@ -505,12 +531,10 @@ export function useWorkflowMessages(options = {}) {
         return
       }
 
-      const isHiddenAskUserResponse =
-        message?.role === 'user' &&
-        message?.metadata?.ui_visibility === 'hide' &&
-        /<ask_user_response>\s*[\s\S]*?<\/ask_user_response>/i.test(message?.message || '')
-      if (isHiddenAskUserResponse && pendingAskUserSourceOrder !== null) {
-        askUserResponsesBySourceOrder.set(pendingAskUserSourceOrder, message.message)
+      if (isHiddenAskUserResponse(message) && pendingAskUserSourceOrder !== null) {
+        if (!getMessageToolCallId(message)) {
+          askUserResponsesBySourceOrder.set(pendingAskUserSourceOrder, message.message)
+        }
         pendingAskUserSourceOrder = null
       }
     })
@@ -1051,7 +1075,11 @@ export function useWorkflowMessages(options = {}) {
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),
           subAgentCard: buildSubAgentCard(message),
-          askUserResponse: askUserResponsesBySourceOrder.get(message.sourceOrder) || '',
+          askUserResponse: resolveAskUserResponse(
+            message,
+            askUserResponsesByToolCallId.value,
+            askUserResponsesBySourceOrder
+          ),
           pendingToolCalls,
           isRejected,
           isApproved
@@ -1163,7 +1191,7 @@ export function useWorkflowMessages(options = {}) {
     })
   })
 
-  const enhancedMessages = computed(() => {
+  const allEnhancedMessages = computed(() => {
     const messages = rawEnhancedMessages.value
     const displayIdCounts = new Map()
 
@@ -1185,6 +1213,8 @@ export function useWorkflowMessages(options = {}) {
       }
     })
   })
+
+  const enhancedMessages = allEnhancedMessages
 
   const lastAssistantMessage = computed(() => {
     for (let index = enhancedMessages.value.length - 1; index >= 0; index -= 1) {
@@ -1895,6 +1925,7 @@ export function useWorkflowMessages(options = {}) {
     hiddenEarlierMessageCount,
     hiddenCompletedTaskGroupCount,
     revealEarlierMessages,
+    expandLoadedTaskMessageWindow,
     revealLoadedEarlierTaskGroup,
     lastAssistantMessage,
     toggleMessageExpand,

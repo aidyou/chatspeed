@@ -5,7 +5,8 @@
 use crate::db::MainStore;
 use crate::workflow::react::events::{WorkflowEventRecord, WorkflowEventType};
 use crate::workflow::react::types::{
-    ExecutionContext, PendingFinalReview, PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
+    EffectiveTaskObjective, ExecutionContext, PendingFinalReview, PendingTool, RuntimeState,
+    SubAgentCompletion, WaitReason,
 };
 use std::sync::Arc;
 use thiserror::Error;
@@ -75,6 +76,8 @@ pub struct EventReducer {
     last_action_summary: Option<String>,
     last_event_id: Option<i64>,
     waiting_on_sub_agent_id: Option<String>,
+    awaiting_user_tool_call_id: Option<String>,
+    effective_task_objective: Option<EffectiveTaskObjective>,
     sub_agent_sessions: Vec<String>,
     pending_sub_agent_completions: Vec<SubAgentCompletion>,
     pending_final_review: Option<PendingFinalReview>,
@@ -91,6 +94,8 @@ impl EventReducer {
             last_action_summary: None,
             last_event_id: None,
             waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -111,6 +116,7 @@ impl EventReducer {
             "state_changed" => WorkflowEventType::StateChanged,
             "wait_entered" => WorkflowEventType::WaitEntered,
             "user_input_received" => WorkflowEventType::UserInputReceived,
+            "effective_task_objective_changed" => WorkflowEventType::EffectiveTaskObjectiveChanged,
             "approval_requested" => WorkflowEventType::ApprovalRequested,
             "approval_resolved" => WorkflowEventType::ApprovalResolved,
             "tool_started" => WorkflowEventType::ToolStarted,
@@ -143,6 +149,9 @@ impl EventReducer {
                     }
                 })?;
                 self.state = map_ui_state_to_runtime(to_state)?;
+                if to_state != "awaiting_user" {
+                    self.awaiting_user_tool_call_id = None;
+                }
             }
             WorkflowEventType::WaitEntered => {
                 self.state = RuntimeState::Waiting;
@@ -154,6 +163,14 @@ impl EventReducer {
                         }
                     })?;
                 self.wait_reason = Some(parse_wait_reason(wait_reason_str)?);
+                self.awaiting_user_tool_call_id = if self.wait_reason == Some(WaitReason::UserInput)
+                {
+                    event.event_data["awaiting_user_tool_call_id"]
+                        .as_str()
+                        .map(str::to_string)
+                } else {
+                    None
+                };
 
                 if let Some(tools) = event.event_data["pending_tools"].as_array() {
                     self.pending_tools.clear();
@@ -176,8 +193,30 @@ impl EventReducer {
                 if self.wait_reason == Some(WaitReason::UserInput) {
                     self.wait_reason = None;
                     self.state = RuntimeState::Running;
+                    self.awaiting_user_tool_call_id = None;
                 }
                 self.current_step += 1;
+            }
+            WorkflowEventType::EffectiveTaskObjectiveChanged => {
+                let objective = event
+                    .event_data
+                    .get("effective_task_objective")
+                    .cloned()
+                    .ok_or_else(|| RecoveryError::MissingEventData {
+                        event_type: "effective_task_objective_changed".to_string(),
+                        field: "effective_task_objective".to_string(),
+                    })?;
+                self.effective_task_objective = if objective.is_null() {
+                    None
+                } else {
+                    Some(serde_json::from_value(objective).map_err(|error| {
+                        RecoveryError::ReplayFailed {
+                            reason: format!(
+                                "invalid effective_task_objective event payload: {error}"
+                            ),
+                        }
+                    })?)
+                };
             }
             WorkflowEventType::ApprovalRequested => {
                 let tool_call_id = event.event_data["tool_call_id"].as_str().ok_or_else(|| {
@@ -372,6 +411,8 @@ impl EventReducer {
             last_event_id: self.last_event_id,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: self.waiting_on_sub_agent_id,
+            awaiting_user_tool_call_id: self.awaiting_user_tool_call_id,
+            effective_task_objective: self.effective_task_objective,
             sub_agent_sessions: self.sub_agent_sessions,
             pending_sub_agent_completions: self.pending_sub_agent_completions,
             pending_final_review: self.pending_final_review,
@@ -613,6 +654,69 @@ mod tests {
         assert_eq!(ctx.pending_tools.len(), 1);
         assert_eq!(ctx.pending_tools[0].tool_call_id, "call_123");
         assert_eq!(ctx.pending_tools[0].tool_name, "bash");
+    }
+
+    #[test]
+    fn test_reducer_preserves_and_resolves_ask_user_tool_call_id() {
+        let mut reducer = EventReducer::new("test-session".to_string());
+        let wait_event = WorkflowEventRecord {
+            id: 1,
+            session_id: "test-session".to_string(),
+            event_type: "wait_entered".to_string(),
+            event_version: "1.0.0".to_string(),
+            event_data: serde_json::json!({
+                "wait_reason": "user_input",
+                "pending_tools": [],
+                "awaiting_user_tool_call_id": "ask-user-1",
+            }),
+            created_at: "2026-01-01 00:00:00".to_string(),
+        };
+        reducer.apply_event(&wait_event).unwrap();
+        assert_eq!(
+            reducer.awaiting_user_tool_call_id.as_deref(),
+            Some("ask-user-1")
+        );
+
+        let user_input = WorkflowEventRecord {
+            id: 2,
+            session_id: "test-session".to_string(),
+            event_type: "user_input_received".to_string(),
+            event_version: "1.0.0".to_string(),
+            event_data: serde_json::json!({ "content": "answer" }),
+            created_at: "2026-01-01 00:00:01".to_string(),
+        };
+        reducer.apply_event(&user_input).unwrap();
+        let context = reducer.build();
+        assert_eq!(context.state, RuntimeState::Running);
+        assert_eq!(context.wait_reason, None);
+        assert_eq!(context.awaiting_user_tool_call_id, None);
+    }
+
+    #[test]
+    fn test_reducer_restores_effective_task_objective_from_structured_event() {
+        let mut reducer = EventReducer::new("test-session".to_string());
+        let mut objective = EffectiveTaskObjective::new(11, "Audit only".to_string());
+        objective.append_directive(12, "Implement the confirmed fixes".to_string());
+        let objective_event = WorkflowEventRecord {
+            id: 1,
+            session_id: "test-session".to_string(),
+            event_type: "effective_task_objective_changed".to_string(),
+            event_version: "1.0.0".to_string(),
+            event_data: serde_json::json!({
+                "source_message_id": 12,
+                "effective_task_objective": objective,
+            }),
+            created_at: "2026-01-01 00:00:00".to_string(),
+        };
+
+        reducer.apply_event(&objective_event).unwrap();
+        let context = reducer.build();
+        let restored = context
+            .effective_task_objective
+            .expect("structured objective should survive event replay");
+        assert_eq!(restored.initial_source_message_id, 11);
+        assert_eq!(restored.latest_source_message_id, 12);
+        assert_eq!(restored.source_message_ids(), vec![11, 12]);
     }
 
     #[test]
@@ -1144,6 +1248,10 @@ mod tests {
                 details: Some(serde_json::json!("List files")),
                 display_type: Some("text".to_string()),
             });
+            ctx.effective_task_objective = Some(EffectiveTaskObjective::new(
+                41,
+                "Implement the confirmed fix".to_string(),
+            ));
 
             {
                 let s = store.as_ref();
@@ -1166,6 +1274,13 @@ mod tests {
                     assert_eq!(context.state, RuntimeState::Waiting);
                     assert_eq!(context.wait_reason, Some(WaitReason::Approval));
                     assert_eq!(context.pending_tools.len(), 1);
+                    assert_eq!(
+                        context
+                            .effective_task_objective
+                            .as_ref()
+                            .map(|objective| objective.latest_source_message_id),
+                        Some(41)
+                    );
                 }
                 _ => panic!("Expected SnapshotHit, got {:?}", result),
             }

@@ -10,6 +10,7 @@ import {
   getStructuredWorkflowToolName,
   getWorkflowPersistedMessageId,
   getWorkflowToolGroupRenderOrders,
+  hasIncompleteWorkflowToolCallChain,
   hasOpenWorkflowTaskFrame,
   inferWorkflowToolExecutionStatus,
   isPendingApprovalEntryForTool,
@@ -18,7 +19,9 @@ import {
   mergeManualClearContextMarkersIntoPreviousGroups,
   mergeWorkflowMessagePages,
   normalizeVisibleCompletionReport,
+  projectWorkflowMessageList,
   reconcileWorkflowTaskWindowState,
+  resolveAskUserResponse,
   resolveWorkflowPhaseFromPlanningMode,
   selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups,
@@ -43,6 +46,193 @@ assert.ok(
   ),
   'tool-group render orders must stay valid CSS flex-order integers'
 )
+
+assert.equal(
+  hasIncompleteWorkflowToolCallChain([
+    {
+      id: 'assistant-declaration',
+      role: 'assistant',
+      metadata: { tool_calls: [{ id: 'tool-read', function: { name: 'read_file' } }] }
+    },
+    {
+      id: 'tool-result',
+      role: 'tool',
+      metadata: { tool_call_id: 'tool-read', tool_name: 'read_file', execution_status: 'completed' }
+    }
+  ]),
+  false,
+  'a dedicated tool result with its assistant declaration is a complete display chain'
+)
+assert.equal(
+  hasIncompleteWorkflowToolCallChain([
+    {
+      id: 'tool-result-without-declaration',
+      role: 'tool',
+      metadata: { tool_call_id: 'tool-missing', tool_name: 'read_file' }
+    }
+  ]),
+  true,
+  'a page beginning at a tool result must request its missing assistant declaration'
+)
+assert.equal(
+  hasIncompleteWorkflowToolCallChain([
+    {
+      id: 'ask-user-answer-without-source',
+      role: 'user',
+      stepType: 'Observe',
+      message: '<ask_user_response>[]</ask_user_response>',
+      metadata: { ui_visibility: 'hide' }
+    }
+  ]),
+  true,
+  'a hidden ask_user answer must not be loaded without its source tool record'
+)
+
+const askUserResponsesByToolCallId = new Map([
+  ['ask-user-current', '<ask_user_response>["canonical"]</ask_user_response>']
+])
+const legacyAskUserResponsesBySourceOrder = new Map([
+  [7, '<ask_user_response>["legacy"]</ask_user_response>']
+])
+assert.equal(
+  resolveAskUserResponse(
+    {
+      role: 'tool',
+      sourceOrder: 7,
+      metadata: { tool_name: 'ask_user', tool_call_id: 'ask-user-current' }
+    },
+    askUserResponsesByToolCallId,
+    legacyAskUserResponsesBySourceOrder
+  ),
+  '<ask_user_response>["canonical"]</ask_user_response>',
+  'canonical ask_user answers must associate by tool_call_id instead of transcript position'
+)
+assert.equal(
+  resolveAskUserResponse(
+    {
+      role: 'tool',
+      sourceOrder: 7,
+      metadata: { tool_name: 'ask_user', tool_call_id: 'ask-user-unanswered' }
+    },
+    askUserResponsesByToolCallId,
+    legacyAskUserResponsesBySourceOrder
+  ),
+  '',
+  'a missing canonical answer must not fall back to a positionally adjacent legacy response'
+)
+assert.equal(
+  resolveAskUserResponse(
+    {
+      role: 'tool',
+      sourceOrder: 7,
+      metadata: { tool_name: 'ask_user' }
+    },
+    askUserResponsesByToolCallId,
+    legacyAskUserResponsesBySourceOrder
+  ),
+  '<ask_user_response>["legacy"]</ask_user_response>',
+  'position matching remains a compatibility path only for historic rows without tool_call_id'
+)
+
+const projectMessageList = (messages, options = {}) =>
+  projectWorkflowMessageList(messages, {
+    removeSystemReminder: value => String(value || '').replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, ''),
+    translate: (key, values = {}) => `${key}:${values.count ?? ''}`,
+    ...options
+  })
+
+const projectedToolActivity = projectMessageList([
+  { id: 'thought-1', role: 'assistant', reasoning: 'Inspect the current code', message: '' },
+  {
+    id: 'read-1',
+    role: 'tool',
+    groupOrder: 1,
+    metadata: { tool_call_id: 'read-1', tool_name: 'read_file', execution_status: 'completed' },
+    toolDisplay: { summary: 'Read src/App.vue' }
+  },
+  {
+    id: 'search-1',
+    role: 'tool',
+    groupOrder: 2,
+    metadata: { tool_call_id: 'search-1', tool_name: 'grep', execution_status: 'completed' },
+    toolDisplay: { summary: 'Search render rules' }
+  },
+  { id: 'next-user', role: 'user', message: 'Continue' }
+])
+assert.equal(projectedToolActivity.length, 2)
+assert.equal(projectedToolActivity[0].metadata.message_kind, 'tool_group')
+assert.equal(projectedToolActivity[0].metadata.tool_group_is_ongoing, false)
+assert.deepEqual(
+  projectedToolActivity[0].groupedThoughts.map(message => message.id),
+  ['thought-1'],
+  'a thought followed by tool activity must project into that tool group'
+)
+assert.deepEqual(
+  projectedToolActivity[0].groupedTools.map(message => message.id),
+  ['read-1', 'search-1'],
+  'contiguous read/search observations must retain their durable order inside one group'
+)
+
+const pendingApprovalProjection = projectMessageList(
+  [
+    {
+      id: 'pending-write',
+      role: 'tool',
+      metadata: { tool_call_id: 'pending-write', tool_name: 'write_file', approval_status: 'pending' },
+      toolDisplay: { summary: 'Write src/App.vue' }
+    }
+  ],
+  { pendingApprovalIds: new Set(['pending-write']) }
+)
+assert.equal(
+  pendingApprovalProjection[0].metadata.message_kind,
+  undefined,
+  'canonical pending approvals must remain standalone instead of joining a tool group'
+)
+
+const runningPendingProjection = projectMessageList([
+  {
+    id: 'assistant-with-pending-tools',
+    role: 'assistant',
+    message: '',
+    reasoning: '',
+    pendingToolCalls: [
+      {
+        id: 'pending-read',
+        toolName: 'read_file',
+        groupOrder: 0,
+        summary: 'Read src/App.vue'
+      }
+    ]
+  }
+])
+assert.equal(runningPendingProjection.length, 1)
+assert.equal(runningPendingProjection[0].metadata.message_kind, 'tool_group')
+assert.equal(runningPendingProjection[0].metadata.tool_group_is_ongoing, true)
+assert.equal(
+  runningPendingProjection[0].groupedTools[0].metadata.tool_call_id,
+  'pending-read',
+  'a pending auto-executed tool must use the same stable tool-call identity as its final observation'
+)
+
+const repeatedCompletionErrors = projectMessageList([
+  {
+    id: 'finish-error-1',
+    role: 'tool',
+    message: 'Completion rejected',
+    metadata: { tool_name: 'complete_workflow' },
+    toolDisplay: { isError: true, summary: 'Completion rejected' }
+  },
+  {
+    id: 'finish-error-2',
+    role: 'tool',
+    message: 'Completion rejected',
+    metadata: { tool_name: 'complete_workflow' },
+    toolDisplay: { isError: true, summary: 'Completion rejected' }
+  }
+])
+assert.equal(repeatedCompletionErrors.length, 1)
+assert.equal(repeatedCompletionErrors[0].metadata.finish_task_error_count, 2)
 
 const finalReviewPendingMessage = {
   metadata: {

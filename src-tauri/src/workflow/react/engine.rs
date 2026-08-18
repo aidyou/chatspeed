@@ -51,8 +51,9 @@ use crate::workflow::react::{
     sinks::{Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        ExecutionContext, GatewayPayload, PendingCompletionReport, PendingTool, QueuedUserMessage,
-        RuntimeState, StepType, SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
+        EffectiveTaskObjective, ExecutionContext, GatewayPayload, PendingCompletionReport,
+        PendingTool, QueuedUserMessage, RuntimeState, StepType, SubAgentCompletion, WaitReason,
+        WorkflowSignal, WorkflowState,
     },
 };
 
@@ -205,6 +206,10 @@ pub struct WorkflowExecutor {
     pub removed_queued_user_message_ids: HashSet<String>,
     /// Phase 7: ID of sub-agent this session is waiting for (Call model)
     pub sub_agent_id: Option<String>,
+    /// Canonical `ask_user` call currently awaiting a response.
+    pub(crate) awaiting_user_tool_call_id: Option<String>,
+    /// Structured user directives that define the active task across compression and recovery.
+    pub(crate) effective_task_objective: Option<EffectiveTaskObjective>,
     /// Phase 7: All sub-agent session IDs created by this parent session.
     pub sub_agent_sessions: Vec<String>,
     /// Durable sub-agent completions restored from snapshot but not yet consumed.
@@ -804,11 +809,13 @@ impl WorkflowExecutor {
     async fn persist_compression_summary(
         &mut self,
         summary: String,
+        task_goal_state: Option<crate::workflow::react::types::TaskGoalState>,
         compressed_until_message_id: i64,
     ) -> Result<(), WorkflowEngineError> {
         self.context
-            .compress(
+            .compress_with_task_goal_state(
                 summary,
+                task_goal_state,
                 self.current_step as i32,
                 compressed_until_message_id,
             )
@@ -853,6 +860,13 @@ impl WorkflowExecutor {
             return Ok(false);
         }
 
+        let task_goal_ledger = matches!(mode, CompressionMode::Blocking)
+            .then(|| {
+                self.context
+                    .task_goal_ledger_for_compression(compressed_until_message_id)
+            })
+            .transpose()?;
+
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
             is_compressing: true,
             message: t!("workflow.compression_in_progress").to_string(),
@@ -877,6 +891,7 @@ impl WorkflowExecutor {
                 mode,
                 compressed_until_message_id,
                 max_output_tokens,
+                task_goal_ledger.as_ref(),
             )
             .await;
 
@@ -893,9 +908,13 @@ impl WorkflowExecutor {
         .await?;
 
         match compression_result {
-            Ok(summary) => {
-                self.persist_compression_summary(summary, compressed_until_message_id)
-                    .await?;
+            Ok(result) => {
+                self.persist_compression_summary(
+                    result.summary,
+                    result.task_goal_state,
+                    compressed_until_message_id,
+                )
+                .await?;
                 log::info!(
                     "[Workflow][session={}][phase=compression] Blocking compression completed through boundary {} ({})",
                     self.session_id,
@@ -1092,7 +1111,7 @@ impl WorkflowExecutor {
 
         self.background_compression_retry_state
             .remove(&compressed_until_message_id);
-        self.persist_compression_summary(summary, compressed_until_message_id)
+        self.persist_compression_summary(summary, None, compressed_until_message_id)
             .await
     }
 
@@ -1170,6 +1189,7 @@ impl ReActExecutor for WorkflowExecutor {
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.save_snapshot().await?;
         self.context.begin_manual_clear_context_segment(0).await?;
+        self.clear_effective_task_objective("manual_clear_context")?;
         self.state = WorkflowState::Pending;
         self.current_step = 0;
         self.consecutive_no_tool_calls = 0;
@@ -1308,6 +1328,7 @@ impl WorkflowExecutor {
         self.recovery_error = None;
         self.queued_user_messages.clear();
         self.sub_agent_id = None;
+        self.awaiting_user_tool_call_id = None;
         self.pending_sub_agent_completions.clear();
         self.pending_final_review = None;
         self.pending_completion_reports.clear();
@@ -1516,6 +1537,8 @@ impl WorkflowExecutor {
             applied_queued_user_message_ids: HashSet::new(),
             removed_queued_user_message_ids: HashSet::new(),
             sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
             sub_agent_sessions: Vec::new(),
             pending_sub_agent_completions: Vec::new(),
             pending_final_review: None,
@@ -1743,6 +1766,8 @@ impl WorkflowExecutor {
             .get_execution_context(&self.session_id)
         {
             self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
+            self.awaiting_user_tool_call_id = context.awaiting_user_tool_call_id.clone();
+            self.effective_task_objective = context.effective_task_objective.clone();
             self.sub_agent_sessions = context.sub_agent_sessions.clone();
             self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
             self.pending_final_review = context.pending_final_review.clone();
@@ -1821,6 +1846,9 @@ impl WorkflowExecutor {
                         );
 
                         self.sub_agent_id = context.waiting_on_sub_agent_id.clone();
+                        self.awaiting_user_tool_call_id =
+                            context.awaiting_user_tool_call_id.clone();
+                        self.effective_task_objective = context.effective_task_objective.clone();
                         self.sub_agent_sessions = context.sub_agent_sessions.clone();
                         self.pending_sub_agent_completions =
                             context.pending_sub_agent_completions.clone();
@@ -1932,6 +1960,8 @@ impl WorkflowExecutor {
                 self.current_step = last_msg.step_index as usize;
             }
         }
+
+        self.backfill_effective_task_objective_if_missing().await?;
 
         // Child workflows are hidden from the workflow list and already have a descriptive
         // agent label, so avoid spawning a redundant title request for every sub-agent.
@@ -3485,6 +3515,8 @@ impl WorkflowExecutor {
                                 content, metadata, ..
                             } => {
                                 let user_content = content.clone();
+                                let metadata =
+                                    self.canonicalize_ask_user_response_metadata(metadata);
                                 self.add_message_and_notify_internal(
                                     "user".to_string(),
                                     content,
@@ -4035,6 +4067,8 @@ impl WorkflowExecutor {
                                     content, metadata, ..
                                 } => {
                                     let user_content = content.clone();
+                                    let metadata =
+                                        self.canonicalize_ask_user_response_metadata(metadata);
                                     self.add_message_and_notify_internal(
                                         "user".to_string(),
                                         content,
@@ -6035,7 +6069,7 @@ impl WorkflowExecutor {
                 return Ok(completion_result);
             }
             TOOL_SUBMIT_RESULT => return self.handle_submit_result_intercept(args).await,
-            TOOL_ASK_USER => return self.handle_ask_user_intercept(args).await,
+            TOOL_ASK_USER => return self.handle_ask_user_intercept(id, args).await,
             _ => {}
         }
 
@@ -6501,6 +6535,9 @@ impl WorkflowExecutor {
         }
 
         self.state = new_state.clone();
+        if old_state == WorkflowState::AwaitingUser && new_state != WorkflowState::AwaitingUser {
+            self.awaiting_user_tool_call_id = None;
+        }
         // This is the single lifecycle hook for the idle-sleep assertion. It intentionally
         // releases for ask_user, approvals, confirmations, sub-agent waits, errors, cancellation,
         // stopping, and completion because none of those states can make autonomous progress.
@@ -6553,10 +6590,15 @@ impl WorkflowExecutor {
                     })
                     .collect();
 
-                let event = WorkflowEvent::wait_entered(
+                let event = WorkflowEvent::wait_entered_with_user_tool_call_id(
                     self.session_id.clone(),
                     wait_reason.as_ref().unwrap().to_string(),
                     pending_tools,
+                    if wait_reason == Some(WaitReason::UserInput) {
+                        self.awaiting_user_tool_call_id.clone()
+                    } else {
+                        None
+                    },
                 );
                 if let Err(e) = self.append_event(&event) {
                     log::error!(
@@ -6629,6 +6671,154 @@ impl WorkflowExecutor {
         store
             .append_workflow_event(event)
             .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+        Ok(())
+    }
+
+    fn canonicalize_ask_user_response_metadata(
+        &self,
+        metadata: Option<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        if self.state != WorkflowState::AwaitingUser {
+            return metadata;
+        }
+        let Some(tool_call_id) = self.awaiting_user_tool_call_id.as_deref() else {
+            return metadata;
+        };
+
+        let mut metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+        let Some(metadata_object) = metadata.as_object_mut() else {
+            return Some(metadata);
+        };
+        let is_ask_user_response = metadata_object
+            .get("ask_user_response")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || metadata_object
+                .get("ui_visibility")
+                .and_then(serde_json::Value::as_str)
+                == Some("hide");
+        if !is_ask_user_response {
+            return Some(metadata);
+        }
+
+        if let Some(requested_tool_call_id) = metadata_object
+            .get("requested_tool_call_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if requested_tool_call_id != tool_call_id {
+                log::warn!(
+                    "[Workflow][session={}][phase=ask_user] Ignoring frontend response association hint {} because the authoritative waiting tool is {}",
+                    self.session_id,
+                    requested_tool_call_id,
+                    tool_call_id
+                );
+            }
+        }
+
+        metadata_object.remove("requested_tool_call_id");
+        metadata_object.insert(
+            "tool_call_id".to_string(),
+            serde_json::Value::String(tool_call_id.to_string()),
+        );
+        metadata_object.insert(
+            "ask_user_response".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        Some(metadata)
+    }
+
+    fn clear_effective_task_objective(&mut self, reason: &str) -> Result<(), WorkflowEngineError> {
+        if self.effective_task_objective.is_none() {
+            return Ok(());
+        }
+
+        let event =
+            WorkflowEvent::effective_task_objective_changed(self.session_id.clone(), None, None);
+        self.append_event(&event)?;
+        self.effective_task_objective = None;
+        log::info!(
+            "[Workflow][session={}][phase=objective] Cleared effective task objective at {}",
+            self.session_id,
+            reason
+        );
+        Ok(())
+    }
+
+    async fn backfill_effective_task_objective_if_missing(
+        &mut self,
+    ) -> Result<(), WorkflowEngineError> {
+        if self.effective_task_objective.is_some() {
+            return Ok(());
+        }
+
+        let Some(objective) = self
+            .context
+            .effective_task_objective_from_durable_history()?
+        else {
+            return Ok(());
+        };
+        let source_message_id = objective.latest_source_message_id;
+        let event = WorkflowEvent::effective_task_objective_changed(
+            self.session_id.clone(),
+            Some(source_message_id),
+            Some(objective.clone()),
+        );
+        self.append_event(&event)?;
+        self.effective_task_objective = Some(objective);
+        self.save_snapshot().await?;
+        log::info!(
+            "[Workflow][session={}][phase=objective][compat=legacy_backfill] Backfilled effective task objective through source_message_id={}",
+            self.session_id,
+            source_message_id
+        );
+        Ok(())
+    }
+
+    async fn record_effective_task_objective_for_message(
+        &mut self,
+        message: &WorkflowMessage,
+    ) -> Result<(), WorkflowEngineError> {
+        if !ContextManager::is_effective_task_objective_directive(message) {
+            return Ok(());
+        }
+        let Some(source_message_id) = message.id else {
+            return Err(WorkflowEngineError::General(
+                "effective task objective requires a persisted user message id".to_string(),
+            ));
+        };
+
+        let objective = if let Some(mut existing) = self.effective_task_objective.clone() {
+            existing.append_directive(source_message_id, message.message.clone());
+            existing
+        } else if let Some(mut objective) = self
+            .context
+            .effective_task_objective_from_durable_history()?
+        {
+            // A recovered or legacy session may cross successful completion boundaries while
+            // the user is still refining the same context. The durable manual-clear marker,
+            // not complete_workflow, is the only reset boundary for source authority.
+            objective.append_directive(source_message_id, message.message.clone());
+            objective
+        } else {
+            EffectiveTaskObjective::new(source_message_id, message.message.clone())
+        };
+        let directive_count = objective.directives.len();
+        let event = WorkflowEvent::effective_task_objective_changed(
+            self.session_id.clone(),
+            Some(source_message_id),
+            Some(objective.clone()),
+        );
+        self.append_event(&event)?;
+        self.effective_task_objective = Some(objective);
+        self.save_snapshot().await?;
+        log::info!(
+            "[Workflow][session={}][phase=objective] Recorded effective task directive source_message_id={} directives={}",
+            self.session_id,
+            source_message_id,
+            directive_count
+        );
         Ok(())
     }
 
@@ -6767,6 +6957,9 @@ impl WorkflowExecutor {
                 }
             }
         }
+
+        self.record_effective_task_objective_for_message(&msg)
+            .await?;
 
         self.dispatch_ui_payload(GatewayPayload::Message {
             message_id: msg.id.map(|id| id.to_string()),
@@ -8041,6 +8234,8 @@ impl WorkflowExecutor {
             last_event_id: None,
             version: ExecutionContext::CURRENT_VERSION.to_string(),
             waiting_on_sub_agent_id: self.sub_agent_id.clone(),
+            awaiting_user_tool_call_id: self.awaiting_user_tool_call_id.clone(),
+            effective_task_objective: self.effective_task_objective.clone(),
             sub_agent_sessions: self.sub_agent_sessions.clone(),
             pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
             pending_final_review: self.pending_final_review.clone(),
@@ -9439,6 +9634,7 @@ mod recovery_tests {
         );
         executor.dispatcher = None;
         executor.state = WorkflowState::AwaitingUser;
+        executor.awaiting_user_tool_call_id = Some("ask-user-resolved".to_string());
 
         executor
             .update_state(WorkflowState::Thinking)
@@ -9451,10 +9647,11 @@ mod recovery_tests {
             .expect("transition should persist execution context");
         assert_eq!(context.state, RuntimeState::Running);
         assert_eq!(context.wait_reason, None);
+        assert_eq!(context.awaiting_user_tool_call_id, None);
     }
 
     #[tokio::test]
-    async fn entering_user_input_wait_persists_waiting_snapshot() {
+    async fn ask_user_wait_persists_canonical_id_and_response_metadata() {
         let (_temp_dir, store) = create_test_store();
         let session_id = "entered-user-input-wait-snapshot";
         let agent = Agent::new(
@@ -9507,6 +9704,26 @@ mod recovery_tests {
         );
         executor.dispatcher = None;
         executor.state = WorkflowState::Executing;
+        executor.awaiting_user_tool_call_id = Some("ask-user-canonical".to_string());
+
+        executor
+            .add_message_and_notify_internal(
+                "user".to_string(),
+                "Audit the workflow before implementing the confirmed fixes".to_string(),
+                None,
+                None,
+                None,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("task directive should persist before the ask_user response");
+        let directive_source_message_id = executor
+            .effective_task_objective
+            .as_ref()
+            .expect("normal user task directive should update the effective objective")
+            .latest_source_message_id;
 
         executor
             .update_state(WorkflowState::AwaitingUser)
@@ -9519,6 +9736,86 @@ mod recovery_tests {
             .expect("entered wait should persist execution context");
         assert_eq!(context.state, RuntimeState::Waiting);
         assert_eq!(context.wait_reason, Some(WaitReason::UserInput));
+        assert_eq!(
+            context.awaiting_user_tool_call_id.as_deref(),
+            Some("ask-user-canonical")
+        );
+
+        let response_metadata = executor
+            .canonicalize_ask_user_response_metadata(Some(serde_json::json!({
+                "ui_visibility": "hide",
+                "ask_user_response": true,
+                "requested_tool_call_id": "untrusted-call-id",
+            })))
+            .expect("response metadata should remain structured");
+        assert_eq!(
+            response_metadata["tool_call_id"].as_str(),
+            Some("ask-user-canonical")
+        );
+        assert!(response_metadata.get("requested_tool_call_id").is_none());
+
+        executor
+            .add_message_and_notify_internal(
+                "user".to_string(),
+                "<ask_user_response>[\"Use canonical association\"]</ask_user_response>"
+                    .to_string(),
+                None,
+                None,
+                None,
+                false,
+                None,
+                Some(response_metadata),
+            )
+            .await
+            .expect("ask_user response should persist");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to read workflow snapshot");
+        let response = snapshot
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .expect("ask_user response should be persisted");
+        assert_eq!(
+            response
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("tool_call_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("ask-user-canonical")
+        );
+
+        let resolved_context = store
+            .get_execution_context(session_id)
+            .expect("failed to read resolved execution context")
+            .expect("resolved execution context should persist");
+        assert_eq!(resolved_context.state, RuntimeState::Running);
+        assert_eq!(resolved_context.wait_reason, None);
+        assert_eq!(resolved_context.awaiting_user_tool_call_id, None);
+        let objective = resolved_context
+            .effective_task_objective
+            .expect("normal user task directive should remain in the snapshot");
+        assert_eq!(
+            objective.source_message_ids(),
+            vec![directive_source_message_id]
+        );
+        assert!(objective.directives[0]
+            .content
+            .contains("Audit the workflow before implementing"));
+
+        let objective_events = store
+            .list_workflow_events(session_id)
+            .expect("failed to list workflow events")
+            .into_iter()
+            .filter(|event| event.event_type == "effective_task_objective_changed")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            objective_events.len(),
+            1,
+            "ask_user responses must not change the effective task objective"
+        );
     }
 
     #[tokio::test]

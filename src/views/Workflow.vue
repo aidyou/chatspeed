@@ -206,6 +206,7 @@
                 :last-assistant-message="lastAssistantMessage"
                 :approval-loading="approvalLoading"
                 :active-approval-id="activeApprovalId"
+                :is-batch-approval-submitting="isBatchApprovalSubmitting"
                 :ask-user-submitting="askUserSubmitting"
                 :is-message-expanded="isMessageExpanded"
                 :is-reasoning-expanded="isReasoningExpanded"
@@ -220,6 +221,7 @@
                 :current-workflow-id="currentWorkflowId"
                 :wait-reason="waitReason"
                 :is-approval-submitting="isApprovalSubmitting"
+                @message-projection-count="onWorkflowMessageProjectionCount"
                 @toggle-expand="toggleMessageExpand"
                 @toggle-reasoning="toggleReasoningExpand"
                 @reveal-earlier-messages="revealEarlierMessagesInTaskWindow"
@@ -609,6 +611,7 @@ const {
   hiddenEarlierMessageCount,
   hiddenCompletedTaskGroupCount,
   revealEarlierMessages,
+  expandLoadedTaskMessageWindow,
   revealLoadedEarlierTaskGroup,
   lastAssistantMessage,
   toggleMessageExpand,
@@ -623,6 +626,49 @@ const {
 } = useWorkflowMessages({
   visibleTaskGroupCount
 })
+
+const workflowMessageProjection = ref({ visible: 0, total: 0, hasOverflow: false })
+let isFillingWorkflowMessageProjection = false
+
+const shouldFillWorkflowMessageProjection = () => {
+  const projection = workflowMessageProjection.value
+  if (projection.hasOverflow || !workflowStore.hasMoreInCurrentTask) return false
+  return projection.total < 300 || workflowStore.hasIncompleteMessageToolChain
+}
+
+const fillWorkflowMessageProjection = async () => {
+  if (isFillingWorkflowMessageProjection || !shouldFillWorkflowMessageProjection()) return
+
+  const sessionId = currentWorkflowId.value
+  if (!sessionId) return
+
+  isFillingWorkflowMessageProjection = true
+  try {
+    while (
+      currentWorkflowId.value === sessionId &&
+      shouldFillWorkflowMessageProjection()
+    ) {
+      const loaded = await workflowStore.loadEarlierMessages({ withinCurrentTask: true })
+      if (!loaded) break
+
+      expandLoadedTaskMessageWindow()
+      await nextTick()
+    }
+  } catch (error) {
+    console.error('Failed to fill workflow message projection:', error)
+  } finally {
+    isFillingWorkflowMessageProjection = false
+  }
+}
+
+const onWorkflowMessageProjectionCount = projection => {
+  workflowMessageProjection.value = {
+    visible: Number(projection?.visible) || 0,
+    total: Number(projection?.total) || 0,
+    hasOverflow: projection?.hasOverflow === true
+  }
+  void fillWorkflowMessageProjection()
+}
 
 const revealEarlierTaskGroup = async done => {
   try {
@@ -645,7 +691,7 @@ const revealEarlierMessagesInTaskWindow = async done => {
   try {
     if (revealEarlierMessages()) return
 
-    const loaded = await workflowStore.loadEarlierMessages()
+    const loaded = await workflowStore.loadEarlierMessages({ withinCurrentTask: false })
     if (loaded) {
       if (!revealLoadedEarlierTaskGroup()) revealEarlierMessages()
     }
@@ -1870,12 +1916,17 @@ const onSkillsConfigSave = async config => {
   }
 }
 
+const batchApprovalSessionId = ref('')
+const isBatchApprovalSubmitting = computed(
+  () => batchApprovalSessionId.value === currentWorkflowId.value
+)
+
 // Approve all pending approval items for the current workflow using the
 // in-message FIFO order so the inline item that triggered the batch action
 // is never dropped from the snapshot.
 const onApproveAllPendingAction = async payload => {
   const sessionId = currentWorkflowId.value
-  if (!sessionId) return
+  if (!sessionId || batchApprovalSessionId.value) return
 
   const startingToolCallId =
     typeof payload === 'string' ? payload : payload?.startingToolCallId || ''
@@ -1902,11 +1953,19 @@ const onApproveAllPendingAction = async payload => {
 
   if (!orderedIds.length) return
 
-  // Always resolve approvals sequentially against a stable snapshot.
-  // The backend remains authoritative for pending approval order/state, and
-  // concurrent approval signals can race with per-tool state transitions.
-  for (const toolCallId of orderedIds) {
-    await onApproveAction(toolCallId, sessionId)
+  batchApprovalSessionId.value = sessionId
+  try {
+    // Always resolve approvals sequentially against a stable snapshot.
+    // The backend remains authoritative for pending approval order/state, and
+    // concurrent approval signals can race with per-tool state transitions.
+    for (const toolCallId of orderedIds) {
+      if (workflowStore.isApprovalSubmitted(sessionId, toolCallId)) continue
+      await onApproveAction(toolCallId, sessionId)
+    }
+  } finally {
+    if (batchApprovalSessionId.value === sessionId) {
+      batchApprovalSessionId.value = ''
+    }
   }
 }
 
@@ -2297,13 +2356,19 @@ const onErrorCaptured = (err, instance, info) => {
   return false
 }
 
-const submitAskUserResponse = async content => {
+const submitAskUserResponse = async response => {
+  const content = typeof response === 'string' ? response : response?.content
+  const toolCallId = typeof response === 'object' ? String(response?.toolCallId || '').trim() : ''
   if (!content?.trim()) return
 
   askUserSubmitting.value = true
   try {
     await coreOnSendMessage(content, {
-      metadata: { ui_visibility: 'hide' }
+      metadata: {
+        ui_visibility: 'hide',
+        ask_user_response: true,
+        ...(toolCallId ? { requested_tool_call_id: toolCallId } : {})
+      }
     })
   } finally {
     askUserSubmitting.value = false

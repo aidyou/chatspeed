@@ -115,53 +115,51 @@ assert.match(bashCommandStyles, /grid-template-columns: auto minmax\(0, 1fr\)/)
 assert.match(bashCommandStyles, /&__prompt \{[\s\S]*color: var\(--cs-color-primary\)/)
 assert.match(bashCommandStyles, /\.bash-command \{[\s\S]*border: 0/)
 assert.match(bashCommandStyles, /\.bash-command \{[\s\S]*background: transparent/)
-const toolGroupProjection = sourceSection(
-  messageList,
-  'const isToolWaitingApproval',
-  'const visibleMessages'
-)
+const toolGroupProjectionStart = projectionRules.indexOf('export const projectWorkflowMessageList')
+assert.notEqual(toolGroupProjectionStart, -1, 'missing centralized message-list projection')
+const toolGroupProjection = projectionRules.slice(toolGroupProjectionStart)
 assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName\)/)
 assert.match(toolGroupProjection, /mcp_tools/)
-assert.match(toolGroupProjection, /mcp_tools: 'mcp'/)
+assert.match(projectionRules, /mcp_tools: 'mcp'/)
 assert.match(toolGroupProjection, /mixed_tools/)
 assert.match(
-  messageList,
-  /const buildToolGroupSummary = messages => \{[\s\S]*const counts = new Map\(\)/,
+  toolGroupProjection,
+  /const buildToolGroupSummary = groupMessages => \{[\s\S]*const counts = new Map\(\)/,
   'tool groups must aggregate repeated operations into a compact title'
 )
 assert.match(
-  messageList,
+  toolGroupProjection,
   /Array\.from\(counts, \(\[label, count\]\) => `\$\{label\} x\$\{count\}`\)\.join\(' · '\)/,
   'tool group summaries must display compact label counts'
 )
 assert.match(
-  messageList,
-  /if \(TODO_TOOL_NAMES\.has\(toolName\)\) return t\('workflow\.toolGroups\.taskChanges'\)/,
+  toolGroupProjection,
+  /if \(TODO_TOOL_NAMES\.has\(toolName\)\) return translate\('workflow\.toolGroups\.taskChanges'\)/,
   'todo tools must aggregate under the task changes operation label'
 )
 assert.match(
-  messageList,
-  /if \(isWorkflowMcpTool\(toolName\)\) return t\('workflow\.toolGroups\.callMcp'\)/,
+  toolGroupProjection,
+  /if \(isWorkflowMcpTool\(toolName\)\) return translate\('workflow\.toolGroups\.callMcp'\)/,
   'MCP tools must aggregate under the MCP operation label'
 )
 assert.match(
-  messageList,
-  /return t\(TOOL_GROUP_LABEL_KEYS\[toolName\] \|\| 'workflow\.toolGroups\.useTool'\)/,
+  toolGroupProjection,
+  /return translate\(TOOL_GROUP_LABEL_KEYS\[toolName\] \|\| 'workflow\.toolGroups\.useTool'\)/,
   'known tools must aggregate by their localized operation label'
 )
 assert.match(
-  messageList,
+  toolGroupProjection,
   /return `tool_group:\$\{firstToolCallId \|\| firstId\}`/,
   'tool-group identity must remain stable as tools append or transition from pending to completed'
 )
 assert.match(
   toolGroupProjection,
-  /const projectPendingToolGroups = messages =>/,
+  /const projectPendingToolGroups = input =>/,
   'auto-executing pending tool calls must use the same grouped presentation before results arrive'
 )
 assert.match(
   messageList,
-  /projectPendingToolGroups\(/,
+  /projectWorkflowMessageList\(props\.messages/,
   'the visible message projection must include running pending tool groups'
 )
 assert.match(workflowMessageStyles, /background: linear-gradient\(/)
@@ -179,15 +177,15 @@ assert.match(
 )
 assert.match(
   toolGroupProjection,
-  /while \(nextIndex < messages\.length && getCollapsibleToolGroupKind\(messages\[nextIndex\]\)\)/
+  /while \(nextIndex < input\.length && getCollapsibleToolGroupKind\(input\[nextIndex\]\)\)/
 )
 assert.match(
-  sourceSection(messageList, 'const isToolWaitingApproval', 'const isCollapsibleReadOnlyToolMessage'),
-  /const isToolWaitingApproval = message => isApprovalPending\(message\)/,
+  toolGroupProjection,
+  /const isApprovalPending = message =>\s*isWorkflowMessagePendingApproval\(message, pendingApprovalIds\)/,
   'only the canonical pending-approval ID set may exclude a tool from grouping'
 )
 assert.doesNotMatch(
-  sourceSection(messageList, 'const isToolWaitingApproval', 'const isCollapsibleReadOnlyToolMessage'),
+  toolGroupProjection,
   /approval_submitted/,
   'approval-submitted and running tools must join their continuous tool group'
 )

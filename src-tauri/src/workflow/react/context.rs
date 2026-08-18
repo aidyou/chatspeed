@@ -6,7 +6,9 @@ use crate::workflow::react::runtime_observation::{
     is_runtime_observation, runtime_observation_metadata, runtime_observation_type,
     RuntimeObservationLlmVisibility, RuntimeObservationType, MESSAGE_KIND_RUNTIME_OBSERVATION,
 };
-use crate::workflow::react::types::StepType;
+use crate::workflow::react::types::{
+    EffectiveTaskObjective, StepType, TaskGoalLedger, TaskGoalSourcePreview, TaskGoalState,
+};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,6 +16,8 @@ use tokio::sync::Semaphore;
 
 const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
 const UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT: usize = 20_000;
+const TASK_GOAL_LEDGER_PREVIEW_LIMIT: usize = 6;
+const TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT: usize = 1_200;
 
 /// ContextManager manages durable transcript history plus the AI-only context projection cache.
 pub struct ContextManager {
@@ -227,6 +231,25 @@ impl ContextManager {
         compacted
     }
 
+    fn strip_system_reminder_blocks(content: &str) -> String {
+        const START: &str = "<SYSTEM_REMINDER>";
+        const END: &str = "</SYSTEM_REMINDER>";
+
+        let mut stripped = String::with_capacity(content.len());
+        let mut remainder = content;
+        while let Some(start) = remainder.find(START) {
+            let after_start = &remainder[start + START.len()..];
+            let Some(end) = after_start.find(END) else {
+                // Do not silently discard a user-authored malformed literal.
+                return content.to_string();
+            };
+            stripped.push_str(&remainder[..start]);
+            remainder = &after_start[end + END.len()..];
+        }
+        stripped.push_str(remainder);
+        stripped
+    }
+
     pub(crate) fn is_user_authored_task_message(message: &WorkflowMessage) -> bool {
         let metadata = message.metadata.as_ref();
         message.role == "user"
@@ -244,12 +267,246 @@ impl ContextManager {
                     || metadata.get("review_verdict").is_some()
                     || metadata.get("runtime_observation").is_some()
             })
-            && !message.message.contains("<SYSTEM_REMINDER>")
-            && (!message.message.trim().is_empty()
+            && (!Self::strip_system_reminder_blocks(&message.message)
+                .trim()
+                .is_empty()
                 || message
                     .attached_context
                     .as_deref()
                     .is_some_and(|attached| !attached.trim().is_empty()))
+    }
+
+    /// Returns true only for user messages that define task scope rather than answering an
+    /// `ask_user` prompt or carrying a runtime control payload.
+    pub(crate) fn is_effective_task_objective_directive(message: &WorkflowMessage) -> bool {
+        Self::is_user_authored_task_message(message)
+            && !message.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .get("ask_user_response")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                    || metadata
+                        .get("tool_call_id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|tool_call_id| !tool_call_id.trim().is_empty())
+            })
+    }
+
+    pub(crate) fn effective_task_objective_from_durable_messages(
+        messages: &[WorkflowMessage],
+    ) -> Option<EffectiveTaskObjective> {
+        let manual_clear_start = Self::latest_manual_clear_context_index(messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+
+        messages
+            .iter()
+            .skip(manual_clear_start)
+            .filter(|message| Self::is_effective_task_objective_directive(message))
+            .filter_map(|message| {
+                message
+                    .id
+                    .map(|source_message_id| (source_message_id, message.message.clone()))
+            })
+            .fold(None, |objective, (source_message_id, content)| {
+                Some(match objective {
+                    Some(mut objective) => {
+                        objective.append_directive(source_message_id, content);
+                        objective
+                    }
+                    None => EffectiveTaskObjective::new(source_message_id, content),
+                })
+            })
+    }
+
+    pub(crate) fn effective_task_objective_from_durable_history(
+        &self,
+    ) -> Result<Option<EffectiveTaskObjective>, WorkflowEngineError> {
+        let snapshot = self.main_store.get_workflow_snapshot(&self.session_id)?;
+        Ok(Self::effective_task_objective_from_durable_messages(
+            &snapshot.messages,
+        ))
+    }
+
+    fn latest_task_goal_state_before_boundary(
+        messages: &[WorkflowMessage],
+        compressed_until_message_id: i64,
+    ) -> Option<TaskGoalState> {
+        let start_index = Self::latest_manual_clear_context_index(messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        messages[start_index..].iter().rev().find_map(|message| {
+            if message.message_subtype.as_deref() != Some("current_task_goal") {
+                return None;
+            }
+            let data = message.metadata.as_ref()?.get("data")?;
+            let state_boundary = data
+                .get("compressed_until_message_id")
+                .and_then(serde_json::Value::as_i64)?;
+            if state_boundary > compressed_until_message_id {
+                return None;
+            }
+            serde_json::from_value(data.get("task_goal_state")?.clone()).ok()
+        })
+    }
+
+    fn bounded_task_goal_preview(content: &str) -> String {
+        let content = content.trim();
+        if content.chars().count() <= TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT {
+            return content.to_string();
+        }
+
+        let retained = TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT.saturating_sub(80);
+        let head = content.chars().take(retained).collect::<String>();
+        format!(
+            "{head}\n<GOAL_SOURCE_PREVIEW_TRUNCATED omitted_chars=\"{}\" />",
+            content.chars().count().saturating_sub(retained)
+        )
+    }
+
+    fn task_goal_source_previews(directives: &[&WorkflowMessage]) -> Vec<TaskGoalSourcePreview> {
+        if directives.is_empty() {
+            return Vec::new();
+        }
+
+        let mut selected = Vec::new();
+        if directives.len() > TASK_GOAL_LEDGER_PREVIEW_LIMIT {
+            selected.push(directives[0]);
+        }
+        let trailing = TASK_GOAL_LEDGER_PREVIEW_LIMIT.saturating_sub(selected.len());
+        let start = directives.len().saturating_sub(trailing);
+        selected.extend_from_slice(&directives[start..]);
+
+        selected
+            .into_iter()
+            .filter_map(|message| {
+                let source_message_id = message.id?;
+                let content = Self::strip_system_reminder_blocks(
+                    &Self::content_for_context_projection(message),
+                );
+                Some(TaskGoalSourcePreview {
+                    source_message_id,
+                    content: Self::bounded_task_goal_preview(&content),
+                })
+            })
+            .collect()
+    }
+
+    fn task_goal_ledger_from_durable_messages(
+        messages: &[WorkflowMessage],
+        compressed_until_message_id: i64,
+    ) -> TaskGoalLedger {
+        let manual_clear_start = Self::latest_manual_clear_context_index(messages)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let directives = messages[manual_clear_start..]
+            .iter()
+            .filter(|message| {
+                message
+                    .id
+                    .is_some_and(|message_id| message_id <= compressed_until_message_id)
+            })
+            .filter(|message| Self::is_effective_task_objective_directive(message))
+            .collect::<Vec<_>>();
+        let source_message_ids = directives
+            .iter()
+            .filter_map(|message| message.id)
+            .collect::<Vec<_>>();
+        let latest_directive_id = source_message_ids.last().copied();
+        let latest_completion_id = messages[manual_clear_start..]
+            .iter()
+            .filter(|message| {
+                message
+                    .id
+                    .is_some_and(|message_id| message_id <= compressed_until_message_id)
+                    && Self::is_successful_completion_message(message)
+            })
+            .filter_map(|message| message.id)
+            .last();
+        let completion_evidence_message_id = latest_completion_id.filter(|completion_id| {
+            latest_directive_id
+                .map(|directive_id| *completion_id > directive_id)
+                .unwrap_or(false)
+        });
+
+        TaskGoalLedger {
+            source_previews: Self::task_goal_source_previews(&directives),
+            source_message_ids,
+            previous_state: Self::latest_task_goal_state_before_boundary(
+                messages,
+                compressed_until_message_id,
+            ),
+            requires_active_goal: latest_directive_id.is_some()
+                && completion_evidence_message_id.is_none(),
+            completion_evidence_message_id,
+        }
+    }
+
+    pub(crate) fn task_goal_ledger_for_compression(
+        &self,
+        compressed_until_message_id: i64,
+    ) -> Result<TaskGoalLedger, WorkflowEngineError> {
+        let snapshot = self.main_store.get_workflow_snapshot(&self.session_id)?;
+        Ok(Self::task_goal_ledger_from_durable_messages(
+            &snapshot.messages,
+            compressed_until_message_id,
+        ))
+    }
+
+    fn current_task_goal_observation(
+        &self,
+        task_goal_state: TaskGoalState,
+        compressed_until_message_id: i64,
+        step_index: i32,
+    ) -> Result<WorkflowMessage, WorkflowEngineError> {
+        let model_state = json!({
+            "version": task_goal_state.version,
+            "status": task_goal_state.status,
+            "current_goal": task_goal_state.current_goal,
+            "source_count": task_goal_state.source_message_ids.len(),
+            "latest_source_message_id": task_goal_state.source_message_ids.last(),
+            "latest_directive": task_goal_state.latest_directive,
+            "completion_evidence_message_id": task_goal_state.completion_evidence_message_id,
+        });
+        let state_json = serde_json::to_string(&model_state).map_err(|error| {
+            WorkflowEngineError::General(format!(
+                "serialize compact task goal state for compression: {error}"
+            ))
+        })?;
+        let llm_content = format!(
+            "<CURRENT_TASK_GOAL>\n{}\n</CURRENT_TASK_GOAL>\n\n<SYSTEM_REMINDER>\nThis is the fixed current-task goal state written at the compression boundary. Its source authority and completion evidence were validated by the runtime from durable user messages. The bounded latest_directive is the highest-precedence user intent captured at this boundary: use it to preserve the requested execution mode over older instructions. Continue an active goal; do not treat this record, a compression summary, or a todo snapshot as permission to drop or redefine the user task. Later raw-tail user messages are newer and may refine the goal.\n</SYSTEM_REMINDER>",
+            state_json
+        );
+        let message_id = self
+            .tsid_generator
+            .generate_u64()
+            .map_err(WorkflowEngineError::General)?;
+
+        Ok(WorkflowMessage {
+            id: Some(message_id as i64),
+            session_id: self.session_id.clone(),
+            role: "user".to_string(),
+            message: llm_content.clone(),
+            reasoning: None,
+            message_kind: MESSAGE_KIND_RUNTIME_OBSERVATION.to_string(),
+            message_subtype: Some("current_task_goal".to_string()),
+            segment_id: self.current_segment_id,
+            source_event_type: Some("current_task_goal_snapshot".to_string()),
+            metadata: Some(runtime_observation_metadata(
+                RuntimeObservationType::CurrentTaskGoal,
+                json!({
+                    "compressed_until_message_id": compressed_until_message_id,
+                    "task_goal_state": task_goal_state,
+                    "llm_content": llm_content,
+                }),
+            )),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        })
     }
 
     fn current_approved_plan_index(messages: &[WorkflowMessage]) -> Option<usize> {
@@ -853,7 +1110,7 @@ impl ContextManager {
 
     fn compression_summary_context_projection(content: &str) -> String {
         format!(
-            "<CONTEXT_HANDOFF_PRECEDENCE>\nThis checkpoint describes only the compression boundary. The following durable todo snapshot and later raw-tail messages are newer authority. Do not continue, verify, or repeat a boundary-open item until checking whether later context has resolved or superseded it.\n</CONTEXT_HANDOFF_PRECEDENCE>\n\n{content}"
+            "<CONTEXT_HANDOFF_PRECEDENCE>\nThis checkpoint describes only the compression boundary. The following raw-tail messages and fixed todo snapshot are newer authority. Do not continue, verify, or repeat a boundary-open item until checking whether later context has resolved or superseded it.\n</CONTEXT_HANDOFF_PRECEDENCE>\n\n{content}"
         )
     }
 
@@ -1231,6 +1488,20 @@ impl ContextManager {
             return projection;
         };
 
+        let task_goal = scoped_messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.message_subtype.as_deref() == Some("current_task_goal")
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("data"))
+                        .and_then(|data| data.get("compressed_until_message_id"))
+                        .and_then(serde_json::Value::as_i64)
+                        == Some(compressed_until_message_id)
+            })
+            .cloned();
         let tail_messages = scoped_messages
             .iter()
             .filter(|message| {
@@ -1238,6 +1509,14 @@ impl ContextManager {
                     && message
                         .id
                         .is_some_and(|id| id > compressed_until_message_id)
+                    && !matches!(
+                        message.message_subtype.as_deref(),
+                        Some(
+                            "current_task_goal"
+                                | "current_task_user_context"
+                                | "effective_task_objective"
+                        )
+                    )
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1257,7 +1536,10 @@ impl ContextManager {
             .map(|index| index + 1)
             .unwrap_or(0);
 
-        let mut projection = user_anchors;
+        let mut projection = task_goal.into_iter().collect::<Vec<_>>();
+        if projection.is_empty() {
+            projection = user_anchors;
+        }
         projection.push(summary);
         projection.extend(tail_messages[retained_start..].iter().cloned());
         projection
@@ -1612,12 +1894,38 @@ impl ContextManager {
             .await
     }
 
+    #[cfg(test)]
     pub async fn compress(
         &mut self,
         summary: String,
         step_index: i32,
         compressed_until_message_id: i64,
     ) -> Result<(), WorkflowEngineError> {
+        self.compress_with_task_goal_state(summary, None, step_index, compressed_until_message_id)
+            .await
+    }
+
+    pub async fn compress_with_task_goal_state(
+        &mut self,
+        summary: String,
+        task_goal_state: Option<TaskGoalState>,
+        step_index: i32,
+        compressed_until_message_id: i64,
+    ) -> Result<(), WorkflowEngineError> {
+        let mut all_messages = self.messages.clone();
+        if let Some(task_goal_state) = task_goal_state {
+            let task_goal = self.current_task_goal_observation(
+                task_goal_state,
+                compressed_until_message_id,
+                step_index,
+            )?;
+            let persisted_task_goal = {
+                let store = self.main_store.as_ref();
+                store.add_workflow_message(&task_goal)?
+            };
+            all_messages.push(persisted_task_goal);
+        }
+
         let msg_id = self
             .tsid_generator
             .generate_u64()
@@ -1650,7 +1958,6 @@ impl ContextManager {
             store.add_workflow_message(&summary_msg)?
         };
 
-        let mut all_messages = self.messages.clone();
         all_messages.push(persisted_summary.clone());
 
         match self.main_store.get_todo_list_for_workflow(&self.session_id) {
@@ -1790,6 +2097,7 @@ impl ContextManager {
 mod tests {
     use super::{
         ContextManager, CONTEXT_PRESSURE_COMPRESSION_THRESHOLD,
+        TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT, TASK_GOAL_LEDGER_PREVIEW_LIMIT,
         UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT,
     };
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
@@ -1801,7 +2109,9 @@ mod tests {
     use crate::workflow::react::runtime_observation::{
         runtime_observation_metadata, RuntimeObservationType,
     };
-    use crate::workflow::react::types::{ExecutionContext, StepType};
+    use crate::workflow::react::types::{
+        ExecutionContext, StepType, TaskGoalSourcePreview, TaskGoalState, TaskGoalStatus,
+    };
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1809,9 +2119,7 @@ mod tests {
     fn compression_summary_projection_marks_later_context_as_authoritative() {
         let projected = ContextManager::compression_summary_context_projection("checkpoint");
         assert!(projected.contains("CONTEXT_HANDOFF_PRECEDENCE"));
-        assert!(
-            projected.contains("The following durable todo snapshot and later raw-tail messages")
-        );
+        assert!(projected.contains("The following raw-tail messages and fixed todo snapshot"));
         assert!(projected.ends_with("checkpoint"));
     }
 
@@ -1854,6 +2162,23 @@ mod tests {
         store_guard
             .create_workflow(session_id, "Initial query", "test-agent", None, None)
             .expect("failed to create workflow");
+    }
+
+    fn active_task_goal_state(source_message_ids: Vec<i64>, current_goal: &str) -> TaskGoalState {
+        let latest_source_message_id = *source_message_ids
+            .last()
+            .expect("test task goal state requires a source");
+        TaskGoalState {
+            version: 1,
+            status: TaskGoalStatus::Active,
+            current_goal: Some(current_goal.to_string()),
+            source_message_ids,
+            latest_directive: Some(TaskGoalSourcePreview {
+                source_message_id: latest_source_message_id,
+                content: current_goal.to_string(),
+            }),
+            completion_evidence_message_id: None,
+        }
     }
 
     #[test]
@@ -2271,6 +2596,748 @@ mod tests {
         assert!(!restored_snapshot
             .message
             .contains("Changed after compression"));
+    }
+
+    #[tokio::test]
+    async fn compression_projects_compact_task_goal_before_summary_and_fixed_todo_snapshot() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-effective-objective";
+        insert_workflow(&store, session_id);
+        store
+            .update_workflow_todo_list(
+                session_id,
+                r#"[{"id":"todo-1","subject":"Implement confirmed fixes","status":"in_progress"}]"#,
+            )
+            .expect("failed to seed todo list");
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let initial = context
+            .add_message(
+                "user".to_string(),
+                "Perform a read-only audit".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add initial directive")
+            .0;
+        let implementation = context
+            .add_message(
+                "user".to_string(),
+                "Implement the confirmed fixes instead".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add implementation directive")
+            .0;
+        let initial_id = initial.id.expect("initial directive id");
+        let implementation_id = implementation.id.expect("implementation directive id");
+        let ask_user_response = context
+            .add_message(
+                "user".to_string(),
+                "Use the existing release branch".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                Some(json!({
+                    "ask_user_response": true,
+                    "tool_call_id": "ask-user-1",
+                })),
+            )
+            .await
+            .expect("failed to add ask_user response")
+            .0;
+        let ask_user_response_id = ask_user_response.id.expect("ask_user response id");
+
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![initial_id, implementation_id],
+                    "Implement the confirmed fixes",
+                )),
+                4,
+                ask_user_response_id,
+            )
+            .await
+            .expect("compression should persist compact task goal");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        let task_goal_message = snapshot
+            .messages
+            .iter()
+            .find(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("compression must persist a compact task-goal observation");
+        assert_eq!(task_goal_message.role, "user");
+        assert_eq!(task_goal_message.step_type.as_deref(), Some("observe"));
+        assert_eq!(
+            task_goal_message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("observation_type")),
+            Some(&json!("current_task_goal"))
+        );
+        assert_eq!(
+            task_goal_message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("data"))
+                .and_then(|data| data.get("task_goal_state"))
+                .and_then(|state| state.get("source_message_ids")),
+            Some(&json!([initial_id, implementation_id]))
+        );
+        assert_eq!(
+            task_goal_message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("data"))
+                .and_then(|data| data.get("task_goal_state"))
+                .and_then(|state| state.get("latest_directive"))
+                .and_then(|directive| directive.get("source_message_id")),
+            Some(&json!(implementation_id))
+        );
+        assert!(task_goal_message
+            .message
+            .contains("Implement the confirmed fixes"));
+        assert!(!task_goal_message
+            .message
+            .contains("Use the existing release branch"));
+
+        let llm_messages = context.get_messages_for_llm();
+        let task_goal_index = llm_messages
+            .iter()
+            .position(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("compact task goal should be projected");
+        let summary_index = llm_messages
+            .iter()
+            .position(ContextManager::is_compression_summary_message)
+            .expect("summary should be projected");
+        let todo_index = llm_messages
+            .iter()
+            .position(|message| {
+                message.message_subtype.as_deref() == Some("compression_todo_snapshot")
+            })
+            .expect("todo snapshot should be projected");
+        assert!(task_goal_index < summary_index && summary_index < todo_index);
+        assert_eq!(llm_messages[task_goal_index].role, "user");
+        assert_eq!(llm_messages[todo_index].role, "user");
+    }
+
+    #[tokio::test]
+    async fn consecutive_compressions_project_only_latest_compact_task_goal_and_rebuild() {
+        let (_dir, store) = setup_store();
+        let session_id = "consecutive-compression-effective-objective";
+        insert_workflow(&store, session_id);
+        store
+            .update_workflow_todo_list(
+                session_id,
+                r#"[{"id":"todo-1","subject":"Implement confirmed fixes","status":"in_progress"}]"#,
+            )
+            .expect("failed to seed first compression todo list");
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let initial = context
+            .add_message(
+                "user".to_string(),
+                "Perform a read-only audit".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add initial directive")
+            .0;
+        let implementation = context
+            .add_message(
+                "user".to_string(),
+                "Implement the confirmed fixes instead".to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add implementation directive")
+            .0;
+        let initial_id = initial.id.expect("initial directive id");
+        let implementation_id = implementation.id.expect("implementation directive id");
+
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>first checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![initial_id, implementation_id],
+                    "Implement the confirmed fixes",
+                )),
+                3,
+                implementation_id,
+            )
+            .await
+            .expect("first compression should persist a compact task goal");
+
+        // A later compression must not recreate a todo observation after the todo list is empty.
+        store
+            .update_workflow_todo_list(session_id, "[]")
+            .expect("failed to clear todo list before second compression");
+        let focused_implementation = context
+            .add_message(
+                "user".to_string(),
+                "Continue the implementation and keep the scope focused".to_string(),
+                None,
+                None,
+                None,
+                4,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add later implementation directive")
+            .0;
+        let focused_implementation_id = focused_implementation.id.expect("later directive id");
+
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>second checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![initial_id, implementation_id, focused_implementation_id],
+                    "Continue the focused implementation",
+                )),
+                5,
+                focused_implementation_id,
+            )
+            .await
+            .expect("second compression should persist the latest compact task goal");
+
+        let assert_latest_projection = |messages: Vec<WorkflowMessage>| {
+            let task_goal_messages = messages
+                .iter()
+                .filter(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                task_goal_messages.len(),
+                1,
+                "the AI projection must retain only the latest compact task-goal observation"
+            );
+            assert!(task_goal_messages[0]
+                .message
+                .contains("Continue the focused implementation"));
+            assert!(!task_goal_messages[0]
+                .message
+                .contains("Perform a read-only audit"));
+            assert_eq!(
+                task_goal_messages[0]
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("data"))
+                    .and_then(|data| data.get("task_goal_state"))
+                    .and_then(|state| state.get("source_message_ids")),
+                Some(&json!([
+                    initial_id,
+                    implementation_id,
+                    focused_implementation_id
+                ]))
+            );
+            let task_goal_index = messages
+                .iter()
+                .position(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+                .expect("latest compact task goal should be projected");
+            let summary_index = messages
+                .iter()
+                .position(ContextManager::is_compression_summary_message)
+                .expect("latest summary should be projected");
+            assert!(task_goal_index < summary_index);
+            assert!(messages[summary_index]
+                .message
+                .contains("second checkpoint"));
+            assert!(messages.iter().all(|message| {
+                message.message_subtype.as_deref() != Some("compression_todo_snapshot")
+            }));
+            assert!(messages.iter().all(|message| {
+                message.message_subtype.as_deref() != Some("effective_task_objective")
+            }));
+        };
+
+        assert_latest_projection(context.get_messages_for_llm());
+
+        let mut restored = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(2).expect("failed to create restore tsid")),
+        );
+        restored
+            .load_history()
+            .await
+            .expect("restored projection should rebuild from durable history");
+        assert_latest_projection(restored.get_messages_for_llm());
+    }
+
+    #[tokio::test]
+    async fn compact_task_goal_excludes_newer_raw_tail_user_messages() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-user-context-tail";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let boundary = context
+            .add_message(
+                "user".to_string(),
+                "Initial implementation directive".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add boundary directive")
+            .0;
+
+        let boundary_id = boundary.id.expect("boundary id");
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![boundary_id],
+                    "Initial implementation directive",
+                )),
+                2,
+                boundary_id,
+            )
+            .await
+            .expect("compression should persist a boundary snapshot");
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "Later raw-tail implementation correction".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add later user correction");
+
+        let messages = context.get_messages_for_llm();
+        let task_goal_index = messages
+            .iter()
+            .position(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("compact task goal should be projected");
+        let summary_index = messages
+            .iter()
+            .position(ContextManager::is_compression_summary_message)
+            .expect("summary should be projected");
+        let raw_tail_indices = messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                message
+                    .message
+                    .contains("Later raw-tail implementation correction")
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(messages[task_goal_index]
+            .message
+            .contains("Initial implementation directive"));
+        assert!(!messages[task_goal_index]
+            .message
+            .contains("Later raw-tail implementation correction"));
+        assert_eq!(
+            raw_tail_indices.len(),
+            1,
+            "the newer user message must not be duplicated"
+        );
+        assert!(task_goal_index < summary_index && summary_index < raw_tail_indices[0]);
+    }
+
+    #[tokio::test]
+    async fn compact_task_goal_preserves_sources_across_completed_segments() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-user-context-related-segments";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let initial = context
+            .add_message(
+                "user".to_string(),
+                "Perform a read-only audit first".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add initial directive")
+            .0;
+        let _ = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "execution_status": "completed",
+                })),
+            )
+            .await
+            .expect("failed to add completed segment marker");
+        let implementation = context
+            .add_message(
+                "user".to_string(),
+                "Implement the confirmed fixes instead.\n<SYSTEM_REMINDER>This is a new context segment following earlier completed work.</SYSTEM_REMINDER>".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add implementation directive")
+            .0;
+        let initial_id = initial.id.expect("initial directive id");
+        let implementation_id = implementation.id.expect("implementation directive id");
+
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![initial_id, implementation_id],
+                    "Implement the confirmed fixes",
+                )),
+                4,
+                implementation_id,
+            )
+            .await
+            .expect("compression should preserve related task-goal sources");
+
+        let task_goal = context
+            .get_messages_for_llm()
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("compact task goal should be projected");
+        assert_eq!(
+            task_goal
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("data"))
+                .and_then(|data| data.get("task_goal_state"))
+                .and_then(|state| state.get("source_message_ids")),
+            Some(&json!([initial_id, implementation_id]))
+        );
+        assert!(task_goal.message.contains("Implement the confirmed fixes"));
+        assert!(!task_goal
+            .message
+            .contains("This is a new context segment following earlier completed work"));
+    }
+
+    #[tokio::test]
+    async fn task_goal_ledger_remains_active_after_completed_segment_when_user_continues() {
+        let (_dir, store) = setup_store();
+        let session_id = "task-goal-ledger-across-completion";
+        insert_workflow(&store, session_id);
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let audit = context
+            .add_message(
+                "user".to_string(),
+                "Audit the workflow display first".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add audit directive")
+            .0;
+        let _completion = context
+            .add_message(
+                "tool".to_string(),
+                TASK_FINISHED.to_string(),
+                None,
+                None,
+                None,
+                2,
+                false,
+                None,
+                Some(json!({
+                    "tool_name": TOOL_COMPLETE_WORKFLOW,
+                    "execution_status": "completed",
+                })),
+            )
+            .await
+            .expect("failed to add completion marker");
+        let implementation = context
+            .add_message(
+                "user".to_string(),
+                "Implement the confirmed fixes.\n<SYSTEM_REMINDER>runtime-only note</SYSTEM_REMINDER>"
+                    .to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add implementation directive")
+            .0;
+        let audit_id = audit.id.expect("audit directive id");
+        let implementation_id = implementation.id.expect("implementation directive id");
+
+        let ledger = context
+            .task_goal_ledger_for_compression(implementation_id)
+            .expect("task-goal ledger should derive from durable messages");
+        assert_eq!(ledger.source_message_ids, vec![audit_id, implementation_id]);
+        assert!(ledger.requires_active_goal);
+        assert_eq!(ledger.completion_evidence_message_id, None);
+        assert!(ledger
+            .source_previews
+            .iter()
+            .any(|preview| preview.content.contains("Implement the confirmed fixes")));
+        assert!(ledger
+            .source_previews
+            .iter()
+            .all(|preview| !preview.content.contains("runtime-only note")));
+    }
+
+    #[tokio::test]
+    async fn task_goal_ledger_bounds_long_user_history_without_dropping_source_ids() {
+        let (_dir, store) = setup_store();
+        let session_id = "task-goal-ledger-bounded-history";
+        insert_workflow(&store, session_id);
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let mut source_ids = Vec::new();
+        for index in 0..10 {
+            let message = context
+                .add_message(
+                    "user".to_string(),
+                    format!("directive-{index}: {}", "x".repeat(2_000)),
+                    None,
+                    None,
+                    None,
+                    index,
+                    false,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to add directive")
+                .0;
+            source_ids.push(message.id.expect("directive id"));
+        }
+        let ledger = context
+            .task_goal_ledger_for_compression(*source_ids.last().expect("latest source id"))
+            .expect("task-goal ledger should derive from durable messages");
+        assert_eq!(ledger.source_message_ids, source_ids);
+        assert_eq!(ledger.source_previews.len(), TASK_GOAL_LEDGER_PREVIEW_LIMIT);
+        assert!(ledger
+            .source_previews
+            .iter()
+            .all(|preview| preview.content.chars().count() <= TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT));
+    }
+
+    #[tokio::test]
+    async fn manual_clear_resets_task_goal_ledger_sources() {
+        let (_dir, store) = setup_store();
+        let session_id = "task-goal-ledger-manual-clear";
+        insert_workflow(&store, session_id);
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let old = context
+            .add_message(
+                "user".to_string(),
+                "Old task must not survive a manual clear".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add old directive")
+            .0;
+        let old_id = old.id.expect("old directive id");
+        context
+            .begin_manual_clear_context_segment(2)
+            .await
+            .expect("manual clear should persist its durable marker");
+        let current = context
+            .add_message(
+                "user".to_string(),
+                "Current task after manual clear".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add current directive")
+            .0;
+        let current_id = current.id.expect("current directive id");
+
+        let ledger = context
+            .task_goal_ledger_for_compression(current_id)
+            .expect("task-goal ledger should respect manual clear");
+        assert_eq!(ledger.source_message_ids, vec![current_id]);
+        assert!(!ledger.source_message_ids.contains(&old_id));
+        assert!(ledger.requires_active_goal);
+    }
+
+    #[tokio::test]
+    async fn compact_task_goal_keeps_large_user_source_out_of_llm_projection() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-user-context-reference";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let large_user_message = format!(
+            "Preserve the implementation mode.\n{}\nOMITTED-MIDDLE-SENTINEL\n{}\nKeep the final verification focused.",
+            "a".repeat(9_000),
+            "b".repeat(9_000),
+        );
+        let persisted = context
+            .add_message(
+                "user".to_string(),
+                large_user_message.clone(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add large user directive")
+            .0;
+        let message_id = persisted.id.expect("large directive id");
+        let reference = crate::workflow::react::user_context::reference_large_user_context(
+            message_id,
+            &large_user_message,
+            None,
+        )
+        .expect("large input should use a durable reference");
+        context
+            .update_message_metadata(
+                message_id,
+                crate::workflow::react::user_context::merge_reference_metadata(None, &reference),
+            )
+            .await
+            .expect("failed to attach user context reference");
+
+        context
+            .compress_with_task_goal_state(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                Some(active_task_goal_state(
+                    vec![message_id],
+                    "Preserve implementation mode and keep final verification focused",
+                )),
+                2,
+                message_id,
+            )
+            .await
+            .expect("compression should persist a compact task goal");
+
+        let task_goal = context
+            .get_messages_for_llm()
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("compact task goal should be projected");
+        assert!(task_goal
+            .message
+            .contains("Preserve implementation mode and keep final verification focused"));
+        assert!(!task_goal.message.contains("USER_CONTEXT_REFERENCE"));
+        assert!(!task_goal.message.contains("OMITTED-MIDDLE-SENTINEL"));
+        assert!(task_goal.message.len() < 2_000);
     }
 
     #[tokio::test]
@@ -4972,6 +6039,20 @@ mod tests {
             created_at: None,
         };
         assert!(ContextManager::is_user_authored_task_message(&base));
+
+        let user_message_with_appended_reminder = WorkflowMessage {
+            id: Some(5),
+            message: "Continue with the implementation.\n<SYSTEM_REMINDER>This is a runtime segment note and not part of the user directive.</SYSTEM_REMINDER>".to_string(),
+            ..base.clone()
+        };
+        assert!(ContextManager::is_user_authored_task_message(
+            &user_message_with_appended_reminder
+        ));
+        let stripped = ContextManager::strip_system_reminder_blocks(
+            &user_message_with_appended_reminder.message,
+        );
+        assert!(stripped.contains("Continue with the implementation."));
+        assert!(!stripped.contains("This is a runtime segment note"));
 
         let runtime_observation = WorkflowMessage {
             id: Some(2),

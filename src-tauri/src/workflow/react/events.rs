@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::workflow::react::types::EffectiveTaskObjective;
+
 pub const EVENT_VERSION: &str = "1.0.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -10,6 +12,7 @@ pub enum WorkflowEventType {
     StateChanged,
     WaitEntered,
     UserInputReceived,
+    EffectiveTaskObjectiveChanged,
     ApprovalRequested,
     ApprovalResolved,
     ToolStarted,
@@ -32,6 +35,7 @@ impl WorkflowEventType {
             WorkflowEventType::StateChanged => "state_changed",
             WorkflowEventType::WaitEntered => "wait_entered",
             WorkflowEventType::UserInputReceived => "user_input_received",
+            WorkflowEventType::EffectiveTaskObjectiveChanged => "effective_task_objective_changed",
             WorkflowEventType::ApprovalRequested => "approval_requested",
             WorkflowEventType::ApprovalResolved => "approval_resolved",
             WorkflowEventType::ToolStarted => "tool_started",
@@ -83,15 +87,29 @@ impl WorkflowEvent {
         )
     }
 
+    #[cfg(test)]
     pub fn wait_entered(
         session_id: String,
         wait_reason: String,
         pending_tools: Vec<Value>,
     ) -> Self {
+        Self::wait_entered_with_user_tool_call_id(session_id, wait_reason, pending_tools, None)
+    }
+
+    pub fn wait_entered_with_user_tool_call_id(
+        session_id: String,
+        wait_reason: String,
+        pending_tools: Vec<Value>,
+        awaiting_user_tool_call_id: Option<String>,
+    ) -> Self {
         Self::new(
             WorkflowEventType::WaitEntered,
             session_id,
-            serde_json::json!({ "wait_reason": wait_reason, "pending_tools": pending_tools }),
+            serde_json::json!({
+                "wait_reason": wait_reason,
+                "pending_tools": pending_tools,
+                "awaiting_user_tool_call_id": awaiting_user_tool_call_id,
+            }),
         )
     }
 
@@ -100,6 +118,21 @@ impl WorkflowEvent {
             WorkflowEventType::UserInputReceived,
             session_id,
             serde_json::json!({ "content": content }),
+        )
+    }
+
+    pub fn effective_task_objective_changed(
+        session_id: String,
+        source_message_id: Option<i64>,
+        effective_task_objective: Option<EffectiveTaskObjective>,
+    ) -> Self {
+        Self::new(
+            WorkflowEventType::EffectiveTaskObjectiveChanged,
+            session_id,
+            serde_json::json!({
+                "source_message_id": source_message_id,
+                "effective_task_objective": effective_task_objective,
+            }),
         )
     }
 

@@ -11,6 +11,7 @@ use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::{
     BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
 };
+use crate::workflow::react::types::{TaskGoalLedger, TaskGoalState, TaskGoalStatus};
 
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -28,6 +29,15 @@ pub struct ContextCompressor {
 pub enum CompressionMode {
     Rollup,
     Blocking,
+}
+
+/// A validated compression handoff. `task_goal_state` is intentionally kept
+/// separate from the generated logical summary so it can be persisted as a
+/// runtime-owned observation before the summary in the LLM projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompressionResult {
+    pub summary: String,
+    pub task_goal_state: Option<TaskGoalState>,
 }
 
 impl ContextCompressor {
@@ -53,9 +63,13 @@ impl ContextCompressor {
         mode: CompressionMode,
         compressed_until_message_id: i64,
         max_output_tokens: u32,
-    ) -> Result<String, WorkflowEngineError> {
+        task_goal_ledger: Option<&TaskGoalLedger>,
+    ) -> Result<CompressionResult, WorkflowEngineError> {
         if messages.is_empty() {
-            return Ok(String::new());
+            return Ok(CompressionResult {
+                summary: String::new(),
+                task_goal_state: None,
+            });
         }
 
         // 1. Locate the LATEST summary to implement incremental compression
@@ -96,7 +110,10 @@ impl ContextCompressor {
             .collect();
 
         if purified_history.is_empty() {
-            return Ok("No meaningful progress to compress.".to_string());
+            return Ok(CompressionResult {
+                summary: "No meaningful progress to compress.".to_string(),
+                task_goal_state: None,
+            });
         }
 
         let completed_tasks = Self::render_completed_tasks(incremental_messages);
@@ -106,7 +123,7 @@ impl ContextCompressor {
 
         // 4. Strategic Summary (LLM Call)
         let user_prompt = match mode {
-            CompressionMode::Blocking => "Create or update only the v2 pressure_handoff checkpoint from the supplied fact packs. It is boundary-scoped: do not restate the live user goal or a next action. Later raw-tail messages are authoritative deltas.",
+            CompressionMode::Blocking => "Create the v2 pressure_handoff checkpoint and the required compact task_state from the runtime-owned goal source ledger. The task_state is the only model-generated goal wording; later raw-tail messages are authoritative deltas.",
             CompressionMode::Rollup => "Create or update only the v2 completed_task_rollup from the supplied completed historical work. Preserve supplied review rounds and typed evidence for completed work, but do not represent live task state.",
         };
 
@@ -125,9 +142,19 @@ impl ContextCompressor {
                 mode,
                 compressed_until_message_id,
                 max_output_tokens,
+                task_goal_ledger,
             )
             .await?;
-        Ok(summary)
+        let (summary, task_goal_state) = match task_goal_ledger {
+            Some(ledger) if matches!(mode, CompressionMode::Blocking) => {
+                Self::extract_runtime_task_goal_state(&summary, ledger)?
+            }
+            _ => (summary, None),
+        };
+        Ok(CompressionResult {
+            summary,
+            task_goal_state,
+        })
     }
 
     async fn extract_fact_from_history(
@@ -141,6 +168,7 @@ impl ContextCompressor {
         mode: CompressionMode,
         compressed_until_message_id: i64,
         max_output_tokens: u32,
+        task_goal_ledger: Option<&TaskGoalLedger>,
     ) -> Result<String, WorkflowEngineError> {
         let transcript = Self::render_history_as_transcript(&history_json);
         let chat_interface = {
@@ -173,10 +201,13 @@ impl ContextCompressor {
                 json!({
                     "role": "user",
                     "content": format!(
-                        "<completed_tasks>\n{}\n</completed_tasks>\n\n<review_rounds>\n{}\n</review_rounds>\n\n<handoff_fact_pack>\n{}\n</handoff_fact_pack>\n\n<conversation_history>\n{}\n</conversation_history>\n\n{}{}",
+                        "<completed_tasks>\n{}\n</completed_tasks>\n\n<review_rounds>\n{}\n</review_rounds>\n\n<handoff_fact_pack>\n{}\n</handoff_fact_pack>\n\n<task_goal_source_ledger>\n{}\n</task_goal_source_ledger>\n\n<conversation_history>\n{}\n</conversation_history>\n\n{}{}",
                         completed_tasks,
                         review_rounds,
                         fact_pack,
+                        task_goal_ledger
+                            .map(Self::render_task_goal_source_ledger)
+                            .unwrap_or_else(|| "None".to_string()),
                         transcript,
                         user_prompt,
                         retry_instruction
@@ -217,17 +248,19 @@ impl ContextCompressor {
                     );
                     let normalized =
                         Self::normalize_handoff_file_changes(&normalized, canonical_file_changes);
-                    let validation_error = match Self::validate_compression_result(
-                        &normalized,
-                        completed_tasks,
-                        review_rounds,
-                        fact_pack,
-                        mode,
-                        compressed_until_message_id,
-                    ) {
-                        Ok(validated) => return Ok(validated),
-                        Err(err) => err,
-                    };
+                    let validation_error =
+                        match Self::validate_compression_result_with_task_goal_ledger(
+                            &normalized,
+                            completed_tasks,
+                            review_rounds,
+                            fact_pack,
+                            mode,
+                            compressed_until_message_id,
+                            task_goal_ledger,
+                        ) {
+                            Ok(validated) => return Ok(validated),
+                            Err(err) => err,
+                        };
 
                     if attempt < max_attempts {
                         let wait_secs = 2u64.pow(attempt - 1);
@@ -761,13 +794,14 @@ impl ContextCompressor {
             }
         }
         let normalized = components.join("/");
-        Some(if absolute {
+        let normalized = if absolute {
             format!("/{normalized}")
         } else if normalized.is_empty() {
             ".".to_string()
         } else {
             normalized
-        })
+        };
+        (!normalized.starts_with("/tmp/") && normalized != "/tmp").then_some(normalized)
     }
 
     fn render_fact_pack(
@@ -918,17 +952,6 @@ impl ContextCompressor {
                 object.remove("environment_constraints");
             }
 
-            let user_directives = handoff
-                .get("user_directives")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|directive| !directive.is_empty())
-                .collect::<std::collections::BTreeSet<_>>();
-            handoff["user_directives"] = json!(user_directives);
-
             let mut boundary_open_items = std::collections::BTreeSet::new();
             if let Some(items) = handoff.get("boundary_open_items").and_then(Value::as_array) {
                 for item in items {
@@ -1044,6 +1067,85 @@ impl ContextCompressor {
         trimmed.to_string()
     }
 
+    fn render_task_goal_source_ledger(ledger: &TaskGoalLedger) -> String {
+        let source_previews = ledger
+            .source_previews
+            .iter()
+            .map(|preview| {
+                json!({
+                    "message_id": preview.source_message_id,
+                    "content": preview.content,
+                })
+            })
+            .collect::<Vec<_>>();
+        let latest_directive = ledger.source_previews.last().map(|preview| {
+            json!({
+                "message_id": preview.source_message_id,
+                "content": preview.content,
+            })
+        });
+        let source_message_ids = ledger.source_message_ids.as_slice();
+        let value = json!({
+            "runtime_owned": true,
+            "source_count": source_message_ids.len(),
+            "first_source_message_id": source_message_ids.first(),
+            "latest_source_message_id": source_message_ids.last(),
+            "latest_directive": latest_directive,
+            "source_previews": source_previews,
+            "previous_task_state": ledger.previous_state.as_ref().map(|state| json!({
+                "status": state.status,
+                "current_goal": state.current_goal,
+            })),
+            "required_status": if ledger.requires_active_goal { "active" } else { "complete_or_none" },
+            "completion_evidence_message_id": ledger.completion_evidence_message_id,
+        });
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    fn extract_runtime_task_goal_state(
+        summary: &str,
+        ledger: &TaskGoalLedger,
+    ) -> Result<(String, Option<TaskGoalState>), WorkflowEngineError> {
+        let mut parsed = serde_json::from_str::<Value>(summary).map_err(|error| {
+            WorkflowEngineError::General(format!(
+                "validated compression summary could not be parsed for task goal state: {error}"
+            ))
+        })?;
+        let object = parsed.as_object_mut().ok_or_else(|| {
+            WorkflowEngineError::General(
+                "validated compression summary must remain a JSON object".to_string(),
+            )
+        })?;
+        let model_task_state = object.remove("task_state").ok_or_else(|| {
+            WorkflowEngineError::General(
+                "validated blocking compression summary is missing task_state".to_string(),
+            )
+        })?;
+        let model_task_state =
+            serde_json::from_value::<TaskGoalState>(model_task_state).map_err(|error| {
+                WorkflowEngineError::General(format!(
+                    "validated compression task_state could not be decoded: {error}"
+                ))
+            })?;
+        let task_goal_state = TaskGoalState {
+            version: 1,
+            status: model_task_state.status,
+            current_goal: model_task_state
+                .current_goal
+                .map(|goal| goal.trim().to_string())
+                .filter(|goal| !goal.is_empty()),
+            source_message_ids: ledger.source_message_ids.clone(),
+            latest_directive: ledger.source_previews.last().cloned(),
+            completion_evidence_message_id: ledger.completion_evidence_message_id,
+        };
+        let summary = serde_json::to_string_pretty(&parsed).map_err(|error| {
+            WorkflowEngineError::General(format!(
+                "serialize logical compression summary without task_state: {error}"
+            ))
+        })?;
+        Ok((summary, Some(task_goal_state)))
+    }
+
     #[cfg(test)]
     fn validate_summary_result(normalized: &str) -> Result<String, String> {
         let trimmed = normalized.trim();
@@ -1117,6 +1219,7 @@ impl ContextCompressor {
             .map_err(|error| format!("failed to normalize snapshot json: {}", error))
     }
 
+    #[cfg(test)]
     fn validate_compression_result(
         normalized: &str,
         _completed_tasks: &str,
@@ -1124,6 +1227,26 @@ impl ContextCompressor {
         fact_pack: &str,
         mode: CompressionMode,
         compressed_until_message_id: i64,
+    ) -> Result<String, String> {
+        Self::validate_compression_result_with_task_goal_ledger(
+            normalized,
+            _completed_tasks,
+            review_rounds,
+            fact_pack,
+            mode,
+            compressed_until_message_id,
+            None,
+        )
+    }
+
+    fn validate_compression_result_with_task_goal_ledger(
+        normalized: &str,
+        _completed_tasks: &str,
+        review_rounds: &str,
+        fact_pack: &str,
+        mode: CompressionMode,
+        compressed_until_message_id: i64,
+        task_goal_ledger: Option<&TaskGoalLedger>,
     ) -> Result<String, String> {
         let parsed = serde_json::from_str::<serde_json::Value>(normalized)
             .map_err(|_| "new compression output must be a v2 JSON object".to_string())?;
@@ -1133,6 +1256,7 @@ impl ContextCompressor {
             fact_pack,
             mode,
             compressed_until_message_id,
+            task_goal_ledger,
         )
     }
 
@@ -1170,6 +1294,7 @@ impl ContextCompressor {
         fact_pack: &str,
         mode: CompressionMode,
         compressed_until_message_id: i64,
+        task_goal_ledger: Option<&TaskGoalLedger>,
     ) -> Result<String, String> {
         let object = parsed
             .as_object()
@@ -1182,12 +1307,11 @@ impl ContextCompressor {
             return Err("schema_version must be 2".to_string());
         }
 
-        let (kind, required_fields): (&str, Vec<&str>) = match mode {
+        let (kind, mut required_fields): (&str, Vec<&str>) = match mode {
             CompressionMode::Blocking => (
                 "pressure_handoff",
                 vec![
                     "as_of_boundary",
-                    "user_directives",
                     "confirmed_facts",
                     "boundary_open_items",
                     "completed_work",
@@ -1208,8 +1332,30 @@ impl ContextCompressor {
                 ],
             ),
         };
+        if matches!(mode, CompressionMode::Blocking) && task_goal_ledger.is_some() {
+            required_fields.push("task_state");
+        }
         if object.get("kind").and_then(|value| value.as_str()) != Some(kind) {
             return Err(format!("kind must be {kind}"));
+        }
+        for prohibited in [
+            "user_directives",
+            "effective_task_objective",
+            "next_action",
+            "overall_goal",
+            "approved_plan",
+        ] {
+            if object.contains_key(prohibited) {
+                return Err(format!("{prohibited} is prohibited in v2 handoff"));
+            }
+        }
+        if let Some(unexpected_field) = object.keys().find(|field| {
+            !required_fields.contains(&field.as_str())
+                && !matches!(field.as_str(), "schema_version" | "kind")
+        }) {
+            return Err(format!(
+                "{unexpected_field} is not part of the v2 {kind} handoff contract"
+            ));
         }
         if matches!(mode, CompressionMode::Blocking)
             && object
@@ -1222,7 +1368,7 @@ impl ContextCompressor {
         }
         for field in &required_fields {
             let field = *field;
-            if field != "as_of_boundary"
+            if !matches!(field, "as_of_boundary" | "task_state")
                 && !object.get(field).is_some_and(serde_json::Value::is_array)
             {
                 return Err(format!("{field} must be an array"));
@@ -1249,10 +1395,14 @@ impl ContextCompressor {
         }
         match mode {
             CompressionMode::Blocking => {
+                if let Some(ledger) = task_goal_ledger {
+                    Self::validate_task_goal_state(object, ledger)?;
+                } else if object.contains_key("task_state") {
+                    return Err("task_state requires a runtime task-goal source ledger".to_string());
+                }
                 Self::validate_semantic_string_arrays(
                     object,
                     &[
-                        "user_directives",
                         "confirmed_facts",
                         "completed_work",
                         "constraints_and_guards",
@@ -1261,7 +1411,6 @@ impl ContextCompressor {
                 Self::validate_semantic_entry_limits(
                     object,
                     &[
-                        ("user_directives", 2),
                         ("confirmed_facts", 4),
                         ("boundary_open_items", 3),
                         ("completed_work", 2),
@@ -1304,21 +1453,78 @@ impl ContextCompressor {
                 }
             }
         }
-        for prohibited in [
-            "next_action",
-            "todos",
-            "task_state",
-            "overall_goal",
-            "approved_plan",
-        ] {
-            if object.contains_key(prohibited) {
-                return Err(format!("{prohibited} is prohibited in v2 handoff"));
-            }
-        }
         Self::validate_review_rounds(object, review_rounds)?;
         Self::validate_fact_pack(object, fact_pack)?;
         serde_json::to_string_pretty(parsed)
             .map_err(|error| format!("failed to normalize v2 handoff json: {error}"))
+    }
+
+    fn validate_task_goal_state(
+        object: &serde_json::Map<String, Value>,
+        ledger: &TaskGoalLedger,
+    ) -> Result<(), String> {
+        let state = object
+            .get("task_state")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "task_state must be an object".to_string())?;
+        if let Some(unexpected) = state
+            .keys()
+            .find(|key| !matches!(key.as_str(), "status" | "current_goal"))
+        {
+            return Err(format!("task_state.{unexpected} is not allowed"));
+        }
+        let status_value = state
+            .get("status")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "task_state.status is required".to_string())?;
+        let status =
+            serde_json::from_value::<TaskGoalStatus>(Value::String(status_value.to_string()))
+                .map_err(|_| "task_state.status must be active, complete, or none".to_string())?;
+        let current_goal = state.get("current_goal");
+
+        match status {
+            TaskGoalStatus::Active | TaskGoalStatus::Complete => {
+                let goal = current_goal
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|goal| !goal.is_empty())
+                    .ok_or_else(|| {
+                        "task_state.current_goal must be a non-empty string for active or complete status"
+                            .to_string()
+                    })?;
+                if goal.chars().count() > 800 {
+                    return Err(
+                        "task_state.current_goal must contain at most 800 characters".to_string(),
+                    );
+                }
+            }
+            TaskGoalStatus::None => {
+                if !current_goal.is_some_and(Value::is_null) {
+                    return Err("task_state.current_goal must be null for none status".to_string());
+                }
+            }
+        }
+
+        if ledger.requires_active_goal && status != TaskGoalStatus::Active {
+            return Err(
+                "task_state cannot become complete or none while runtime-owned user sources remain active"
+                    .to_string(),
+            );
+        }
+        if matches!(status, TaskGoalStatus::Complete | TaskGoalStatus::None)
+            && ledger.completion_evidence_message_id.is_none()
+        {
+            return Err(
+                "task_state can become complete or none only with successful complete_workflow evidence after the latest user directive"
+                    .to_string(),
+            );
+        }
+        if status == TaskGoalStatus::Active && ledger.source_message_ids.is_empty() {
+            return Err(
+                "task_state cannot be active without a runtime-owned user source".to_string(),
+            );
+        }
+        Ok(())
     }
 
     fn validate_review_rounds(
@@ -1607,17 +1813,19 @@ impl ContextCompressor {
 
     fn build_retry_instruction(validation_error: &str, mode: CompressionMode) -> String {
         let schema = match mode {
-            CompressionMode::Blocking => "user_directives, confirmed_facts, boundary_open_items, completed_work, constraints_and_guards",
+            CompressionMode::Blocking => {
+                "task_state, confirmed_facts, boundary_open_items, completed_work, constraints_and_guards"
+            }
             CompressionMode::Rollup => {
                 "confirmed_facts, completed_work, unresolved_carryovers, constraints_and_guards"
             }
         };
         let item_shapes = match mode {
-            CompressionMode::Blocking => "user_directives, confirmed_facts, completed_work, and constraints_and_guards must be compact string arrays; boundary_open_items must contain only {kind, summary}. Limits: user_directives=2, confirmed_facts=4, boundary_open_items=3, completed_work=2, constraints_and_guards=3.",
+            CompressionMode::Blocking => "task_state must contain only {status: active|complete|none, current_goal: string|null}; confirmed_facts, completed_work, and constraints_and_guards must be compact string arrays; boundary_open_items must contain only {kind, summary}. Limits: current_goal=800 characters, confirmed_facts=4, boundary_open_items=3, completed_work=2, constraints_and_guards=3.",
             CompressionMode::Rollup => "confirmed_facts, completed_work, unresolved_carryovers, and constraints_and_guards must be compact string arrays. Limits: confirmed_facts=4, unresolved_carryovers=3, completed_work=2, constraints_and_guards=3.",
         };
         format!(
-            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one semantic JSON object and nothing else. Required semantic fields: {}. Required item shapes: {} The runtime adds schema_version, kind, boundary, canonical file_changes, and review_rounds; do not emit those system-owned fields. Every listed array key must be present, but any semantic array may be []; never invent a verification, change, constraint, directive, open item, or review to fill one. Do not emit legacy state_snapshot, prev_tasks, task_state, todos, next_action, approved_plan, or overall_goal. Do NOT return XML, reasoning-only text, markdown fences, or explanations.</SYSTEM_REMINDER>",
+            "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one semantic JSON object and nothing else. Required semantic fields: {}. Required item shapes: {} The runtime adds schema_version, kind, boundary, canonical file_changes, review_rounds, source IDs, and completion evidence; do not emit those system-owned fields. Every listed array key must be present, but any semantic array may be []; never invent a verification, change, constraint, open item, review, source, or completion evidence to fill one. Do not emit legacy state_snapshot, prev_tasks, next_action, approved_plan, or overall_goal. Do NOT return XML, reasoning-only text, markdown fences, or explanations.</SYSTEM_REMINDER>",
             validation_error, schema, item_shapes
         )
     }
@@ -1639,9 +1847,23 @@ mod tests {
         workflow::react::{
             constants::TASK_FINISHED,
             prompts::{BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT},
+            types::{TaskGoalLedger, TaskGoalSourcePreview},
         },
     };
     use serde_json::{json, Value};
+
+    fn active_task_goal_ledger() -> TaskGoalLedger {
+        TaskGoalLedger {
+            source_message_ids: vec![11, 12],
+            source_previews: vec![TaskGoalSourcePreview {
+                source_message_id: 12,
+                content: "Implement the confirmed fixes".to_string(),
+            }],
+            previous_state: None,
+            requires_active_goal: true,
+            completion_evidence_message_id: None,
+        }
+    }
 
     #[test]
     fn normalize_handoff_file_changes_replaces_model_output_with_canonical_paths() {
@@ -1669,6 +1891,22 @@ mod tests {
         assert_eq!(
             value["completed_work"],
             json!(["Inspected and updated the implementation"])
+        );
+    }
+
+    #[test]
+    fn normalize_handoff_path_excludes_tmp_artifacts() {
+        assert_eq!(
+            ContextCompressor::normalize_handoff_path(&json!("/tmp/compression-test.rs")),
+            None
+        );
+        assert_eq!(
+            ContextCompressor::normalize_handoff_path(&json!("/tmp/../tmp/check.json")),
+            None
+        );
+        assert_eq!(
+            ContextCompressor::normalize_handoff_path(&json!("src/workflow/react/context.rs")),
+            Some("src/workflow/react/context.rs".to_string())
         );
     }
 
@@ -1718,7 +1956,6 @@ mod tests {
     #[test]
     fn runtime_injects_pressure_mechanical_fields() {
         let semantic = json!({
-            "user_directives": ["Keep the current API contract"],
             "confirmed_facts": ["The local guard is required"],
             "boundary_open_items": [{"kind": "verification", "summary": "Run the runtime check"}],
             "completed_work": ["Added the guard"],
@@ -1791,7 +2028,6 @@ mod tests {
             "schema_version": 2,
             "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 42},
-            "user_directives": [],
             "confirmed_facts": [],
             "boundary_open_items": [],
             "completed_work": [],
@@ -1812,14 +2048,120 @@ mod tests {
     }
 
     #[test]
+    fn active_task_goal_cannot_silently_become_none_on_later_compression() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "task_state": {"status": "none", "current_goal": null},
+            "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": [],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+        let ledger = active_task_goal_ledger();
+        let error = ContextCompressor::validate_compression_result_with_task_goal_ledger(
+            &handoff,
+            "None",
+            "None",
+            "{\"file_changes\":[]}",
+            CompressionMode::Blocking,
+            42,
+            Some(&ledger),
+        )
+        .expect_err("an active goal must not disappear without completion evidence");
+        assert!(error.contains("remain active"));
+    }
+
+    #[test]
+    fn completion_evidence_permits_complete_then_none_task_goal_state() {
+        let mut ledger = active_task_goal_ledger();
+        ledger.requires_active_goal = false;
+        ledger.completion_evidence_message_id = Some(41);
+        let base = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": [],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        });
+
+        for state in [
+            json!({"status": "complete", "current_goal": "Implement the confirmed fixes"}),
+            json!({"status": "none", "current_goal": null}),
+        ] {
+            let mut handoff = base.clone();
+            handoff["task_state"] = state;
+            assert!(
+                ContextCompressor::validate_compression_result_with_task_goal_ledger(
+                    &handoff.to_string(),
+                    "None",
+                    "None",
+                    "{\"file_changes\":[]}",
+                    CompressionMode::Blocking,
+                    42,
+                    Some(&ledger),
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_assigns_goal_sources_and_keeps_task_state_out_of_logical_summary() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "task_state": {"status": "active", "current_goal": "Implement the confirmed fixes"},
+            "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": [],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+        let ledger = active_task_goal_ledger();
+        let (summary, state) =
+            ContextCompressor::extract_runtime_task_goal_state(&handoff, &ledger)
+                .expect("runtime should split validated task goal from logical summary");
+        assert!(!summary.contains("task_state"));
+        let state = state.expect("task state should be persisted separately");
+        assert_eq!(state.source_message_ids, vec![11, 12]);
+        assert_eq!(
+            state
+                .latest_directive
+                .as_ref()
+                .map(|directive| directive.source_message_id),
+            Some(12)
+        );
+        assert_eq!(
+            state.current_goal.as_deref(),
+            Some("Implement the confirmed fixes")
+        );
+        assert_eq!(state.completion_evidence_message_id, None);
+    }
+
+    #[test]
     fn pressure_handoff_prompt_does_not_imply_task_specific_required_items() {
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"boundary_open_items\": []"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"completed_work\": []"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
-            .contains("The runtime, not you, adds schema version, kind, compression boundary"));
-        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains(
-            "user_directives`: an explicit later user correction, preference, or decision"
-        ));
+            .contains("Return exactly and only the five semantic fields"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"task_state\":"));
+        assert!(!BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("user_directives"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("later directives are refinements by default"));
+        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
+            .contains("Do not narrow the goal to only the newest correction"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
             .contains("confirmed_facts`: evidence-backed behavior, root causes, or decisions"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
@@ -2327,7 +2669,7 @@ mod tests {
             "schema_version": 2,
             "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 7},
-            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "confirmed_facts": [], "boundary_open_items": [],
             "completed_work": [], "file_changes": [], "constraints_and_guards": [],
             "review_rounds": []
         })
@@ -2361,6 +2703,56 @@ mod tests {
     }
 
     #[test]
+    fn v2_pressure_handoff_rejects_duplicate_effective_objective_field() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [], "file_changes": [], "constraints_and_guards": [],
+            "review_rounds": [],
+            "effective_task_objective": "Implement the confirmed fixes"
+        })
+        .to_string();
+
+        let error = ContextCompressor::validate_compression_result(
+            &handoff,
+            "None",
+            "None",
+            "{\"file_changes\":[]}",
+            CompressionMode::Blocking,
+            42,
+        )
+        .expect_err("the summary must not create a second task-objective authority");
+        assert!(error.contains("effective_task_objective"));
+    }
+
+    #[test]
+    fn v2_pressure_handoff_rejects_model_generated_user_directives() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "user_directives": ["Return to read-only audit mode"],
+            "confirmed_facts": [], "boundary_open_items": [],
+            "completed_work": [], "file_changes": [], "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+
+        let error = ContextCompressor::validate_compression_result(
+            &handoff,
+            "None",
+            "None",
+            "{\"file_changes\":[]}",
+            CompressionMode::Blocking,
+            42,
+        )
+        .expect_err("the compressor must not create a second user-directive authority");
+        assert!(error.contains("user_directives"));
+    }
+
+    #[test]
     fn v2_pressure_handoff_preserves_canonical_review_content_and_fact_evidence() {
         let input_rounds = json!([{
             "id": 17,
@@ -2375,7 +2767,7 @@ mod tests {
             "schema_version": 2,
             "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 42},
-            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "confirmed_facts": [], "boundary_open_items": [],
             "completed_work": [],
             "file_changes": ["src/example.rs"],
             "constraints_and_guards": [],
@@ -2491,7 +2883,7 @@ mod tests {
         let second_handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 51},
-            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "confirmed_facts": [], "boundary_open_items": [],
             "completed_work": [],
             "file_changes": ["src/example.rs"],
             "constraints_and_guards": [],
@@ -2515,7 +2907,7 @@ mod tests {
         let handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 42},
-            "user_directives": [], "confirmed_facts": [],
+            "confirmed_facts": [],
             "boundary_open_items": [],
             "completed_work": ["Validated the workflow compression change"],
             "file_changes": ["src/lib.rs"],
@@ -2692,6 +3084,55 @@ mod tests {
     }
 
     #[test]
+    fn fact_pack_excludes_tmp_paths_from_prior_and_current_mutations() {
+        let summary = WorkflowMessage {
+            id: Some(41),
+            session_id: "s".to_string(),
+            role: "system".to_string(),
+            message: "## Previous Context Snapshot\n{\"schema_version\":2,\"kind\":\"pressure_handoff\",\"file_changes\":[\"/tmp/old-compression-test.rs\",\"src/archived.rs\"]}".to_string(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({"compressed_until_message_id": 40})),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let temporary_mutation = WorkflowMessage {
+            id: Some(42),
+            session_id: "s".to_string(),
+            role: "tool".to_string(),
+            message: "write_file result".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({
+                "tool_name": "write_file",
+                "details": {"display_path": "/tmp/current-compression-test.rs"},
+                "execution_status": "completed"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 1,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let messages = vec![summary, temporary_mutation];
+        let facts: Value =
+            serde_json::from_str(&ContextCompressor::render_fact_pack(&messages, &messages))
+                .expect("fact pack json");
+        assert_eq!(facts["file_changes"], json!(["src/archived.rs"]));
+    }
+
+    #[test]
     fn review_round_status_uses_later_approval_as_semantic_evidence() {
         let review_message = |id: i64, approved: bool| WorkflowMessage {
             id: Some(id),
@@ -2810,7 +3251,7 @@ mod tests {
         let handoff = json!({
             "schema_version": 2, "kind": "pressure_handoff",
             "as_of_boundary": {"compressed_until_message_id": 20},
-            "user_directives": [], "confirmed_facts": [], "boundary_open_items": [],
+            "confirmed_facts": [], "boundary_open_items": [],
             "completed_work": [], "file_changes": [], "constraints_and_guards": [],
             "review_rounds": serde_json::from_str::<serde_json::Value>(&review_rounds).expect("rounds json")
         })

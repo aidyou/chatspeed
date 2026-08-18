@@ -171,19 +171,20 @@ test('MCP tool calls show their arguments and format only valid JSON results', a
 })
 
 test('ask-user responses stay hidden from the transcript and render on their source tool card', async () => {
-  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine] =
+  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine, workflowStore] =
     await Promise.all([
       readFile('src/views/Workflow.vue', 'utf8'),
       readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
       readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
       readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-      readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+      readFile('src-tauri/src/workflow/react/engine.rs', 'utf8'),
+      readFile('src/stores/workflow.js', 'utf8')
     ])
 
   assert.match(
     workflowView,
-    /const submitAskUserResponse = async content => \{[\s\S]*?coreOnSendMessage\(content, \{\s*metadata: \{ ui_visibility: 'hide' \}/,
-    'ask-user answers must remain hidden user messages'
+    /const submitAskUserResponse = async response => \{[\s\S]*?coreOnSendMessage\(content, \{[\s\S]*?ui_visibility: 'hide',[\s\S]*?ask_user_response: true,[\s\S]*?requested_tool_call_id/,
+    'ask-user answers must remain hidden and carry an association hint'
   )
   assert.match(
     workflowCore,
@@ -191,27 +192,72 @@ test('ask-user responses stay hidden from the transcript and render on their sou
     'hidden-message metadata must continue through the user-message signal sent to the runtime'
   )
   const awaitingUserMetadataWrites = workflowEngine.match(
-    /WorkflowSignal::UserMessage \{\s*content, metadata, \.\.\s*\}[\s\S]*?add_message_and_notify_internal\([\s\S]*?metadata,\s*\)/g
+    /WorkflowSignal::UserMessage \{\s*content, metadata, \.\.\s*\}[\s\S]*?canonicalize_ask_user_response_metadata\(metadata\)[\s\S]*?add_message_and_notify_internal\([\s\S]*?metadata,\s*\)/g
   )
   assert.equal(
     awaitingUserMetadataWrites?.length,
     2,
-    'both awaiting-user signal branches must persist the structured UI metadata with the answer'
+    'both awaiting-user signal branches must persist backend-canonicalized answer metadata'
   )
   assert.match(
     workflowMessages,
-    /const askUserResponsesBySourceOrder = new Map\(\)[\s\S]*?isHiddenAskUserResponse[\s\S]*?askUserResponsesBySourceOrder\.set\(pendingAskUserSourceOrder, message\.message\)/,
-    'the hidden answer must attach to its preceding ask_user tool record'
+    /const askUserResponsesByToolCallId = computed\(\(\) => \{[\s\S]*?getMessageToolCallId\(message\)[\s\S]*?responses\.set\(toolCallId, message\.message \|\| ''\)/,
+    'the hidden answer must be indexed by its canonical tool_call_id'
   )
   assert.match(
     workflowMessages,
-    /askUserResponse: askUserResponsesBySourceOrder\.get\(message\.sourceOrder\) \|\| ''/,
-    'the source ask_user tool must receive its hidden response for rendering'
+    /if \(!getMessageToolCallId\(message\)\) \{\s*askUserResponsesBySourceOrder\.set\(pendingAskUserSourceOrder, message\.message\)/,
+    'positional ask-user response matching must be limited to legacy rows without tool_call_id'
   )
   assert.match(
     workflowMessages,
-    /m\.metadata\?\.ui_visibility === 'hide'[\s\S]*?return false/,
-    'the hidden answer must not enter the normal transcript projection'
+    /askUserResponse: resolveAskUserResponse\([\s\S]*?askUserResponsesByToolCallId\.value,[\s\S]*?askUserResponsesBySourceOrder/,
+    'the source ask_user tool must receive its response through the ID-first projection rule'
+  )
+  assert.match(
+    workflowMessages,
+    /if \(isApprovedPlanAnchor\(message\) \|\| isHiddenAskUserResponse\(message\)\) return false/,
+    'the hidden answer must stay out of the transcript after its association is derived'
+  )
+  assert.match(
+    workflowMessages,
+    /askUserResponse: message\?\.askUserResponse \|\| ''/,
+    'ask-user response attachment must invalidate the enhanced-message cache'
+  )
+  assert.match(
+    messageList,
+    /@focus="selectAskUserOtherIfUnset\(message, group\.title\)"/,
+    'focusing the supplemental input must select Other when the user has not selected an option'
+  )
+  assert.match(
+    messageList,
+    /const selectAskUserOtherIfUnset = \(message, title\) => \{[\s\S]*?OTHER_ASK_USER_VALUE/,
+    'the focus handler must select the fixed Other value only when unset'
+  )
+  assert.match(
+    messageList,
+    /const getToolRenderStatusClass = message => \{[\s\S]*?isToolGroupItemRunning\(message\)/,
+    'standalone and grouped tools must share the running/error/success class mapping'
+  )
+  assert.match(
+    workflowView,
+    /const batchApprovalSessionId = ref\(''\)[\s\S]*?if \(!sessionId \|\| batchApprovalSessionId\.value\) return/,
+    'bulk approval must be locked per active workflow session'
+  )
+  assert.match(
+    messageList,
+    /props\.isBatchApprovalSubmitting[\s\S]*?orderedToolCallIds: pendingToolCallIds/,
+    'all inline approval cards must disable duplicate batch submissions while the batch is active'
+  )
+  assert.match(
+    workflowStore,
+    /hasMoreInCurrentTask\.value = snapshot\.hasMoreInCurrentTask === true/,
+    'history pagination must keep the backend-selected current-task boundary'
+  )
+  assert.match(
+    workflowView,
+    /loadEarlierMessages\(\{ withinCurrentTask: true \}\)/,
+    'automatic top-up must never cross a completion or clear-context boundary'
   )
   assert.match(
     messageList,
@@ -396,44 +442,45 @@ test('persisted awaiting-user status restores answer controls when an older snap
 })
 
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
-  const [messageList, workflowMessages] = await Promise.all([
+  const [messageList, workflowMessages, projectionRules] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-    readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8')
+    readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
+    readFile('src/composables/workflow/messageProjectionRules.js', 'utf8')
   ])
 
   assert.match(
-    messageList,
-    /const currentIsPendingThought = isThinkOnlyAssistantMessage\(current\)[\s\S]*?collapsed\.push\(buildToolGroupMessage\(\[\], index, thoughts, true\)\)/,
+    projectionRules,
+    /const currentIsThought = isThinkOnlyAssistantMessage\(current\)[\s\S]*?collapsed\.push\(buildToolGroupMessage\(\[\], index, thoughts, true\)\)/,
     'a thought without a prior visible tool group can become its own ongoing group'
   )
   assert.match(
-    messageList,
-    /currentIsPendingThought && isStandaloneOngoingThoughtRun\(messages, index\)/,
+    projectionRules,
+    /currentIsThought && isStandaloneOngoingThoughtRun\(input, index\)/,
     'a thought followed by later tool activity must start grouped instead of flashing outside the tool group'
   )
   assert.match(
-    messageList,
-    /if \(getCollapsibleToolGroupKind\(message\) \|\| isCollapsedToolGroupMessage\(message\)\) return false/,
+    projectionRules,
+    /if \(getCollapsibleToolGroupKind\(message\) \|\| isCollapsedWorkflowToolGroupMessage\(message\)\) \{\s*return false/,
     'standalone ongoing thought groups must stop being standalone once tool activity appears after them'
   )
   assert.match(
-    messageList,
-    /while \(nextIndex < messages\.length && !isToolGroupBoundaryMessage\(messages\[nextIndex\]\)\)/,
+    projectionRules,
+    /while \(nextIndex < input\.length && !isToolGroupBoundaryMessage\(input\[nextIndex\]\)\)/,
     'non-independent thoughts and tools must be collected into one tool group until a boundary appears'
   )
   assert.match(
-    messageList,
-    /if \(isCompletionReportMessage\(message\) \|\| isFinishTaskMessage\(message\)\) return true/,
+    projectionRules,
+    /if \(isCompletionReportMessage\(message\) \|\| isWorkflowCompletionMessage\(message\)\) return true/,
     'completion tool messages must split tool groups so the finish-task badge remains visible after history is expanded'
   )
   assert.doesNotMatch(
-    messageList,
-    /isCollapsedToolGroupMessage\(current\) && current\.metadata\?\.tool_group_is_ongoing/,
+    projectionRules,
+    /isCollapsedWorkflowToolGroupMessage\(current\) && current\.metadata\?\.tool_group_is_ongoing/,
     'ongoing thought groups must remain eligible to merge back into adjacent non-independent tool activity'
   )
   assert.match(
-    messageList,
-    /return !content && !!reasoning/,
+    projectionRules,
+    /!removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\) &&\s*!!String\(message\?\.reasoning \|\| ''\)\.trim\(\)/,
     'only assistant messages without visible content may be treated as thought-only tool activity'
   )
   assert.doesNotMatch(
@@ -442,13 +489,13 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     'stepType Think must not make visible assistant output collapse into a tool group'
   )
   assert.match(
-    messageList,
-    /if \(message\.role === 'assistant'\) \{\s*return \([\s\S]*?!isThinkOnlyAssistantMessage\(message\) && !!props\.removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)[\s\S]*?\)/,
+    projectionRules,
+    /if \(message\.role === 'assistant'\) \{\s*return !isThinkOnlyAssistantMessage\(message\) && !!removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)/,
     'a visible non-thought assistant text message must still split tool groups, while thought text does not'
   )
   assert.match(
-    messageList,
-    /const getToolGroupIcon = \(kind, messages\) => \{\s*if \(messages\.some\(isCollapsibleMutationToolMessage\)\) return TOOL_GROUP_ICONS\.mutation_tools/,
+    projectionRules,
+    /const getToolGroupIcon = \(kind, groupMessages\) => \{\s*if \(groupMessages\.some\(isCollapsibleMutationToolMessage\)\) return TOOL_GROUP_ICONS\.mutation_tools/,
     'a mixed tool group containing file edits must prefer the edit icon'
   )
   assert.match(
@@ -482,12 +529,12 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     'completed tool messages must carry the same original order even after their assistant declaration is filtered'
   )
   assert.match(
-    messageList,
+    projectionRules,
     /call\.groupOrder \?\? index \+ \(callIndex \+ 1\) \/ \(pendingCalls\.length \+ 1\)/,
-    'the message list must consume the stable pending-tool order and only fall back for old data'
+    'the message projection must consume the stable pending-tool order and only fall back for old data'
   )
   assert.match(
-    messageList,
+    projectionRules,
     /tools\.push\(\{ \.\.\.message, groupOrder: message\.groupOrder \?\? index \}\)/,
     'tool collection must not overwrite a stable order with a transient projection index'
   )
@@ -502,18 +549,18 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     'thoughts and tools must share the same durable order axis while tool calls retain declaration order'
   )
   assert.match(
-    messageList,
+    projectionRules,
     /thoughts\.push\([\s\S]*?thought\.groupOrder \?\? index \+ thoughtIndex \/ 1000/,
     'nested tool groups must retain each thought’s durable order instead of replacing it with a transient group index'
   )
   assert.match(
-    messageList,
+    projectionRules,
     /thoughts\.push\(buildGroupedThoughtItem\(message, index, message\.groupOrder \?\? index\)\)/,
     'grouped thoughts must use their durable order instead of the transient filtered-list index'
   )
   assert.match(
-    messageList,
-    /const \{ thoughtOrders, toolOrders \} = getWorkflowToolGroupRenderOrders\(thoughts, messages\)[\s\S]*?renderOrder: thoughtOrders\[thoughtIndex\][\s\S]*?renderOrder: toolOrders\[toolIndex\]/,
+    projectionRules,
+    /const \{ thoughtOrders, toolOrders \} = getWorkflowToolGroupRenderOrders\(thoughts, groupMessages\)[\s\S]*?renderOrder: thoughtOrders\[thoughtIndex\][\s\S]*?renderOrder: toolOrders\[toolIndex\]/,
     'thoughts and tools must be assigned integer render ranks from their shared durable order axis'
   )
   assert.match(

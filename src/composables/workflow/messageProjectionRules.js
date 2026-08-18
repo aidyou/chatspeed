@@ -1,3 +1,5 @@
+import { isWorkflowMcpTool } from './toolClassification.js'
+
 /**
  * Frontend workflow projection rules that must stay aligned with backend authority.
  *
@@ -330,6 +332,19 @@ export const dedupeQueuedUserMessageProjection = (messages = []) => {
       selectedMessageByQueueId.get(queuedMessageId) === message
     )
   })
+}
+
+export const resolveAskUserResponse = (
+  message,
+  responsesByToolCallId = new Map(),
+  legacyResponsesBySourceOrder = new Map()
+) => {
+  if (getStructuredWorkflowToolName(message) !== 'ask_user') return ''
+
+  const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+  if (toolCallId) return responsesByToolCallId.get(toolCallId) || ''
+
+  return legacyResponsesBySourceOrder.get(message?.sourceOrder) || ''
 }
 
 export const reconcileWorkflowTaskWindowState = ({
@@ -669,6 +684,57 @@ export const isWorkflowToolAwaitingExecution = (message, approvedSubmission = fa
 export const isWorkflowCompletionMessage = message =>
   getStructuredWorkflowToolName(message) === 'complete_workflow'
 
+const getWorkflowToolCallId = value =>
+  String(value?.id || value?.tool_call_id || value?.toolCallId || '').trim()
+
+const isHiddenAskUserResponse = message =>
+  message?.role === 'user' &&
+  (message?.metadata?.ui_visibility || message?.metadata?.uiVisibility) === 'hide' &&
+  /<ask_user_response>\s*[\s\S]*?<\/ask_user_response>/i.test(message?.message || '')
+
+/**
+ * A page can begin mid-tool-chain after the raw 301-row read. Keep loading
+ * within the backend-selected task window until every rendered observation has
+ * its assistant declaration and every hidden ask_user answer has its source
+ * tool record. These dependencies are not independent display cards.
+ */
+export const hasIncompleteWorkflowToolCallChain = (messages = []) => {
+  const declaredToolCallIds = new Set()
+  const observedToolCallIds = new Set()
+  const askUserToolCallIds = new Set()
+  const askUserResponseToolCallIds = new Set()
+
+  for (const message of messages) {
+    if (message?.role === 'assistant') {
+      for (const call of message?.metadata?.tool_calls || []) {
+        const toolCallId = getWorkflowToolCallId(call)
+        if (toolCallId) declaredToolCallIds.add(toolCallId)
+      }
+    }
+
+    const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
+    const isToolObservation =
+      message?.role === 'tool' ||
+      (message?.role === 'user' && String(message?.stepType || '').toLowerCase() === 'observe')
+    if (toolCallId && isToolObservation) observedToolCallIds.add(toolCallId)
+
+    if (message?.role === 'tool' && getStructuredWorkflowToolName(message) === 'ask_user') {
+      if (toolCallId) askUserToolCallIds.add(toolCallId)
+      continue
+    }
+
+    if (isHiddenAskUserResponse(message)) {
+      if (!toolCallId) return true
+      askUserResponseToolCallIds.add(toolCallId)
+    }
+  }
+
+  return (
+    [...observedToolCallIds].some(toolCallId => !declaredToolCallIds.has(toolCallId)) ||
+    [...askUserResponseToolCallIds].some(toolCallId => !askUserToolCallIds.has(toolCallId))
+  )
+}
+
 /**
  * Decide whether a workflow message should render as a delegated-task card.
  *
@@ -689,5 +755,498 @@ export const shouldRenderSubAgentCard = message => {
     toolName === 'sub_agent_run' ||
     reviewDisplayState === 'final_review_pending' ||
     !!subAgentId
+  )
+}
+
+export const isWorkflowContextSnapshotMessage = message =>
+  message?.role === 'system' &&
+  message?.messageKind === 'summary' &&
+  !isWorkflowManualClearContextMessage(message)
+
+export const isWorkflowExplorationBatchMessage = message =>
+  message?.metadata?.message_kind === 'exploration_batch'
+
+export const isCollapsedWorkflowToolGroupMessage = message =>
+  message?.metadata?.message_kind === 'tool_group'
+
+export const getWorkflowAskUserResponseItems = message => {
+  const content = message?.askUserResponse || message?.message || ''
+  const match = content.match(/<ask_user_response>\s*([\s\S]*?)\s*<\/ask_user_response>/i)
+  if (!match) return []
+
+  try {
+    const parsed = JSON.parse(match[1])
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const COLLAPSIBLE_READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'web_fetch'])
+const COLLAPSIBLE_SEARCH_TOOL_NAMES = new Set(['grep', 'glob', 'web_search'])
+const COLLAPSIBLE_COMMAND_TOOL_NAMES = new Set(['bash'])
+const COLLAPSIBLE_MUTATION_TOOL_NAMES = new Set(['edit_file', 'write_file'])
+const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
+  'ask_user',
+  'submit_plan',
+  'complete_workflow',
+  'sub_agent_run',
+  'sub_agent_stop'
+])
+const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
+const TOOL_GROUP_LABEL_KEYS = {
+  bash: 'workflow.toolGroups.runCommand',
+  edit_file: 'workflow.toolGroups.editFile',
+  glob: 'workflow.toolGroups.fileSearch',
+  grep: 'workflow.toolGroups.fileSearch',
+  list_dir: 'workflow.toolGroups.readFile',
+  read_file: 'workflow.toolGroups.readFile',
+  skill: 'workflow.toolGroups.useSkill',
+  sub_agent_output: 'workflow.toolGroups.fetchSubAgentResult',
+  web_fetch: 'workflow.toolGroups.readWeb',
+  web_search: 'workflow.toolGroups.fileSearch',
+  write_file: 'workflow.toolGroups.editFile'
+}
+const TOOL_GROUP_ICONS = {
+  command_tools: 'bash',
+  mcp_tools: 'mcp',
+  mutation_tools: 'edit',
+  readonly_tools: 'search',
+  sub_agent_result_tools: 'skill-relation-chart',
+  todo_tools: 'todo'
+}
+
+const defaultRemoveSystemReminder = value => String(value || '').trimEnd()
+const defaultTranslate = key => key
+
+/**
+ * Build the list-specific semantic projection from durable UI messages.
+ *
+ * This is deliberately independent from Vue state: current pending approvals,
+ * localization and system-reminder cleanup enter through explicit adapters.
+ * The component may render, expand and scroll this projection, but must not
+ * recreate its grouping or visibility rules.
+ */
+export const projectWorkflowMessageList = (
+  messages = [],
+  {
+    pendingApprovalIds = [],
+    removeSystemReminder = defaultRemoveSystemReminder,
+    translate = defaultTranslate
+  } = {}
+) => {
+  const isApprovalPending = message =>
+    isWorkflowMessagePendingApproval(message, pendingApprovalIds)
+  const getToolName = message => getStructuredWorkflowToolName(message)
+  const isFinishTaskErrorMessage = message =>
+    !!(
+      message &&
+      message.role === 'tool' &&
+      isWorkflowCompletionMessage(message) &&
+      message.toolDisplay?.isError
+    )
+  const isSameFinishTaskError = (left, right) =>
+    isFinishTaskErrorMessage(left) &&
+    isFinishTaskErrorMessage(right) &&
+    removeSystemReminder(left.message || '') === removeSystemReminder(right.message || '') &&
+    (left.toolDisplay?.summary || '') === (right.toolDisplay?.summary || '')
+  const isCompletionReportMessage = message =>
+    message?.role === 'assistant' && message?.metadata?.message_kind === 'completion_report'
+  const isThinkOnlyAssistantMessage = message =>
+    message?.role === 'assistant' &&
+    !removeSystemReminder(message?.message || '').trim() &&
+    !!String(message?.reasoning || '').trim()
+  const getReadOnlyToolCategory = toolName => {
+    if (COLLAPSIBLE_READ_TOOL_NAMES.has(toolName)) return 'read'
+    if (COLLAPSIBLE_SEARCH_TOOL_NAMES.has(toolName)) return 'search'
+    return null
+  }
+  const isCollapsibleToolMessage = message => {
+    if (message?.role !== 'tool') return false
+    const toolName = getToolName(message)
+    return !!toolName && !NON_COLLAPSIBLE_TOOL_NAMES.has(toolName) && !isApprovalPending(message)
+  }
+  const isCollapsibleReadOnlyToolMessage = message => {
+    const toolName = getToolName(message)
+    return (
+      isCollapsibleToolMessage(message) &&
+      !TODO_TOOL_NAMES.has(toolName) &&
+      getReadOnlyToolCategory(toolName) !== null
+    )
+  }
+  const isCollapsibleTodoToolMessage = message =>
+    isCollapsibleToolMessage(message) && TODO_TOOL_NAMES.has(getToolName(message))
+  const isCollapsibleCommandToolMessage = message =>
+    isCollapsibleToolMessage(message) &&
+    COLLAPSIBLE_COMMAND_TOOL_NAMES.has(getToolName(message))
+  const isCollapsibleMutationToolMessage = message =>
+    isCollapsibleToolMessage(message) &&
+    COLLAPSIBLE_MUTATION_TOOL_NAMES.has(getToolName(message))
+  const isCollapsibleMcpToolMessage = message =>
+    isCollapsibleToolMessage(message) && isWorkflowMcpTool(getToolName(message))
+  const isCollapsibleSubAgentResultToolMessage = message =>
+    isCollapsibleToolMessage(message) && getToolName(message) === 'sub_agent_output'
+  const getCollapsibleToolGroupKind = message => {
+    if (isCollapsibleReadOnlyToolMessage(message)) return 'readonly_tools'
+    if (isCollapsibleTodoToolMessage(message)) return 'todo_tools'
+    if (isCollapsibleCommandToolMessage(message)) return 'command_tools'
+    if (isCollapsibleMutationToolMessage(message)) return 'mutation_tools'
+    if (isCollapsibleSubAgentResultToolMessage(message)) return 'sub_agent_result_tools'
+    if (isCollapsibleMcpToolMessage(message)) return 'mcp_tools'
+    return isCollapsibleToolMessage(message) ? 'other_tools' : null
+  }
+  const getToolCallId = call => String(call?.id || call?.tool_call_id || '').trim()
+  const getToolGroupLabel = message => {
+    const toolName = getToolName(message)
+    if (TODO_TOOL_NAMES.has(toolName)) return translate('workflow.toolGroups.taskChanges')
+    if (isWorkflowMcpTool(toolName)) return translate('workflow.toolGroups.callMcp')
+    return translate(TOOL_GROUP_LABEL_KEYS[toolName] || 'workflow.toolGroups.useTool')
+  }
+  const truncateToolGroupText = (value, maxLength = 48) => {
+    const text = String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!text) return ''
+    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text
+  }
+  const buildToolGroupSummary = groupMessages => {
+    const counts = new Map()
+    groupMessages.forEach(message => {
+      const label = getToolGroupLabel(message)
+      if (label) counts.set(label, (counts.get(label) || 0) + 1)
+    })
+    return truncateToolGroupText(
+      Array.from(counts, ([label, count]) => `${label} x${count}`).join(' · '),
+      120
+    )
+  }
+  const getCollapsedToolGroupExpandId = (groupMessages, index) => {
+    const first = groupMessages[0]
+    const firstId = first?.displayId || first?.id || `tool_group_${index}`
+    const firstToolCallId = String(first?.metadata?.tool_call_id || '').trim()
+    return `tool_group:${firstToolCallId || firstId}`
+  }
+  const getToolGroupIcon = (kind, groupMessages) => {
+    if (groupMessages.some(isCollapsibleMutationToolMessage)) return TOOL_GROUP_ICONS.mutation_tools
+    return TOOL_GROUP_ICONS[kind] || 'tool'
+  }
+  const buildToolGroupMessage = (groupMessages, index, thoughts = [], isOngoing = false) => {
+    const kinds = new Set(groupMessages.map(getCollapsibleToolGroupKind).filter(Boolean))
+    const [singleKind] = kinds
+    const kind = groupMessages.length > 0 && kinds.size === 1 ? singleKind : 'mixed_tools'
+    const thoughtCount = thoughts.length
+    const errorCount = groupMessages.filter(
+      message => !!(message?.toolDisplay?.isError || message?.isRejected)
+    ).length
+    const seedMessage = groupMessages[0] || thoughts[0] || {}
+    const firstActivity = [...thoughts, ...groupMessages].reduce((earliest, item) => {
+      if (!earliest) return item
+      return (item?.groupOrder ?? index) < (earliest?.groupOrder ?? index) ? item : earliest
+    }, null)
+    const { thoughtOrders, toolOrders } = getWorkflowToolGroupRenderOrders(thoughts, groupMessages)
+    const groupedThoughts = thoughts.map((thought, thoughtIndex) => ({
+      ...thought,
+      renderOrder: thoughtOrders[thoughtIndex]
+    }))
+    const groupedTools = groupMessages.map((tool, toolIndex) => ({
+      ...tool,
+      renderOrder: toolOrders[toolIndex]
+    }))
+
+    return {
+      ...seedMessage,
+      role: 'assistant',
+      displayId: getCollapsedToolGroupExpandId([firstActivity || seedMessage], index),
+      metadata: {
+        ...(seedMessage?.metadata || {}),
+        message_kind: 'tool_group',
+        tool_group_kind: kind,
+        tool_group_thought_count: thoughtCount,
+        tool_group_is_ongoing: isOngoing
+      },
+      groupDisplay: {
+        icon: getToolGroupIcon(kind, groupMessages),
+        thoughtSummary: thoughtCount
+          ? translate('workflow.toolGroups.thoughtChangeCount', { count: thoughtCount })
+          : '',
+        errorSummary: errorCount
+          ? translate('workflow.toolGroups.errorCount', { count: errorCount })
+          : '',
+        summary: buildToolGroupSummary(groupMessages)
+      },
+      groupedThoughts,
+      groupedTools
+    }
+  }
+  const buildPendingToolGroupItem = (call, groupOrder) => {
+    const toolCallId = getToolCallId(call)
+    const toolName = String(call?.toolName || '').trim()
+    const argumentsValue = call?.arguments ?? {}
+
+    return {
+      id: `pending_tool:${toolCallId}`,
+      groupOrder,
+      displayId: `pending_tool:${toolCallId}`,
+      role: 'tool',
+      message: '',
+      isRejected: !!call?.isRejected,
+      isApproved: false,
+      metadata: {
+        tool_call_id: toolCallId,
+        tool_name: toolName,
+        tool_call: {
+          id: toolCallId,
+          function: {
+            name: toolName,
+            arguments: argumentsValue
+          }
+        },
+        approval_status: 'approved',
+        execution_status: 'running'
+      },
+      toolDisplay: {
+        icon: call?.icon || 'tool',
+        toolType: call?.toolType || 'tool-system',
+        action: call?.action || toolName,
+        target: call?.target || '',
+        summary: call?.summary || '',
+        isError: !!call?.isRejected
+      }
+    }
+  }
+  const projectPendingToolGroups = input => {
+    const projected = []
+    input.forEach((message, index) => {
+      const pendingCalls = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls : []
+      const groupedTools = pendingCalls
+        .map((call, callIndex) =>
+          buildPendingToolGroupItem(
+            call,
+            call.groupOrder ?? index + (callIndex + 1) / (pendingCalls.length + 1)
+          )
+        )
+        .filter(tool => getCollapsibleToolGroupKind(tool))
+      if (groupedTools.length === 0) {
+        projected.push(message)
+        return
+      }
+
+      const groupedToolIds = new Set(groupedTools.map(tool => tool.metadata.tool_call_id))
+      const remainingPendingCalls = pendingCalls.filter(
+        call => !groupedToolIds.has(getToolCallId(call))
+      )
+      const hasAssistantContent = Boolean(
+        String(message?.message || '').trim() || String(message?.reasoning || '').trim()
+      )
+      if (message?.role !== 'assistant' || hasAssistantContent || remainingPendingCalls.length > 0) {
+        projected.push({ ...message, pendingToolCalls: remainingPendingCalls })
+      }
+      projected.push(buildToolGroupMessage(groupedTools, index, [], true))
+    })
+    return projected
+  }
+  const isToolGroupBoundaryMessage = message => {
+    if (!message) return true
+    if (isCollapsedWorkflowToolGroupMessage(message)) return false
+    if (message.role === 'user') return true
+    if (isWorkflowContextSnapshotMessage(message) || isWorkflowManualClearContextMessage(message)) {
+      return true
+    }
+    if (isCompletionReportMessage(message) || isWorkflowCompletionMessage(message)) return true
+    if (isWorkflowExplorationBatchMessage(message)) return true
+    if (message.role === 'assistant') {
+      return !isThinkOnlyAssistantMessage(message) && !!removeSystemReminder(message?.message || '').trim()
+    }
+    return message.role === 'tool' && !getCollapsibleToolGroupKind(message)
+  }
+  const isToolGroupOngoingBoundaryMessage = message => {
+    if (!message || isCollapsedWorkflowToolGroupMessage(message)) return false
+    if (message.role === 'user') return true
+    if (isWorkflowContextSnapshotMessage(message) || isWorkflowManualClearContextMessage(message)) {
+      return true
+    }
+    if (isCompletionReportMessage(message) || isWorkflowCompletionMessage(message)) return true
+    if (isWorkflowExplorationBatchMessage(message)) return true
+    if (message.role === 'assistant') {
+      return !isThinkOnlyAssistantMessage(message) && !!removeSystemReminder(message?.message || '').trim()
+    }
+    return message.role === 'tool' && (isApprovalPending(message) || !getCollapsibleToolGroupKind(message))
+  }
+  const hasOngoingToolGroupAfter = (input, startIndex) => {
+    for (let index = startIndex; index < input.length; index += 1) {
+      if (isToolGroupOngoingBoundaryMessage(input[index])) return false
+    }
+    return true
+  }
+  const isStandaloneOngoingThoughtRun = (input, startIndex) => {
+    for (let index = startIndex; index < input.length; index += 1) {
+      const message = input[index]
+      if (isToolGroupOngoingBoundaryMessage(message)) return false
+      if (getCollapsibleToolGroupKind(message) || isCollapsedWorkflowToolGroupMessage(message)) {
+        return false
+      }
+      if (!isThinkOnlyAssistantMessage(message)) return false
+    }
+    return true
+  }
+  const buildGroupedThoughtItem = (message, index, order = index) => ({
+    ...message,
+    displayId: `${message?.displayId || message?.id || `thought_${index}`}:tool_group_thought`,
+    groupOrder: order,
+    sourceMessage: message
+  })
+  const collectContiguousToolMessages = (input, startIndex) => {
+    const tools = []
+    let nextIndex = startIndex
+    while (nextIndex < input.length && getCollapsibleToolGroupKind(input[nextIndex])) {
+      tools.push(input[nextIndex])
+      nextIndex += 1
+    }
+    return { tools, nextIndex }
+  }
+  const collectToolActivityMessage = (message, index, thoughts, tools) => {
+    if (isThinkOnlyAssistantMessage(message)) {
+      thoughts.push(buildGroupedThoughtItem(message, index, message.groupOrder ?? index))
+      return
+    }
+    if (isCollapsedWorkflowToolGroupMessage(message)) {
+      ;(message.groupedThoughts || []).forEach((thought, thoughtIndex) => {
+        thoughts.push(
+          buildGroupedThoughtItem(
+            thought,
+            `${index}_${thoughtIndex}`,
+            thought.groupOrder ?? index + thoughtIndex / 1000
+          )
+        )
+      })
+      ;(message.groupedTools || []).forEach((tool, toolIndex) => {
+        if (getCollapsibleToolGroupKind(tool)) {
+          tools.push({ ...tool, groupOrder: tool.groupOrder ?? index + (toolIndex + 1) / 1000 })
+        }
+      })
+      return
+    }
+    if (getCollapsibleToolGroupKind(message)) {
+      tools.push({ ...message, groupOrder: message.groupOrder ?? index })
+    }
+  }
+  const collapseToolActivityGroups = input => {
+    const collapsed = []
+    for (let index = 0; index < input.length; ) {
+      const current = input[index]
+      const currentIsThought = isThinkOnlyAssistantMessage(current)
+      const currentToolGroupKind = getCollapsibleToolGroupKind(current)
+      if (currentIsThought || currentToolGroupKind || isCollapsedWorkflowToolGroupMessage(current)) {
+        if (currentToolGroupKind) {
+          const contiguousGroup = collectContiguousToolMessages(input, index)
+          const nextMessage = input[contiguousGroup.nextIndex]
+          if (!isThinkOnlyAssistantMessage(nextMessage) && !isCollapsedWorkflowToolGroupMessage(nextMessage)) {
+            collapsed.push(
+              buildToolGroupMessage(
+                contiguousGroup.tools,
+                index,
+                [],
+                hasOngoingToolGroupAfter(input, contiguousGroup.nextIndex)
+              )
+            )
+            index = contiguousGroup.nextIndex
+            continue
+          }
+        }
+
+        const thoughts = []
+        const tools = []
+        let nextIndex = index
+        if (currentIsThought && isStandaloneOngoingThoughtRun(input, index)) {
+          while (
+            nextIndex < input.length &&
+            isThinkOnlyAssistantMessage(input[nextIndex]) &&
+            isStandaloneOngoingThoughtRun(input, nextIndex)
+          ) {
+            collectToolActivityMessage(input[nextIndex], nextIndex, thoughts, tools)
+            nextIndex += 1
+          }
+          collapsed.push(buildToolGroupMessage([], index, thoughts, true))
+          index = nextIndex
+          continue
+        }
+
+        while (nextIndex < input.length && !isToolGroupBoundaryMessage(input[nextIndex])) {
+          collectToolActivityMessage(input[nextIndex], nextIndex, thoughts, tools)
+          nextIndex += 1
+        }
+        if (tools.length > 0) {
+          collapsed.push(
+            buildToolGroupMessage(tools, index, thoughts, hasOngoingToolGroupAfter(input, nextIndex))
+          )
+          index = nextIndex
+          continue
+        }
+      }
+      collapsed.push(current)
+      index += 1
+    }
+    return collapsed
+  }
+  const collapseRepeatedFinishTaskErrors = input => {
+    const collapsed = []
+    for (let index = 0; index < input.length; ) {
+      const current = input[index]
+      if (!isFinishTaskErrorMessage(current)) {
+        collapsed.push(current)
+        index += 1
+        continue
+      }
+      let count = 1
+      let nextIndex = index + 1
+      while (nextIndex < input.length && isSameFinishTaskError(current, input[nextIndex])) {
+        count += 1
+        nextIndex += 1
+      }
+      collapsed.push(
+        count > 1
+          ? {
+              ...current,
+              displayId: `${current.displayId || current.id || `finish_task_${index}`}_collapsed_${count}`,
+              metadata: { ...(current.metadata || {}), finish_task_error_count: count }
+            }
+          : current
+      )
+      index = nextIndex
+    }
+    return collapsed
+  }
+  const collapseAssistantCompletionPairs = input =>
+    input.filter(
+      (message, index) =>
+        !(
+          isThinkOnlyAssistantMessage(message) &&
+          isCompletionReportMessage(input[index + 1]) &&
+          String(message.stepIndex || '') === String(input[index + 1].stepIndex || '')
+        )
+    )
+  const isHiddenSystemObservation = message => {
+    if (message?.metadata?.ui_visibility === 'hide') return true
+    if (message?.metadata?.message_kind === 'runtime_observation') return false
+    if (message?.metadata?.error_type === 'SubAgentInterrupted') return true
+    if (message?.role !== 'user' || String(message.stepType || '').toLowerCase() !== 'observe') {
+      return false
+    }
+    if (getWorkflowAskUserResponseItems(message).length > 0) return false
+    return removeSystemReminder(message.message || '').trim() === ''
+  }
+
+  return excludeLeadingManualClearContextMarkers(
+    collapseToolActivityGroups(
+      projectPendingToolGroups(
+        collapseAssistantCompletionPairs(
+          collapseRepeatedFinishTaskErrors(
+            messages.filter(
+              message => !isHiddenSystemObservation(message) || isWorkflowManualClearContextMessage(message)
+            )
+          )
+        )
+      )
+    )
   )
 }
