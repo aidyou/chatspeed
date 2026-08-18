@@ -127,14 +127,19 @@
           <div
             v-if="isCollapsedToolGroupMessage(message)"
             class="cli-tool-call tool-group"
-            :class="{ 'tool-group--running': isCollapsedToolGroupRunning(message) }">
+            :class="{
+              'tool-group--running':
+                isCollapsedToolGroupRunning(message) || isStreamingThoughtMergedIntoToolGroup(message)
+            }">
             <div
               class="tool-line title-wrap expandable tool-group__summary"
               :class="{ expanded: isMessageExpanded(message) }"
               @click="$emit('toggle-expand', message.displayId)">
               <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-              <span v-if="message.groupDisplay.thoughtSummary" class="tool-group__thought-count">
-                {{ message.groupDisplay.thoughtSummary }}
+              <span
+                v-if="getCollapsedToolGroupThoughtSummary(message)"
+                class="tool-group__thought-count">
+                {{ getCollapsedToolGroupThoughtSummary(message) }}
               </span>
               <span v-if="message.groupDisplay.errorSummary" class="tool-group__error-count">
                 {{ message.groupDisplay.errorSummary }}
@@ -169,6 +174,38 @@
                 </div>
                 <div v-if="isReasoningExpandedForMessage(thought)" class="reasoning-content">
                   {{ thought.reasoning || thought.message }}
+                </div>
+              </div>
+              <div
+                v-if="isStreamingThoughtMergedIntoToolGroup(message)"
+                class="reasoning-container collapsed-tool-group__thought"
+                :style="{ order: getStreamingThoughtGroupOrder(message) }">
+                <div
+                  class="reasoning-header"
+                  @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
+                  <cs
+                    name="reasoning"
+                    size="14px"
+                    class="reasoning-icon"
+                    :class="{
+                      rotating:
+                        !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
+                    }" />
+                  <span class="reasoning-text">
+                    {{
+                      isReasoningExpanded(STREAMING_REASONING_ID)
+                        ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                        : hasStreamingThoughtCompleted
+                          ? $t('workflow.thoughtCompleted') || 'Thought Complete'
+                          : $t('workflow.thinking') || 'Thinking...'
+                    }}
+                  </span>
+                  <span class="reasoning-toggle">
+                    {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
+                  </span>
+                </div>
+                <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
+                  {{ chatState.reasoning }}
                 </div>
               </div>
               <div
@@ -942,9 +979,7 @@
     </div>
 
     <!-- Streaming Chat State -->
-    <div
-      v-if="isChatting && (chatState.content || chatState.reasoning)"
-      class="message assistant chatting">
+    <div v-if="shouldShowStandaloneStreamingChat" class="message assistant chatting">
       <div class="content-container">
         <div class="ai-content chat">
           <div v-if="chatState.reasoning" class="reasoning-container">
@@ -1300,10 +1335,12 @@ const isHiddenSystemObservation = message => {
 
 const getWorkflowMessageKind = message => message?.messageKind
 const getWorkflowMessageSubtype = message => message?.messageSubtype
+
 const isManualClearContextMessage = message =>
   message?.role === 'system' &&
   getWorkflowMessageKind(message) === 'summary' &&
   getWorkflowMessageSubtype(message) === 'manual_clear_context'
+
 const isContextSnapshotMessage = message =>
   message?.role === 'system' &&
   getWorkflowMessageKind(message) === 'summary' &&
@@ -2026,13 +2063,16 @@ const getCollapsibleToolGroupKind = message => {
   return isCollapsibleToolMessage(message) ? 'other_tools' : null
 }
 
-const buildPendingToolGroupItem = call => {
-  const toolCallId = String(call?.id || '').trim()
+const getToolCallId = call => String(call?.id || call?.tool_call_id || '').trim()
+
+const buildPendingToolGroupItem = (call, groupOrder) => {
+  const toolCallId = getToolCallId(call)
   const toolName = String(call?.toolName || '').trim()
   const argumentsValue = call?.arguments ?? {}
 
   return {
     id: `pending_tool:${toolCallId}`,
+    groupOrder,
     displayId: `pending_tool:${toolCallId}`,
     role: 'tool',
     message: '',
@@ -2068,7 +2108,12 @@ const projectPendingToolGroups = messages => {
   messages.forEach((message, index) => {
     const pendingCalls = Array.isArray(message?.pendingToolCalls) ? message.pendingToolCalls : []
     const groupedTools = pendingCalls
-      .map(buildPendingToolGroupItem)
+      .map((call, callIndex) =>
+        buildPendingToolGroupItem(
+          call,
+          call.groupOrder ?? index + (callIndex + 1) / (pendingCalls.length + 1)
+        )
+      )
       .filter(tool => getCollapsibleToolGroupKind(tool))
 
     if (groupedTools.length === 0) {
@@ -2077,9 +2122,7 @@ const projectPendingToolGroups = messages => {
     }
 
     const groupedToolIds = new Set(groupedTools.map(tool => tool.metadata.tool_call_id))
-    const remainingPendingCalls = pendingCalls.filter(
-      call => !groupedToolIds.has(String(call?.id || '').trim())
-    )
+    const remainingPendingCalls = pendingCalls.filter(call => !groupedToolIds.has(getToolCallId(call)))
     const hasAssistantContent = Boolean(
       String(message?.message || '').trim() || String(message?.reasoning || '').trim()
     )
@@ -2240,7 +2283,7 @@ const collectToolActivityMessage = (message, index, thoughts, tools) => {
   }
 
   if (getCollapsibleToolGroupKind(message)) {
-    tools.push({ ...message, groupOrder: index })
+    tools.push({ ...message, groupOrder: message.groupOrder ?? index })
   }
 }
 
@@ -2325,6 +2368,38 @@ const visibleMessages = computed(() =>
 )
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
+)
+const hasStreamingThoughtOnly = computed(
+  () =>
+    props.isChatting &&
+    !String(props.chatState?.content || '').trim() &&
+    !!String(props.chatState?.reasoning || '').trim()
+)
+const isStreamingThoughtMergedIntoToolGroup = message =>
+  hasStreamingThoughtOnly.value &&
+  message === lastVisibleMessage.value &&
+  isCollapsedToolGroupMessage(message) &&
+  (message.groupedTools?.length || 0) > 0
+const getCollapsedToolGroupThoughtSummary = message => {
+  const groupedThoughtCount = Array.isArray(message?.groupedThoughts)
+    ? message.groupedThoughts.length
+    : Number(message?.metadata?.tool_group_thought_count || 0)
+  const streamingThoughtCount = isStreamingThoughtMergedIntoToolGroup(message) ? 1 : 0
+  return getToolGroupThoughtSummary(groupedThoughtCount + streamingThoughtCount)
+}
+const getStreamingThoughtGroupOrder = message => {
+  const groupedItems = [...(message?.groupedThoughts || []), ...(message?.groupedTools || [])]
+  const latestOrder = Math.max(
+    -1,
+    ...groupedItems.map(item => Number(item?.groupOrder)).filter(Number.isFinite)
+  )
+  return latestOrder + 1
+}
+const shouldShowStandaloneStreamingChat = computed(
+  () =>
+    props.isChatting &&
+    !!(props.chatState?.content || props.chatState?.reasoning) &&
+    !isStreamingThoughtMergedIntoToolGroup(lastVisibleMessage.value)
 )
 const isReasoningExpandedForMessage = message => {
   const messageId = String(message?.displayId || message?.id || '')

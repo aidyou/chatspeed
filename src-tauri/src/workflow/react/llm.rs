@@ -400,19 +400,6 @@ impl LlmProcessor {
         }
     }
 
-    fn current_todo_prompt_from_store(&self, context: &ContextManager) -> String {
-        match context
-            .main_store
-            .get_todo_list_for_workflow(&self.session_id)
-        {
-            Ok(todos) => Self::render_current_todo_list(&todos),
-            Err(error) => format!(
-                "<CURRENT_TODO_LIST authoritative=\"unavailable\">\nUnable to read the authoritative todo list for this call: {}\n</CURRENT_TODO_LIST>",
-                error
-            ),
-        }
-    }
-
     /// Prepares and calls the LLM with the current context.
     /// Implements exponential backoff for 429 errors and drafting instructions for non-reasoning models.
     pub async fn call(
@@ -430,24 +417,9 @@ impl LlmProcessor {
         let raw_history = context.get_messages_for_llm();
 
         // 1. Context Normalization & Prompt Injection
-        let state_snapshot = raw_history.iter().rev().find_map(|m| {
-            if m.role == "system"
-                && crate::workflow::react::context::ContextManager::is_compression_summary_message(
-                    m,
-                )
-            {
-                Some(m.message.clone())
-            } else {
-                None
-            }
-        });
-
-        let current_todo_list = self.current_todo_prompt_from_store(context);
-
         let mut history = self.normalize_history(raw_history);
         Self::append_runtime_reminder(&mut history, runtime_reminder);
-        let final_history =
-            self.inject_prompts(history, state_snapshot, Some(current_todo_list), policy);
+        let final_history = self.inject_prompts(history, policy);
 
         // 2. Retry Loop for transient LLM failures with exponential backoff
         let mut retry_count = 0;
@@ -864,18 +836,21 @@ impl LlmProcessor {
     fn normalize_history_messages(raw_history: Vec<WorkflowMessage>) -> Vec<serde_json::Value> {
         let mut history: Vec<serde_json::Value> = Vec::new();
         let mut deferred_system_observations: Vec<(Option<String>, String)> = Vec::new();
+        let mut last_history_preserves_position = false;
 
         for m in raw_history {
-            // As part of defensive programming, filter out system messages
             if m.role == "system" {
+                // Legacy system history is not replayed, but it still forms a semantic boundary
+                // between adjacent user messages.
+                last_history_preserves_position = true;
                 continue;
             }
 
-            let runtime_observation_content = if let Some(rendered) =
+            let (runtime_observation_content, preserves_position) = if let Some(rendered) =
                 render_runtime_observation_for_llm(&m)
             {
                 match rendered.placement {
-                    RuntimeObservationPlacement::Preserve => Some(rendered.content),
+                    RuntimeObservationPlacement::Preserve => (Some(rendered.content), true),
                     RuntimeObservationPlacement::Defer => {
                         deferred_system_observations
                             .push((Self::runtime_observation_tool_call_id(&m), rendered.content));
@@ -884,7 +859,12 @@ impl LlmProcessor {
                     RuntimeObservationPlacement::Hide => continue,
                 }
             } else {
-                None
+                (
+                    None,
+                    crate::workflow::react::context::ContextManager::is_compression_summary_message(
+                        &m,
+                    ),
+                )
             };
 
             let role = m.role.clone();
@@ -947,7 +927,12 @@ impl LlmProcessor {
             }
 
             if let Some(last) = history.last_mut() {
-                if last["role"] == role && role != "tool" && role != "system" {
+                if !preserves_position
+                    && !last_history_preserves_position
+                    && last["role"] == role
+                    && role != "tool"
+                    && role != "system"
+                {
                     let last_content = last["content"].as_str().unwrap_or("");
                     if !content.is_empty() {
                         last["content"] =
@@ -1016,6 +1001,7 @@ impl LlmProcessor {
                 msg["tool_call_id"] = serde_json::json!(tid);
             }
             history.push(msg);
+            last_history_preserves_position = preserves_position;
         }
 
         // Defensive pass: normalize tool_calls[].index to match array position
@@ -1134,19 +1120,12 @@ impl LlmProcessor {
             .map(str::to_string)
     }
 
-    fn render_current_todo_list(todos: &[serde_json::Value]) -> String {
-        ContextManager::render_authoritative_todo_list(todos)
-    }
-
     fn inject_prompts(
         &self,
         mut history: Vec<serde_json::Value>,
-        state_snapshot: Option<String>,
-        current_todo_list: Option<String>,
         policy: &ExecutionPolicy,
     ) -> Vec<serde_json::Value> {
         let mut stable_system_parts = Vec::new();
-        let mut dynamic_tail_parts = Vec::new();
 
         // 1. Core System Prompt
         if self.agent_config.role.as_deref() == Some("child") {
@@ -1276,22 +1255,8 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
         }
 
         if let Some(reminder) = self.build_user_info_reminder() {
-            dynamic_tail_parts.push(reminder);
+            stable_system_parts.push(reminder);
         }
-
-        // Keep unstable sections at the very end so stable prompt prefixes remain
-        // cache-friendly even after a compaction boundary moves.
-        if let Some(snapshot) = state_snapshot {
-            dynamic_tail_parts.push(format!(
-                "<PREVIOUS_CONTEXT_SNAPSHOT>\n{}\n</PREVIOUS_CONTEXT_SNAPSHOT>",
-                snapshot
-            ));
-        }
-        if let Some(current_todo_list) = current_todo_list {
-            dynamic_tail_parts.push(current_todo_list);
-        }
-
-        stable_system_parts.extend(dynamic_tail_parts);
         let combined_system_prompt = stable_system_parts.join("\n\n---\n\n");
 
         // 1. Remove all existing system messages
@@ -1550,11 +1515,9 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 mod tests {
     use super::LlmProcessor;
     use crate::ai::traits::chat::MCPToolDeclaration;
+    use crate::db::Agent;
     use crate::db::WorkflowMessage;
-    use crate::db::{Agent, MainStore};
-    use crate::libs::tsid::TsidGenerator;
     use crate::tools::ToolScope;
-    use crate::workflow::react::context::ContextManager;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
     use crate::workflow::react::policy::ExecutionPolicy;
@@ -1817,56 +1780,54 @@ mod tests {
     }
 
     #[test]
-    fn current_todo_prompt_reads_latest_database_state_without_context_mutation() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = Arc::new(MainStore::new(&dir.path().join("todo.db")).expect("store"));
-        let mut agent = test_agent();
-        agent.is_system = Some(false);
-        agent.disabled = Some(false);
-        store.add_agent(&agent).expect("agent");
-        store
-            .create_workflow("test-session", "query", &agent.id, None, None)
-            .expect("workflow");
-        let context = ContextManager::new(
-            "test-session".to_string(),
-            store.clone(),
-            4096,
-            Arc::new(TsidGenerator::new(1).expect("tsid")),
+    fn normalize_history_preserves_persisted_compression_recovery_boundaries() {
+        let mut compression_summary = message(
+            "user",
+            "<CONTEXT_HANDOFF_PRECEDENCE>checkpoint</CONTEXT_HANDOFF_PRECEDENCE>",
+            None,
+            Some(json!({ "compressed_until_message_id": 42 })),
         );
-        let transcript_len = context.messages.len();
-        store
-            .update_workflow_todo_list(
-                "test-session",
-                r#"[{"id":"1","subject":"first","status":"pending"}]"#,
-            )
-            .expect("first todo");
-        let processor = test_llm_processor();
-        assert!(processor
-            .current_todo_prompt_from_store(&context)
-            .contains("subject=first"));
-        store
-            .update_workflow_todo_list(
-                "test-session",
-                r#"[{"id":"2","subject":"second","status":"in_progress","description":"fresh"}]"#,
-            )
-            .expect("second todo");
-        let prompt = processor.current_todo_prompt_from_store(&context);
-        assert!(prompt.contains("subject=second"));
-        assert!(!prompt.contains("subject=first"));
-        assert_eq!(context.messages.len(), transcript_len);
-    }
+        compression_summary.message_kind = "summary".to_string();
+        compression_summary.message_subtype = Some("compression".to_string());
 
-    #[test]
-    fn current_todo_list_is_compact_and_authoritative() {
-        let prompt = LlmProcessor::render_current_todo_list(&[
-            serde_json::json!({"id":"1","subject":"Inspect target","status":"completed","description":"not included"}),
-            serde_json::json!({"id":"2","subject":"Implement fix","status":"in_progress","description":"focused detail"}),
+        let mut todo_snapshot = message(
+            "user",
+            "<SYSTEM_REMINDER>\n<CURRENT_TODO_LIST authoritative=\"true\">\n- id=1 status=in_progress subject=Implement\n</CURRENT_TODO_LIST>\n</SYSTEM_REMINDER>",
+            Some("observe"),
+            Some(json!({
+                "message_kind": "runtime_observation",
+                "observation_type": "compression_todo_snapshot",
+                "llm_visibility": "preserve_position",
+                "ui_visibility": "hide"
+            })),
+        );
+        todo_snapshot.message_kind = "runtime_observation".to_string();
+        todo_snapshot.message_subtype = Some("compression_todo_snapshot".to_string());
+
+        let normalized = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Original task", None, None),
+            compression_summary,
+            todo_snapshot,
+            message("user", "Current task", None, None),
         ]);
-        assert!(prompt.contains("<CURRENT_TODO_LIST authoritative=\"true\">"));
-        assert!(prompt.contains("id=1 status=completed subject=Inspect target"));
-        assert!(prompt
-            .contains("id=2 status=in_progress subject=Implement fix description=focused detail"));
-        assert!(!prompt.contains("not included"));
+
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized[1]["role"], "user");
+        assert!(normalized[1]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("CONTEXT_HANDOFF_PRECEDENCE"));
+        assert!(normalized[2]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("CURRENT_TODO_LIST"));
+        assert_eq!(normalized[3]["content"], "Current task");
+
+        let final_history =
+            test_llm_processor().inject_prompts(normalized, &ExecutionPolicy::standard());
+        let system = final_history[0]["content"].as_str().unwrap_or_default();
+        assert!(!system.contains("CONTEXT_HANDOFF_PRECEDENCE"));
+        assert!(!system.contains("CURRENT_TODO_LIST"));
     }
 
     #[test]
@@ -1886,7 +1847,7 @@ mod tests {
             approved_plan,
         ]);
         let final_history =
-            processor.inject_prompts(normalized, None, None, &ExecutionPolicy::implementation());
+            processor.inject_prompts(normalized, &ExecutionPolicy::implementation());
 
         assert!(final_history[0]["content"]
             .as_str()
@@ -2065,7 +2026,7 @@ mod tests {
     }
 
     #[test]
-    fn inject_prompts_keeps_dynamic_sections_at_the_end() {
+    fn inject_prompts_keeps_volatile_context_out_of_system_message() {
         let mut processor = test_llm_processor();
         processor.cached_global_agents_path = Some(PathBuf::from("/tmp/global/AGENTS.md"));
         processor.cached_project_agents_path = Some(PathBuf::from("/tmp/project/AGENTS.md"));
@@ -2073,25 +2034,19 @@ mod tests {
         processor.cached_project_agents = Some("project agent".into());
 
         let history = vec![json!({ "role": "user", "content": "Do work" })];
-        let final_history = processor.inject_prompts(
-            history,
-            Some("snapshot body".into()),
-            None,
-            &ExecutionPolicy::standard(),
-        );
+        let final_history = processor.inject_prompts(history, &ExecutionPolicy::standard());
         let system = final_history[0]["content"].as_str().unwrap_or_default();
 
         let env_idx = system.find("<ENVIRONMENT_CONTEXT>").unwrap();
         let date_idx = system
             .rfind("User environment note: today's date is")
             .unwrap();
-        let snapshot_idx = system.rfind("<PREVIOUS_CONTEXT_SNAPSHOT>").unwrap();
 
         assert!(env_idx < date_idx);
-        assert!(date_idx < snapshot_idx);
         assert!(system.contains("<SOURCE_PATH>/tmp/global/AGENTS.md</SOURCE_PATH>"));
         assert!(system.contains("<SOURCE_PATH>/tmp/project/AGENTS.md</SOURCE_PATH>"));
-        assert!(system.trim_end().ends_with("</PREVIOUS_CONTEXT_SNAPSHOT>"));
+        assert!(!system.contains("PREVIOUS_CONTEXT_SNAPSHOT"));
+        assert!(!system.contains("CURRENT_TODO_LIST"));
     }
 
     #[test]
@@ -2099,14 +2054,12 @@ mod tests {
         let mut processor = test_llm_processor();
         let history = vec![json!({ "role": "user", "content": "Do work" })];
 
-        let without_audit =
-            processor.inject_prompts(history.clone(), None, None, &ExecutionPolicy::standard());
+        let without_audit = processor.inject_prompts(history.clone(), &ExecutionPolicy::standard());
         let without_audit_system = without_audit[0]["content"].as_str().unwrap_or_default();
         assert!(!without_audit_system.contains("Final audit is enabled"));
 
         processor.agent_config.final_audit = Some(true);
-        let with_audit =
-            processor.inject_prompts(history, None, None, &ExecutionPolicy::standard());
+        let with_audit = processor.inject_prompts(history, &ExecutionPolicy::standard());
         let with_audit_system = with_audit[0]["content"].as_str().unwrap_or_default();
         assert!(with_audit_system.contains("Final audit is enabled"));
         assert!(with_audit_system.contains("Key deliverables or changes:"));

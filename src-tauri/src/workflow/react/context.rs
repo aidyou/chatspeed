@@ -3,8 +3,8 @@ use crate::libs::tsid::TsidGenerator;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::runtime_observation::{
-    is_runtime_observation, runtime_observation_type, RuntimeObservationLlmVisibility,
-    RuntimeObservationType,
+    is_runtime_observation, runtime_observation_metadata, runtime_observation_type,
+    RuntimeObservationLlmVisibility, RuntimeObservationType, MESSAGE_KIND_RUNTIME_OBSERVATION,
 };
 use crate::workflow::react::types::StepType;
 use serde_json::json;
@@ -853,7 +853,14 @@ impl ContextManager {
 
     fn compression_summary_context_projection(content: &str) -> String {
         format!(
-            "<CONTEXT_HANDOFF_PRECEDENCE>\nThis checkpoint describes only the compression boundary. Dynamic todo and later raw-tail messages are newer authority. Do not continue, verify, or repeat a boundary-open item until checking whether later context has resolved or superseded it.\n</CONTEXT_HANDOFF_PRECEDENCE>\n\n{content}"
+            "<CONTEXT_HANDOFF_PRECEDENCE>\nThis checkpoint describes only the compression boundary. The following durable todo snapshot and later raw-tail messages are newer authority. Do not continue, verify, or repeat a boundary-open item until checking whether later context has resolved or superseded it.\n</CONTEXT_HANDOFF_PRECEDENCE>\n\n{content}"
+        )
+    }
+
+    fn compression_todo_observation(todos: &[serde_json::Value]) -> String {
+        format!(
+            "<SYSTEM_REMINDER>\nThis is the durable todo snapshot captured when the prior context was compressed. It is authoritative for that compression boundary; later context may have resolved or superseded it.\n\n{}\n</SYSTEM_REMINDER>",
+            Self::render_authoritative_todo_list(todos)
         )
     }
 
@@ -1319,7 +1326,9 @@ impl ContextManager {
                 id: None,
                 session_id: self.session_id.clone(),
                 segment_id,
-                role: if message.message_subtype.as_deref() == Some("approved_plan") {
+                role: if message.message_subtype.as_deref() == Some("approved_plan")
+                    || Self::is_compression_summary_message(message)
+                {
                     "user".to_string()
                 } else {
                     message.role.clone()
@@ -1643,6 +1652,55 @@ impl ContextManager {
 
         let mut all_messages = self.messages.clone();
         all_messages.push(persisted_summary.clone());
+
+        match self.main_store.get_todo_list_for_workflow(&self.session_id) {
+            Ok(todos) if !todos.is_empty() => {
+                let todo_msg_id = self
+                    .tsid_generator
+                    .generate_u64()
+                    .map_err(|e| WorkflowEngineError::General(e))?;
+                let todo_snapshot = WorkflowMessage {
+                    id: Some(todo_msg_id as i64),
+                    session_id: self.session_id.clone(),
+                    role: "user".to_string(),
+                    message: Self::compression_todo_observation(&todos),
+                    reasoning: None,
+                    message_kind: MESSAGE_KIND_RUNTIME_OBSERVATION.to_string(),
+                    message_subtype: Some("compression_todo_snapshot".to_string()),
+                    segment_id: self.current_segment_id,
+                    source_event_type: Some("compression_todo_snapshot".to_string()),
+                    metadata: Some(runtime_observation_metadata(
+                        RuntimeObservationType::CompressionTodoSnapshot,
+                        json!({
+                            "compressed_until_message_id": compressed_until_message_id,
+                            "snapshot_version": 1,
+                        }),
+                    )),
+                    attached_context: None,
+                    step_type: Some("observe".to_string()),
+                    step_index,
+                    is_error: false,
+                    error_type: None,
+                    created_at: None,
+                };
+
+                match self.main_store.add_workflow_message(&todo_snapshot) {
+                    Ok(persisted_todo_snapshot) => all_messages.push(persisted_todo_snapshot),
+                    Err(error) => log::warn!(
+                        "[Workflow][session={}][phase=compression] Failed to persist hidden todo snapshot after compression: {}",
+                        self.session_id,
+                        error
+                    ),
+                }
+            }
+            Ok(_) => {}
+            Err(error) => log::warn!(
+                "[Workflow][session={}][phase=compression] Skipping hidden todo snapshot because the authoritative todo list is unavailable: {}",
+                self.session_id,
+                error
+            ),
+        }
+
         self.messages = Self::rebuild_compacted_messages(&all_messages, self.max_tokens);
 
         self.rebuild_context_projection_from_runtime_messages(true, true)
@@ -1751,7 +1809,9 @@ mod tests {
     fn compression_summary_projection_marks_later_context_as_authoritative() {
         let projected = ContextManager::compression_summary_context_projection("checkpoint");
         assert!(projected.contains("CONTEXT_HANDOFF_PRECEDENCE"));
-        assert!(projected.contains("Dynamic todo and later raw-tail messages are newer authority"));
+        assert!(
+            projected.contains("The following durable todo snapshot and later raw-tail messages")
+        );
         assert!(projected.ends_with("checkpoint"));
     }
 
@@ -2081,6 +2141,184 @@ mod tests {
             "compression boundary should stop at the earliest compressible completion and keep the latest completed task in memory"
         );
         assert_eq!(Some(compressed_until_id), completion_message.id);
+    }
+
+    #[tokio::test]
+    async fn compress_persists_hidden_todo_snapshot_in_stable_projection_order() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-todo-snapshot";
+        insert_workflow(&store, session_id);
+        store
+            .update_workflow_todo_list(
+                session_id,
+                r#"[{"id":"todo-1","subject":"Persist first snapshot","status":"in_progress","description":"captured before compression"}]"#,
+            )
+            .expect("failed to seed todo list");
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let boundary = context
+            .add_message(
+                "user".to_string(),
+                "Original task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message")
+            .0;
+
+        context
+            .compress(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                2,
+                boundary.id.expect("boundary id"),
+            )
+            .await
+            .expect("compression should persist");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        let todo_snapshot = snapshot
+            .messages
+            .iter()
+            .find(|message| message.message_subtype.as_deref() == Some("compression_todo_snapshot"))
+            .expect("non-empty todo list must create one hidden snapshot");
+        let todo_snapshot_content = todo_snapshot.message.clone();
+
+        assert_eq!(todo_snapshot.role, "user");
+        assert_eq!(todo_snapshot.step_type.as_deref(), Some("observe"));
+        assert_eq!(
+            todo_snapshot
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("message_kind")),
+            Some(&json!("runtime_observation"))
+        );
+        assert_eq!(
+            todo_snapshot
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("observation_type")),
+            Some(&json!("compression_todo_snapshot"))
+        );
+        assert_eq!(
+            todo_snapshot
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("llm_visibility")),
+            Some(&json!("preserve_position"))
+        );
+        assert_eq!(
+            todo_snapshot
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("ui_visibility")),
+            Some(&json!("hide"))
+        );
+        assert!(todo_snapshot_content.contains("<SYSTEM_REMINDER>"));
+        assert!(todo_snapshot_content.contains("subject=Persist first snapshot"));
+
+        let llm_messages = context.get_messages_for_llm();
+        let summary_index = llm_messages
+            .iter()
+            .position(ContextManager::is_compression_summary_message)
+            .expect("compression summary should be projected");
+        let todo_index = llm_messages
+            .iter()
+            .position(|message| {
+                message.message_subtype.as_deref() == Some("compression_todo_snapshot")
+            })
+            .expect("todo snapshot should be projected");
+        assert!(summary_index < todo_index);
+        assert_eq!(llm_messages[summary_index].role, "user");
+        assert_eq!(llm_messages[todo_index].role, "user");
+
+        store
+            .update_workflow_todo_list(
+                session_id,
+                r#"[{"id":"todo-2","subject":"Changed after compression","status":"pending"}]"#,
+            )
+            .expect("failed to update todo list after compression");
+
+        let mut restored = ContextManager::new(
+            session_id.to_string(),
+            store,
+            4_096,
+            Arc::new(TsidGenerator::new(2).expect("failed to create restore tsid")),
+        );
+        restored
+            .load_history()
+            .await
+            .expect("restored projection should rebuild");
+        let restored_snapshot = restored
+            .get_messages_for_llm()
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("compression_todo_snapshot"))
+            .expect("restored projection should retain the durable todo snapshot");
+        assert_eq!(restored_snapshot.message, todo_snapshot_content);
+        assert!(restored_snapshot.message.contains("Persist first snapshot"));
+        assert!(!restored_snapshot
+            .message
+            .contains("Changed after compression"));
+    }
+
+    #[tokio::test]
+    async fn compress_skips_hidden_todo_snapshot_when_todo_list_is_empty() {
+        let (_dir, store) = setup_store();
+        let session_id = "compression-empty-todo-snapshot";
+        insert_workflow(&store, session_id);
+
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4_096,
+            Arc::new(TsidGenerator::new(1).expect("failed to create tsid")),
+        );
+        let boundary = context
+            .add_message(
+                "user".to_string(),
+                "Original task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user message")
+            .0;
+
+        context
+            .compress(
+                "<state_snapshot>checkpoint</state_snapshot>".to_string(),
+                2,
+                boundary.id.expect("boundary id"),
+            )
+            .await
+            .expect("compression should persist");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        assert!(snapshot.messages.iter().all(|message| {
+            message.message_subtype.as_deref() != Some("compression_todo_snapshot")
+        }));
+        assert!(context.get_messages_for_llm().iter().all(|message| {
+            message.message_subtype.as_deref() != Some("compression_todo_snapshot")
+        }));
     }
 
     #[tokio::test]

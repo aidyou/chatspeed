@@ -256,6 +256,7 @@ export function useWorkflowMessages(options = {}) {
     JSON.stringify({
       displayId: message?.displayId || '',
       role: message?.role || '',
+      groupOrder: message?.groupOrder ?? null,
       stepType: message?.stepType || '',
       stepIndex: message?.stepIndex || '',
       message: message?.message || '',
@@ -477,6 +478,19 @@ export function useWorkflowMessages(options = {}) {
         .map(tool => String(tool?.toolCallId || tool?.tool_call_id || '').trim())
         .filter(Boolean)
     )
+    const getToolCallId = tool => String(tool?.id || tool?.tool_call_id || '').trim()
+    const toolGroupOrderById = new Map()
+
+    rawMsgs.forEach((message, messageIndex) => {
+      const toolCalls = Array.isArray(message?.metadata?.tool_calls) ? message.metadata.tool_calls : []
+      const callCount = toolCalls.length
+
+      toolCalls.forEach((call, callIndex) => {
+        const toolCallId = getToolCallId(call)
+        if (!toolCallId || toolGroupOrderById.has(toolCallId)) return
+        toolGroupOrderById.set(toolCallId, messageIndex + (callIndex + 1) / (callCount + 1))
+      })
+    })
 
     const tryParseJsonValue = value => {
       if (value === null || value === undefined) return null
@@ -939,7 +953,7 @@ export function useWorkflowMessages(options = {}) {
         const toolCalls = message.metadata?.tool_calls || []
         if (Array.isArray(toolCalls) && toolCalls.length > 0) {
           pendingToolCalls = toolCalls
-            .map(call => {
+            .map((call, callIndex) => {
               const name = call.function?.name || call.name || ''
               const rawArgs = call.function?.arguments || call.arguments || {}
               let args = rawArgs
@@ -964,6 +978,9 @@ export function useWorkflowMessages(options = {}) {
                   : ''
               return {
                 id: call.id,
+                groupOrder:
+                  toolGroupOrderById.get(getToolCallId(call)) ??
+                  idx + (callIndex + 1) / (toolCalls.length + 1),
                 arguments: args,
                 icon,
                 toolType,
@@ -1003,6 +1020,10 @@ export function useWorkflowMessages(options = {}) {
 
         const enhancedMessage = {
           ...message,
+          groupOrder:
+            message.role === 'tool'
+              ? toolGroupOrderById.get(String(message.metadata?.tool_call_id || '').trim()) ?? idx
+              : message.groupOrder,
           displayId,
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),

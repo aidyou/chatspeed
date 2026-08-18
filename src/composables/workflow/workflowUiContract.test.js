@@ -371,7 +371,10 @@ test('persisted awaiting-user status restores answer controls when an older snap
 })
 
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
-  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+  const [messageList, workflowMessages] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8')
+  ])
 
   assert.match(
     messageList,
@@ -422,5 +425,45 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     messageList,
     /const getToolGroupIcon = \(kind, messages\) => \{\s*if \(messages\.some\(isCollapsibleMutationToolMessage\)\) return TOOL_GROUP_ICONS\.mutation_tools/,
     'a mixed tool group containing file edits must prefer the edit icon'
+  )
+  assert.match(
+    messageList,
+    /const isStreamingThoughtMergedIntoToolGroup = message =>[\s\S]*?hasStreamingThoughtOnly\.value[\s\S]*?message === lastVisibleMessage\.value[\s\S]*?isCollapsedToolGroupMessage\(message\)[\s\S]*?\(message\.groupedTools\?\.length \|\| 0\) > 0/,
+    'a reasoning-only stream must attach only to the final tool group, never an independent message or thought-only group'
+  )
+  assert.match(
+    messageList,
+    /const shouldShowStandaloneStreamingChat = computed\([\s\S]*?!isStreamingThoughtMergedIntoToolGroup\(lastVisibleMessage\.value\)/,
+    'the standalone streaming card must stay hidden only while its thought is attached to the preceding tool group'
+  )
+  assert.match(
+    messageList,
+    /v-if="isStreamingThoughtMergedIntoToolGroup\(message\)"[\s\S]*?STREAMING_REASONING_ID/,
+    'an attached streaming thought must retain its expandable reasoning UI inside the tool group'
+  )
+  assert.match(
+    workflowMessages,
+    /const toolGroupOrderById = new Map\(\)[\s\S]*?rawMsgs\.forEach\(\(message, messageIndex\) => \{[\s\S]*?toolGroupOrderById\.set\(toolCallId, messageIndex \+ \(callIndex \+ 1\) \/ \(callCount \+ 1\)\)/,
+    'tool-call declaration order must be recorded before assistant tool messages can be hidden'
+  )
+  assert.match(
+    workflowMessages,
+    /id: call\.id,[\s\S]*?groupOrder:[\s\S]*?toolGroupOrderById\.get\(getToolCallId\(call\)\)/,
+    'pending tool placeholders must carry their original tool-call order'
+  )
+  assert.match(
+    workflowMessages,
+    /message\.role === 'tool'[\s\S]*?toolGroupOrderById\.get\(String\(message\.metadata\?\.tool_call_id \|\| ''\)\.trim\(\)\) \?\? idx/,
+    'completed tool messages must carry the same original order even after their assistant declaration is filtered'
+  )
+  assert.match(
+    messageList,
+    /call\.groupOrder \?\? index \+ \(callIndex \+ 1\) \/ \(pendingCalls\.length \+ 1\)/,
+    'the message list must consume the stable pending-tool order and only fall back for old data'
+  )
+  assert.match(
+    messageList,
+    /tools\.push\(\{ \.\.\.message, groupOrder: message\.groupOrder \?\? index \}\)/,
+    'tool collection must not overwrite a stable order with a transient projection index'
   )
 })

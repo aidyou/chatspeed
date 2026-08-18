@@ -9,6 +9,7 @@ pub const MESSAGE_KIND_RUNTIME_OBSERVATION: &str = "runtime_observation";
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeObservationType {
+    CompressionTodoSnapshot,
     SubAgentCompletion,
     SubAgentInterrupted,
     CompletionRejected,
@@ -173,6 +174,10 @@ fn default_visibility(
     RuntimeObservationUiVisibility,
 ) {
     match observation_type {
+        RuntimeObservationType::CompressionTodoSnapshot => (
+            RuntimeObservationLlmVisibility::PreservePosition,
+            RuntimeObservationUiVisibility::Hide,
+        ),
         RuntimeObservationType::SubAgentCompletion => (
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Card,

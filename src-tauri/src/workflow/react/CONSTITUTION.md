@@ -305,6 +305,18 @@ Consumer boundary implication:
 - UI must not depend on `workflow_context_messages` for semantic correctness
 - reports and metrics must not depend on `workflow_context_messages`
 
+Hard rule: frequently changing runtime data must not be inserted into the system prompt. Keep the
+system prompt cache-stable; inject dynamic state only as an ordered user or tool observation when
+the current context actually needs it, such as an authoritative todo snapshot after compression.
+
+Hard rule: AI-visible history is a stable ordered projection of durable workflow messages. When the
+projection cache is missing or stale, `ContextManager` may rebuild it deterministically from durable
+transcript and snapshot authority, preserving the same semantic order and boundaries. Semantic
+context needed after compression, recovery, or restart must be persisted at the event boundary.
+LLM request preparation must consume that projection and may perform only deterministic
+provider-wire normalization; it must not query current runtime state, synthesize missing semantic
+history, or reorder semantic messages.
+
 ### 8.3 Context rebuild must be rule-driven
 
 At minimum, context rebuild rules must distinguish:
