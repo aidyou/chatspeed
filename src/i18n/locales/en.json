@@ -1137,12 +1137,12 @@
     "approvePlan": "Approve Plan",
     "askUser": {
       "answerLabel": "Answer:",
-      "customLabel": "Custom input",
-      "customPlaceholder": "I want to type...",
+      "otherLabel": "Other",
       "responseTitle": "Submitted response",
       "submit": "Submit",
-      "validationCustomRequired": "Please enter your custom response.",
-      "validationRequired": "Please answer every item before submitting."
+      "supplementPlaceholder": "Enter additional information",
+      "validationOtherRequired": "Please enter additional information when selecting Other.",
+      "validationRequired": "Please select an option for every item."
     },
     "autoApprovedTools": "Auto-Approved Tools",
     "automation": {

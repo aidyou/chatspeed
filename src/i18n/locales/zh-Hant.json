@@ -1137,12 +1137,12 @@
     "approvePlan": "批准計劃",
     "askUser": {
       "answerLabel": "回答：",
-      "customLabel": "自訂輸入",
-      "customPlaceholder": "我想輸入...",
+      "otherLabel": "其他",
       "responseTitle": "已提交的選擇",
       "submit": "提交",
-      "validationCustomRequired": "請補充自訂輸入內容。",
-      "validationRequired": "請為每一項選擇一個選項或填寫輸入內容。"
+      "supplementPlaceholder": "請輸入您的補充資訊",
+      "validationOtherRequired": "選擇「其他」時，請填寫補充資訊。",
+      "validationRequired": "請為每一項選擇一個選項。"
     },
     "autoApprovedTools": "自動審批工具",
     "automation": {

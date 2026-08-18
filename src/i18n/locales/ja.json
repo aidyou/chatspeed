@@ -1137,12 +1137,12 @@
     "approvePlan": "計画を承認",
     "askUser": {
       "answerLabel": "回答：",
-      "customLabel": "カスタム入力",
-      "customPlaceholder": "入力したい内容...",
+      "otherLabel": "その他",
       "responseTitle": "送信済みの選択",
       "submit": "送信",
-      "validationCustomRequired": "カスタム入力を補足してください。",
-      "validationRequired": "各項目で選択するか入力してください。"
+      "supplementPlaceholder": "補足情報を入力してください",
+      "validationOtherRequired": "「その他」を選択した場合は、補足情報を入力してください。",
+      "validationRequired": "各項目で選択してください。"
     },
     "autoApprovedTools": "自動承認ツール",
     "automation": {

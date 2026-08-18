@@ -504,18 +504,21 @@
                 white-space: normal;
               }
 
-              .choice-custom-row {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-
-                .el-radio {
-                  margin-right: 0;
+              .choice-group--answered {
+                .choice-selected-answer {
+                  margin: 0;
+                  white-space: pre-wrap;
+                  word-break: break-word;
+                  color: var(--cs-text-color-primary);
                 }
               }
 
-              .choice-custom-input {
-                flex: 1;
+              .choice-supplement-row {
+                padding-left: 24px;
+              }
+
+              .choice-supplement-input {
+                width: 100%;
               }
 
               .choice-submit-row {

@@ -170,7 +170,7 @@ test('MCP tool calls show their arguments and format only valid JSON results', a
   assert.match(messageList, /getMcpToolContentForDisplay\(message\)/)
 })
 
-test('ask-user responses stay in the workflow chain but are hidden from the transcript UI', async () => {
+test('ask-user responses stay hidden from the transcript and render on their source tool card', async () => {
   const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine] =
     await Promise.all([
       readFile('src/views/Workflow.vue', 'utf8'),
@@ -183,7 +183,7 @@ test('ask-user responses stay in the workflow chain but are hidden from the tran
   assert.match(
     workflowView,
     /const submitAskUserResponse = async content => \{[\s\S]*?coreOnSendMessage\(content, \{\s*metadata: \{ ui_visibility: 'hide' \}/,
-    'ask-user answers must use the existing hidden-message metadata instead of content-based filtering'
+    'ask-user answers must remain hidden user messages'
   )
   assert.match(
     workflowCore,
@@ -200,13 +200,38 @@ test('ask-user responses stay in the workflow chain but are hidden from the tran
   )
   assert.match(
     workflowMessages,
+    /const askUserResponsesBySourceOrder = new Map\(\)[\s\S]*?isHiddenAskUserResponse[\s\S]*?askUserResponsesBySourceOrder\.set\(pendingAskUserSourceOrder, message\.message\)/,
+    'the hidden answer must attach to its preceding ask_user tool record'
+  )
+  assert.match(
+    workflowMessages,
+    /askUserResponse: askUserResponsesBySourceOrder\.get\(message\.sourceOrder\) \|\| ''/,
+    'the source ask_user tool must receive its hidden response for rendering'
+  )
+  assert.match(
+    workflowMessages,
     /m\.metadata\?\.ui_visibility === 'hide'[\s\S]*?return false/,
-    'the workflow message projection must hide messages marked with ui_visibility=hide'
+    'the hidden answer must not enter the normal transcript projection'
   )
   assert.match(
     messageList,
-    /const uiVisibility = message\?\.metadata\?\.ui_visibility\s*if \(uiVisibility === 'hide'\) return true/,
-    'the message list must retain its existing hidden-message safeguard'
+    /<template v-if="getAskUserResponseItems\(message\)\.length > 0">[\s\S]*?choice-group--answered/,
+    'an answered ask_user card must replace disabled choices with the selected response'
+  )
+  assert.match(
+    messageList,
+    /const OTHER_ASK_USER_VALUE = '__other__'/,
+    'the fixed Other choice must have a distinct non-user option value'
+  )
+  assert.match(
+    messageList,
+    /selection === OTHER_ASK_USER_VALUE[\s\S]*?validationOtherRequired/,
+    'Other must require supplemental text before submission'
+  )
+  assert.match(
+    messageList,
+    /choice: supplement \? `\$\{selection\}\\n\$\{supplement\}` : selection/,
+    'standard choices must include an optional supplemental line in their submitted result'
   )
 })
 

@@ -2309,7 +2309,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
         if normalized_groups.is_empty() {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} and ensure every group has a direct decision title plus at least one concise, actionable option. Use ask_user only for blocking decisions required to continue; do not use it for status updates, generic feedback, final answers, or plan approval. Do not include custom-input placeholder options because the UI already provides custom text input.</SYSTEM_REMINDER>".to_string(),
+                content: "<SYSTEM_REMINDER>Error: 'ask_user' requires grouped choices with at least one valid item. Use {\"items\":[{\"title\":\"...\",\"options\":[\"...\"]}]} and ensure every group has a direct decision title plus at least one concise, actionable option. Use ask_user only for blocking decisions required to continue; do not use it for status updates, generic feedback, final answers, or plan approval. Do not include placeholder or Other options because the UI appends the fixed Other option and supplemental-input field.</SYSTEM_REMINDER>".to_string(),
                 llm_content: None,
                 title: "Ask User Error".to_string(),
                 summary: "Invalid ask_user payload".to_string(),

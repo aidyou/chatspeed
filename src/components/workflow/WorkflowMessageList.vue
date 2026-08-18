@@ -769,55 +769,67 @@
                     message.toolDisplay.displayType === 'choice'
                   "
                   class="choice-container">
-                  <div
-                    v-for="group in getChoiceGroups(message)"
-                    :key="group.title"
-                    class="choice-group">
-                    <div class="choice-question">
-                      {{ group.title }}
+                  <template v-if="getAskUserResponseItems(message).length > 0">
+                    <div
+                      v-for="(item, itemIndex) in getAskUserResponseItems(message)"
+                      :key="`${item.title}-${itemIndex}`"
+                      class="choice-group choice-group--answered">
+                      <div class="choice-question">{{ item.title }}</div>
+                      <pre class="choice-selected-answer">{{ formatAskUserAnswer(item) }}</pre>
                     </div>
-                    <el-radio-group
-                      :model-value="getAskUserSelection(message, group.title)"
-                      class="choice-options vertical numbered"
-                      @update:model-value="
-                        value => setAskUserSelection(message, group.title, value)
-                      ">
-                      <el-radio
-                        v-for="(opt, optIndex) in group.options"
-                        :key="`${group.title}-${opt}`"
-                        :value="opt"
-                        :disabled="!canAnswerAskUser(message) || askUserSubmitting">
-                        <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
-                      </el-radio>
-                      <div class="choice-custom-row">
-                        <el-radio
-                          :value="CUSTOM_ASK_USER_VALUE"
-                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
-                          <span class="choice-option-label">{{ group.options.length + 1 }}.</span>
-                        </el-radio>
-                        <el-input
-                          :model-value="getAskUserCustomInput(message, group.title)"
-                          class="choice-custom-input"
-                          type="textarea"
-                          :autosize="{ minRows: 1, maxRows: 6 }"
-                          :placeholder="$t('workflow.askUser.customPlaceholder')"
-                          :disabled="!canAnswerAskUser(message) || askUserSubmitting"
-                          @focus="setAskUserSelection(message, group.title, CUSTOM_ASK_USER_VALUE)"
-                          @update:model-value="
-                            value => setAskUserCustomInput(message, group.title, value)
-                          " />
+                  </template>
+                  <template v-else>
+                    <div
+                      v-for="group in getChoiceGroups(message)"
+                      :key="group.title"
+                      class="choice-group">
+                      <div class="choice-question">
+                        {{ group.title }}
                       </div>
-                    </el-radio-group>
-                  </div>
-                  <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
-                    <el-button
-                      size="small"
-                      type="primary"
-                      :loading="askUserSubmitting"
-                      @click="submitAskUserResponse(message)">
-                      {{ $t('workflow.askUser.submit') }}
-                    </el-button>
-                  </div>
+                      <el-radio-group
+                        :model-value="getAskUserSelection(message, group.title)"
+                        class="choice-options vertical numbered"
+                        @update:model-value="
+                          value => setAskUserSelection(message, group.title, value)
+                        ">
+                        <el-radio
+                          v-for="(opt, optIndex) in group.options"
+                          :key="`${group.title}-${opt}`"
+                          :value="opt"
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
+                          <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
+                        </el-radio>
+                        <el-radio
+                          :value="OTHER_ASK_USER_VALUE"
+                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
+                          <span class="choice-option-label">
+                            {{ group.options.length + 1 }}. {{ $t('workflow.askUser.otherLabel') }}
+                          </span>
+                        </el-radio>
+                        <div class="choice-supplement-row">
+                          <el-input
+                            :model-value="getAskUserSupplement(message, group.title)"
+                            class="choice-supplement-input"
+                            type="textarea"
+                            :autosize="{ minRows: 1, maxRows: 6 }"
+                            :placeholder="$t('workflow.askUser.supplementPlaceholder')"
+                            :disabled="!canAnswerAskUser(message) || askUserSubmitting"
+                            @update:model-value="
+                              value => setAskUserSupplement(message, group.title, value)
+                            " />
+                        </div>
+                      </el-radio-group>
+                    </div>
+                    <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
+                      <el-button
+                        size="small"
+                        type="primary"
+                        :loading="askUserSubmitting"
+                        @click="submitAskUserResponse(message)">
+                        {{ $t('workflow.askUser.submit') }}
+                      </el-button>
+                    </div>
+                  </template>
                 </div>
                 <MarkdownSimple
                   v-else-if="
@@ -1117,7 +1129,7 @@ import { useWorkflowStore } from '@/stores/workflow'
 
 const workflowStore = useWorkflowStore()
 const { t } = useI18n()
-const CUSTOM_ASK_USER_VALUE = '__custom__'
+const OTHER_ASK_USER_VALUE = '__other__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
 const STREAMING_REASONING_ID = '__streaming_reasoning__'
 
@@ -2668,7 +2680,7 @@ const getChoiceKey = message =>
   message.metadata?.tool_call_id || message.displayId || message.id || ''
 
 const getAskUserResponseItems = message => {
-  const content = message?.message || ''
+  const content = message?.askUserResponse || message?.message || ''
   const match = content.match(/<ask_user_response>\s*([\s\S]*?)\s*<\/ask_user_response>/i)
   if (!match) return []
 
@@ -2682,8 +2694,9 @@ const getAskUserResponseItems = message => {
 
 const formatAskUserAnswer = item => {
   if (!item) return ''
+  if (item.source === 'other') return item.choice || ''
   if (item.source === 'custom') {
-    return `${t('workflow.askUser.customLabel')} (${item.choice_index})`
+    return `${t('workflow.askUser.otherLabel')} (${item.choice_index})`
   }
   return item.choice_index ? `${item.choice_index}. ${item.choice}` : item.choice || ''
 }
@@ -3026,7 +3039,7 @@ const ensureAskUserDraft = message => {
   const nextDraft = groups.reduce((acc, group) => {
     acc[group.title] = {
       selection: '',
-      customInput: ''
+      supplement: ''
     }
     return acc
   }, {})
@@ -3061,16 +3074,15 @@ const setAskUserSelection = (message, title, value) => {
   }))
 }
 
-const getAskUserCustomInput = (message, title) =>
-  ensureAskUserDraft(message)[title]?.customInput || ''
+const getAskUserSupplement = (message, title) =>
+  ensureAskUserDraft(message)[title]?.supplement || ''
 
-const setAskUserCustomInput = (message, title, value) => {
+const setAskUserSupplement = (message, title, value) => {
   updateAskUserDraft(message, current => ({
     ...current,
     [title]: {
       ...current[title],
-      selection: value?.trim() ? CUSTOM_ASK_USER_VALUE : current[title]?.selection,
-      customInput: value
+      supplement: value
     }
   }))
 }
@@ -3134,7 +3146,7 @@ const buildAskUserResponse = message => {
   for (const group of groups) {
     const groupDraft = draft[group.title] || {}
     const selection = groupDraft.selection || ''
-    const customInput = (groupDraft.customInput || '').trim()
+    const supplement = (groupDraft.supplement || '').trim()
 
     if (!selection) {
       return {
@@ -3143,19 +3155,19 @@ const buildAskUserResponse = message => {
       }
     }
 
-    if (selection === CUSTOM_ASK_USER_VALUE) {
-      if (!customInput) {
+    if (selection === OTHER_ASK_USER_VALUE) {
+      if (!supplement) {
         return {
           ok: false,
-          error: 'workflow.askUser.validationCustomRequired'
+          error: 'workflow.askUser.validationOtherRequired'
         }
       }
 
       selections.push({
         title: group.title,
         choice_index: group.options.length + 1,
-        choice: customInput,
-        source: 'custom'
+        choice: supplement,
+        source: 'other'
       })
       continue
     }
@@ -3171,7 +3183,7 @@ const buildAskUserResponse = message => {
     selections.push({
       title: group.title,
       choice_index: optionIndex + 1,
-      choice: selection,
+      choice: supplement ? `${selection}\n${supplement}` : selection,
       source: 'option'
     })
   }

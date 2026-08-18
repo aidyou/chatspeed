@@ -1137,12 +1137,12 @@
     "approvePlan": "批准计划",
     "askUser": {
       "answerLabel": "回答：",
-      "customLabel": "自定义输入",
-      "customPlaceholder": "我想输入...",
+      "otherLabel": "其他",
       "responseTitle": "已提交的选择",
       "submit": "提交",
-      "validationCustomRequired": "请补充自定义输入内容。",
-      "validationRequired": "请为每一项选择一个选项或填写输入内容。"
+      "supplementPlaceholder": "请输入您的补充信息",
+      "validationOtherRequired": "选择“其他”时，请填写补充信息。",
+      "validationRequired": "请为每一项选择一个选项。"
     },
     "autoApprovedTools": "自动审批的工具",
     "automation": {

@@ -479,7 +479,16 @@ export function useWorkflowMessages(options = {}) {
         .filter(Boolean)
     )
     const getToolCallId = tool => String(tool?.id || tool?.tool_call_id || '').trim()
+    const getToolName = message =>
+      String(
+        message?.metadata?.tool_name ||
+          message?.metadata?.tool_call?.name ||
+          message?.metadata?.tool_call?.function?.name ||
+          ''
+      ).trim()
     const toolGroupOrderById = new Map()
+    const askUserResponsesBySourceOrder = new Map()
+    let pendingAskUserSourceOrder = null
 
     rawMsgs.forEach((message, messageIndex) => {
       const toolCalls = Array.isArray(message?.metadata?.tool_calls) ? message.metadata.tool_calls : []
@@ -490,6 +499,20 @@ export function useWorkflowMessages(options = {}) {
         if (!toolCallId || toolGroupOrderById.has(toolCallId)) return
         toolGroupOrderById.set(toolCallId, messageIndex + (callIndex + 1) / (callCount + 1))
       })
+
+      if (message?.role === 'tool' && getToolName(message) === 'ask_user') {
+        pendingAskUserSourceOrder = messageIndex
+        return
+      }
+
+      const isHiddenAskUserResponse =
+        message?.role === 'user' &&
+        message?.metadata?.ui_visibility === 'hide' &&
+        /<ask_user_response>\s*[\s\S]*?<\/ask_user_response>/i.test(message?.message || '')
+      if (isHiddenAskUserResponse && pendingAskUserSourceOrder !== null) {
+        askUserResponsesBySourceOrder.set(pendingAskUserSourceOrder, message.message)
+        pendingAskUserSourceOrder = null
+      }
     })
 
     const tryParseJsonValue = value => {
@@ -1028,6 +1051,7 @@ export function useWorkflowMessages(options = {}) {
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),
           subAgentCard: buildSubAgentCard(message),
+          askUserResponse: askUserResponsesBySourceOrder.get(message.sourceOrder) || '',
           pendingToolCalls,
           isRejected,
           isApproved

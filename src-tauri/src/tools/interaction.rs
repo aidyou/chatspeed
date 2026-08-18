@@ -20,7 +20,7 @@ impl ToolDefinition for AskUser {
         - Prefer one focused group. Use multiple groups only when each group is an independent blocking decision.\n\
         - Each item MUST use the shape {\"title\": \"...\", \"options\": [\"...\", \"...\"]}.\n\
         - Titles must be direct questions or decision labels, not vague headings like \"Any thoughts?\".\n\
-        - Options must be concise, mutually exclusive, and actionable. Do not include placeholder options like \"I want to input...\" because the UI already provides custom text input.\n\
+        - Options must be concise, mutually exclusive, and actionable. Do not include placeholder or Other options yourself.\n\
         - If you recommend a specific option, make it the first option and add \"(Recommended)\" at the end of the label.\n\
         - Include the concrete consequence in the option text when it matters, for example \"Proceed with safe change; skip data backfill\"."
     }
@@ -52,7 +52,7 @@ impl ToolDefinition for AskUser {
                                     "type": "array",
                                     "items": { "type": "string" },
                                     "minItems": 1,
-                                    "description": "Concise, mutually exclusive, actionable options. Do not include a custom-input placeholder; the UI already provides custom text input. Put the recommended option first and suffix it with '(Recommended)' when applicable."
+                                    "description": "Concise, mutually exclusive, actionable options. The UI appends a fixed Other option and an optional supplemental-input field, so do not include placeholder or Other options. Put the recommended option first and suffix it with '(Recommended)' when applicable."
                                 }
                             },
                             "required": ["title", "options"],
