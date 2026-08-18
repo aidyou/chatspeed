@@ -564,6 +564,47 @@ export const getStructuredWorkflowToolName = message => {
     .toLowerCase()
 }
 
+// Flexbox `order` accepts integers only. Rank the shared durable order axis so
+// pending and persisted tools keep the same interleaving without passing fractions to CSS.
+export const getWorkflowToolGroupRenderOrders = (thoughts = [], tools = []) => {
+  const entries = [
+    ...thoughts.map((item, index) => ({
+      kind: 'thought',
+      index,
+      sourceIndex: index,
+      order:
+        item?.groupOrder !== null &&
+        item?.groupOrder !== undefined &&
+        Number.isFinite(Number(item.groupOrder))
+          ? Number(item.groupOrder)
+          : index
+    })),
+    ...tools.map((item, index) => ({
+      kind: 'tool',
+      index,
+      sourceIndex: thoughts.length + index,
+      order:
+        item?.groupOrder !== null &&
+        item?.groupOrder !== undefined &&
+        Number.isFinite(Number(item.groupOrder))
+          ? Number(item.groupOrder)
+          : index
+    }))
+  ].sort((left, right) => left.order - right.order || left.sourceIndex - right.sourceIndex)
+
+  const thoughtOrders = Array(thoughts.length)
+  const toolOrders = Array(tools.length)
+  entries.forEach((entry, renderOrder) => {
+    if (entry.kind === 'thought') {
+      thoughtOrders[entry.index] = renderOrder
+    } else {
+      toolOrders[entry.index] = renderOrder
+    }
+  })
+
+  return { thoughtOrders, toolOrders }
+}
+
 export const isPendingApprovalEntryForTool = (entry, sessionId, toolName) => {
   const entryId = String(entry?.id || '').trim()
   const expectedToolName = String(toolName || '').trim().toLowerCase()

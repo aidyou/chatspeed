@@ -9,6 +9,7 @@ import {
   excludeManualClearContextMarkers,
   getStructuredWorkflowToolName,
   getWorkflowPersistedMessageId,
+  getWorkflowToolGroupRenderOrders,
   hasOpenWorkflowTaskFrame,
   inferWorkflowToolExecutionStatus,
   isPendingApprovalEntryForTool,
@@ -23,6 +24,25 @@ import {
   selectVisibleWorkflowTaskGroups,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
+
+const interleavedToolGroupOrders = getWorkflowToolGroupRenderOrders(
+  [{ groupOrder: 0 }, { groupOrder: 2 }],
+  [{ groupOrder: 0.5 }, { groupOrder: 2.5 }]
+)
+assert.deepEqual(
+  interleavedToolGroupOrders,
+  {
+    thoughtOrders: [0, 2],
+    toolOrders: [1, 3]
+  },
+  'fractional source positions must become integer flex orders without losing thought/tool interleaving'
+)
+assert.ok(
+  [...interleavedToolGroupOrders.thoughtOrders, ...interleavedToolGroupOrders.toolOrders].every(
+    Number.isInteger
+  ),
+  'tool-group render orders must stay valid CSS flex-order integers'
+)
 
 const finalReviewPendingMessage = {
   metadata: {

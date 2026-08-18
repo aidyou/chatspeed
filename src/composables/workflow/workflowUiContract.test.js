@@ -486,4 +486,14 @@ test('tool activity grouping keeps only explicit independent segments as boundar
     /thoughts\.push\(buildGroupedThoughtItem\(message, index, message\.groupOrder \?\? index\)\)/,
     'grouped thoughts must use their durable order instead of the transient filtered-list index'
   )
+  assert.match(
+    messageList,
+    /const \{ thoughtOrders, toolOrders \} = getWorkflowToolGroupRenderOrders\(thoughts, messages\)[\s\S]*?renderOrder: thoughtOrders\[thoughtIndex\][\s\S]*?renderOrder: toolOrders\[toolIndex\]/,
+    'thoughts and tools must be assigned integer render ranks from their shared durable order axis'
+  )
+  assert.match(
+    messageList,
+    /:style="\{ order: thought\.renderOrder \?\? thoughtIndex \}"[\s\S]*?:style="\{ order: tool\.renderOrder \?\? toolIndex \}"/,
+    'the expanded tool group must pass only integer render ranks to CSS flex order'
+  )
 })

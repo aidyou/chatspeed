@@ -158,7 +158,7 @@
                 v-for="(thought, thoughtIndex) in message.groupedThoughts || []"
                 :key="`${message.displayId}_grouped_thought_${thoughtIndex}`"
                 class="reasoning-container collapsed-tool-group__thought"
-                :style="{ order: thought.groupOrder ?? thoughtIndex }">
+                :style="{ order: thought.renderOrder ?? thoughtIndex }">
                 <div class="reasoning-header" @click="toggleReasoningForMessage(thought)">
                   <cs name="reasoning" size="14px" class="reasoning-icon" />
                   <span class="reasoning-text">
@@ -216,7 +216,7 @@
                   tool.toolDisplay?.toolType || 'tool-system',
                   tool.toolDisplay?.isError ? 'status-error' : 'status-success'
                 ]"
-                :style="{ order: tool.groupOrder ?? toolIndex }">
+                :style="{ order: tool.renderOrder ?? toolIndex }">
                 <div
                   class="tool-line title-wrap expandable"
                   :class="{
@@ -1100,6 +1100,7 @@ import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
   excludeLeadingManualClearContextMarkers,
+  getWorkflowToolGroupRenderOrders,
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
@@ -2165,6 +2166,15 @@ const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false
     if (!earliest) return item
     return (item?.groupOrder ?? index) < (earliest?.groupOrder ?? index) ? item : earliest
   }, null)
+  const { thoughtOrders, toolOrders } = getWorkflowToolGroupRenderOrders(thoughts, messages)
+  const groupedThoughts = thoughts.map((thought, thoughtIndex) => ({
+    ...thought,
+    renderOrder: thoughtOrders[thoughtIndex]
+  }))
+  const groupedTools = messages.map((tool, toolIndex) => ({
+    ...tool,
+    renderOrder: toolOrders[toolIndex]
+  }))
 
   return {
     ...seedMessage,
@@ -2183,8 +2193,8 @@ const buildToolGroupMessage = (messages, index, thoughts = [], isOngoing = false
       errorSummary: getToolGroupErrorSummary(errorCount),
       summary: buildToolGroupSummary(messages)
     },
-    groupedThoughts: thoughts,
-    groupedTools: messages
+    groupedThoughts,
+    groupedTools
   }
 }
 
@@ -2393,14 +2403,8 @@ const getCollapsedToolGroupThoughtSummary = message => {
   const streamingThoughtCount = isStreamingThoughtMergedIntoToolGroup(message) ? 1 : 0
   return getToolGroupThoughtSummary(groupedThoughtCount + streamingThoughtCount)
 }
-const getStreamingThoughtGroupOrder = message => {
-  const groupedItems = [...(message?.groupedThoughts || []), ...(message?.groupedTools || [])]
-  const latestOrder = Math.max(
-    -1,
-    ...groupedItems.map(item => Number(item?.groupOrder)).filter(Number.isFinite)
-  )
-  return latestOrder + 1
-}
+const getStreamingThoughtGroupOrder = message =>
+  (message?.groupedThoughts?.length || 0) + (message?.groupedTools?.length || 0)
 const shouldShowStandaloneStreamingChat = computed(
   () =>
     props.isChatting &&
