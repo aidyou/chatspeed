@@ -6632,6 +6632,24 @@ impl WorkflowExecutor {
             }
         }
 
+        // Terminal events are durable recovery anchors. Save the post-transition context only
+        // after the terminal event has been written so the snapshot's event cursor includes it.
+        let terminal_transition = old_state != new_state
+            && matches!(
+                new_state,
+                WorkflowState::Completed | WorkflowState::Error | WorkflowState::Cancelled
+            );
+        if terminal_transition {
+            if let Err(e) = self.save_snapshot().await {
+                log::error!(
+                    "[Workflow][session={}][phase=snapshot] Failed to save terminal state {}: {}",
+                    self.session_id,
+                    new_state,
+                    e
+                );
+            }
+        }
+
         if wait_reason.is_some() {
             if let Err(e) = self.save_snapshot().await {
                 log::error!(
@@ -10039,7 +10057,7 @@ mod recovery_tests {
         let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
         let mut executor = WorkflowExecutor::new(
             session_id.to_string(),
-            store,
+            store.clone(),
             chat_state,
             gateway,
             Arc::new(UnusedSubAgentFactory),
@@ -10069,6 +10087,13 @@ mod recovery_tests {
                 .expect("completed state should reach gateway")
                 .expect("gateway should report persisted status");
         assert_eq!(observed_status, "completed");
+
+        let context = store
+            .get_execution_context(session_id)
+            .expect("failed to load terminal execution context")
+            .expect("terminal transition should persist an execution context");
+        assert_eq!(context.state, RuntimeState::Completed);
+        assert_eq!(context.last_event_id, Some(2));
     }
 
     #[tokio::test]

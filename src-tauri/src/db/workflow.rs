@@ -242,35 +242,31 @@ fn select_workflow_ui_message_page(
     message_limit: usize,
 ) -> WorkflowUiMessagePageSelection {
     let page_limit = message_limit.max(1);
-    let mut selected_len = messages_descending.len().min(page_limit);
-    let mut has_content = false;
+    let mut messages = messages_descending
+        .into_iter()
+        .take(page_limit.saturating_add(1))
+        .collect::<Vec<_>>();
+    messages.reverse();
 
-    for (index, message) in messages_descending.iter().enumerate() {
-        if index > page_limit {
-            break;
-        }
-        if is_workflow_ui_task_boundary(message) {
-            if has_content {
-                selected_len = index.min(page_limit);
-                break;
-            }
-            continue;
-        }
-
-        // A run of boundary messages must never become a page by itself. The extra sentinel row may
-        // therefore join the page only when it is the first ordinary message behind those boundaries.
-        if index == page_limit && !has_content && selected_len == page_limit {
-            selected_len = page_limit + 1;
-        }
-        has_content = true;
+    // Keep boundary markers with the older page when they are at the oldest
+    // edge. This prevents a page from starting with an orphan completion or
+    // clear-context marker. A completion at the newest edge remains visible at
+    // the bottom of the current page.
+    while messages.first().is_some_and(is_workflow_ui_task_boundary) {
+        messages.remove(0);
     }
 
-    let has_more_in_current_task = messages_descending
-        .get(selected_len)
-        .is_some_and(|message| !is_workflow_ui_task_boundary(message));
+    let has_more_in_current_task = messages.len() > page_limit
+        && messages
+            .first()
+            .is_some_and(|message| !is_workflow_ui_task_boundary(message));
+
+    if messages.len() > page_limit {
+        messages.drain(..messages.len() - page_limit);
+    }
 
     WorkflowUiMessagePageSelection {
-        messages: messages_descending.into_iter().take(selected_len).collect(),
+        messages,
         has_more_in_current_task,
     }
 }
@@ -1641,10 +1637,12 @@ impl MainStore {
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
             let selection = select_workflow_ui_message_page(descending, message_limit);
             let has_more_in_current_task = selection.has_more_in_current_task;
-            let mut messages = selection.messages;
-            messages.reverse();
+            let messages = selection.messages;
 
             Ok(WorkflowMessagePage {
+                // The selector returns messages oldest-first. The cursor must
+                // point at the oldest displayed row so the next page moves back
+                // by the whole page instead of repeating all but one message.
                 before_message_id: messages.first().and_then(|message| message.id),
                 hidden_message_count: total_message_count.saturating_sub(messages.len()),
                 hidden_completed_task_count: 0,
@@ -1682,8 +1680,7 @@ impl MainStore {
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
             let selection = select_workflow_ui_message_page(descending, message_limit);
             let has_more_in_current_task = selection.has_more_in_current_task;
-            let mut messages = selection.messages;
-            messages.reverse();
+            let messages = selection.messages;
 
             Ok(WorkflowMessagePage {
                 before_message_id: messages
@@ -2733,6 +2730,26 @@ impl MainStore {
                 events.len()
             );
             Ok(events)
+        })
+    }
+
+    pub fn latest_workflow_event_type(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT event_type
+                 FROM workflow_events
+                 WHERE session_id = ?1
+                 ORDER BY id DESC
+                 LIMIT 1",
+                params![session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
         })
     }
 

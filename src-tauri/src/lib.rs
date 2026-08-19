@@ -460,11 +460,6 @@ pub async fn run() -> crate::error::Result<()> {
                 match window.label() {
                     // For these windows, we just hide them.
                     "assistant" | "workflow" => {
-                        if window.label() == "workflow" {
-                            if let Some(terminal_manager) = window.try_state::<Arc<crate::terminal::TerminalManager>>() {
-                                terminal_manager.reset_workflow_window();
-                            }
-                        }
                         api.prevent_close();
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {

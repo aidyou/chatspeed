@@ -584,10 +584,10 @@ assert.match(
   /await workflowStore\.loadMessages\(sessionId\)[\s\S]*currentWorkflowId\.value !== sessionId[\s\S]*await refreshCurrentWorkflowUiConfig\(sessionId\)/,
   'clear-context success must refresh the synchronized Agent configuration only for the selected workflow'
 )
-assert.ok(
-  clearContextProjection.indexOf('visibleTaskGroupCount.value = 1') <
-    clearContextProjection.indexOf('workflowStore.addMessage({'),
-  'clear-context success must collapse expanded history before inserting the marker projection'
+assert.doesNotMatch(
+  clearContextProjection,
+  /visibleTaskGroupCount|hiddenCompletedTaskGroupCount/,
+  'clear-context success must not reset or reveal task-segment pagination state'
 )
 
 const approvalDialog = readProjectFile('src/components/workflow/ApprovalDialog.vue')

@@ -251,13 +251,18 @@ test('ask-user responses stay hidden from the transcript and render on their sou
   )
   assert.match(
     workflowStore,
-    /hasMoreInCurrentTask\.value = snapshot\.hasMoreInCurrentTask === true/,
-    'history pagination must keep the backend-selected current-task boundary'
+    /invokeWrapper\('get_earlier_workflow_message_page'/,
+    'history pagination must use the regular message page endpoint'
   )
-  assert.match(
+  assert.doesNotMatch(
+    workflowStore,
+    /hasMoreInCurrentTask|hiddenCompletedTaskCount|get_earlier_workflow_messages/,
+    'task-segment pagination state and endpoint must not remain in the frontend store'
+  )
+  assert.doesNotMatch(
     workflowView,
-    /loadEarlierMessages\(\{ withinCurrentTask: true \}\)/,
-    'automatic top-up must never cross a completion or clear-context boundary'
+    /withinCurrentTask|loadEarlierTaskGroup|revealEarlierTaskGroup/,
+    'the workflow view must request ordinary message pages'
   )
   assert.match(
     messageList,

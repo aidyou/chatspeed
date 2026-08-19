@@ -1723,6 +1723,15 @@ fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState
     }
 }
 
+fn terminal_workflow_state_from_event_type(event_type: &str) -> Option<WorkflowState> {
+    match event_type {
+        "workflow_completed" => Some(WorkflowState::Completed),
+        "workflow_failed" => Some(WorkflowState::Error),
+        "workflow_cancelled" => Some(WorkflowState::Cancelled),
+        _ => None,
+    }
+}
+
 fn durable_child_terminal_state(
     store: &MainStore,
     child_id: &str,
@@ -1742,6 +1751,12 @@ fn durable_child_terminal_state(
         Ok(None) => None,
         Err(error) => Some(format!("Child workflow snapshot is unreadable: {error}")),
     };
+
+    if let Some(event_type) = store.latest_workflow_event_type(child_id)? {
+        if let Some(terminal_state) = terminal_workflow_state_from_event_type(&event_type) {
+            return Ok(Some(terminal_state));
+        }
+    }
 
     let events = store.list_workflow_events(child_id)?;
     if events.is_empty() {
@@ -2300,6 +2315,24 @@ fn reconcile_child_workflows_for_parent(
     store: &MainStore,
     parent_session_id: &str,
 ) -> Result<(), crate::db::StoreError> {
+    // A current terminal parent snapshot cannot resume or consume a child completion. Avoid
+    // scanning every child against the parent's full event history during read-only UI loads.
+    // Keep the fallback for missing, stale, or inconsistent snapshots so recovery remains safe.
+    if let Some(context) = store.get_execution_context(parent_session_id)? {
+        if context.version == ExecutionContext::CURRENT_VERSION
+            && terminal_workflow_state(&context.state).is_some()
+            && context.waiting_on_sub_agent_id.is_none()
+            && context.sub_agent_sessions.is_empty()
+            && context.pending_sub_agent_completions.is_empty()
+        {
+            log::debug!(
+                "[Workflow][session={}][phase=reconcile] Skipping child recovery for terminal parent snapshot",
+                parent_session_id
+            );
+            return Ok(());
+        }
+    }
+
     let child_workflows = store.list_child_workflows_for_parent(parent_session_id)?;
     reconcile_child_workflows(store, child_workflows)
 }
@@ -6130,6 +6163,43 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_child_workflows_for_parent_skips_terminal_parent_snapshot() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("terminal-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "terminal-parent-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("terminal-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let mut parent_context = ExecutionContext::new("terminal-parent".to_string());
+        parent_context.state = RuntimeState::Cancelled;
+        store
+            .upsert_execution_context(&parent_context)
+            .expect("failed to persist terminal parent snapshot");
+
+        reconcile_child_workflows_for_parent(&store, "terminal-parent")
+            .expect("terminal parent reconciliation should be skipped safely");
+
+        let child = store
+            .get_workflow("terminal-parent-child")
+            .expect("failed to load child workflow")
+            .expect("child workflow should exist");
+        assert_eq!(child.status, "pending");
+        assert!(store
+            .list_workflow_events("terminal-parent")
+            .expect("failed to load parent events")
+            .is_empty());
+    }
+
+    #[test]
     fn reconcile_terminal_child_redelivers_signal_after_prior_parent_projection() {
         let store = create_test_store();
         seed_agent(&store, "agent-test");
@@ -6335,7 +6405,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_interrupted_child_preserves_terminal_event_replay() {
+    fn reconcile_interrupted_child_preserves_terminal_event_reconciliation() {
         for (suffix, event, expected_status) in [
             (
                 "completed",
@@ -6418,7 +6488,53 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_interrupted_child_replays_events_for_outdated_snapshot() {
+    fn reconcile_interrupted_child_uses_latest_terminal_event_without_replay() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(
+                "parent-terminal-tail",
+                "Parent task",
+                "agent-test",
+                None,
+                None,
+            )
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent-terminal-tail",
+                "Child task",
+                "agent-test",
+                None,
+                Some("parent-terminal-tail"),
+            )
+            .expect("failed to create child workflow");
+        store
+            .append_workflow_event(&WorkflowEvent::new(
+                crate::workflow::react::events::WorkflowEventType::StateChanged,
+                "subagent-terminal-tail".to_string(),
+                json!({}),
+            ))
+            .expect("failed to append malformed child event");
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_completed(
+                "subagent-terminal-tail".to_string(),
+                Some("done".to_string()),
+            ))
+            .expect("failed to append terminal child event");
+
+        reconcile_interrupted_child_workflows(&store)
+            .expect("latest terminal event should bypass malformed prefix replay");
+
+        let child = store
+            .get_workflow("subagent-terminal-tail")
+            .expect("failed to load child workflow")
+            .expect("child workflow should exist");
+        assert_eq!(child.status, "completed");
+    }
+
+    #[test]
+    fn reconcile_interrupted_child_uses_terminal_event_for_outdated_snapshot() {
         let store = create_test_store();
         seed_agent(&store, "agent-test");
         store
@@ -6478,18 +6594,18 @@ mod tests {
             )
             .expect("failed to create child workflow");
         store
+            .append_workflow_event(&WorkflowEvent::workflow_completed(
+                "subagent_invalid_replay".to_string(),
+                Some("done".to_string()),
+            ))
+            .expect("failed to append terminal child event");
+        store
             .append_workflow_event(&WorkflowEvent::new(
                 crate::workflow::react::events::WorkflowEventType::StateChanged,
                 "subagent_invalid_replay".to_string(),
                 json!({}),
             ))
             .expect("failed to append malformed child event");
-        store
-            .append_workflow_event(&WorkflowEvent::workflow_completed(
-                "subagent_invalid_replay".to_string(),
-                Some("done".to_string()),
-            ))
-            .expect("failed to append terminal child event");
 
         let error = reconcile_interrupted_child_workflows(&store)
             .expect_err("invalid event replay must fail safely");

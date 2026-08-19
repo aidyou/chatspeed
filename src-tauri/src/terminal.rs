@@ -278,13 +278,6 @@ impl TerminalManager {
         }
     }
 
-    pub(crate) fn reset_workflow_window(&self) {
-        self.cleanup_all();
-        let _ = self
-            .app_handle
-            .emit_to(WORKFLOW_WINDOW_LABEL, "terminal://reset", ());
-    }
-
     fn select_shell(&self, shell_path: Option<&str>) -> Result<ShellDescriptor, String> {
         let shells = get_available_shells();
         let shell = match shell_path {

@@ -6,13 +6,11 @@ import {
   dedupeQueuedUserMessageProjection,
   excludeLeadingWorkflowTaskBoundaryMessages,
   getStructuredWorkflowToolName,
-  hasOpenWorkflowTaskFrame,
   isWorkflowManualClearContextMessage,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
-  selectVisibleWorkflowMessageWindow,
-  selectVisibleWorkflowTaskGroups
+  selectVisibleWorkflowMessageWindow
 } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
 import { resolveWorkflowToolIcon } from './toolIcons'
@@ -32,14 +30,11 @@ import {
  * Composable for managing message processing and display
  * Handles enhanced messages, tool formatting, and expansion states
  */
-const DEFAULT_VISIBLE_TASK_GROUPS = 1
 const DEFAULT_VISIBLE_TASK_MESSAGES = 300
 
-export function useWorkflowMessages(options = {}) {
+export function useWorkflowMessages() {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
-  const visibleTaskGroupCount =
-    options.visibleTaskGroupCount || ref(DEFAULT_VISIBLE_TASK_GROUPS)
   const loadedTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
 
   const expandedMessages = ref(new Set())
@@ -392,37 +387,14 @@ export function useWorkflowMessages(options = {}) {
         }
       : null
 
-    const hasOpenTaskFrame = hasOpenWorkflowTaskFrame(
-      state.completedGroups,
-      state.activeMessages
-    )
-
     return {
-      groups: selectVisibleWorkflowTaskGroups(
-        state.completedGroups,
-        activeGroup,
-        visibleTaskGroupCount.value,
-        hasOpenTaskFrame
-      ),
+      groups: activeGroup ? [...state.completedGroups, activeGroup] : state.completedGroups,
       activeGroupId: activeGroup?.id || ''
     }
   })
 
-  const taskMessageWindowAnchor = computed(() => {
-    const state = taskWindowState.value
-    const activeMessage = state.activeMessages.find(
-      message => !isWorkflowManualClearContextMessage(message)
-    )
-    const latestCompletedMessages = state.completedGroups[state.completedGroups.length - 1]?.messages
-    const completedMessage = latestCompletedMessages?.find(
-      message => !isWorkflowManualClearContextMessage(message)
-    )
-    const anchorMessage = activeMessage || completedMessage
-    return anchorMessage ? getMessageIdentity(anchorMessage, 0) : ''
-  })
-
   watch(
-    [() => workflowStore.currentWorkflowId, taskMessageWindowAnchor],
+    () => workflowStore.currentWorkflowId,
     () => {
       loadedTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
     },
@@ -444,36 +416,36 @@ export function useWorkflowMessages(options = {}) {
     () => (workflowStore.hiddenEarlierMessageCount || 0) + loadedHiddenEarlierMessageCount.value
   )
 
-  const expandLoadedTaskMessageWindow = () => {
-    if (loadedHiddenEarlierMessageCount.value <= 0) return false
-    loadedTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
-    return true
-  }
-
-  const revealEarlierMessages = () => expandLoadedTaskMessageWindow()
-
-  const visibleCompletedTaskGroupCount = computed(
-    () => visibleTaskGroupsState.value.groups.filter(group => group.isCompleted).length
-  )
-
-  const loadedHiddenCompletedTaskGroupCount = computed(() =>
-    Math.max(
-      0,
-      taskWindowState.value.completedGroups.length - visibleCompletedTaskGroupCount.value
+  const getVisibleTaskMessageCount = () =>
+    visibleTaskMessageWindow.value.groups.reduce(
+      (total, group) => total + (group?.messages?.length || 0),
+      0
     )
-  )
 
-  const hiddenCompletedTaskGroupCount = computed(
-    () =>
-      (workflowStore.hiddenCompletedTaskCount || 0) +
-      loadedHiddenCompletedTaskGroupCount.value
-  )
-
-  const revealLoadedEarlierTaskGroup = () => {
-    if (loadedHiddenCompletedTaskGroupCount.value <= 0) return false
-    visibleTaskGroupCount.value += 1
+  const expandLoadedMessageWindow = () => {
+    const hiddenMessageCount = loadedHiddenEarlierMessageCount.value
+    if (hiddenMessageCount <= 0) {
+      console.log('[workflow pagination] local task window has no hidden messages', {
+        workflowId: workflowStore.currentWorkflowId,
+        loadedTaskMessageCount: loadedTaskMessageCount.value,
+        visibleTaskMessageCount: getVisibleTaskMessageCount(),
+        hiddenMessageCount
+      })
+      return false
+    }
+    const previousLoadedTaskMessageCount = loadedTaskMessageCount.value
+    loadedTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
+    console.log('[workflow pagination] local task window expanded', {
+      workflowId: workflowStore.currentWorkflowId,
+      previousLoadedTaskMessageCount,
+      nextLoadedTaskMessageCount: loadedTaskMessageCount.value,
+      visibleTaskMessageCount: getVisibleTaskMessageCount(),
+      hiddenMessageCount: visibleTaskMessageWindow.value.hiddenMessageCount
+    })
     return true
   }
+
+  const revealEarlierMessages = () => expandLoadedMessageWindow()
 
   const subAgentCompletionsById = computed(() =>
     collectSubAgentCompletions(
@@ -1923,10 +1895,7 @@ export function useWorkflowMessages(options = {}) {
     expandedReasonings,
     enhancedMessages,
     hiddenEarlierMessageCount,
-    hiddenCompletedTaskGroupCount,
     revealEarlierMessages,
-    expandLoadedTaskMessageWindow,
-    revealLoadedEarlierTaskGroup,
     lastAssistantMessage,
     toggleMessageExpand,
     isMessageExpanded,

@@ -196,7 +196,6 @@
                 :messages="enhancedMessages"
                 :is-loading="workflowStore.isLoadingMessages"
                 :hidden-earlier-message-count="hiddenEarlierMessageCount"
-                :hidden-completed-task-group-count="hiddenCompletedTaskGroupCount"
                 :is-running="isRunning"
                 :queued-messages="workflowStore.messageQueue"
                 :is-chatting="isChatting"
@@ -221,11 +220,9 @@
                 :current-workflow-id="currentWorkflowId"
                 :wait-reason="waitReason"
                 :is-approval-submitting="isApprovalSubmitting"
-                @message-projection-count="onWorkflowMessageProjectionCount"
                 @toggle-expand="toggleMessageExpand"
                 @toggle-reasoning="toggleReasoningExpand"
-                @reveal-earlier-messages="revealEarlierMessagesInTaskWindow"
-                @reveal-earlier-task-group="revealEarlierTaskGroup"
+                @reveal-earlier-messages="loadEarlierMessagePage"
                 @submit-ask-user="submitAskUserResponse"
                 @approve-tool="onApproveAction"
                 @approve-all-tool="onApproveAllAction"
@@ -425,7 +422,6 @@ const autoApprovePlan = ref(false)
 const autoCompressEnabled = ref(true)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
-const visibleTaskGroupCount = ref(1)
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
 const lastHistoryWorkflowId = ref(null)
@@ -609,10 +605,7 @@ const {
   expandedReasonings,
   enhancedMessages,
   hiddenEarlierMessageCount,
-  hiddenCompletedTaskGroupCount,
-  revealEarlierMessages,
-  expandLoadedTaskMessageWindow,
-  revealLoadedEarlierTaskGroup,
+  revealEarlierMessages: expandVisibleMessageWindow,
   lastAssistantMessage,
   toggleMessageExpand,
   isMessageExpanded,
@@ -623,79 +616,58 @@ const {
   parseChoiceContent,
   getParsedMessage,
   shouldShowToolRawContent
-} = useWorkflowMessages({
-  visibleTaskGroupCount
-})
+} = useWorkflowMessages()
 
-const workflowMessageProjection = ref({ visible: 0, total: 0, hasOverflow: false })
-let isFillingWorkflowMessageProjection = false
+let earlierMessagePageUiRequestSequence = 0
 
-const shouldFillWorkflowMessageProjection = () => {
-  const projection = workflowMessageProjection.value
-  if (projection.hasOverflow || !workflowStore.hasMoreInCurrentTask) return false
-  return projection.total < 300 || workflowStore.hasIncompleteMessageToolChain
-}
-
-const fillWorkflowMessageProjection = async () => {
-  if (isFillingWorkflowMessageProjection || !shouldFillWorkflowMessageProjection()) return
-
-  const sessionId = currentWorkflowId.value
-  if (!sessionId) return
-
-  isFillingWorkflowMessageProjection = true
+const loadEarlierMessagePage = async done => {
+  const requestId = ++earlierMessagePageUiRequestSequence
+  const startedAt = Date.now()
+  console.log('[workflow pagination] parent reveal event', {
+    requestId,
+    workflowId: workflowStore.currentWorkflowId,
+    hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
+    storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount,
+    storeMessageCount: workflowStore.messages.length,
+    enhancedMessageCount: enhancedMessages.value.length
+  })
   try {
-    while (
-      currentWorkflowId.value === sessionId &&
-      shouldFillWorkflowMessageProjection()
-    ) {
-      const loaded = await workflowStore.loadEarlierMessages({ withinCurrentTask: true })
-      if (!loaded) break
-
-      expandLoadedTaskMessageWindow()
-      await nextTick()
-    }
-  } catch (error) {
-    console.error('Failed to fill workflow message projection:', error)
-  } finally {
-    isFillingWorkflowMessageProjection = false
-  }
-}
-
-const onWorkflowMessageProjectionCount = projection => {
-  workflowMessageProjection.value = {
-    visible: Number(projection?.visible) || 0,
-    total: Number(projection?.total) || 0,
-    hasOverflow: projection?.hasOverflow === true
-  }
-  void fillWorkflowMessageProjection()
-}
-
-const revealEarlierTaskGroup = async done => {
-  try {
-    if (revealLoadedEarlierTaskGroup()) {
-      revealEarlierMessages()
+    const expandedLocally = expandVisibleMessageWindow()
+    if (expandedLocally) {
+      console.log('[workflow pagination] parent handled reveal locally', {
+        requestId,
+        workflowId: workflowStore.currentWorkflowId,
+        hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
+        enhancedMessageCount: enhancedMessages.value.length,
+        elapsedMs: Date.now() - startedAt
+      })
       return
     }
 
-    const loaded = await workflowStore.loadEarlierTaskGroup()
-    if (loaded) {
-      visibleTaskGroupCount.value += 1
-      revealEarlierMessages()
-    }
+    console.log('[workflow pagination] parent loading backend earlier page', {
+      requestId,
+      workflowId: workflowStore.currentWorkflowId,
+      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
+      storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount
+    })
+    const loaded = await workflowStore.loadEarlierMessages()
+    if (loaded) expandVisibleMessageWindow()
+    console.log('[workflow pagination] parent backend page handled', {
+      requestId,
+      workflowId: workflowStore.currentWorkflowId,
+      loaded,
+      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
+      storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount,
+      storeMessageCount: workflowStore.messages.length,
+      enhancedMessageCount: enhancedMessages.value.length,
+      elapsedMs: Date.now() - startedAt
+    })
   } finally {
-    done?.()
-  }
-}
-
-const revealEarlierMessagesInTaskWindow = async done => {
-  try {
-    if (revealEarlierMessages()) return
-
-    const loaded = await workflowStore.loadEarlierMessages({ withinCurrentTask: false })
-    if (loaded) {
-      if (!revealLoadedEarlierTaskGroup()) revealEarlierMessages()
-    }
-  } finally {
+    console.log('[workflow pagination] parent reveal done', {
+      requestId,
+      workflowId: workflowStore.currentWorkflowId,
+      elapsedMs: Date.now() - startedAt
+    })
     done?.()
   }
 }
@@ -1820,10 +1792,6 @@ const onClearContextFrame = async () => {
       return
     }
 
-    if (currentWorkflowId.value === sessionId) {
-      visibleTaskGroupCount.value = 1
-    }
-
     const markerMessage = result?.markerMessage || null
     if (markerMessage && currentWorkflowId.value === sessionId) {
       workflowStore.addMessage({
@@ -1837,7 +1805,6 @@ const onClearContextFrame = async () => {
       return
     }
     await refreshCurrentWorkflowUiConfig(sessionId)
-    visibleTaskGroupCount.value = 1
 
     if (workflowStore.currentWorkflow?.executionContext) {
       workflowStore.currentWorkflow.executionContext.currentSegmentId = result?.segmentId || null
@@ -2520,7 +2487,6 @@ watch(
     if (previousWorkflowId) {
       saveCurrentInputDraft(previousWorkflowId)
     }
-    visibleTaskGroupCount.value = 1
     if (nextWorkflowId) {
       restoreWorkflowInputDraft(nextWorkflowId)
     } else {
