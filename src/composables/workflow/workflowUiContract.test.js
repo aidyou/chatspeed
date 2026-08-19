@@ -345,10 +345,9 @@ test('switching workflows clears an unobserved compression indicator from the pr
 })
 
 test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {
-  const [messageList, enLocale, jaLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
     readFile('src/i18n/locales/en.json', 'utf8'),
-    readFile('src/i18n/locales/ja.json', 'utf8'),
     readFile('src/i18n/locales/zh-Hans.json', 'utf8'),
     readFile('src/i18n/locales/zh-Hant.json', 'utf8')
   ])
@@ -378,7 +377,7 @@ test('context snapshots render the v2 handoff contract without losing legacy sna
   )
   assert.match(messageList, /if \(!content\.includes\('<state_snapshot'\)\) return content/)
 
-  for (const locale of [enLocale, jaLocale, zhHansLocale, zhHantLocale]) {
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
     assert.match(locale, /"contextSnapshot": \{[\s\S]*?"pressureHandoff"/)
     assert.match(locale, /"contextSnapshot": \{[\s\S]*?"completedTaskRollup"/)
     assert.match(locale, /"contextSnapshot": \{[\s\S]*?"reviewStatus"/)

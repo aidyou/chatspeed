@@ -141,7 +141,7 @@ test('every shipped locale contains the terminal label and toolbar strings', asy
     .map(file => file.replace(/\.json$/, ''))
     .sort()
 
-  assert.deepEqual(shippedLocales, ['en', 'ja', 'zh-Hans', 'zh-Hant'])
+  assert.deepEqual(shippedLocales, ['en', 'zh-Hans', 'zh-Hant'])
 
   for (const locale of shippedLocales) {
     const content = await read(`src/i18n/locales/${locale}.json`)

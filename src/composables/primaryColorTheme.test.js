@@ -29,7 +29,7 @@ test('primary presets, setting flow, and locale labels remain aligned', () => {
     assert.match(css, new RegExp(`:root\\[data-primary-color='${color}'\\]\\s*\\{\\s*--cs-color-primary-rgb: ${rgb};`))
   }
 
-  for (const locale of ['en', 'ja', 'zh-Hans', 'zh-Hant']) {
+  for (const locale of ['en', 'zh-Hans', 'zh-Hant']) {
     const json = JSON.parse(read(join(projectRoot, `src/i18n/locales/${locale}.json`)))
     assert.deepEqual(Object.keys(json.settings.general.primaryColors), Object.keys(colors).sort())
   }

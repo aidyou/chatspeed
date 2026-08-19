@@ -1,7 +1,6 @@
 import { createI18n } from 'vue-i18n'
 import common from './do_not_edit/copy_from_rust_src_i18n.json'
 import en from './locales/en.json'
-import ja from './locales/ja.json'
 import zhHans from './locales/zh-Hans.json'
 import zhHant from './locales/zh-Hant.json'
 import { normalizeInterfaceLocale } from './supportedLocales'
@@ -14,7 +13,6 @@ const i18n = createI18n({
   fallbackLocale: 'en',
   messages: {
     en: { ...common, ...en },
-    ja: { ...common, ...ja },
     'zh-Hans': { ...common, ...zhHans },
     'zh-Hant': { ...common, ...zhHant }
   }
