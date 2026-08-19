@@ -771,11 +771,50 @@
                   class="choice-container">
                   <template v-if="getAskUserResponseItems(message).length > 0">
                     <div
-                      v-for="(item, itemIndex) in getAskUserResponseItems(message)"
-                      :key="`${item.title}-${itemIndex}`"
+                      v-for="group in getChoiceGroups(message)"
+                      :key="group.title"
                       class="choice-group choice-group--answered">
-                      <div class="choice-question">{{ item.title }}</div>
-                      <pre class="choice-selected-answer">{{ formatAskUserAnswer(item) }}</pre>
+                      <div class="choice-question">{{ group.title }}</div>
+                      <div class="choice-options vertical numbered choice-options--readonly">
+                        <div
+                          v-for="(opt, optIndex) in group.options"
+                          :key="`${group.title}-${opt}`"
+                          class="choice-option-label"
+                          :class="{
+                            'is-selected': isAskUserOptionSelected(
+                              group,
+                              getAskUserResponseForGroup(message, group.title),
+                              optIndex
+                            )
+                          }">
+                          {{ optIndex + 1 }}. {{ opt }}
+                        </div>
+                        <div
+                          class="choice-option-label choice-option-label--other"
+                          :class="{
+                            'is-selected': isAskUserAnswerOther(
+                              group,
+                              getAskUserResponseForGroup(message, group.title)
+                            )
+                          }">
+                          {{ group.options.length + 1 }}. {{ $t('workflow.askUser.otherLabel') }}
+                        </div>
+                      </div>
+                      <pre
+                        v-if="
+                          getAskUserAnswerSupplement(
+                            group,
+                            getAskUserResponseForGroup(message, group.title)
+                          )
+                        "
+                        class="choice-selected-answer"
+                        v-text="
+                          getAskUserAnswerSupplement(
+                            group,
+                            getAskUserResponseForGroup(message, group.title)
+                          )
+                        "
+                      ></pre>
                     </div>
                   </template>
                   <template v-else>
@@ -1123,6 +1162,7 @@ import {
   isWorkflowManualClearContextMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
+  isWorkflowToolRunningForDisplay,
   projectWorkflowMessageList,
   shouldRenderSubAgentCard
 } from '@/composables/workflow/messageProjectionRules'
@@ -1977,21 +2017,11 @@ const isToolAwaitingExecution = message => {
 const isToolMessageExpanded = message =>
   isApprovalPending(message) || props.isMessageExpanded(message)
 
-const TOOL_GROUP_RUNNING_STATUSES = new Set([
-  'running',
-  'pending',
-  'queued',
-  'waiting',
-  'awaiting_execution',
-  'approval_submitted'
-])
-
 const isToolGroupItemRunning = tool => {
-  const executionStatus = String(tool?.metadata?.execution_status || '').toLowerCase()
-  if (TOOL_GROUP_RUNNING_STATUSES.has(executionStatus)) return true
-  if (isToolAwaitingExecution(tool)) return true
   const toolCallId = String(tool?.metadata?.tool_call_id || '').trim()
-  return !!toolCallId && approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(tool)
+  const hasApprovedSubmission =
+    !!toolCallId && approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(tool)
+  return isWorkflowToolRunningForDisplay(tool, hasApprovedSubmission)
 }
 
 const getToolRenderStatusClass = message => {
@@ -2190,6 +2220,38 @@ const formatAskUserAnswer = item => {
     return `${t('workflow.askUser.otherLabel')} (${item.choice_index})`
   }
   return item.choice_index ? `${item.choice_index}. ${item.choice}` : item.choice || ''
+}
+
+const getAskUserResponseForGroup = (message, title) =>
+  getAskUserResponseItems(message).find(item => item?.title === title) || null
+
+const getAskUserAnswerChoiceIndex = item => {
+  const choiceIndex = Number(item?.choice_index)
+  return Number.isInteger(choiceIndex) && choiceIndex > 0 ? choiceIndex : 0
+}
+
+const isAskUserAnswerOther = (group, item) => {
+  if (!item) return false
+  const source = String(item.source || '').toLowerCase()
+  if (source === 'other' || source === 'custom') return true
+  return getAskUserAnswerChoiceIndex(item) === (group?.options?.length || 0) + 1
+}
+
+const isAskUserOptionSelected = (group, item, optionIndex) =>
+  !!item &&
+  !isAskUserAnswerOther(group, item) &&
+  getAskUserAnswerChoiceIndex(item) === optionIndex + 1
+
+const getAskUserAnswerSupplement = (group, item) => {
+  if (!item) return ''
+
+  const choice = String(item.choice || '').trim()
+  if (!choice) return ''
+  if (isAskUserAnswerOther(group, item)) return choice
+
+  const selectedOption = group?.options?.[getAskUserAnswerChoiceIndex(item) - 1]
+  const prefix = selectedOption ? `${selectedOption}\n` : ''
+  return prefix && choice.startsWith(prefix) ? choice.slice(prefix.length).trim() : ''
 }
 
 const getFinishTaskLabel = message => {
@@ -2804,7 +2866,7 @@ watch(
   }
 )
 
-const syncMessageContentResizeObserver = () => {
+function syncMessageContentResizeObserver() {
   const container = messagesRef.value
   if (!messageContentResizeObserver || !container) return
 

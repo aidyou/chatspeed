@@ -267,6 +267,8 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
             | "update_sandbox_config"
             | "update_approval_level"
             | "update_phase"
+            | "update_available_tools"
+            | "update_auto_approved_tools"
             | "remove_auto_approved_tool"
             | "remove_shell_policy_item"
     )
@@ -3561,6 +3563,22 @@ fn should_run_terminal_manual_compression(
         && compat_is_terminal_snapshot_status(snapshot_status)
 }
 
+fn should_bypass_manager_for_terminal_manual_compression(
+    signal: Option<&WorkflowSignal>,
+    snapshot_status: &str,
+    managed_status: Option<&ManagedSessionStatus>,
+) -> bool {
+    should_run_terminal_manual_compression(signal, snapshot_status)
+        && !matches!(
+            managed_status,
+            Some(
+                ManagedSessionStatus::Active
+                    | ManagedSessionStatus::Waiting
+                    | ManagedSessionStatus::Stopping
+            )
+        )
+}
+
 fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
     matches!(
         compat_snapshot_workflow_state(status),
@@ -4304,10 +4322,42 @@ pub async fn workflow_signal(
         &allowed_paths_from_workflow_snapshot(&workflow_snapshot),
     );
     let recovery_context = restore_context_for_signal(main_store_arc.clone(), &session_id);
+    let workflow_signal = WorkflowSignal::parse(&signal);
 
-    // Phase 1: Check manager first (primary path)
+    // Phase 1: reconcile manager state before choosing the manual-compression path.
     let has_live_session =
         has_reconciled_live_session(&workflow_manager_arc, &session_id, "signal").await;
+    let reconciled_managed_status = workflow_manager_arc.get_session_status(&session_id);
+
+    // A stopped workflow is compressed through the terminal-only path before manager validation.
+    // A still-live executor continues through the existing signal path to avoid concurrent compression.
+    if should_bypass_manager_for_terminal_manual_compression(
+        workflow_signal.as_ref(),
+        &workflow_snapshot.workflow.status,
+        reconciled_managed_status.as_ref(),
+    ) {
+        log::info!(
+            "[Workflow][session={}][phase=signal] Routing manual compression through the terminal-only path before manager validation",
+            session_id
+        );
+        let applied = run_terminal_manual_compression(
+            &app,
+            main_store_arc.clone(),
+            chat_state.inner().clone(),
+            tsid_generator.inner().clone(),
+            gateway_arc.clone(),
+            factory.inner().clone(),
+            &session_id,
+            &workflow_snapshot,
+        )
+        .await?;
+        return Ok(if applied {
+            "Terminal workflow compressed without resuming execution".to_string()
+        } else {
+            "Terminal workflow has no new safe segment to compress".to_string()
+        });
+    }
+
     let should_enter_recovery = if has_live_session {
         log::info!(
             "[WorkflowManager][session={}][event=session_lookup_hit] Session exists in manager",
@@ -4667,27 +4717,6 @@ pub async fn workflow_signal(
                     workflow_signal.as_ref(),
                     Some(WorkflowSignal::ManualCompress)
                 );
-                if should_run_terminal_manual_compression(
-                    workflow_signal.as_ref(),
-                    &workflow_snapshot.workflow.status,
-                ) {
-                    let applied = run_terminal_manual_compression(
-                        &app,
-                        main_store_arc.clone(),
-                        chat_state.inner().clone(),
-                        tsid_generator.inner().clone(),
-                        gateway_arc.clone(),
-                        factory.inner().clone(),
-                        &session_id,
-                        &workflow_snapshot,
-                    )
-                    .await?;
-                    return Ok(if applied {
-                        "Terminal workflow compressed without resuming execution".to_string()
-                    } else {
-                        "Terminal workflow has no new safe segment to compress".to_string()
-                    });
-                }
                 let can_resume = is_manual_compress
                     || effective_wait_reason == Some(WaitReason::Confirmation)
                     || (recovery_context.is_none()
@@ -5846,6 +5875,23 @@ mod tests {
 
         fn deref(&self) -> &Self::Target {
             &self.store
+        }
+    }
+
+    #[test]
+    fn completed_session_runtime_config_signals_are_deferred() {
+        for signal_type in [
+            "update_available_tools",
+            "update_auto_approved_tools",
+            "update_final_audit",
+            "update_auto_compress",
+            "update_approval_level",
+            "update_phase",
+        ] {
+            assert!(
+                can_defer_runtime_config_signal_for_completed_session(signal_type),
+                "completed sessions should defer {signal_type}"
+            );
         }
     }
 
@@ -7163,27 +7209,45 @@ mod tests {
     }
 
     #[test]
-    fn terminal_manual_compression_routes_without_recovery_only_for_stopped_sessions() {
-        assert!(should_run_terminal_manual_compression(
-            Some(&WorkflowSignal::ManualCompress),
-            "completed"
-        ));
-        assert!(should_run_terminal_manual_compression(
-            Some(&WorkflowSignal::ManualCompress),
-            "error"
-        ));
-        assert!(should_run_terminal_manual_compression(
-            Some(&WorkflowSignal::ManualCompress),
-            "cancelled"
-        ));
+    fn terminal_manual_compression_bypasses_manager_only_after_session_stops() {
+        let manual_compress = WorkflowSignal::ManualCompress;
+
+        for status in ["completed", "error", "cancelled"] {
+            assert!(should_run_terminal_manual_compression(
+                Some(&manual_compress),
+                status
+            ));
+        }
         assert!(!should_run_terminal_manual_compression(
-            Some(&WorkflowSignal::ManualCompress),
+            Some(&manual_compress),
             "executing"
         ));
         assert!(!should_run_terminal_manual_compression(
             Some(&WorkflowSignal::Continue),
             "completed"
         ));
+
+        assert!(should_bypass_manager_for_terminal_manual_compression(
+            Some(&manual_compress),
+            "completed",
+            Some(&ManagedSessionStatus::Completed),
+        ));
+        assert!(should_bypass_manager_for_terminal_manual_compression(
+            Some(&manual_compress),
+            "completed",
+            None,
+        ));
+        for managed_status in [
+            ManagedSessionStatus::Active,
+            ManagedSessionStatus::Waiting,
+            ManagedSessionStatus::Stopping,
+        ] {
+            assert!(!should_bypass_manager_for_terminal_manual_compression(
+                Some(&manual_compress),
+                "completed",
+                Some(&managed_status),
+            ));
+        }
     }
 
     #[test]

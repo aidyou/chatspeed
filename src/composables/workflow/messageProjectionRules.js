@@ -672,6 +672,28 @@ export const isWorkflowToolAwaitingExecution = (message, approvedSubmission = fa
   return Boolean(approvedSubmission)
 }
 
+const WORKFLOW_TOOL_RUNNING_DISPLAY_STATUSES = new Set([
+  'running',
+  'pending',
+  'queued',
+  'waiting',
+  'awaiting_execution',
+  'approval_submitted'
+])
+
+/**
+ * Waiting for an ask_user response is a user-input wait, not tool execution.
+ * Keep its durable execution_status intact while avoiding the running animation.
+ */
+export const isWorkflowToolRunningForDisplay = (message, approvedSubmission = false) => {
+  const executionStatus = String(message?.metadata?.execution_status || '').toLowerCase()
+  if (executionStatus === 'waiting' && getStructuredWorkflowToolName(message) === 'ask_user') {
+    return false
+  }
+  if (WORKFLOW_TOOL_RUNNING_DISPLAY_STATUSES.has(executionStatus)) return true
+  return isWorkflowToolAwaitingExecution(message, approvedSubmission)
+}
+
 /**
  * Identify the completion tool exclusively from structured metadata.
  *

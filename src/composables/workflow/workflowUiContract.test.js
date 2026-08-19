@@ -261,8 +261,13 @@ test('ask-user responses stay hidden from the transcript and render on their sou
   )
   assert.match(
     messageList,
-    /<template v-if="getAskUserResponseItems\(message\)\.length > 0">[\s\S]*?choice-group--answered/,
-    'an answered ask_user card must replace disabled choices with the selected response'
+    /<template v-if="getAskUserResponseItems\(message\)\.length > 0">[\s\S]*?v-for="group in getChoiceGroups\(message\)"[\s\S]*?choice-options--readonly[\s\S]*?isAskUserOptionSelected[\s\S]*?isAskUserAnswerOther[\s\S]*?getAskUserAnswerSupplement/,
+    'an answered ask_user card must retain original choices, mark the selected option, and show supplied text'
+  )
+  assert.match(
+    messageList,
+    /const getAskUserResponseForGroup = \(message, title\) =>[\s\S]*?item\?\.title === title/,
+    'answered choices must resolve their associated response by question title from the canonical tool response'
   )
   assert.match(
     messageList,
@@ -306,6 +311,21 @@ test('applied compression clears the indicator and updates context usage', async
     workflowCore,
     /payload\.type === 'compression_applied'[\s\S]*?setCompressionStatus\(sessionId, false, ''\)[\s\S]*?setCurrentContextTokens\([\s\S]*?payload\.current_context_tokens[\s\S]*?payload\.max_context_tokens/,
     'a persisted compression must clear the loading indicator and apply its authoritative usage'
+  )
+})
+
+test('message resize observer is hoisted for immediate watchers', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+
+  assert.match(
+    messageList,
+    /function syncMessageContentResizeObserver\(\)/,
+    'the resize observer helper must use a hoisted function declaration'
+  )
+  assert.match(
+    messageList,
+    /watch\(\n  \[visibleMessages, collapsedMessages\][\s\S]*?syncMessageContentResizeObserver\(\)/,
+    'the immediate message watcher must call the hoisted resize observer helper'
   )
 })
 

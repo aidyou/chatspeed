@@ -399,7 +399,9 @@
               .finish-task-cost-arrow {
                 margin-left: 15px;
                 opacity: 0;
-                transition: opacity 0.15s ease, transform 0.15s ease;
+                transition:
+                  opacity 0.15s ease,
+                  transform 0.15s ease;
               }
 
               &:hover .finish-task-cost-arrow,
@@ -449,23 +451,24 @@
             }
 
             .choice-container {
-              padding: 12px;
+              padding: 10px;
               background: var(--cs-bg-color-light);
               border-radius: var(--cs-border-radius-md);
               margin-top: 8px;
               display: flex;
               flex-direction: column;
-              gap: 12px;
+              gap: 8px;
 
               .choice-group {
-                padding: 12px;
+                box-sizing: border-box;
+                padding: 10px;
                 border-radius: var(--cs-border-radius-md);
                 background: var(--cs-bg-color);
               }
 
               .choice-question {
                 font-size: var(--cs-font-size-sm);
-                margin-bottom: 12px;
+                margin-bottom: 8px;
                 color: var(--cs-text-color-primary);
                 line-height: 1.5;
               }
@@ -497,6 +500,31 @@
                     color: var(--cs-text-color-primary);
                   }
                 }
+
+                &.choice-options--readonly {
+                  gap: 2px;
+                  width: 100%;
+                  max-width: 100%;
+                  margin: 0;
+
+                  .choice-option-label {
+                    width: 100%;
+                    max-width: 100%;
+                    min-height: 0;
+                    box-sizing: border-box;
+                    padding: var(--cs-space-xs) var(--cs-space-sm);
+                    border: 1px solid transparent;
+                    border-radius: var(--cs-border-radius-sm);
+                    line-height: 1.5;
+
+                    &.is-selected {
+                      border-color: var(--el-color-primary-light-5);
+                      background: var(--el-color-primary-light-9);
+                      color: var(--el-color-primary);
+                      font-weight: 600;
+                    }
+                  }
+                }
               }
 
               .choice-option-label {
@@ -506,10 +534,27 @@
 
               .choice-group--answered {
                 .choice-selected-answer {
-                  margin: 0;
+                  display: block;
+                  width: 100%;
+                  max-height: 250px;
+                  margin: var(--cs-space-sm) 0 0;
+                  padding: 10px 12px 10px 14px;
+                  box-sizing: border-box;
+                  overflow: auto;
                   white-space: pre-wrap;
-                  word-break: break-word;
+                  overflow-wrap: anywhere;
                   color: var(--cs-text-color-primary);
+                  background: color-mix(
+                    in srgb,
+                    var(--cs-code-bg-color) 88%,
+                    var(--cs-bg-color)
+                  );
+                  border: 1px solid var(--cs-border-color);
+                  border-left-width: 3px;
+                  border-radius: var(--cs-border-radius);
+                  font-family: var(--cs-font-family);
+                  font-size: var(--cs-font-size);
+                  line-height: 1.8;
                 }
               }
 
@@ -1090,7 +1135,8 @@
     align-items: center;
     min-height: 26px;
     padding: 4px var(--cs-space-sm);
-    border: 1px solid color-mix(in srgb, var(--cost-analysis-accent) 22%, var(--cs-border-color-light));
+    border: 1px solid
+      color-mix(in srgb, var(--cost-analysis-accent) 22%, var(--cs-border-color-light));
     border-radius: var(--cs-border-radius);
     background: color-mix(in srgb, var(--cs-bg-color) 92%, transparent);
     color: var(--cs-text-color-primary);
@@ -1137,7 +1183,8 @@
     display: grid;
     gap: var(--cs-space-sm);
     padding-top: var(--cs-space-sm);
-    border-top: 1px dashed color-mix(in srgb, var(--cost-analysis-accent) 28%, var(--cs-border-color-lighter));
+    border-top: 1px dashed
+      color-mix(in srgb, var(--cost-analysis-accent) 28%, var(--cs-border-color-lighter));
   }
 
   &__model {

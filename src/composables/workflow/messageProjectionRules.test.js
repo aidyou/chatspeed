@@ -16,6 +16,7 @@ import {
   isPendingApprovalEntryForTool,
   isWorkflowCompletionMessage,
   isWorkflowToolAwaitingExecution,
+  isWorkflowToolRunningForDisplay,
   mergeManualClearContextMarkersIntoPreviousGroups,
   mergeWorkflowMessagePages,
   normalizeVisibleCompletionReport,
@@ -323,6 +324,28 @@ assert.equal(
   ),
   false,
   'the backend running state must take precedence over a stale local submission flag'
+)
+
+assert.equal(
+  isWorkflowToolRunningForDisplay({
+    metadata: { tool_name: 'ask_user', execution_status: 'waiting' }
+  }),
+  false,
+  'ask_user waiting for a response must not render as a running tool'
+)
+assert.equal(
+  isWorkflowToolRunningForDisplay({
+    metadata: { tool_name: 'complete_workflow', execution_status: 'waiting' }
+  }),
+  true,
+  'other workflow-owned waiting states must retain their active display state'
+)
+assert.equal(
+  isWorkflowToolRunningForDisplay({
+    metadata: { tool_name: 'ask_user', execution_status: 'running' }
+  }),
+  true,
+  'an ask_user tool explicitly reported as running must still render as running'
 )
 
 assert.equal(
