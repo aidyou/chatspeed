@@ -157,7 +157,7 @@
     "assistant": "Assistant",
     "chat": "Chat",
     "mcp": "MCP",
-    "model": "AI Engine",
+    "model": "AI Provider",
     "note": "Note",
     "proxy": "Proxy",
     "proxy_switcher": "Proxy Switcher",
@@ -1067,6 +1067,7 @@
     "allowedShellCommands": "Allowed Shell Commands",
     "costAnalysis": {
       "cache": "Cache",
+      "cacheHitRate": "Cache hit rate",
       "duration": "{minutes}m {seconds}s",
       "input": "Input",
       "output": "Output",

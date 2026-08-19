@@ -30,6 +30,7 @@ const normalizeModelBreakdown = value => {
     inputTokens,
     outputTokens,
     cacheTokens,
+    cacheHitRate: inputTokens > 0 ? (cacheTokens / inputTokens) * 100 : null,
     pricingStatus: String(value.pricing_status || 'missing'),
     inputPerMillion: finiteNumber(value.input_per_million),
     outputPerMillion: finiteNumber(value.output_per_million),

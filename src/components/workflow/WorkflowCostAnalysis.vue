@@ -32,6 +32,9 @@
           <span>{{ t('workflow.costAnalysis.input') }} {{ formatTokens(model.inputTokens) }}</span>
           <span>{{ t('workflow.costAnalysis.cache') }} {{ formatTokens(model.cacheTokens) }}</span>
           <span>{{ t('workflow.costAnalysis.output') }} {{ formatTokens(model.outputTokens) }}</span>
+          <span v-if="model.cacheHitRate !== null">
+            {{ t('workflow.costAnalysis.cacheHitRate') }} {{ formatPercent(model.cacheHitRate) }}
+          </span>
         </div>
         <div class="workflow-cost-analysis__model-rates">
           <span>{{ t('workflow.costAnalysis.input') }} {{ formatRate(model.inputPerMillion) }}</span>
@@ -53,6 +56,8 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 defineProps({ summary: { type: Object, required: true } })
 const formatTokens = value => new Intl.NumberFormat().format(value || 0)
+const formatPercent = value =>
+  `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)}%`
 const modelKey = model => `${model.providerId ?? 'unknown'}:${model.backendModel}`
 const formatCost = value =>
   value === null || value === undefined ? t('workflow.costAnalysis.unpriced') : `$${value.toFixed(6)}`

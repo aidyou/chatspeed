@@ -154,10 +154,10 @@
   "menu": {
     "about": "关于",
     "agent": "智能体",
-    "assistant": "桌面助手",
+    "assistant": "助手",
     "chat": "聊天",
     "mcp": "MCP",
-    "model": "AI引擎",
+    "model": "AI供应商",
     "note": "智记",
     "proxy": "代理",
     "proxy_switcher": "代理切换",
@@ -1067,6 +1067,7 @@
     "allowedShellCommands": "允许的 Shell 命令",
     "costAnalysis": {
       "cache": "缓存",
+      "cacheHitRate": "缓存命中率",
       "duration": "{minutes} 分 {seconds} 秒",
       "input": "输入",
       "output": "输出",

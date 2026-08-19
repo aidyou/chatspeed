@@ -49,6 +49,7 @@ test('normalizes the canonical snake_case usage summary', () => {
   assert.equal(normalized.withSubAgents.estimatedCost, 0.2)
   assert.equal(normalized.modelBreakdowns[0].backendModel, 'gpt-test')
   assert.equal(normalized.modelBreakdowns[0].inputPerMillion, 2)
+  assert.equal(normalized.modelBreakdowns[0].cacheHitRate, 40)
   assert.equal(normalized.hasSubAgents, true)
 })
 
@@ -57,6 +58,14 @@ test('accepts every terminal child state while rejecting running summaries', () 
     assert.equal(isTerminalUsageSummary({ ...summary, terminal_status: terminalStatus }), true)
   }
   assert.equal(isTerminalUsageSummary({ ...summary, terminal_status: 'running' }), false)
+})
+
+test('omits cache-hit rate when model input tokens are zero', () => {
+  const normalized = normalizeUsageSummary({
+    ...summary,
+    model_breakdowns: [{ ...summary.model_breakdowns[0], input_tokens: 0, cache_tokens: 0 }]
+  })
+  assert.equal(normalized.modelBreakdowns[0].cacheHitRate, null)
 })
 
 test('preserves an explicit zero-token sub-agent summary for the combined UI row', () => {
