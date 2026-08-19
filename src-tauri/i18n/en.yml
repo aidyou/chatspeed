@@ -291,7 +291,7 @@ tray:
   quit: Quit
   settings: Settings
   skill: Skill
-  workflow: Workflow
+  workflow: Task
 updater:
   errors:
     config: 'Updater configuration error: %{error}'

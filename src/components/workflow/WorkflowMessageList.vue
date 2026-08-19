@@ -1174,67 +1174,6 @@ import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
 import { useWorkflowStore } from '@/stores/workflow'
 
-const summarizeRenderedMessage = message => {
-  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {}
-  const toolCall = metadata.tool_call || metadata.toolCall || {}
-  const toolName =
-    metadata.tool_name ||
-    metadata.toolName ||
-    toolCall.name ||
-    toolCall.function?.name ||
-    ''
-  const messageKind = message?.messageKind || message?.message_kind || metadata.message_kind || metadata.messageKind || ''
-  const messageSubtype =
-    message?.messageSubtype || message?.message_subtype || metadata.subtype || metadata.message_subtype || ''
-
-  return {
-    id: message?.id ?? null,
-    displayId: message?.displayId || '',
-    role: message?.role || '',
-    stepType: message?.stepType || message?.step_type || '',
-    messageKind,
-    messageSubtype,
-    toolName,
-    toolCallId: metadata.tool_call_id || metadata.toolCallId || '',
-    thoughtCount: Array.isArray(message?.groupedThoughts)
-      ? message.groupedThoughts.length
-      : Number(metadata.tool_group_thought_count || 0),
-    groupedToolCount: Array.isArray(message?.groupedTools) ? message.groupedTools.length : 0,
-    boundary:
-      messageKind === 'summary' ||
-      messageSubtype === 'manual_clear_context' ||
-      toolName === 'complete_workflow'
-  }
-}
-
-const summarizeRenderedMessages = messages => {
-  const list = Array.isArray(messages) ? messages : []
-  const roleCounts = {}
-  const kindCounts = {}
-  let toolGroupCount = 0
-  let thoughtCount = 0
-  for (const message of list) {
-    const summary = summarizeRenderedMessage(message)
-    roleCounts[summary.role || 'unknown'] = (roleCounts[summary.role || 'unknown'] || 0) + 1
-    const kind = summary.messageKind || 'unknown'
-    kindCounts[kind] = (kindCounts[kind] || 0) + 1
-    if (isCollapsedWorkflowToolGroupMessage(message)) {
-      toolGroupCount += 1
-      thoughtCount += summary.thoughtCount
-    }
-  }
-  const sample = list.length <= 6 ? list : [...list.slice(0, 3), ...list.slice(-3)]
-
-  return {
-    count: list.length,
-    roleCounts,
-    kindCounts,
-    toolGroupCount,
-    thoughtCount,
-    sample: sample.map(summarizeRenderedMessage)
-  }
-}
-
 const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const OTHER_ASK_USER_VALUE = '__other__'
@@ -1458,91 +1397,37 @@ const revealEarlierMessages = () => {
   const previousScrollHeight = container?.scrollHeight || 0
   const previousScrollTop = container?.scrollTop || 0
   const scrollAnchor = captureScrollAnchor(container)
-  console.log('[workflow pagination] reveal clicked', {
-    workflowId: props.currentWorkflowId,
-    hiddenEarlierMessageCount: props.hiddenEarlierMessageCount,
-    visibleMessageLimit: visibleMessageLimit.value,
-    hasCollapsedMessageOverflow: hasCollapsedMessageOverflow.value,
-    rawMessages: summarizeRenderedMessages(props.messages),
-    collapsedMessages: summarizeRenderedMessages(collapsedMessages.value),
-    visibleMessages: summarizeRenderedMessages(visibleMessages.value),
-    scroll: {
-      scrollTop: previousScrollTop,
-      scrollHeight: previousScrollHeight,
-      clientHeight: container?.clientHeight || 0,
-      anchor: scrollAnchor
-    }
-  })
 
   if (hasCollapsedMessageOverflow.value) {
     visibleMessageLimit.value += MAX_VISIBLE_WORKFLOW_MESSAGES
-    console.log('[workflow pagination] local projection window expanded', {
-      workflowId: props.currentWorkflowId,
-      previousVisibleMessageLimit: visibleMessageLimit.value - MAX_VISIBLE_WORKFLOW_MESSAGES,
-      nextVisibleMessageLimit: visibleMessageLimit.value
-    })
     nextTick(() => {
       if (container) {
-        const scrollRestore = restoreScrollPosition({
+        restoreScrollPosition({
           container,
           anchor: scrollAnchor,
           previousScrollTop,
           previousScrollHeight
         })
-        console.log('[workflow pagination] local projection scroll restored', {
-          workflowId: props.currentWorkflowId,
-          previousScrollTop,
-          ...scrollRestore,
-          previousScrollHeight,
-          visibleMessages: summarizeRenderedMessages(visibleMessages.value)
-        })
       }
     })
     return
   }
 
-  if (props.hiddenEarlierMessageCount <= 0) {
-    console.log('[workflow pagination] reveal ignored because no hidden earlier messages', {
-      workflowId: props.currentWorkflowId
-    })
-    return
-  }
+  if (props.hiddenEarlierMessageCount <= 0) return
 
-  console.log('[workflow pagination] requesting backend earlier page', {
-    workflowId: props.currentWorkflowId,
-    hiddenEarlierMessageCount: props.hiddenEarlierMessageCount
-  })
   emit('reveal-earlier-messages', () => {
     nextTick(() => {
-      const previousVisibleMessageLimit = visibleMessageLimit.value
       if (hasCollapsedMessageOverflow.value) {
         visibleMessageLimit.value += MAX_VISIBLE_WORKFLOW_MESSAGES
-        console.log('[workflow pagination] backend page expanded local projection', {
-          workflowId: props.currentWorkflowId,
-          previousVisibleMessageLimit,
-          nextVisibleMessageLimit: visibleMessageLimit.value,
-          collapsedMessageCount: collapsedMessages.value.length,
-          hiddenEarlierMessageCount: props.hiddenEarlierMessageCount
-        })
       }
 
       nextTick(() => {
         if (container) {
-          const scrollRestore = restoreScrollPosition({
+          restoreScrollPosition({
             container,
             anchor: scrollAnchor,
             previousScrollTop,
             previousScrollHeight
-          })
-          console.log('[workflow pagination] backend page scroll restored', {
-            workflowId: props.currentWorkflowId,
-            previousScrollTop,
-            ...scrollRestore,
-            previousScrollHeight,
-            rawMessages: summarizeRenderedMessages(props.messages),
-            collapsedMessages: summarizeRenderedMessages(collapsedMessages.value),
-            visibleMessages: summarizeRenderedMessages(visibleMessages.value),
-            hiddenEarlierMessageCount: props.hiddenEarlierMessageCount
           })
         }
       })

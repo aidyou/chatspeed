@@ -416,32 +416,10 @@ export function useWorkflowMessages() {
     () => (workflowStore.hiddenEarlierMessageCount || 0) + loadedHiddenEarlierMessageCount.value
   )
 
-  const getVisibleTaskMessageCount = () =>
-    visibleTaskMessageWindow.value.groups.reduce(
-      (total, group) => total + (group?.messages?.length || 0),
-      0
-    )
-
   const expandLoadedMessageWindow = () => {
     const hiddenMessageCount = loadedHiddenEarlierMessageCount.value
-    if (hiddenMessageCount <= 0) {
-      console.log('[workflow pagination] local task window has no hidden messages', {
-        workflowId: workflowStore.currentWorkflowId,
-        loadedTaskMessageCount: loadedTaskMessageCount.value,
-        visibleTaskMessageCount: getVisibleTaskMessageCount(),
-        hiddenMessageCount
-      })
-      return false
-    }
-    const previousLoadedTaskMessageCount = loadedTaskMessageCount.value
+    if (hiddenMessageCount <= 0) return false
     loadedTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
-    console.log('[workflow pagination] local task window expanded', {
-      workflowId: workflowStore.currentWorkflowId,
-      previousLoadedTaskMessageCount,
-      nextLoadedTaskMessageCount: loadedTaskMessageCount.value,
-      visibleTaskMessageCount: getVisibleTaskMessageCount(),
-      hiddenMessageCount: visibleTaskMessageWindow.value.hiddenMessageCount
-    })
     return true
   }
 

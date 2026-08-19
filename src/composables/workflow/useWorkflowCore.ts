@@ -1612,7 +1612,7 @@ export function useWorkflowCore({
         } else {
             if (targetStatus === WORKFLOW_STATUSES.STOPPING) {
                 showMessage(
-                    t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                    t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
                     'warning'
                 )
                 return false
@@ -1733,7 +1733,7 @@ export function useWorkflowCore({
                     if (errorText.includes('Session is stopping')) {
                         removeProvisionalMessage()
                         showMessage(
-                            t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                            t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
                             'warning'
                         )
                         return false
@@ -1834,7 +1834,7 @@ export function useWorkflowCore({
         } catch (error) {
             if (String(error).includes('Session is stopping')) {
                 showMessage(
-                    t('workflow.stopping') || 'Workflow is stopping. Please wait a moment.',
+                    t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
                     'warning'
                 )
                 return false

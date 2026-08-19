@@ -13,7 +13,7 @@
         significantly reducing development costs. Simultaneously, it is a comprehensive desktop AI
         assistant that integrates intelligent conversation, AI-assisted diagramming, web search, a
         knowledge base with smart notes, and an extensible skill system, all designed to
-        comprehensively boost your workflow efficiency.
+        comprehensively boost your task efficiency.
       </p>
 
       <h3>Core Features</h3>
@@ -153,7 +153,7 @@
         的理念。这意味着您可以将任何免费、开源或高性价比的 AI 模型集成到您偏爱的开发环境（如 Claude
         Code 或 Gemini CLI）中，从而大幅降低开发成本。同时，它也是一个功能全面的桌面 AI
         助手，集成了智能对话、AI
-        辅助图表、联网搜索、知识库笔记和可扩展的技能系统，旨在全面提升您的工作流效率。
+        辅助图表、联网搜索、知识库笔记和可扩展的技能系统，旨在全面提升您的任务处理效率。
       </p>
 
       <h3>核心功能</h3>

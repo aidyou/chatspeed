@@ -287,7 +287,7 @@ tray:
   quit: 終了
   settings: 設定
   skill: スキル
-  workflow: ワークフロー
+  workflow: タスク
 updater:
   errors:
     config: アップデーター設定エラー：%{error}

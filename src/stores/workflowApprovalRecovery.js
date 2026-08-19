@@ -224,7 +224,7 @@ const buildInlineApprovalEntry = ({
 
 export const deriveInlinePendingApprovals = ({
   currentWorkflowId,
-  workflowTitle = 'Untitled Workflow',
+  workflowTitle = 'Untitled Task',
   status = '',
   waitReason = null,
   executionContext = null,

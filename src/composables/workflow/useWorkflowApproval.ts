@@ -74,7 +74,7 @@ export function useWorkflowApproval({
       ) {
         showMessage(
           t('workflow.sessionLost') ||
-            'Session disconnected. Please refresh the page to restore the workflow.',
+            'Session disconnected. Please refresh the page to restore the task.',
           'warning'
         )
         workflowStore.setRunning(false)

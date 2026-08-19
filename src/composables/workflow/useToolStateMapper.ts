@@ -203,13 +203,17 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
     sub_agent_run: () => 'Run Sub-agent',
     sub_agent_output: () => 'Get Sub-agent Output',
     sub_agent_stop: () => 'Stop Sub-agent',
-    complete_workflow: () => 'Complete Workflow',
+    complete_workflow: () => 'Complete Task',
     ask_user: () => 'Ask User'
   }
 
   const formatter = formatters[toolName]
   if (formatter && args) {
     return normalizeToolDisplayText(formatter(args))
+  }
+
+  if (toolName === 'complete_workflow') {
+    return 'Complete Task'
   }
 
   return toolName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())

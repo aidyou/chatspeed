@@ -30,55 +30,6 @@ import {
   upsertExecutionContextPendingTool
 } from './workflowApprovalRecovery.js';
 
-const summarizeWorkflowMessage = message => {
-  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
-  const toolCall = metadata.tool_call || metadata.toolCall || {};
-  const toolName =
-    metadata.tool_name ||
-    metadata.toolName ||
-    toolCall.name ||
-    toolCall.function?.name ||
-    '';
-  const messageKind = message?.messageKind || message?.message_kind || metadata.message_kind || metadata.messageKind || '';
-  const messageSubtype =
-    message?.messageSubtype || message?.message_subtype || metadata.subtype || metadata.message_subtype || '';
-  const toolCallId = metadata.tool_call_id || metadata.toolCallId || '';
-
-  return {
-    id: message?.id ?? message?.persistedMessageId ?? message?.message_id ?? null,
-    role: message?.role || '',
-    stepType: message?.stepType || message?.step_type || '',
-    messageKind,
-    messageSubtype,
-    toolName,
-    toolCallId,
-    boundary:
-      messageKind === 'summary' ||
-      messageSubtype === 'manual_clear_context' ||
-      toolName === 'complete_workflow'
-  };
-};
-
-const summarizeWorkflowMessages = messages => {
-  const list = Array.isArray(messages) ? messages : [];
-  const roleCounts = {};
-  const kindCounts = {};
-  for (const message of list) {
-    const summary = summarizeWorkflowMessage(message);
-    roleCounts[summary.role || 'unknown'] = (roleCounts[summary.role || 'unknown'] || 0) + 1;
-    const kind = summary.messageKind || 'unknown';
-    kindCounts[kind] = (kindCounts[kind] || 0) + 1;
-  }
-  const sample = list.length <= 6 ? list : [...list.slice(0, 3), ...list.slice(-3)];
-
-  return {
-    count: list.length,
-    roleCounts,
-    kindCounts,
-    sample: sample.map(summarizeWorkflowMessage)
-  };
-};
-
 /**
  * Task Ledger - 统一任务账本模型
  * 阶段9：建立 tool_call_id 统一视图模型，避免多轨状态冲突
@@ -219,7 +170,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const approvalSubmissions = ref(new Map()); // sessionId -> Set<toolCallId>
   const taskCompletionRevision = ref(0);
   let messageLoadRevision = 0;
-  let earlierMessagePageRequestSequence = 0;
   const lastTaskCompletion = ref(null);
   const reportedApprovalRecoveryInvariantSessions = new Set();
 
@@ -566,7 +516,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const inlineApprovals = deriveInlinePendingApprovals({
       currentWorkflowId: currentWorkflowId.value,
       workflowTitle:
-        currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Workflow',
+        currentWorkflow.value?.title || currentWorkflow.value?.userQuery || 'Untitled Task',
       status: currentWorkflow.value?.status || '',
       waitReason: getCurrentWorkflowWaitReason(),
       executionContext: currentWorkflow.value?.executionContext,
@@ -1934,55 +1884,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const workflowId = currentWorkflowId.value;
     const beforeMessageId = messageWindowBeforeId.value;
     const requestRevision = messageLoadRevision;
-    const requestId = ++earlierMessagePageRequestSequence;
     if (!workflowId || !beforeMessageId || hiddenEarlierMessageCount.value <= 0) {
-      console.log('[workflow pagination] skipped earlier page request', {
-        requestId,
-        workflowId,
-        beforeMessageId,
-        hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-        currentMessageCount: messages.value.length
-      });
       return false;
     }
-
-    console.log('[workflow pagination] earlier page request', {
-      requestId,
-      workflowId,
-      beforeMessageId,
-      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-      currentMessageCount: messages.value.length,
-      currentWindow: summarizeWorkflowMessages(messages.value)
-    });
 
     const page = await invokeWrapper('get_earlier_workflow_message_page', {
       sessionId: workflowId,
       beforeMessageId
     });
     const responseMessages = Array.isArray(page?.messages) ? page.messages : [];
-    console.log('[workflow pagination] earlier page response', {
-      requestId,
-      workflowId,
-      requestedBeforeMessageId: beforeMessageId,
-      responseBeforeMessageId: page?.beforeMessageId ?? null,
-      responseHiddenEarlierMessageCount: Number(page?.hiddenEarlierMessageCount) || 0,
-      response: summarizeWorkflowMessages(responseMessages)
-    });
 
     if (
       currentWorkflowId.value !== workflowId ||
       messageLoadRevision !== requestRevision ||
       messageWindowBeforeId.value !== beforeMessageId
     ) {
-      console.log('[workflow pagination] discarded stale earlier page response', {
-        requestId,
-        workflowId,
-        currentWorkflowId: currentWorkflowId.value,
-        requestRevision,
-        currentMessageLoadRevision: messageLoadRevision,
-        requestedBeforeMessageId: beforeMessageId,
-        currentBeforeMessageId: messageWindowBeforeId.value
-      });
       return false;
     }
 
@@ -1994,16 +1910,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messages.value = mergedMessages;
     messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId;
     hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0;
-    console.log('[workflow pagination] merged earlier page', {
-      requestId,
-      workflowId,
-      earlierMessageCount: earlierMessages.length,
-      previousMessageCount: previousMessages.length,
-      mergedMessageCount: mergedMessages.length,
-      nextBeforeMessageId: messageWindowBeforeId.value,
-      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-      mergedWindow: summarizeWorkflowMessages(mergedMessages)
-    });
     return earlierMessages.length > 0;
   };
 

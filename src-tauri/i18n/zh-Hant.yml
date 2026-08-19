@@ -285,7 +285,7 @@ tray:
   quit: 結束
   settings: 設定
   skill: 技能
-  workflow: 工作流
+  workflow: 任務
 updater:
   errors:
     config: 更新器配置錯誤：%{error}

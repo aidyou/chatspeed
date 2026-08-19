@@ -618,56 +618,16 @@ const {
   shouldShowToolRawContent
 } = useWorkflowMessages()
 
-let earlierMessagePageUiRequestSequence = 0
-
 const loadEarlierMessagePage = async done => {
-  const requestId = ++earlierMessagePageUiRequestSequence
-  const startedAt = Date.now()
-  console.log('[workflow pagination] parent reveal event', {
-    requestId,
-    workflowId: workflowStore.currentWorkflowId,
-    hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-    storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount,
-    storeMessageCount: workflowStore.messages.length,
-    enhancedMessageCount: enhancedMessages.value.length
-  })
   try {
     const expandedLocally = expandVisibleMessageWindow()
     if (expandedLocally) {
-      console.log('[workflow pagination] parent handled reveal locally', {
-        requestId,
-        workflowId: workflowStore.currentWorkflowId,
-        hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-        enhancedMessageCount: enhancedMessages.value.length,
-        elapsedMs: Date.now() - startedAt
-      })
       return
     }
 
-    console.log('[workflow pagination] parent loading backend earlier page', {
-      requestId,
-      workflowId: workflowStore.currentWorkflowId,
-      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-      storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount
-    })
     const loaded = await workflowStore.loadEarlierMessages()
     if (loaded) expandVisibleMessageWindow()
-    console.log('[workflow pagination] parent backend page handled', {
-      requestId,
-      workflowId: workflowStore.currentWorkflowId,
-      loaded,
-      hiddenEarlierMessageCount: hiddenEarlierMessageCount.value,
-      storeHiddenEarlierMessageCount: workflowStore.hiddenEarlierMessageCount,
-      storeMessageCount: workflowStore.messages.length,
-      enhancedMessageCount: enhancedMessages.value.length,
-      elapsedMs: Date.now() - startedAt
-    })
   } finally {
-    console.log('[workflow pagination] parent reveal done', {
-      requestId,
-      workflowId: workflowStore.currentWorkflowId,
-      elapsedMs: Date.now() - startedAt
-    })
     done?.()
   }
 }
