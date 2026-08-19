@@ -705,7 +705,8 @@ impl ShellPolicyEngine {
         let mut final_decision = ShellDecision::Allow;
         let mut has_boundary_review = false;
         let mut current_binary = String::new();
-        let mut current_binary_arg_index = 0usize;
+        let mut current_binary_index = 0usize;
+        let mut current_binary_operand_index = 0usize;
 
         for (i, token) in tokens.iter().enumerate() {
             let token_str = token.as_str();
@@ -713,7 +714,7 @@ impl ShellPolicyEngine {
             if separators.contains(&token_str) {
                 next_is_binary = true;
                 current_binary.clear();
-                current_binary_arg_index = 0;
+                current_binary_operand_index = 0;
                 continue;
             }
 
@@ -747,6 +748,7 @@ impl ShellPolicyEngine {
 
             if next_is_binary {
                 current_binary = clean_token.clone();
+                current_binary_index = i;
                 if Self::hard_denied_command(&clean_token) {
                     return ShellDecision::Deny(format!(
                         "System-critical command '{}' is forbidden.",
@@ -762,18 +764,27 @@ impl ShellPolicyEngine {
                     }
                 }
                 next_is_binary = false;
-                current_binary_arg_index = 0;
+                current_binary_operand_index = 0;
                 continue;
             }
 
-            if !token.starts_with('-')
+            let arg_index = i.saturating_sub(current_binary_index + 1);
+            let command_args = tokens.get(current_binary_index + 1..).unwrap_or(&[]);
+            let is_operand = !token.starts_with('-')
                 && !(Self::is_null_device(token)
                     && i > 0
-                    && redirection_ops.contains(&tokens[i - 1].as_str()))
-            {
+                    && redirection_ops.contains(&tokens[i - 1].as_str()));
+            let is_non_path_argument =
+                Self::is_non_path_argument(&current_binary, command_args, arg_index);
+
+            if !is_non_path_argument && is_operand {
                 let is_delete = current_binary == "rm";
-                let force_path_validation =
-                    Self::should_force_path_validation(&current_binary, current_binary_arg_index);
+                let force_path_validation = Self::should_force_path_validation(
+                    &current_binary,
+                    command_args,
+                    arg_index,
+                    current_binary_operand_index,
+                );
                 match self.validate_path_token(
                     token,
                     restrict_to_planning,
@@ -809,8 +820,10 @@ impl ShellPolicyEngine {
                         }
                     }
                 }
+            }
 
-                current_binary_arg_index += 1;
+            if is_operand {
+                current_binary_operand_index += 1;
             }
         }
 
@@ -836,13 +849,146 @@ impl ShellPolicyEngine {
         }
     }
 
-    fn should_force_path_validation(command: &str, arg_index: usize) -> bool {
+    fn is_non_path_argument(command: &str, arguments: &[String], arg_index: usize) -> bool {
+        match command {
+            "awk" => Self::awk_non_path_argument(arguments, arg_index),
+            "sed" => Self::sed_non_path_argument(arguments, arg_index),
+            "grep" | "egrep" | "fgrep" | "rg" => Self::grep_non_path_argument(arguments, arg_index),
+            _ => false,
+        }
+    }
+
+    fn awk_non_path_argument(arguments: &[String], arg_index: usize) -> bool {
+        let mut index = 0;
+        let mut program_seen = false;
+        let mut options_ended = false;
+
+        while index <= arg_index && index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if !options_ended && argument == "--" {
+                options_ended = true;
+                index += 1;
+                continue;
+            }
+            if !options_ended && argument.starts_with('-') {
+                if matches!(argument, "-f" | "--file") {
+                    if index + 1 == arg_index {
+                        return false;
+                    }
+                    program_seen = true;
+                    index += 2;
+                } else if matches!(argument, "-v" | "--assign" | "-F" | "--field-separator") {
+                    if index + 1 == arg_index {
+                        return true;
+                    }
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                continue;
+            }
+
+            if index == arg_index {
+                return !program_seen;
+            }
+            program_seen = true;
+            index += 1;
+        }
+
+        false
+    }
+
+    fn sed_non_path_argument(arguments: &[String], arg_index: usize) -> bool {
+        let mut index = 0;
+        let mut script_seen = false;
+        while index <= arg_index && index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if argument == "-e" || argument == "--expression" {
+                if index + 1 == arg_index {
+                    return true;
+                }
+                script_seen = true;
+                index += 2;
+                continue;
+            }
+            if argument == "-f" || argument == "--file" {
+                if index + 1 == arg_index {
+                    return false;
+                }
+                script_seen = true;
+                index += 2;
+                continue;
+            }
+            if argument == "-i" {
+                // BSD/macOS sed takes an optional backup suffix as the next argument.
+                if index + 1 == arg_index && arguments[index + 1].is_empty() {
+                    return true;
+                }
+                if index + 1 < arguments.len() && arguments[index + 1].is_empty() {
+                    index += 2;
+                    continue;
+                }
+            }
+            if argument.starts_with('-') {
+                index += 1;
+                continue;
+            }
+            if index == arg_index {
+                return !script_seen;
+            }
+            script_seen = true;
+            index += 1;
+        }
+        false
+    }
+
+    fn grep_non_path_argument(arguments: &[String], arg_index: usize) -> bool {
+        let mut index = 0;
+        let mut pattern_seen = false;
+        while index <= arg_index && index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if matches!(argument, "-e" | "--regexp") {
+                if index + 1 == arg_index {
+                    return true;
+                }
+                pattern_seen = true;
+                index += 2;
+                continue;
+            }
+            if matches!(argument, "-f" | "--file") {
+                if index + 1 == arg_index {
+                    return false;
+                }
+                pattern_seen = true;
+                index += 2;
+                continue;
+            }
+            if argument.starts_with('-') {
+                index += 1;
+                continue;
+            }
+            if index == arg_index {
+                return !pattern_seen;
+            }
+            pattern_seen = true;
+            index += 1;
+        }
+        false
+    }
+
+    fn should_force_path_validation(
+        command: &str,
+        arguments: &[String],
+        arg_index: usize,
+        operand_index: usize,
+    ) -> bool {
         match command {
             "cat" | "head" | "tail" | "less" | "more" | "bat" | "nl" | "wc" | "sort" | "uniq"
             | "ls" | "stat" | "file" | "du" | "diff" | "cmp" | "comm" => true,
-            "grep" | "egrep" | "fgrep" | "rg" => arg_index >= 1,
-            "sed" | "awk" => arg_index >= 1,
-            "find" => arg_index == 0,
+            "grep" | "egrep" | "fgrep" | "rg" | "sed" | "awk" => {
+                !Self::is_non_path_argument(command, arguments, arg_index)
+            }
+            "find" => operand_index == 0,
             _ => false,
         }
     }
@@ -4502,6 +4648,51 @@ mod tests {
             Some(plan)
         );
         assert!(shell.approved_shell_execution_plan(&tool_call_id).is_none());
+    }
+
+    #[test]
+    fn test_policy_engine_does_not_treat_awk_and_sed_scripts_as_paths() {
+        let project_root = tempdir().unwrap();
+        let project_path = project_root.path().canonicalize().unwrap();
+        let input_path = project_path.join("diff.txt");
+        std::fs::write(&input_path, "diff content\n").unwrap();
+
+        let guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![project_path.clone()],
+            vec![],
+            vec![],
+        )));
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        let awk_command = format!(
+            "cd {} && awk '/^diff --git a\\/src\\/components\\/workflow\\/WorkflowMessageList.vue/,/^diff --git a\\/src\\/composables/' {} | grep -E '^[+-]' | grep -vE '^[+-]{{3}}' | head -60",
+            project_path.display(),
+            input_path.display()
+        );
+        assert!(!matches!(
+            engine.check(&awk_command, false),
+            ShellDecision::Deny(_)
+        ));
+
+        let sed_command = format!("sed -i '' 's/foo/bar/g' {}", input_path.display());
+        assert!(!matches!(
+            engine.check(&sed_command, false),
+            ShellDecision::Deny(_)
+        ));
+
+        let outside_root = tempdir().unwrap();
+        let outside_path = outside_root.path().join("outside.txt");
+        assert!(matches!(
+            engine.check(&format!("awk '/foo/' {}", outside_path.display()), false),
+            ShellDecision::Deny(_)
+        ));
+        assert!(matches!(
+            engine.check(
+                &format!("sed -i '' 's/foo/bar/g' {}", outside_path.display()),
+                false
+            ),
+            ShellDecision::Deny(_)
+        ));
     }
 
     #[test]
