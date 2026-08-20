@@ -316,6 +316,7 @@ pub(crate) async fn execute_unified_chat_request(
     let http_client = ModelResolver::build_http_client(
         main_store_arc.clone(),
         proxy_model.model_metadata.clone(),
+        proxy_model.key_index,
     )?;
 
     let mut final_headers = reqwest::header::HeaderMap::new();
@@ -785,6 +786,7 @@ mod usage_attribution_tests {
             base_url,
             model: "backend-model".to_string(),
             api_key: String::new(),
+            key_index: None,
             model_metadata: None,
             custom_params: None,
             prompt_injection: "off".to_string(),

@@ -274,40 +274,51 @@ pub fn init_request_params_value(metadata: Option<Value>) -> Value {
     body
 }
 
-/// Gets proxy type from metadata
-///
-/// # Arguments
-/// * `metadata` - Optional metadata containing proxy configuration
-///
-/// # Returns
-/// ProxyType based on metadata configuration:
-/// - "system" -> ProxyType::System
-/// - "http" with non-empty proxy_server -> ProxyType::Http(server)
-/// - others -> ProxyType::None
-pub fn get_proxy_type(metadata: Option<Value>) -> ProxyType {
+/// Gets proxy type from metadata and selects a server by API key index.
+pub fn get_proxy_type_for_key(metadata: Option<Value>, key_index: Option<usize>) -> ProxyType {
     let Some(metadata) = metadata else {
         return ProxyType::None;
     };
 
     match metadata.get("proxyType").and_then(Value::as_str) {
         Some("system") => ProxyType::System,
-        Some("http") => metadata
-            .get("proxyServer")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map_or(ProxyType::None, |server| {
+        Some("http") => {
+            let proxy = metadata
+                .get("proxyServers")
+                .and_then(Value::as_array)
+                .filter(|servers| !servers.is_empty())
+                .and_then(|servers| {
+                    let index = key_index.unwrap_or(0) % servers.len();
+                    servers[index].as_object()
+                });
+
+            let server = proxy
+                .and_then(|item| item.get("server"))
+                .and_then(Value::as_str)
+                .filter(|server| !server.is_empty())
+                .or_else(|| {
+                    metadata
+                        .get("proxyServer")
+                        .and_then(Value::as_str)
+                        .filter(|server| !server.is_empty())
+                });
+
+            server.map_or(ProxyType::None, |server| {
                 ProxyType::Http(
                     server.to_string(),
-                    metadata
-                        .get("proxyUsername")
+                    proxy
+                        .and_then(|item| item.get("username"))
                         .and_then(Value::as_str)
-                        .map(|s| s.to_string()),
-                    metadata
-                        .get("proxyPassword")
+                        .or_else(|| metadata.get("proxyUsername").and_then(Value::as_str))
+                        .map(str::to_string),
+                    proxy
+                        .and_then(|item| item.get("password"))
                         .and_then(Value::as_str)
-                        .map(|s| s.to_string()),
+                        .or_else(|| metadata.get("proxyPassword").and_then(Value::as_str))
+                        .map(str::to_string),
                 )
-            }),
+            })
+        }
         _ => ProxyType::None,
     }
 }
@@ -624,20 +635,26 @@ mod tests {
     #[test]
     fn test_get_proxy_type() {
         // Test None metadata
-        assert!(matches!(get_proxy_type(None), ProxyType::None));
+        assert!(matches!(
+            get_proxy_type_for_key(None, None),
+            ProxyType::None
+        ));
 
         // Test system proxy
         let metadata = json!({
             "proxyType": "system"
         });
-        assert!(matches!(get_proxy_type(Some(metadata)), ProxyType::System));
+        assert!(matches!(
+            get_proxy_type_for_key(Some(metadata), None),
+            ProxyType::System
+        ));
 
         // Test http proxy with valid server
         let metadata = json!({
             "proxyType": "http",
             "proxyServer": "http://127.0.0.1:7890"
         });
-        if let ProxyType::Http(server, None, None) = get_proxy_type(Some(metadata)) {
+        if let ProxyType::Http(server, None, None) = get_proxy_type_for_key(Some(metadata), None) {
             assert_eq!(server, "http://127.0.0.1:7890");
         } else {
             panic!("Expected ProxyType::Http");
@@ -648,12 +665,50 @@ mod tests {
             "proxyType": "http",
             "proxyServer": ""
         });
-        assert!(matches!(get_proxy_type(Some(metadata)), ProxyType::None));
+        assert!(matches!(
+            get_proxy_type_for_key(Some(metadata), None),
+            ProxyType::None
+        ));
 
         // Test invalid proxy type
         let metadata = json!({
             "proxyType": "invalid"
         });
-        assert!(matches!(get_proxy_type(Some(metadata)), ProxyType::None));
+        assert!(matches!(
+            get_proxy_type_for_key(Some(metadata), None),
+            ProxyType::None
+        ));
+
+        // Test HTTP proxy server rotation and credentials
+        let metadata = json!({
+            "proxyType": "http",
+            "proxyServers": [
+                {"server": "http://127.0.0.1:7890", "username": "user1", "password": "pass1"},
+                {"server": "http://127.0.0.1:7891", "username": "user2", "password": "pass2"}
+            ]
+        });
+        assert!(matches!(
+            get_proxy_type_for_key(Some(metadata.clone()), Some(0)),
+            ProxyType::Http(server, Some(username), Some(password))
+                if server == "http://127.0.0.1:7890" && username == "user1" && password == "pass1"
+        ));
+        assert!(matches!(
+            get_proxy_type_for_key(Some(metadata), Some(3)),
+            ProxyType::Http(server, Some(username), Some(password))
+                if server == "http://127.0.0.1:7891" && username == "user2" && password == "pass2"
+        ));
+
+        // Legacy single-server metadata remains supported.
+        let legacy_metadata = json!({
+            "proxyType": "http",
+            "proxyServer": "http://127.0.0.1:7890",
+            "proxyUsername": "legacy-user",
+            "proxyPassword": "legacy-pass"
+        });
+        assert!(matches!(
+            get_proxy_type_for_key(Some(legacy_metadata), Some(9)),
+            ProxyType::Http(server, Some(username), Some(password))
+                if server == "http://127.0.0.1:7890" && username == "legacy-user" && password == "legacy-pass"
+        ));
     }
 }

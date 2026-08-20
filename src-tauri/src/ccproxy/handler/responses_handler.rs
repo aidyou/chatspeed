@@ -141,6 +141,7 @@ async fn direct_forward_responses(
     let http_client = ModelResolver::build_http_client(
         main_store_arc.clone(),
         proxy_model.model_metadata.clone(),
+        proxy_model.key_index,
     )?;
 
     let mut reqwest_headers = reqwest::header::HeaderMap::new();
@@ -381,6 +382,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             model: "model".to_string(),
             api_key: String::new(),
+            key_index: None,
             model_metadata: metadata,
             custom_params: None,
             prompt_injection: "off".to_string(),

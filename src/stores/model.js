@@ -25,10 +25,8 @@ import { csGetStorage, csSetStorage, isEmpty } from '@/libs/util';
  * @property {string|null} [logo] - URL or path to the model provider's logo.
  * @property {number|null} [n] - Corresponds to OpenAI's 'n' parameter (number of choices to generate).
  * @property {number|null} [presencePenalty] - The presence penalty setting.
- * @property {string|null} [proxyPassword] - Password for the proxy server.
- * @property {string|null} [proxyServer] - Address of the proxy server.
+ * @property {Array<{server: string, username: string, password: string}>} [proxyServers] - HTTP proxy servers, selected in API key order.
  * @property {string|null} [proxyType] - Type of proxy to use (e.g., 'bySetting', 'none').
- * @property {string|null} [proxyUsername] - Username for the proxy server.
  * @property {string|null} [responseFormat] - The response format (e.g., 'text', 'json_object').
  * @property {string|null} [stop] - Stop sequences for the model.
  */

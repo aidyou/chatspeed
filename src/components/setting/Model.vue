@@ -138,30 +138,53 @@
           </el-form-item>
           <el-form-item
             :label="$t('settings.general.proxyServer')"
-            prop="proxyServer"
+            prop="proxyServers"
             v-show="modelForm.proxyType === 'http'">
-            <el-input
-              v-model="modelForm.proxyServer"
-              type="text"
-              :placeholder="$t('settings.general.proxyServerPlaceholder')" />
-          </el-form-item>
-          <el-form-item
-            :label="$t('settings.general.proxyUsername')"
-            prop="proxyUsername"
-            v-show="modelForm.proxyType === 'http'">
-            <el-input
-              v-model="modelForm.proxyUsername"
-              type="text"
-              :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
-          </el-form-item>
-          <el-form-item
-            :label="$t('settings.general.proxyPassword')"
-            prop="proxyPassword"
-            v-show="modelForm.proxyType === 'http'">
-            <el-input
-              v-model="modelForm.proxyPassword"
-              type="text"
-              :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
+            <div class="proxy-server-editor">
+              <Sortable
+                v-if="modelForm.proxyServers.length > 0"
+                class="proxy-server-list"
+                item-key="server"
+                :list="modelForm.proxyServers"
+                :options="{
+                  animation: 150,
+                  ghostClass: 'ghost',
+                  dragClass: 'drag',
+                  draggable: '.draggable',
+                  forceFallback: true,
+                  bubbleScroll: true
+                }"
+                @update="onProxyServerUpdate">
+                <template #item="{ element }">
+                  <div class="proxy-server-item draggable">
+                    <span class="proxy-server-address">{{ element.server }}</span>
+                    <span class="proxy-server-actions" @mousedown.stop>
+                      <el-tooltip
+                        :content="$t('settings.model.editProxyServer')"
+                        placement="top"
+                        :hide-after="0"
+                        :enterable="false">
+                        <span class="icon" @click="editProxyServer(element)">
+                          <cs name="edit" size="16px" color="secondary" />
+                        </span>
+                      </el-tooltip>
+                      <el-tooltip
+                        :content="$t('settings.model.deleteProxyServer')"
+                        placement="top"
+                        :hide-after="0"
+                        :enterable="false">
+                        <span class="icon" @click="removeProxyServer(element)">
+                          <cs name="trash" size="16px" color="secondary" />
+                        </span>
+                      </el-tooltip>
+                    </span>
+                  </div>
+                </template>
+              </Sortable>
+              <el-button type="primary" plain size="small" @click="addProxyServer">
+                <cs name="add" /> {{ $t('settings.model.addProxyServer') }}
+              </el-button>
+            </div>
           </el-form-item>
           <el-form-item :label="$t('settings.model.disabled')" prop="disabled">
             <el-switch v-model="modelForm.disabled" />
@@ -400,6 +423,44 @@
       <span class="dialog-footer">
         <el-button @click="modelDialogVisible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="updateModel">{{ $t('common.save') }}</el-button>
+      </span>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="proxyServerDialogVisible"
+    width="500px"
+    :title="
+      proxyServerEditTarget
+        ? $t('settings.model.editProxyServer')
+        : $t('settings.model.addProxyServer')
+    "
+    :show-close="false"
+    :close-on-click-modal="false"
+    :close-on-press-escape="false">
+    <el-form :model="proxyServerForm" label-width="120px">
+      <el-form-item :label="$t('settings.general.proxyServer')" prop="server">
+        <el-input
+          v-model="proxyServerForm.server"
+          :placeholder="$t('settings.general.proxyServerPlaceholder')" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.general.proxyUsername')" prop="username">
+        <el-input
+          v-model="proxyServerForm.username"
+          :placeholder="$t('settings.general.proxyUsernamePlaceholder')" />
+      </el-form-item>
+      <el-form-item :label="$t('settings.general.proxyPassword')" prop="password">
+        <el-input
+          v-model="proxyServerForm.password"
+          type="password"
+          show-password
+          :placeholder="$t('settings.general.proxyPasswordPlaceholder')" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <span class="dialog-footer">
+        <el-button @click="proxyServerDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="saveProxyServer">{{ $t('common.save') }}</el-button>
       </span>
     </template>
   </el-dialog>
@@ -727,6 +788,7 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessageBox } from 'element-plus'
 const { t } = useI18n()
 
 import { Sortable } from 'sortablejs-vue3'
@@ -892,15 +954,86 @@ const defaultFormData = {
   frequencyPenalty: 0.0,
   stop: '',
   proxyType: 'bySetting',
-  proxyServer: '',
-  proxyUsername: '',
-  proxyPassword: '',
+  proxyServers: [],
   supportsResponsesApi: false,
   customHeaders: [],
   disabled: false
 }
+const createDefaultFormData = () => ({
+  ...defaultFormData,
+  proxyServers: [],
+  customHeaders: []
+})
+
 // Reactive object to hold the form data for the model
-const modelForm = ref({ ...defaultFormData })
+const modelForm = ref(createDefaultFormData())
+
+const proxyServerDialogVisible = ref(false)
+const proxyServerEditTarget = ref(null)
+const proxyServerForm = ref({ server: '', username: '', password: '' })
+
+const addProxyServer = () => {
+  proxyServerEditTarget.value = null
+  proxyServerForm.value = { server: '', username: '', password: '' }
+  proxyServerDialogVisible.value = true
+}
+
+const editProxyServer = server => {
+  proxyServerEditTarget.value = server
+  proxyServerForm.value = { ...server }
+  proxyServerDialogVisible.value = true
+}
+
+const saveProxyServer = () => {
+  const server = proxyServerForm.value.server.trim()
+  if (!server) {
+    showMessage(t('settings.model.proxyServerRequired'), 'error')
+    return
+  }
+  if (!isValidUrl(server)) {
+    showMessage(t('settings.general.proxyServerInvalid'), 'error')
+    return
+  }
+
+  const proxyServer = {
+    server,
+    username: proxyServerForm.value.username.trim(),
+    password: proxyServerForm.value.password.trim()
+  }
+  if (proxyServerEditTarget.value) {
+    const index = modelForm.value.proxyServers.indexOf(proxyServerEditTarget.value)
+    if (index !== -1) {
+      modelForm.value.proxyServers.splice(index, 1, proxyServer)
+    }
+  } else {
+    modelForm.value.proxyServers.push(proxyServer)
+  }
+  proxyServerDialogVisible.value = false
+}
+
+const removeProxyServer = server => {
+  ElMessageBox.confirm(
+    t('settings.model.deleteProxyServerConfirm'),
+    t('settings.model.deleteProxyServer'),
+    {
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning'
+    }
+  ).then(() => {
+    const index = modelForm.value.proxyServers.indexOf(server)
+    if (index !== -1) {
+      modelForm.value.proxyServers.splice(index, 1)
+    }
+  })
+}
+
+const onProxyServerUpdate = event => {
+  const { oldIndex, newIndex } = event
+  if (oldIndex === null || newIndex === null || oldIndex === newIndex) return
+  const item = modelForm.value.proxyServers.splice(oldIndex, 1)[0]
+  modelForm.value.proxyServers.splice(newIndex, 0, item)
+}
 
 // Computed property to get the base URL placeholder based on the API type
 const baseUrlPlaceholder = computed(() => {
@@ -933,6 +1066,29 @@ const formModelIds = computed(() => {
   return modelForm.value.models.map(model => model.id)
 })
 
+const normalizeProxyServers = metadata => {
+  if (Array.isArray(metadata?.proxyServers)) {
+    return metadata.proxyServers
+      .map(item => ({
+        server: String(item?.server || '').trim(),
+        username: String(item?.username || '').trim(),
+        password: String(item?.password || '').trim()
+      }))
+      .filter(item => item.server)
+  }
+
+  const server = String(metadata?.proxyServer || '').trim()
+  return server
+    ? [
+        {
+          server,
+          username: String(metadata?.proxyUsername || '').trim(),
+          password: String(metadata?.proxyPassword || '').trim()
+        }
+      ]
+    : []
+}
+
 const createFromModel = srcModel => {
   return {
     apiProtocol: srcModel.apiProtocol,
@@ -952,10 +1108,8 @@ const createFromModel = srcModel => {
     frequencyPenalty: srcModel?.metadata?.frequencyPenalty || 0.0,
     responseFormat: srcModel?.metadata?.responseFormat || 'text',
     stop: srcModel?.metadata?.stop || '',
-    proxyType: srcModel?.metadata?.proxyType,
-    proxyServer: srcModel?.metadata?.proxyServer || '',
-    proxyUsername: srcModel?.metadata?.proxyUsername || '',
-    proxyPassword: srcModel?.metadata?.proxyPassword || '',
+    proxyType: srcModel?.metadata?.proxyType || 'bySetting',
+    proxyServers: normalizeProxyServers(srcModel?.metadata),
     supportsResponsesApi:
       srcModel?.metadata?.supportsResponsesApi ||
       srcModel?.metadata?.supports_responses_api ||
@@ -980,7 +1134,7 @@ const editModel = async (id, model) => {
     editId.value = id
     modelForm.value = createFromModel(modelData)
   } else if (model) {
-    modelForm.value = { ...defaultFormData }
+    modelForm.value = createDefaultFormData()
     modelForm.value.models = [...model.models]
     modelForm.value.apiProtocol = model.protocol
 
@@ -996,7 +1150,7 @@ const editModel = async (id, model) => {
     console.log(modelForm.value)
   } else {
     editId.value = null
-    modelForm.value = { ...defaultFormData }
+    modelForm.value = createDefaultFormData()
     if (!modelForm.baseUrl) {
       modelForm.value.baseUrl = baseUrlPlaceholder.value
     }
@@ -1006,13 +1160,17 @@ const editModel = async (id, model) => {
   fetchedProviderModelsFromServer(
     modelForm.value.apiProtocol,
     modelForm.value.baseUrl,
-    modelForm.value.apiKey
+    modelForm.value.apiKey,
+    {
+      proxyType: modelForm.value.proxyType,
+      proxyServers: modelForm.value.proxyServers
+    }
   )
 }
 
 const onModelDialogClose = () => {
   editId.value = null
-  modelForm.value = { ...defaultFormData }
+  modelForm.value = createDefaultFormData()
   formRef.value?.resetFields()
 }
 
@@ -1075,14 +1233,11 @@ const updateModel = () => {
     }
 
     if (modelForm.value.proxyType === 'http') {
-      if (!modelForm.value.proxyServer) {
+      if (!modelForm.value.proxyServers.length) {
         showMessage(t('settings.model.proxyServerRequired'), 'error')
         return
       }
-      if (
-        modelForm.value.proxyServer.indexOf('http://') !== 0 &&
-        modelForm.value.proxyServer.indexOf('https://') !== 0
-      ) {
+      if (modelForm.value.proxyServers.some(server => !isValidUrl(server.server))) {
         showMessage(t('settings.general.proxyServerInvalid'), 'error')
         return
       }
@@ -1113,9 +1268,11 @@ const updateModel = () => {
           presencePenalty: modelForm.value.presencePenalty,
           stop: modelForm.value.stop.trim() || '',
           proxyType: modelForm.value.proxyType || 'bySetting',
-          proxyServer: modelForm.value.proxyServer.trim() || '',
-          proxyUsername: modelForm.value.proxyUsername.trim() || '',
-          proxyPassword: modelForm.value.proxyPassword.trim() || '',
+          proxyServers: modelForm.value.proxyServers.map(server => ({
+            server: server.server.trim(),
+            username: server.username.trim(),
+            password: server.password.trim()
+          })),
           supportsResponsesApi: modelForm.value.supportsResponsesApi,
           customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
@@ -1409,8 +1566,7 @@ watchEffect(async () => {
   if (canFetch && isValidUrl(baseUrl)) {
     debouncedFetchedProviderModelsFromServer(protocol, baseUrl, apiKey, {
       proxyType: modelForm.value.proxyType,
-      proxyUsername: modelForm.value.proxyUsername,
-      proxyPassword: modelForm.value.proxyPassword
+      proxyServers: modelForm.value.proxyServers
     })
   } else {
     fetchedProviderModels.value = []
@@ -1809,6 +1965,48 @@ const importPresetModel = model => {
 
 .el-overlay-dialog {
   overflow: hidden;
+}
+
+.proxy-server-editor {
+  width: 100%;
+
+  .proxy-server-list {
+    margin-bottom: var(--cs-space-sm);
+  }
+
+  .proxy-server-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cs-space-sm);
+    min-height: 32px;
+    padding: 4px var(--cs-space-xs);
+    border-bottom: 1px solid var(--cs-border-color);
+    cursor: move;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  .proxy-server-address {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--cs-font-family-mono);
+    font-size: var(--cs-font-size-xs);
+  }
+
+  .proxy-server-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: var(--cs-space-xs);
+
+    .icon {
+      cursor: pointer;
+    }
+  }
 }
 
 .custom-headers-section {

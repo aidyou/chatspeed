@@ -229,8 +229,12 @@ pub fn setup_chat_proxy(
         // 如果模型本身已经设置了代理服务器(proxyServer)，则直接返回即可
         // if proxy_type is "http" and proxyServer is set, return directly
         if proxy_type == "http" {
+            let has_proxy_servers = md
+                .get("proxyServers")
+                .and_then(Value::as_array)
+                .is_some_and(|servers| !servers.is_empty());
             let ps = md.get("proxyServer").and_then(Value::as_str).unwrap_or("");
-            if ps.starts_with("http://") || ps.starts_with("https://") {
+            if has_proxy_servers || ps.starts_with("http://") || ps.starts_with("https://") {
                 return Ok(());
             }
         }

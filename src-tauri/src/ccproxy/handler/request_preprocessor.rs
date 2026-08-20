@@ -200,6 +200,7 @@ mod tests {
             base_url: "https://api.deepseek.com".to_string(),
             model: "deepseek-v4-flash".to_string(),
             api_key: String::new(),
+            key_index: None,
             model_metadata: None,
             custom_params: None,
             prompt_injection: "off".to_string(),

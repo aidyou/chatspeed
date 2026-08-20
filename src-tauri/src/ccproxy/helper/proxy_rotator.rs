@@ -14,6 +14,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalApiKey {
     pub key: String,
+    pub key_index: usize,
     pub provider_id: i64,
     pub base_url: String,
     pub model_name: String,
@@ -24,6 +25,7 @@ impl GlobalApiKey {
     pub fn new(key: String, provider_id: i64, base_url: String, model_name: String) -> Self {
         Self {
             key,
+            key_index: 0,
             provider_id,
             base_url,
             model_name,

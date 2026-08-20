@@ -9,7 +9,7 @@ use crate::{
         network::{ApiClient, ApiConfig, DefaultApiClient, ErrorFormat},
         traits::chat::ModelDetails,
         util::{
-            get_family_from_model_id, get_proxy_type, is_function_call_supported,
+            get_family_from_model_id, get_proxy_type_for_key, is_function_call_supported,
             is_image_input_supported, is_reasoning_supported,
         },
     },
@@ -108,7 +108,7 @@ pub async fn openai_list_models(
     let config = ApiConfig::new(
         Some(base_url.to_string()),
         effective_api_key, // Handled by DefaultApiClient for Bearer token
-        get_proxy_type(extra_args.clone()), // Pass extra_args for proxy settings
+        get_proxy_type_for_key(extra_args.clone(), None), // Use the first configured proxy server
         if custom_headers.as_object().map_or(true, |m| m.is_empty()) {
             None
         } else {
@@ -222,7 +222,7 @@ pub async fn claude_list_models(
             &ApiConfig::new(
                 Some(api_url.unwrap_or(CALUDE_BASE_URL).to_string()),
                 None,
-                get_proxy_type(extra_params),
+                get_proxy_type_for_key(extra_params, None), // Use the first configured proxy server
                 Some(headers),
             ),
             "models", // Endpoint path
@@ -322,7 +322,7 @@ pub async fn gemini_list_models(
     let config = ApiConfig::new(
         Some(base_url.to_string()),
         None,
-        get_proxy_type(extra_args.clone()),
+        get_proxy_type_for_key(extra_args.clone(), None), // Use the first configured proxy server
         None, // No special headers needed if key is in URL for this request
     );
 

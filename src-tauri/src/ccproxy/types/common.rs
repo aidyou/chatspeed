@@ -81,6 +81,8 @@ pub struct ProxyModel {
     /// Actual backend model ID used for API requests
     pub model: String,
     pub api_key: String,
+    /// Zero-based index of the selected key in the provider's newline-separated key list.
+    pub key_index: Option<usize>,
     pub model_metadata: Option<Value>,
     pub custom_params: Option<Value>,
     pub prompt_injection: String,

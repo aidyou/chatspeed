@@ -2060,6 +2060,15 @@ const isToolGroupItemRunning = tool => {
 
 const getToolRenderStatusClass = message => {
   if (message?.toolDisplay?.isError || message?.isRejected) return 'status-error'
+
+  // A delegated-task card is an independent message card. Its outer tool row
+  // must not inherit the parent tool execution state, otherwise a completed
+  // card can still receive status-running and keep the pulse animation.
+  if (message?.subAgentCard) {
+    const status = String(message.subAgentCard.status || '').toLowerCase()
+    return ['failed', 'error'].includes(status) ? 'status-error' : 'status-success'
+  }
+
   return isToolGroupItemRunning(message) ? 'status-running' : 'status-success'
 }
 

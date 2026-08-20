@@ -1,5 +1,5 @@
 use crate::{
-    ai::{network::ProxyType, util::get_proxy_type},
+    ai::{network::ProxyType, util::get_proxy_type_for_key},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
         helper::{proxy_rotator::GlobalApiKey, CC_PROXY_ROTATOR},
@@ -326,6 +326,7 @@ impl ModelResolver {
                 base_url: ai_model_detail.base_url,
                 model: backend_target.model.clone(),
                 api_key: ai_model_detail.api_key.clone(),
+                key_index: None,
                 model_metadata: ai_model_detail.metadata.clone(),
                 custom_params,
                 prompt_injection_position: Some(prompt_injection_position),
@@ -431,6 +432,7 @@ impl ModelResolver {
             base_url: ai_model_details.base_url,
             model: global_key.model_name,
             api_key: global_key.key,
+            key_index: Some(global_key.key_index),
             model_metadata: ai_model_details.metadata.clone(),
             custom_params,
             prompt_injection,
@@ -551,6 +553,7 @@ impl ModelResolver {
                     let model_idx = (key_idx + model_rot) % models.len();
                     new_key_pool.push(GlobalApiKey {
                         key,
+                        key_index: key_idx,
                         provider_id: ai_model.id.unwrap_or_default(),
                         base_url: ai_model.base_url.clone(),
                         model_name: models[model_idx].clone(),
@@ -651,21 +654,19 @@ impl ModelResolver {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let selected_api_key = if api_keys.is_empty() {
-            // If there are no keys after trimming and filtering, return an empty string.
-            // This might be the case for Ollama or if keys are not configured.
-            "".to_string()
-        } else if api_keys.len() == 1 {
-            // If there's only one key, no need for rotation.
-            api_keys[0].clone()
+        let (selected_api_key, selected_key_index) = if api_keys.is_empty() {
+            (String::new(), None)
         } else {
-            // If there are multiple keys, use the rotator.
-            let composite_key = format!("internal_provider_key_rotation/{}", provider_id);
-            let index = CC_PROXY_ROTATOR.get_next_target_index(&composite_key, api_keys.len());
-            api_keys
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| "".to_string()) // Fallback, though index should be valid.
+            let index = if api_keys.len() == 1 {
+                0
+            } else {
+                let composite_key = format!("internal_provider_key_rotation/{}", provider_id);
+                CC_PROXY_ROTATOR.get_next_target_index(&composite_key, api_keys.len())
+            };
+            (
+                api_keys.get(index).cloned().unwrap_or_default(),
+                Some(index),
+            )
         };
 
         let chat_protocol = ai_model_detail.api_protocol.try_into().unwrap_or_default();
@@ -695,6 +696,7 @@ impl ModelResolver {
             base_url: ai_model_detail.base_url,
             model: model_id,
             api_key: selected_api_key,
+            key_index: selected_key_index,
             model_metadata: ai_model_detail.metadata.clone(),
             custom_params,
             prompt_injection: "off".to_string(),
@@ -778,24 +780,27 @@ impl ModelResolver {
     pub fn build_http_client(
         main_store_arc: Arc<MainStore>,
         mut metadata: Option<serde_json::Value>,
+        key_index: Option<usize>,
     ) -> ProxyResult<Client> {
         let mut client_builder = Client::builder();
         let _ = setup_chat_proxy(main_store_arc.clone(), &mut metadata);
-        let proxy_type = get_proxy_type(metadata);
+        let proxy_type = get_proxy_type_for_key(metadata, key_index);
 
         match proxy_type {
             ProxyType::None => {
                 client_builder = client_builder.no_proxy();
             }
             ProxyType::Http(proxy_url, proxy_username, proxy_password) => {
-                log::debug!("Using proxy: {}", proxy_url);
-                if let Ok(mut proxy) = reqwest::Proxy::all(&proxy_url) {
-                    if let (Some(user), Some(pass)) = (proxy_username, proxy_password) {
-                        if !user.is_empty() && !pass.is_empty() {
-                            proxy = proxy.basic_auth(&user, &pass);
+                if !proxy_url.trim().is_empty() {
+                    log::info!("Using proxy: {}", proxy_url);
+                    if let Ok(mut proxy) = reqwest::Proxy::all(&proxy_url) {
+                        if let (Some(user), Some(pass)) = (proxy_username, proxy_password) {
+                            if !user.is_empty() && !pass.is_empty() {
+                                proxy = proxy.basic_auth(&user, &pass);
+                            }
                         }
+                        client_builder = client_builder.proxy(proxy);
                     }
-                    client_builder = client_builder.proxy(proxy);
                 }
             }
             ProxyType::System => { /* Use system proxy settings by default */ }
@@ -1058,6 +1063,7 @@ mod tests {
             base_url: "http://127.0.0.1".to_string(),
             model: "model".to_string(),
             api_key: String::new(),
+            key_index: None,
             model_metadata: None,
             custom_params: None,
             prompt_injection: "off".to_string(),
