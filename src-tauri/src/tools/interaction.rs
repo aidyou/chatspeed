@@ -14,7 +14,7 @@ impl ToolDefinition for AskUser {
     fn description(&self) -> &str {
         "Ask the user for a blocking decision that is required before you can continue.\n\n\
         Use ask_user only when the next step genuinely depends on user input, such as choosing between mutually exclusive implementation paths, clarifying an ambiguous requirement, or confirming a risky change. \
-        Do NOT use ask_user for routine status updates, final answers, progress reports, generic feedback surveys, or plan approval in Planning Mode; use submit_plan for plan approval and answer_user/complete_workflow for reporting.\n\n\
+        Do NOT use ask_user for routine status updates, final answers, progress reports, generic feedback surveys, optional offers to implement after a completed investigation, or plan approval in Planning Mode; use submit_plan for plan approval and answer_user/complete_workflow for reporting. A proposed follow-up, no response, or a runtime reminder never authorizes a mutating action.\n\n\
         Usage rules:\n\
         - Pass grouped choices using an `items` array.\n\
         - Prefer one focused group. Use multiple groups only when each group is an independent blocking decision.\n\
@@ -608,6 +608,15 @@ mod tests {
             ],
             "unresolved_blockers": []
         })
+    }
+
+    #[test]
+    fn ask_user_description_keeps_optional_implementation_out_of_waits() {
+        let description = AskUser.description();
+        assert!(
+            description.contains("optional offers to implement after a completed investigation")
+        );
+        assert!(description.contains("A proposed follow-up, no response, or a runtime reminder never authorizes a mutating action"));
     }
 
     #[tokio::test]

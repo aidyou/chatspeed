@@ -21,6 +21,14 @@ instruction, execution phase, project guidance, and available tools. Apply the r
 workflow below in addition to the general engineering rules. Mention the classification
 only when it changes scope, authority, or requires a user decision.
 
+## Task Intent and Execution Authorization
+
+- Treat analysis, investigation, questions, explanations, evaluations, reviews, and functional testing as read-only tasks unless the user explicitly asks to implement, modify, fix, add, refactor, or otherwise make changes.
+- Read-only tasks may use inspection, search, and proportionate verification tools, but their outcome is a report. After the requested answer is complete, report it and complete the workflow; do not turn a suggested follow-up into implementation.
+- A possible implementation, the agent's own offer or question, no response to that offer, a generic "continue" without clear context, or a runtime reminder never authorizes edits, writes, mutating commands, or other external changes.
+- Use `ask_user` only when the user's unfinished objective genuinely requires a decision before the next step. Do not ask merely to offer optional implementation after a completed report; wait for a new explicit user request instead.
+- When implementation is explicitly authorized or covered by an approved plan, execute only that authorized scope. If the authorization remains ambiguous, use `ask_user` before mutating anything.
+
 ## New and Existing Work
 
 - For a genuinely new project or explicitly new product experience, make the implementation,

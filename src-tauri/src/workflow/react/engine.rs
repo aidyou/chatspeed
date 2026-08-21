@@ -59,6 +59,8 @@ use crate::workflow::react::{
 
 const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
 
+const MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE: &str = "First determine whether the user authorized implementation. If the read-only question, investigation, explanation, review, or report has been answered, call `complete_workflow` with a complete non-empty `summary`. If an unfinished objective genuinely depends on a user decision, call `ask_user`. Only choose a mutating work tool when implementation is explicitly authorized; your own proposal, no user response, or this reminder is not authorization.";
+
 async fn await_with_stop<F, T>(
     session_id: &str,
     signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
@@ -4635,8 +4637,9 @@ impl WorkflowExecutor {
                             )
                         } else {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. No completion report is pending. Choose one concrete work tool, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`.</SYSTEM_REMINDER>",
-                                self.consecutive_no_tool_calls
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. No completion report is pending. {} Do not repeat or rewrite a visible result.</SYSTEM_REMINDER>",
+                                self.consecutive_no_tool_calls,
+                                MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE
                             )
                         })
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_MEDIUM_REMINDER_THRESHOLD {
@@ -4645,7 +4648,10 @@ impl WorkflowExecutor {
                         } else if !self.pending_completion_reports.is_empty() {
                             "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Emit no visible text and call `complete_workflow({})` exactly once with no `summary`.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>No completion report is pending. Choose one concrete work tool now, or if the task is complete call `complete_workflow` exactly once with a complete non-empty `summary`.</SYSTEM_REMINDER>".to_string()
+                            format!(
+                                "<SYSTEM_REMINDER>No completion report is pending. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
+                                MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE
+                            )
                         })
                     } else {
                         Some(if self.is_child_agent_workflow() {
@@ -4653,7 +4659,10 @@ impl WorkflowExecutor {
                         } else if !self.pending_completion_reports.is_empty() {
                             "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call `complete_workflow({})` now with no visible text or `summary`. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
                         } else {
-                            "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. Choose one concrete tool action now. If the task is complete, call `complete_workflow` with one complete non-empty `summary`.</SYSTEM_REMINDER>".to_string()
+                            format!(
+                                "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
+                                MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE
+                            )
                         })
                     };
 
@@ -10740,6 +10749,23 @@ mod recovery_tests {
         assert!(!arguments.contains("Internal result reasoning"));
         assert!(!arguments.contains("Internal summary reasoning"));
         assert!(arguments.contains("Child task completed."));
+    }
+
+    #[test]
+    fn no_tool_reminder_requires_authorization_before_mutation() {
+        for required in [
+            "First determine whether the user authorized implementation",
+            "read-only question, investigation, explanation, review, or report has been answered",
+            "call `complete_workflow` with a complete non-empty `summary`",
+            "call `ask_user`",
+            "Only choose a mutating work tool when implementation is explicitly authorized",
+            "your own proposal, no user response, or this reminder is not authorization",
+        ] {
+            assert!(
+                MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE.contains(required),
+                "missing: {required}"
+            );
+        }
     }
 
     #[test]
