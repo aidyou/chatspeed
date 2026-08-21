@@ -558,6 +558,14 @@ pub enum TaskGoalStatus {
     None,
 }
 
+pub(crate) const MAX_USER_EXECUTION_REQUIREMENTS: usize = 16;
+pub(crate) const MAX_USER_EXECUTION_REQUIREMENT_CHARS: usize = 1_000;
+pub(crate) const MAX_USER_EXECUTION_REQUIREMENTS_CHARS: usize = 8_000;
+
+/// User-provided execution prerequisites that may be required by later work.
+/// The strings intentionally remain open-ended and close to the user's wording.
+pub(crate) type UserExecutionRequirements = Vec<String>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskGoalState {
     #[serde(default = "default_task_goal_state_version")]
@@ -574,6 +582,10 @@ pub struct TaskGoalState {
     pub latest_directive: Option<TaskGoalSourcePreview>,
     #[serde(default)]
     pub completion_evidence_message_id: Option<i64>,
+    /// User-provided execution prerequisites that later work may need verbatim.
+    /// These remain plain strings because their shape is intentionally open-ended.
+    #[serde(default)]
+    pub user_execution_requirements: UserExecutionRequirements,
 }
 
 fn default_task_goal_state_version() -> u8 {
@@ -587,6 +599,7 @@ pub(crate) struct TaskGoalLedger {
     pub source_message_ids: Vec<i64>,
     pub source_previews: Vec<TaskGoalSourcePreview>,
     pub previous_state: Option<TaskGoalState>,
+    pub user_execution_requirements: UserExecutionRequirements,
     pub requires_active_goal: bool,
     pub completion_evidence_message_id: Option<i64>,
 }

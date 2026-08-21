@@ -8,8 +8,10 @@ use crate::workflow::react::runtime_observation::{
 };
 use crate::workflow::react::types::{
     EffectiveTaskObjective, StepType, TaskGoalLedger, TaskGoalSourcePreview, TaskGoalState,
+    MAX_USER_EXECUTION_REQUIREMENTS, MAX_USER_EXECUTION_REQUIREMENTS_CHARS,
+    MAX_USER_EXECUTION_REQUIREMENT_CHARS,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -392,6 +394,114 @@ impl ContextManager {
             .collect()
     }
 
+    fn user_execution_requirements_from_message(message: &WorkflowMessage) -> Vec<String> {
+        let values = if message.message_subtype.as_deref() == Some("current_task_goal") {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("data"))
+                .and_then(|data| data.get("task_goal_state"))
+                .and_then(|state| state.get("user_execution_requirements"))
+                .and_then(Value::as_array)
+                .cloned()
+        } else if Self::is_compression_summary_message(message) {
+            let content = message
+                .message
+                .strip_prefix("## Previous Context Snapshot")
+                .map(str::trim)
+                .unwrap_or(message.message.as_str());
+            serde_json::from_str::<Value>(content)
+                .ok()
+                .and_then(|summary| summary.get("user_execution_requirements").cloned())
+                .and_then(|value| value.as_array().cloned())
+        } else {
+            None
+        };
+
+        let Some(values) = values else {
+            return Vec::new();
+        };
+        let candidates = values.iter().filter_map(Value::as_str).map(str::to_string);
+        let mut requirements = Vec::new();
+        Self::merge_user_execution_requirements(&mut requirements, candidates);
+        requirements
+    }
+
+    fn merge_user_execution_requirements(
+        requirements: &mut Vec<String>,
+        candidates: impl IntoIterator<Item = String>,
+    ) {
+        for candidate in candidates {
+            let candidate = candidate.trim();
+            if candidate.is_empty()
+                || candidate.chars().count() > MAX_USER_EXECUTION_REQUIREMENT_CHARS
+                || requirements.iter().any(|existing| existing == candidate)
+            {
+                continue;
+            }
+            if requirements.len() >= MAX_USER_EXECUTION_REQUIREMENTS
+                || requirements
+                    .iter()
+                    .map(|entry| entry.chars().count())
+                    .sum::<usize>()
+                    + candidate.chars().count()
+                    > MAX_USER_EXECUTION_REQUIREMENTS_CHARS
+            {
+                break;
+            }
+            requirements.push(candidate.to_string());
+        }
+    }
+
+    fn user_execution_requirements_from_messages(
+        messages: &[WorkflowMessage],
+        compressed_until_message_id: i64,
+    ) -> Vec<String> {
+        for message in messages.iter().rev().filter(|message| {
+            message
+                .id
+                .is_some_and(|message_id| message_id <= compressed_until_message_id)
+                || message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("compressed_until_message_id"))
+                    .and_then(Value::as_i64)
+                    .is_some_and(|boundary| boundary <= compressed_until_message_id)
+                || message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("data"))
+                    .and_then(|data| data.get("compressed_until_message_id"))
+                    .and_then(Value::as_i64)
+                    .is_some_and(|boundary| boundary <= compressed_until_message_id)
+        }) {
+            let has_requirement_field =
+                if message.message_subtype.as_deref() == Some("current_task_goal") {
+                    message
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("data"))
+                        .and_then(|data| data.get("task_goal_state"))
+                        .and_then(|state| state.get("user_execution_requirements"))
+                        .is_some()
+                } else if Self::is_compression_summary_message(message) {
+                    message
+                        .message
+                        .strip_prefix("## Previous Context Snapshot")
+                        .map(str::trim)
+                        .and_then(|content| serde_json::from_str::<Value>(content).ok())
+                        .and_then(|summary| summary.get("user_execution_requirements").cloned())
+                        .is_some()
+                } else {
+                    false
+                };
+            if has_requirement_field {
+                return Self::user_execution_requirements_from_message(message);
+            }
+        }
+        Vec::new()
+    }
+
     fn task_goal_ledger_from_durable_messages(
         messages: &[WorkflowMessage],
         compressed_until_message_id: i64,
@@ -436,6 +546,10 @@ impl ContextManager {
                 messages,
                 compressed_until_message_id,
             ),
+            user_execution_requirements: Self::user_execution_requirements_from_messages(
+                &messages[manual_clear_start..],
+                compressed_until_message_id,
+            ),
             requires_active_goal: latest_directive_id.is_some()
                 && completion_evidence_message_id.is_none(),
             completion_evidence_message_id,
@@ -467,6 +581,7 @@ impl ContextManager {
             "latest_source_message_id": task_goal_state.source_message_ids.last(),
             "latest_directive": task_goal_state.latest_directive,
             "completion_evidence_message_id": task_goal_state.completion_evidence_message_id,
+            "user_execution_requirements": task_goal_state.user_execution_requirements,
         });
         let state_json = serde_json::to_string(&model_state).map_err(|error| {
             WorkflowEngineError::General(format!(
@@ -1556,7 +1671,14 @@ impl ContextManager {
             .iter()
             .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))?;
 
-        let mut projection = vec![current_task[approved_plan_index].clone()];
+        let mut projection = scoped_messages[..task_start]
+            .iter()
+            .rev()
+            .find(|message| Self::is_compression_summary_message(message))
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>();
+        projection.push(current_task[approved_plan_index].clone());
 
         projection.extend(
             current_task[approved_plan_index + 1..]
@@ -2178,7 +2300,182 @@ mod tests {
                 content: current_goal.to_string(),
             }),
             completion_evidence_message_id: None,
+            user_execution_requirements: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn user_execution_requirements_survive_first_and_consecutive_compressions_after_recovery()
+    {
+        let (_dir, store) = setup_store();
+        let session_id = "requirements-across-compressions";
+        insert_workflow(&store, session_id);
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            4_096,
+            tsid_generator.clone(),
+        );
+        let user_request = context
+            .add_message(
+                "user".to_string(),
+                "Run the integration test against the provided database".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add user request")
+            .0;
+        let user_request_id = user_request.id.expect("user request id");
+        let requirements = vec![
+            "PostgreSQL endpoint: postgres://127.0.0.1:5432/test_db".to_string(),
+            "PostgreSQL username: integration_user".to_string(),
+            "PostgreSQL password: integration_password".to_string(),
+        ];
+
+        let mut first_task_goal = active_task_goal_state(
+            vec![user_request_id],
+            "Run the integration test against the provided database",
+        );
+        first_task_goal.user_execution_requirements = requirements.clone();
+        context
+            .compress_with_task_goal_state(
+                format!(
+                    "{{\"user_execution_requirements\":{}}}",
+                    serde_json::to_string(&requirements).expect("serialize requirements")
+                ),
+                Some(first_task_goal),
+                2,
+                user_request_id,
+            )
+            .await
+            .expect("first compression should persist requirements");
+
+        let follow_up = context
+            .add_message(
+                "assistant".to_string(),
+                "Prepared the database integration test".to_string(),
+                None,
+                None,
+                None,
+                3,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("failed to add follow-up")
+            .0;
+        let follow_up_id = follow_up.id.expect("follow-up id");
+        let inherited_requirements = context
+            .task_goal_ledger_for_compression(follow_up_id)
+            .expect("second compression should recover first handoff requirements")
+            .user_execution_requirements;
+        assert_eq!(inherited_requirements, requirements);
+        let mut second_task_goal = active_task_goal_state(
+            vec![user_request_id],
+            "Run the integration test against the provided database",
+        );
+        second_task_goal.user_execution_requirements = inherited_requirements.clone();
+        context
+            .compress_with_task_goal_state(
+                format!(
+                    "{{\"user_execution_requirements\":{}}}",
+                    serde_json::to_string(&inherited_requirements)
+                        .expect("serialize inherited requirements")
+                ),
+                Some(second_task_goal),
+                4,
+                follow_up_id,
+            )
+            .await
+            .expect("second compression should retain requirements");
+
+        let mut recovered =
+            ContextManager::new(session_id.to_string(), store, 4_096, tsid_generator);
+        recovered
+            .load_history()
+            .await
+            .expect("history recovery should rebuild the handoff");
+
+        let recovered_ledger = recovered
+            .task_goal_ledger_for_compression(follow_up_id)
+            .expect("recovered ledger should retain execution requirements");
+        assert_eq!(recovered_ledger.user_execution_requirements, requirements);
+        let recovered_task_goal = recovered
+            .get_messages_for_llm()
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("current_task_goal"))
+            .expect("recovered handoff should include the compact task goal");
+        for requirement in &recovered_ledger.user_execution_requirements {
+            assert!(recovered_task_goal.message.contains(requirement));
+        }
+    }
+
+    #[test]
+    fn user_execution_requirements_survive_runtime_message_ids_after_boundary() {
+        let summary = WorkflowMessage {
+            id: Some(100),
+            session_id: "requirements-boundary".to_string(),
+            role: "system".to_string(),
+            message: "## Previous Context Snapshot\n{\"user_execution_requirements\":[\"temporary model endpoint\"]}".to_string(),
+            reasoning: None,
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(json!({"compressed_until_message_id": 40})),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+        let task_goal = WorkflowMessage {
+            id: Some(101),
+            session_id: "requirements-boundary".to_string(),
+            role: "user".to_string(),
+            message: "<CURRENT_TASK_GOAL>".to_string(),
+            reasoning: None,
+            message_kind: "runtime_observation".to_string(),
+            message_subtype: Some("current_task_goal".to_string()),
+            segment_id: 1,
+            source_event_type: Some("current_task_goal_snapshot".to_string()),
+            metadata: Some(json!({
+                "data": {
+                    "compressed_until_message_id": 40,
+                    "task_goal_state": {
+                        "status": "active",
+                        "current_goal": "Continue the task",
+                        "user_execution_requirements": [
+                            "temporary model endpoint",
+                            "test credential"
+                        ]
+                    }
+                }
+            })),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        assert_eq!(
+            ContextManager::user_execution_requirements_from_messages(&[summary, task_goal], 40,),
+            vec![
+                "temporary model endpoint".to_string(),
+                "test credential".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -5239,7 +5536,7 @@ mod tests {
             message(
                 5,
                 "system",
-                "<state_snapshot>Implementation summary</state_snapshot>",
+                "## Previous Context Snapshot\n{\"user_execution_requirements\":[\"temporary model endpoint\",\"test credential\"]}",
                 "summary",
                 Some("compression"),
                 Some(json!({"compressed_until_message_id": 4})),
@@ -5258,6 +5555,12 @@ mod tests {
         assert_eq!(execution_projection.len(), 2);
         assert_eq!(execution_projection[0].id, Some(3));
         assert_eq!(execution_projection[1].id, Some(5));
+        let handoff = execution_projection
+            .iter()
+            .find(|message| ContextManager::is_compression_summary_message(message))
+            .expect("active execution projection should retain the compression handoff");
+        assert!(handoff.message.contains("temporary model endpoint"));
+        assert!(handoff.message.contains("test credential"));
         assert!(execution_projection
             .iter()
             .all(|message| message.message != "Ship the fix"));

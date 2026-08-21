@@ -860,12 +860,9 @@ impl WorkflowExecutor {
             return Ok(false);
         }
 
-        let task_goal_ledger = matches!(mode, CompressionMode::Blocking)
-            .then(|| {
-                self.context
-                    .task_goal_ledger_for_compression(compressed_until_message_id)
-            })
-            .transpose()?;
+        let task_goal_ledger = self
+            .context
+            .task_goal_ledger_for_compression(compressed_until_message_id)?;
 
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
             is_compressing: true,
@@ -891,7 +888,7 @@ impl WorkflowExecutor {
                 mode,
                 compressed_until_message_id,
                 max_output_tokens,
-                task_goal_ledger.as_ref(),
+                Some(&task_goal_ledger),
             )
             .await;
 

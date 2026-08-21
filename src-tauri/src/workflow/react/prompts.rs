@@ -377,6 +377,8 @@ pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compres
 
 Return only this semantic schema:
 {
+  "user_execution_requirements": [],
+  "replaced_user_execution_requirements": [],
   "confirmed_facts": [],
   "completed_work": [],
   "unresolved_carryovers": [],
@@ -384,6 +386,8 @@ Return only this semantic schema:
 }
 
 The runtime, not you, adds schema version, kind, compression boundary, canonical successful file changes, and supplied structured review rounds. Do not emit or restate those system-owned fields. Only summarize completed historical tasks. The current task and latest raw messages remain outside this archive: do not include a live todo list, approved plan body, current next action, copied file contents, commands, tool names, statuses, result excerpts, or raw output.
+
+`user_execution_requirements` is the full current plain array of concise strings. Include concrete information the user explicitly supplied that a later task may need in order to execute or verify the work, such as an environment prerequisite, proxy, endpoint, temporary model, account, credential, password, test data location, or required test condition. Do not try to enumerate categories. Each `previous_user_execution_requirements` entry in the supplied task-goal ledger is runtime-provided history: copy every still-valid entry character-for-character, as one original entry, without translating, paraphrasing, reformatting, splitting, merging, or restating it. If a later user message clearly changes a prior entry, omit that old entry from `user_execution_requirements` and put its exact original text in `replaced_user_execution_requirements`; otherwise that replacement list must be empty. Append only a distinct prerequisite that a later user message explicitly supplied. Do not include ordinary goals, progress, todos, commands, file paths, model guesses, or values not supplied or confirmed by the user. The runtime validates these exact references and removes `replaced_user_execution_requirements` before persistence.
 
 This is an AI-to-AI memory checkpoint, not a tool-event archive. Use these mutually exclusive responsibilities:
 - `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on. Do not describe edits, pending work, or limitations here.
@@ -401,13 +405,17 @@ Return only this semantic schema:
     "status": "active",
     "current_goal": "short current goal"
   },
+  "user_execution_requirements": [],
+  "replaced_user_execution_requirements": [],
   "confirmed_facts": [],
   "boundary_open_items": [],
   "completed_work": [],
   "constraints_and_guards": []
 }
 
-Return exactly and only the five semantic fields in the schema above. `task_state` is the only goal field: it has exactly `status` and `current_goal`. Its `status` must be `active`, `complete`, or `none`; use `null` for `current_goal` only with `none`. The runtime supplies a task-goal source ledger. Its `latest_directive` is the highest-precedence user intent at this boundary; use it to determine the current execution mode, even if older source previews requested only an audit. If `latest_directive` asks to modify, implement, optimize, or repair, `current_goal` must describe that active implementation work, never a read-only audit. When `previous_task_state.status` is `active`, later directives are refinements by default: preserve every still-unresolved component of its `current_goal` and add the latest refinement. Do not narrow the goal to only the newest correction unless that directive explicitly replaces or abandons the preceding work. Do not create source IDs, completion evidence, todo state, a next action, effective task objective, plan body, copied content, tool transcript, command, or raw output. For an `active` ledger, you must return `status: "active"` with one concise goal. You may return `complete` or `none` only when the ledger supplies successful completion evidence after the latest user directive.
+Return exactly and only the seven semantic fields in the schema above. `task_state` is the only goal field: it has exactly `status` and `current_goal`. Its `status` must be `active`, `complete`, or `none`; use `null` for `current_goal` only with `none`. `user_execution_requirements` is the full current plain array of concise strings. Include concrete information the user explicitly supplied that later execution or verification may need, such as an environment prerequisite, proxy, endpoint, temporary model, account, credential, password, test data location, or required test condition. Do not enumerate categories or invent values. Each `previous_user_execution_requirements` entry in the supplied task-goal ledger is runtime-provided history: copy every still-valid entry character-for-character, as one original entry, without translating, paraphrasing, reformatting, splitting, merging, or restating it. If a later user message clearly changes a prior entry, omit that old entry from `user_execution_requirements` and put its exact original text in `replaced_user_execution_requirements`; otherwise that replacement list must be empty. Append only a distinct prerequisite that a later user message explicitly supplied. Do not include ordinary goals, progress, todos, commands, file paths, model guesses, or assistant-inferred requirements. The runtime validates these exact references and removes `replaced_user_execution_requirements` before persistence.
+
+The runtime supplies a task-goal source ledger. Its `latest_directive` is the highest-precedence user intent at this boundary; use it to determine the current execution mode, even if older source previews requested only an audit. If `latest_directive` asks to modify, implement, optimize, or repair, `current_goal` must describe that active implementation work, never a read-only audit. When `previous_task_state.status` is `active`, later directives are refinements by default: preserve every still-unresolved component of its `current_goal` and add the latest refinement. Do not narrow the goal to only the newest correction unless that directive explicitly replaces or abandons the preceding work. Do not create source IDs, completion evidence, todo state, a next action, effective task objective, plan body, copied content, tool transcript, command, or raw output. For an `active` ledger, you must return `status: "active"` with one concise goal. You may return `complete` or `none` only when the ledger supplies successful completion evidence after the latest user directive.
 
 Use each field only for its stated purpose:
 - `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on; not edits, pending work, or limitations.
