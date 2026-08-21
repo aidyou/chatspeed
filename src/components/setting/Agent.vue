@@ -917,7 +917,9 @@ const CORE_MANAGEMENT_TOOLS = [
   'skill',
   'ask_user',
   'complete_workflow',
-  'submit_plan'
+  'submit_plan',
+  'mcp_tool_load',
+  'read_history_message',
 ]
 
 const defaultAgentModelConfig = () => ({
