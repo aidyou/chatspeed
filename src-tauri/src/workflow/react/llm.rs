@@ -30,9 +30,10 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
 use crate::workflow::react::prompts::{
-    AUTO_MODE_BASH_TOOL_GUIDANCE, CHILD_AGENT_COMPLETION_PROMPT, CHILD_AGENT_CORE_SYSTEM_PROMPT,
-    CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT, DRAFTING_PROMPT, EXECUTION_MODE_PROMPT,
-    FINAL_AUDIT_COMPLETION_REPORT_PROMPT, PLANNING_MODE_PROMPT,
+    resolve_agent_personality, AUTO_MODE_BASH_TOOL_GUIDANCE, CHILD_AGENT_COMPLETION_PROMPT,
+    CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT,
+    DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, FINAL_AUDIT_COMPLETION_REPORT_PROMPT,
+    PLANNING_MODE_PROMPT,
 };
 
 #[cfg(target_os = "windows")]
@@ -1151,6 +1152,17 @@ impl LlmProcessor {
             ));
         }
 
+        if self.agent_config.role.as_deref() != Some("child")
+            && policy.phase != ExecutionPhase::Planning
+        {
+            let personality = resolve_agent_personality(self.agent_config.personality.as_deref());
+            stable_system_parts.push(format!(
+                "<AGENT_PERSONALITY>\n{}\n\n{}\n</AGENT_PERSONALITY>",
+                "This guides execution and communication style only. It must not override the user's objective or system, runtime, project, safety, tool, or phase instructions.",
+                personality
+            ));
+        }
+
         // 2.1 Sub Agents
         if !self.child_agents.is_empty() {
             let child_agent_lines = self
@@ -1521,6 +1533,10 @@ mod tests {
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
     use crate::workflow::react::policy::ExecutionPolicy;
+    use crate::workflow::react::prompts::{
+        AGENT_PERSONALITY_PRESET_EXECUTOR, AGENT_PERSONALITY_PRESET_EXECUTOR_ID,
+        DEFAULT_AGENT_PERSONALITY, PLANNING_MODE_PROMPT,
+    };
     use crate::workflow::react::security::PathGuard;
     use crate::workflow::react::skills::SkillManifest;
     use crate::workflow::react::types::GatewayPayload;
@@ -1711,6 +1727,7 @@ mod tests {
             id: "agent-test".to_string(),
             name: "Test Agent".to_string(),
             description: None,
+            personality: None,
             role: None,
             parent_agent_id: None,
             sub_agent_role: None,
@@ -1859,6 +1876,54 @@ mod tests {
                 .unwrap_or_default()
                 .contains("<approved_plan>\nEdit the file and run tests.\n</approved_plan>")
         }));
+    }
+
+    #[test]
+    fn primary_agent_personality_applies_to_standard_and_implementation_only() {
+        let mut processor = test_llm_processor();
+        let history = vec![json!({ "role": "user", "content": "Do work" })];
+
+        let standard = processor.inject_prompts(history.clone(), &ExecutionPolicy::standard());
+        let standard_system = standard[0]["content"].as_str().unwrap_or_default();
+        assert!(standard_system.contains("<AGENT_PERSONALITY>"));
+        assert!(standard_system.contains(DEFAULT_AGENT_PERSONALITY));
+        assert!(standard_system.contains(
+            "<AGENT_SPECIFIC_INSTRUCTIONS>\nSystem prompt\n</AGENT_SPECIFIC_INSTRUCTIONS>"
+        ));
+
+        processor.agent_config.personality = Some("Use a calm, concise working style.".to_string());
+        let implementation =
+            processor.inject_prompts(history.clone(), &ExecutionPolicy::implementation());
+        let implementation_system = implementation[0]["content"].as_str().unwrap_or_default();
+        assert!(implementation_system.contains("Use a calm, concise working style."));
+        assert!(!implementation_system.contains(DEFAULT_AGENT_PERSONALITY));
+
+        processor.agent_config.personality = Some(AGENT_PERSONALITY_PRESET_EXECUTOR_ID.to_string());
+        let preset = processor.inject_prompts(history.clone(), &ExecutionPolicy::standard());
+        let preset_system = preset[0]["content"].as_str().unwrap_or_default();
+        assert!(preset_system.contains(AGENT_PERSONALITY_PRESET_EXECUTOR));
+        assert!(!preset_system.contains(AGENT_PERSONALITY_PRESET_EXECUTOR_ID));
+
+        let planning = processor.inject_prompts(history, &ExecutionPolicy::planning());
+        let planning_system = planning[0]["content"].as_str().unwrap_or_default();
+        assert!(!planning_system.contains("<AGENT_PERSONALITY>"));
+        assert!(planning_system.contains(PLANNING_MODE_PROMPT));
+    }
+
+    #[test]
+    fn child_agent_personality_is_not_injected() {
+        let mut processor = test_llm_processor();
+        processor.agent_config.role = Some("child".to_string());
+        processor.agent_config.personality = Some("Use a calm, concise working style.".to_string());
+
+        let final_history = processor.inject_prompts(
+            vec![json!({ "role": "user", "content": "Inspect this change" })],
+            &ExecutionPolicy::standard(),
+        );
+        let system = final_history[0]["content"].as_str().unwrap_or_default();
+
+        assert!(!system.contains("<AGENT_PERSONALITY>"));
+        assert!(!system.contains("Use a calm, concise working style."));
     }
 
     fn message(

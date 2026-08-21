@@ -376,6 +376,27 @@ export function useWorkflowInput({
             }
         }
 
+        // Keep Tab inside the composer when no suggestion list is active.
+        if (event.key === 'Tab') {
+            event.preventDefault()
+            const target = event.target
+            const value = inputMessage.value
+            const start = typeof target?.selectionStart === 'number' ? target.selectionStart : value.length
+            const end = typeof target?.selectionEnd === 'number' ? target.selectionEnd : start
+            const indentation = '    '
+            inputMessage.value = value.slice(0, start) + indentation + value.slice(end)
+            const nextPosition = start + indentation.length
+
+            nextTick(() => {
+                const textarea = inputRef.value?.$el?.querySelector('textarea')
+                if (textarea) {
+                    textarea.focus()
+                    textarea.setSelectionRange(nextPosition, nextPosition)
+                }
+            })
+            return
+        }
+
         // Handle Enter key for sending message based on user settings
         if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && onSendMessage.value) {
             const shouldSend =

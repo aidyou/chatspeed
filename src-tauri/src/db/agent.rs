@@ -26,6 +26,8 @@ pub fn is_supported_sub_agent_role(role: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
+    /// Execution and communication style for primary-agent execution.
+    pub personality: Option<String>,
     pub allowed_paths: Option<Vec<String>>,
     pub shell_policy: Option<Vec<ShellPolicyRule>>,
     pub sandbox_config: Option<AgentSandboxConfig>,
@@ -115,6 +117,8 @@ pub struct Agent {
     pub name: String,
     /// Description of the agent
     pub description: Option<String>,
+    /// Optional execution and communication style for primary-agent execution
+    pub personality: Option<String>,
     /// Agent role in the hierarchy (`primary` or `child`)
     pub role: Option<String>,
     /// Parent agent ID when this agent is a child agent
@@ -202,6 +206,7 @@ impl Agent {
             id,
             name,
             description,
+            personality: None,
             role,
             parent_agent_id,
             sub_agent_role: None,
@@ -254,6 +259,10 @@ impl Agent {
                 }
                 self.models = Some(merged_models);
             }
+
+            // Workflow configuration is a task snapshot. Applying `None` here keeps a task
+            // created before a personality was configured from acquiring one on recovery.
+            self.personality = config.personality;
 
             // Merge shell_policy (Vec<ShellPolicyRule> -> JSON string)
             if let Some(policy) = config.shell_policy {
@@ -337,6 +346,7 @@ impl From<&Row<'_>> for Agent {
             id: row.get("id").unwrap_or_default(),
             name: row.get("name").unwrap_or_default(),
             description: row.get("description").ok(),
+            personality: row.get("personality").ok(),
             role: row
                 .get::<_, String>("role")
                 .ok()
@@ -402,10 +412,10 @@ impl MainStore {
             )?;
             let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
-                "INSERT INTO agents (id, name, description, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
                 params![
-                    agent.id, agent.name, agent.description,
+                    agent.id, agent.name, agent.description, agent.personality,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
                     agent.parent_agent_id, agent.sub_agent_role, agent.system_prompt,
                     agent.planning_prompt, agent.image_recognition_prompt, agent.available_tools,
@@ -458,18 +468,19 @@ impl MainStore {
                 .and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
                 "UPDATE agents SET
-                    name = ?1, description = ?2, role = ?3, parent_agent_id = ?4,
-                    sub_agent_role = ?5, system_prompt = ?6, planning_prompt = ?7,
-                    image_recognition_prompt = ?8, available_tools = ?9, auto_approve = ?10,
-                    models = ?11, shell_policy = ?12, sandbox_execution_mode = ?13,
-                    sandbox_scheme_id = ?14, allowed_paths = ?15,
-                    final_audit = ?16, approval_level = ?17, skill_enabled = ?18,
-                    selected_skills = ?19, mcp_tool_exposure = ?20, phase = ?21,
-                    is_system = ?22, disabled = ?23, version = ?24, sort_index = ?25,
-                    max_contexts = ?26, updated_at = CURRENT_TIMESTAMP WHERE id = ?27",
+                    name = ?1, description = ?2, personality = ?3, role = ?4, parent_agent_id = ?5,
+                    sub_agent_role = ?6, system_prompt = ?7, planning_prompt = ?8,
+                    image_recognition_prompt = ?9, available_tools = ?10, auto_approve = ?11,
+                    models = ?12, shell_policy = ?13, sandbox_execution_mode = ?14,
+                    sandbox_scheme_id = ?15, allowed_paths = ?16,
+                    final_audit = ?17, approval_level = ?18, skill_enabled = ?19,
+                    selected_skills = ?20, mcp_tool_exposure = ?21, phase = ?22,
+                    is_system = ?23, disabled = ?24, version = ?25, sort_index = ?26,
+                    max_contexts = ?27, updated_at = CURRENT_TIMESTAMP WHERE id = ?28",
                 params![
                     effective_name,
                     agent.description,
+                    agent.personality,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
                     agent.parent_agent_id,
                     agent.sub_agent_role,
@@ -711,6 +722,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             description: Some(format!("Description for {}", name)),
+            personality: None,
             role: Some(if parent_agent_id.is_some() {
                 "child".to_string()
             } else {
@@ -782,6 +794,45 @@ mod tests {
             stored.mcp_tool_exposure,
             Some(serde_json::json!(["server__MCP__important_tool"]).to_string())
         );
+    }
+
+    #[test]
+    fn test_personality_persists_with_agent() {
+        let (_temp_dir, store) = create_test_store();
+        let mut agent = make_agent("agent-personality", "Personality Agent", None);
+        agent.personality = Some("Be concise and evidence-led.".to_string());
+
+        store.add_agent(&agent).expect("failed to add agent");
+        let stored = store
+            .get_agent("agent-personality")
+            .expect("failed to load agent")
+            .expect("agent should exist");
+
+        assert_eq!(
+            stored.personality.as_deref(),
+            Some("Be concise and evidence-led.")
+        );
+    }
+
+    #[test]
+    fn merge_config_restores_the_personality_snapshot() {
+        let mut agent = make_agent("agent-personality-snapshot", "Snapshot Agent", None);
+        agent.personality = Some("Current Agent personality".to_string());
+
+        agent.merge_config(
+            &AgentConfig {
+                personality: Some("Task snapshot personality".to_string()),
+                ..AgentConfig::default()
+            }
+            .to_json(),
+        );
+        assert_eq!(
+            agent.personality.as_deref(),
+            Some("Task snapshot personality")
+        );
+
+        agent.merge_config(&AgentConfig::default().to_json());
+        assert!(agent.personality.is_none());
     }
 
     #[test]

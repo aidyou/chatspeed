@@ -323,6 +323,11 @@ pub enum WorkflowSignal {
         #[serde(default, alias = "sandboxSchemeId")]
         sandbox_scheme_id: Option<String>,
     },
+    /// Update the primary agent's execution and communication style at runtime.
+    UpdatePersonality {
+        #[serde(default)]
+        personality: Option<String>,
+    },
     /// Replace the user-selected visible tool set at runtime.
     UpdateAvailableTools {
         #[serde(alias = "tools", default)]
@@ -382,6 +387,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateModelConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSkillsConfig { .. }, _) => true,
             (WorkflowSignal::UpdateSandboxConfig { .. }, _) => true,
+            (WorkflowSignal::UpdatePersonality { .. }, _) => true,
             (WorkflowSignal::UpdateAvailableTools { .. }, _) => true,
             (WorkflowSignal::UpdateAutoApprovedTools { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
@@ -420,6 +426,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateModelConfig { .. } => "update_model_config",
             WorkflowSignal::UpdateSkillsConfig { .. } => "update_skills_config",
             WorkflowSignal::UpdateSandboxConfig { .. } => "update_sandbox_config",
+            WorkflowSignal::UpdatePersonality { .. } => "update_personality",
             WorkflowSignal::UpdateAvailableTools { .. } => "update_available_tools",
             WorkflowSignal::UpdateAutoApprovedTools { .. } => "update_auto_approved_tools",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",

@@ -16,6 +16,10 @@ use crate::workflow::react::orchestrator::{
     clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
     stop_background_task, BackgroundTask, SubAgentFactory, BACKGROUND_TASKS,
 };
+use crate::workflow::react::prompts::{
+    is_agent_personality_preset, AGENT_PERSONALITY_PRESET_DEFAULT_ID,
+    AGENT_PERSONALITY_PRESET_PREFIX,
+};
 use crate::workflow::react::replay::{
     replay_events_to_execution_context, restore_execution_context, RecoveryResult,
 };
@@ -265,6 +269,7 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
             | "update_model_config"
             | "update_skills_config"
             | "update_sandbox_config"
+            | "update_personality"
             | "update_approval_level"
             | "update_phase"
             | "update_available_tools"
@@ -1077,6 +1082,7 @@ fn build_agent_config_from_agent(
 ) -> AgentConfig {
     let mut config = AgentConfig::default();
 
+    config.personality = agent.personality.clone();
     config.models = agent.models.clone();
     config.max_contexts = agent.max_contexts;
 
@@ -1290,6 +1296,7 @@ fn merge_inherited_workflow_config(
         .or(merged.selected_skills);
     merged.phase = inherited_config.phase.clone().or(merged.phase);
     merged.models = inherited_config.models.clone().or(merged.models);
+    merged.personality = resolve_inherited_workflow_personality(agent_config, inherited_config);
 
     // Agent configuration defines the available tool capabilities. An inherited
     // workflow contributes only the user's checked-tool preference: retain selected
@@ -1359,6 +1366,24 @@ fn merge_inherited_workflow_config(
     merged.sync_legacy_final_audit_flag();
     enforce_auto_approve_tool_visibility(&mut merged);
     merged
+}
+
+fn resolve_inherited_workflow_personality(
+    agent_config: &AgentConfig,
+    inherited_config: &AgentConfig,
+) -> Option<String> {
+    let inherited = inherited_config.personality.as_deref().map(str::trim);
+    match inherited {
+        None | Some("") => agent_config.personality.clone(),
+        Some(value) if is_agent_personality_preset(value) => Some(value.to_string()),
+        Some(value) if value.starts_with(AGENT_PERSONALITY_PRESET_PREFIX) => {
+            Some(AGENT_PERSONALITY_PRESET_DEFAULT_ID.to_string())
+        }
+        Some(value) if agent_config.personality.as_deref().map(str::trim) == Some(value) => {
+            Some(value.to_string())
+        }
+        Some(_) => Some(AGENT_PERSONALITY_PRESET_DEFAULT_ID.to_string()),
+    }
 }
 
 fn resolve_agent_sandbox_snapshot(
@@ -1494,6 +1519,11 @@ fn agent_config_to_json_with_agent_shell_policy(
 fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> bool {
     let defaults = build_agent_config_from_agent(agent, None, None);
     let mut changed = false;
+
+    if config.personality.is_none() && defaults.personality.is_some() {
+        config.personality = defaults.personality;
+        changed = true;
+    }
 
     let merge_missing_model_slots =
         |config_models: &mut Option<crate::db::agent::AgentModels>,
@@ -5389,6 +5419,68 @@ pub async fn update_workflow_auto_compress(
 }
 
 #[tauri::command]
+pub async fn update_workflow_personality(
+    state: State<'_, Arc<MainStore>>,
+    gateway: State<'_, Arc<TauriGateway>>,
+    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    session_id: String,
+    personality: String,
+) -> Result<(), String> {
+    let previous_config_json = {
+        let store = &*state;
+        raw_workflow_agent_config_json(&store, &session_id)?
+    };
+    let personality = personality.trim().to_string();
+
+    {
+        let store = &*state;
+        let workflow = store
+            .get_workflow(&session_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
+        let agent = store
+            .get_agent(&workflow.agent_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+
+        let is_custom_personality =
+            !personality.is_empty() && !personality.starts_with(AGENT_PERSONALITY_PRESET_PREFIX);
+        if personality.starts_with(AGENT_PERSONALITY_PRESET_PREFIX)
+            && !is_agent_personality_preset(&personality)
+        {
+            return Err("Unknown execution style preset".to_string());
+        }
+        if is_custom_personality
+            && agent.personality.as_deref().map(str::trim) != Some(&personality)
+        {
+            return Err(
+                "The selected custom execution style is no longer available for this Agent"
+                    .to_string(),
+            );
+        }
+
+        let mut config = raw_workflow_agent_config(&store, &session_id)?;
+        config.personality = (!personality.is_empty()).then_some(personality.clone());
+        store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|error| error.to_string())?;
+    }
+
+    inject_runtime_config_signal(
+        gateway.inner(),
+        workflow_manager.inner(),
+        state.inner(),
+        &session_id,
+        &previous_config_json,
+        serde_json::json!({
+            "type": "update_personality",
+            "personality": (!personality.is_empty()).then_some(personality)
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn update_workflow_model_config(
     state: State<'_, Arc<MainStore>>,
     gateway: State<'_, Arc<TauriGateway>>,
@@ -7458,6 +7550,44 @@ mod tests {
         assert_eq!(merged.auto_approve, Some(vec!["read_file".to_string()]));
         assert_eq!(merged.max_contexts, Some(128_000));
         assert!(merged.shell_policy.is_none());
+    }
+
+    #[test]
+    fn inherited_workflow_personality_respects_agent_defaults_and_stale_preferences() {
+        let agent_config = AgentConfig {
+            personality: Some("Current custom style".to_string()),
+            ..AgentConfig::default()
+        };
+
+        let no_preference = merge_inherited_workflow_config(&agent_config, &AgentConfig::default());
+        assert_eq!(
+            no_preference.personality.as_deref(),
+            Some("Current custom style")
+        );
+
+        let matching_custom = merge_inherited_workflow_config(
+            &agent_config,
+            &AgentConfig {
+                personality: Some("Current custom style".to_string()),
+                ..AgentConfig::default()
+            },
+        );
+        assert_eq!(
+            matching_custom.personality.as_deref(),
+            Some("Current custom style")
+        );
+
+        let stale_custom = merge_inherited_workflow_config(
+            &agent_config,
+            &AgentConfig {
+                personality: Some("Removed custom style".to_string()),
+                ..AgentConfig::default()
+            },
+        );
+        assert_eq!(
+            stale_custom.personality.as_deref(),
+            Some(crate::workflow::react::prompts::AGENT_PERSONALITY_PRESET_DEFAULT_ID)
+        );
     }
 
     #[test]

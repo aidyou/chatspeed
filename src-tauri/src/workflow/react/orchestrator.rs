@@ -754,6 +754,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             .collect::<Vec<_>>();
 
         let workflow_config = AgentConfig {
+            personality: agent_config.personality.clone(),
             allowed_paths: workflow_allowed_paths,
             shell_policy: agent_config
                 .shell_policy

@@ -7,6 +7,7 @@ pub struct AgentPayload {
     pub id: Option<String>,
     pub name: String,
     pub description: Option<String>,
+    pub personality: Option<String>,
     pub role: Option<String>,
     pub parent_agent_id: Option<String>,
     pub sub_agent_role: Option<String>,
@@ -56,6 +57,7 @@ impl From<AgentPayload> for Agent {
             payload.disabled,
             payload.max_contexts,
         );
+        agent.personality = payload.personality;
         agent.mcp_tool_exposure = payload.mcp_tool_exposure;
         agent.sandbox_execution_mode = payload
             .sandbox_execution_mode

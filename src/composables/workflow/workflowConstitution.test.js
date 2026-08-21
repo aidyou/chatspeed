@@ -291,7 +291,16 @@ assert.match(
   /selectionRevision !== workflowSelectionIntentRevision[\s\S]*return/
 )
 const workflowInputArea = readProjectFile('src/components/workflow/WorkflowInputArea.vue')
-assert.match(workflowInputArea, /<cs[\s\S]*:key="approvalLevel"[\s\S]*:name=/)
+assert.doesNotMatch(
+  workflowInputArea,
+  /<!-- Approval Level Dropdown -->/,
+  'approval must no longer have a standalone footer button'
+)
+assert.match(
+  workflowInputArea,
+  /command="autoCompress"[\s\S]*quick-actions-section-title[\s\S]*settings\.agent\.approvalLevel[\s\S]*command="approvalDefault"/,
+  'approval choices must be grouped after auto rollup compression'
+)
 const visibleAutoApprovalTools = sourceSection(
   workflowInputArea,
   'const workflowAvailableToolIds',

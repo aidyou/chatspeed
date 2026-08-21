@@ -27,6 +27,7 @@ import {
 import { formatActiveModelName } from './modelConfigSelection'
 import { removeWorkflowInputDraft } from './useWorkflowInputDraftCache'
 import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
+import { resolveExecutionStylePreference } from '@/constants/executionStyle'
 
 /**
  * Composable for core workflow operations
@@ -342,6 +343,15 @@ export function useWorkflowCore({
         }
     }
 
+    const getWorkflowAgentForExecutionStyle = () => {
+        const workflowAgentId = currentWorkflow.value?.agentId
+        return (
+            agentStore.agents.find(agent => agent.id === workflowAgentId) ||
+            selectedAgent.value ||
+            null
+        )
+    }
+
     /**
      * Builds the preference payload only when the user creates a workflow from the
      * current workflow. A normal new workflow sends no inherited configuration and
@@ -366,6 +376,7 @@ export function useWorkflowCore({
             'finalAudit',
             'finalReviewMode',
             'models',
+            'personality',
             'phase',
             'sandboxConfig',
             'sandboxExecutionMode',
@@ -378,7 +389,13 @@ export function useWorkflowCore({
 
         return inheritedKeys.reduce((inherited, key) => {
             if (config[key] !== undefined) {
-                inherited[key] = config[key]
+                inherited[key] =
+                    key === 'personality'
+                        ? resolveExecutionStylePreference(
+                            config[key],
+                            getWorkflowAgentForExecutionStyle()
+                        )
+                        : config[key]
             }
             return inherited
         }, {})
@@ -480,6 +497,27 @@ export function useWorkflowCore({
             applyWorkflowConfigToLocalStore({ [key]: value }, sessionId)
         } catch (error) {
             console.error(`Failed to update ${key}:`, error)
+            await refreshCurrentWorkflowUiConfig(sessionId)
+        }
+    }
+
+    const updateWorkflowPersonality = async (personality) => {
+        const sessionId = currentWorkflowId.value
+        if (!sessionId) return
+
+        const resolvedPersonality = resolveExecutionStylePreference(
+            personality,
+            getWorkflowAgentForExecutionStyle()
+        )
+
+        try {
+            await invokeWrapper('update_workflow_personality', {
+                sessionId,
+                personality: resolvedPersonality
+            })
+            applyWorkflowConfigToLocalStore({ personality: resolvedPersonality }, sessionId)
+        } catch (error) {
+            console.error('Failed to update workflow execution style:', error)
             await refreshCurrentWorkflowUiConfig(sessionId)
         }
     }
@@ -2246,6 +2284,7 @@ export function useWorkflowCore({
         onSaveEditWorkflow,
         onDeleteWorkflow,
         createNewWorkflow,
+        updateWorkflowPersonality,
         toggleFinalAuditMode,
         playCompletionSound
     }

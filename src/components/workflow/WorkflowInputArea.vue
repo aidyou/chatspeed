@@ -266,6 +266,54 @@
                       <span class="dropdown-note">{{ $t('workflow.autoCompressTooltip') }}</span>
                     </span>
                   </el-dropdown-item>
+                  <div class="quick-actions-divider" />
+                  <div class="quick-actions-section-title">
+                    {{ $t('settings.agent.approvalLevel') }}
+                  </div>
+                  <el-dropdown-item
+                    command="approvalDefault"
+                    :class="{ active: approvalLevel === 'default' }">
+                    <cs name="setting" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('settings.agent.approvalLevelDefault') }}</span>
+                        <cs
+                          v-if="approvalLevel === 'default'"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
+                      </span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item command="approvalSmart" :class="{ active: approvalLevel === 'smart' }">
+                    <cs name="brain" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('settings.agent.approvalLevelSmart') }}</span>
+                        <cs
+                          v-if="approvalLevel === 'smart'"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
+                      </span>
+                    </span>
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    command="approvalFull"
+                    class="danger-option"
+                    :class="{ active: approvalLevel === 'full' }">
+                    <cs name="yolo" size="14px" class="dropdown-icon" />
+                    <span class="dropdown-content">
+                      <span class="dropdown-main">
+                        <span class="dropdown-text">{{ $t('settings.agent.approvalLevelFull') }}</span>
+                        <cs
+                          v-if="approvalLevel === 'full'"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
+                      </span>
+                    </span>
+                  </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -326,62 +374,6 @@
               </div>
             </el-popover>
 
-            <!-- Approval Level Dropdown -->
-            <el-dropdown trigger="click" @command="$emit('update-approval-level', $event)">
-              <label
-                class="icon-btn upperLayer"
-                :class="{ 'warning-mode': approvalLevel === 'full' }">
-                <cs
-                  :key="approvalLevel"
-                  :name="
-                    approvalLevel === 'default'
-                      ? 'setting'
-                      : approvalLevel === 'smart'
-                        ? 'brain'
-                        : 'yolo'
-                  "
-                  class="small" />
-              </label>
-              <template #dropdown>
-                <el-dropdown-menu class="approval-level-dropdown">
-                  <el-dropdown-item
-                    command="default"
-                    :class="{ active: approvalLevel === 'default' }">
-                    <cs name="setting" size="14px" class="dropdown-icon" />
-                    <span class="dropdown-text">{{
-                      $t('settings.agent.approvalLevelDefault')
-                    }}</span>
-                    <cs
-                      v-if="approvalLevel === 'default'"
-                      name="check"
-                      size="14px"
-                      class="dropdown-check" />
-                  </el-dropdown-item>
-                  <el-dropdown-item command="smart" :class="{ active: approvalLevel === 'smart' }">
-                    <cs name="brain" size="14px" class="dropdown-icon" />
-                    <span class="dropdown-text">{{ $t('settings.agent.approvalLevelSmart') }}</span>
-                    <cs
-                      v-if="approvalLevel === 'smart'"
-                      name="check"
-                      size="14px"
-                      class="dropdown-check" />
-                  </el-dropdown-item>
-                  <el-dropdown-item
-                    command="full"
-                    class="danger-option"
-                    :class="{ active: approvalLevel === 'full' }">
-                    <cs name="yolo" size="14px" class="dropdown-icon" />
-                    <span class="dropdown-text">{{ $t('settings.agent.approvalLevelFull') }}</span>
-                    <cs
-                      v-if="approvalLevel === 'full'"
-                      name="check"
-                      size="14px"
-                      class="dropdown-check" />
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-
             <!-- Auto-Approved Tools & Shell Commands Popover -->
             <el-popover
               v-model:visible="autoApprovedPopoverVisible"
@@ -391,12 +383,8 @@
               popper-class="auto-approved-popover">
               <template #reference>
                 <label
-                  class="icon-btn upperLayer auto-approve-badge"
-                  :class="{ 'has-items': autoApprovedItemCount > 0 }">
+                  class="icon-btn upperLayer auto-approve-badge">
                   <cs name="tool" class="small" />
-                  <span v-if="autoApprovedItemCount > 0" class="badge">
-                    {{ autoApprovedItemCount }}
-                  </span>
                 </label>
               </template>
 
@@ -549,6 +537,48 @@
                     </div>
                   </el-tab-pane>
                 </el-tabs>
+              </div>
+            </el-popover>
+
+            <el-popover
+              v-model:visible="executionStylePopoverVisible"
+              placement="top"
+              :width="360"
+              trigger="click"
+              popper-class="workflow-execution-style-popover">
+              <template #reference>
+                <span class="execution-style-reference">
+                  <el-tooltip
+                    :content="$t('settings.agent.personality')"
+                    :hide-after="0"
+                    :enterable="false"
+                    placement="top">
+                    <label
+                      class="icon-btn upperLayer execution-style-trigger">
+                      <cs name="skill-mindmap-circle" class="small" />
+                    </label>
+                  </el-tooltip>
+                </span>
+              </template>
+              <div v-if="executionStylePopoverVisible" class="workflow-execution-style-panel">
+                <button
+                  v-for="option in executionStyleOptions"
+                  :key="option.value || 'default'"
+                  type="button"
+                  class="execution-style-option"
+                  :class="{ active: selectedExecutionStyle === option.value }"
+                  :disabled="!currentWorkflowId"
+                  @click="selectExecutionStyle(option.value)">
+                  <span class="execution-style-option__copy">
+                    <span class="execution-style-option__title">{{ $t(option.labelKey) }}</span>
+                    <span class="execution-style-option__description">{{ $t(option.descriptionKey) }}</span>
+                  </span>
+                  <cs
+                    v-if="selectedExecutionStyle === option.value"
+                    name="check"
+                    size="14px"
+                    class="dropdown-check" />
+                </button>
               </div>
             </el-popover>
 
@@ -838,6 +868,7 @@ const emit = defineEmits([
   'toggle-auto-compress',
   'trigger-manual-compress',
   'update-approval-level',
+  'update-personality',
   'update-selected-agent',
   'clear-context-frame',
   'create-new-workflow',
@@ -851,6 +882,10 @@ import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
+import {
+  getExecutionStyleOptions,
+  resolveExecutionStylePreference
+} from '@/constants/executionStyle'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -1089,9 +1124,6 @@ const availableApprovalTools = computed(() => {
     .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_load')
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
-const autoApprovedItemCount = computed(
-  () => autoApprovedTools.value.length + allowedShellCommands.value.length
-)
 const canAddShellPolicyItem = computed(() =>
   Boolean(props.currentWorkflowId && newShellCommandPattern.value.trim())
 )
@@ -1408,6 +1440,11 @@ watch(inputMessage, value => {
 })
 
 const autoCompressMenuLabel = computed(() => t('workflow.autoCompressShort'))
+const executionStylePopoverVisible = ref(false)
+const executionStyleOptions = computed(() => getExecutionStyleOptions(props.selectedAgent))
+const selectedExecutionStyle = computed(() =>
+  resolveExecutionStylePreference(props.currentWorkflow?.agentConfig?.personality, props.selectedAgent)
+)
 const activeRuntimeOptionCount = computed(
   () =>
     Number(props.planningMode) +
@@ -1504,7 +1541,23 @@ const handleQuickActionCommand = command => {
 
   if (command === 'autoCompress') {
     emit('toggle-auto-compress')
+    return
   }
+
+  const approvalLevelByCommand = {
+    approvalDefault: 'default',
+    approvalSmart: 'smart',
+    approvalFull: 'full'
+  }
+  if (approvalLevelByCommand[command]) {
+    emit('update-approval-level', approvalLevelByCommand[command])
+  }
+}
+
+const selectExecutionStyle = style => {
+  if (!props.currentWorkflowId) return
+  executionStylePopoverVisible.value = false
+  emit('update-personality', style)
 }
 
 const canSendMessage = computed(
@@ -1818,6 +1871,68 @@ defineExpose({
   opacity: 0.45;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+.execution-style-reference {
+  display: inline-flex;
+}
+
+.workflow-execution-style-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 410px;
+  overflow-y: auto;
+}
+
+.execution-style-option {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+  padding: var(--cs-space-sm) var(--cs-space-xs);
+  border: 0;
+  border-radius: var(--cs-border-radius);
+  background: transparent;
+  color: var(--cs-text-color-primary);
+  text-align: left;
+  cursor: pointer;
+
+  & + & {
+    border-top: 1px solid var(--cs-border-color-lighter);
+  }
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    background: var(--cs-hover-bg-color);
+  }
+
+  &.active {
+    background: var(--el-color-primary-light-9);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+.execution-style-option__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.execution-style-option__title {
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.execution-style-option__description {
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  line-height: 1.4;
 }
 
 .workflow-quick-actions-dropdown :deep(.el-dropdown-menu__item) {

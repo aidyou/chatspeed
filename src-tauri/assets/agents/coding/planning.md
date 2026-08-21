@@ -118,6 +118,19 @@ If there are multiple viable approaches, briefly compare them and choose one.
 
 For architecture-sensitive work, also define the relevant component boundaries, responsibilities, control/data flow, interfaces, state ownership, invariants, failure behavior, and migration or rollback path. Include only the dimensions that materially affect implementation.
 
+### Product-Facing and Frontend Work
+
+When a plan creates or materially adjusts a user-facing experience, record only the planning
+context needed for faithful implementation:
+
+- whether it extends an existing interface or establishes a new product experience
+- the intended user, primary task, content hierarchy, and relevant user-visible states
+- existing components, design tokens, interaction patterns, assets, or responsive rules that must
+  be reused when they exist
+- the visual or interaction direction needed to support the product and task, without imposing a
+  generic style
+- a proportionate rendered desktop/mobile or equivalent visual verification when practical
+
 ## 6. Decompose into Execution Units
 
 Break the solution into the smallest practical executable units.

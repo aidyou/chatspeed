@@ -287,6 +287,7 @@
               @toggle-auto-compress="toggleAutoCompressWithFeedback"
               @trigger-manual-compress="triggerManualCompression"
               @update-approval-level="approvalLevel = $event"
+              @update-personality="updateWorkflowPersonality"
               @update-selected-agent="onSelectedAgentChange"
               @clear-context-frame="onClearContextFrame"
               @create-new-workflow="createNewWorkflow($event)"
@@ -905,6 +906,7 @@ const {
   onSaveEditWorkflow,
   onDeleteWorkflow,
   createNewWorkflow: coreCreateNewWorkflow,
+  updateWorkflowPersonality,
   toggleFinalAuditMode
 } = core
 

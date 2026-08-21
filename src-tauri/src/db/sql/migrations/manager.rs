@@ -1,5 +1,5 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v2, v3, v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v2, v3, v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -19,6 +19,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v12::MIGRATION,
     v13::MIGRATION,
     v14::MIGRATION,
+    v15::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -228,6 +229,7 @@ mod tests {
         assert!(has_column(&conn, "agents", "sub_agent_role"));
         assert!(has_column(&conn, "agents", "sandbox_execution_mode"));
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
+        assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
 
         let recorded_versions: i64 = conn
@@ -309,6 +311,7 @@ mod tests {
         assert!(has_column(&conn, "agents", "sub_agent_role"));
         assert!(has_column(&conn, "agents", "sandbox_execution_mode"));
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
+        assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
 
         let has_v3_marker: i64 = conn

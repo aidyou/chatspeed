@@ -255,6 +255,53 @@
           </el-form-item>
         </el-tab-pane>
 
+        <el-tab-pane
+          v-if="agentForm.role === AGENT_ROLE.PRIMARY"
+          :label="$t('settings.agent.personality')"
+          name="personality"
+          lazy>
+          <el-form-item :label="$t('settings.agent.personality')" prop="personality">
+            <el-radio-group
+              v-model="personalitySelection"
+              class="personality-options"
+              @change="selectPersonality">
+              <el-radio :value="PERSONALITY_SELECTION.DEFAULT" class="personality-option">
+                <div class="personality-option__content">
+                  <div class="personality-option__name">{{ $t('settings.agent.personalityDefault') }}</div>
+                  <div class="personality-option__description">{{
+                    $t('settings.agent.personalityDefaultDescription')
+                  }}</div>
+                </div>
+              </el-radio>
+              <el-radio
+                v-for="preset in PERSONALITY_PRESETS"
+                :key="preset.value"
+                :value="preset.value"
+                class="personality-option">
+                <div class="personality-option__content">
+                  <div class="personality-option__name">{{ $t(preset.labelKey) }}</div>
+                  <div class="personality-option__description">{{ $t(preset.descriptionKey) }}</div>
+                </div>
+              </el-radio>
+              <el-radio :value="PERSONALITY_SELECTION.CUSTOM" class="personality-option">
+                <div class="personality-option__content">
+                  <div class="personality-option__name">{{ $t('settings.agent.personalityCustom') }}</div>
+                  <div class="personality-option__description">{{
+                    $t('settings.agent.personalityCustomHint')
+                  }}</div>
+                </div>
+              </el-radio>
+            </el-radio-group>
+            <el-input
+              :model-value="customPersonality"
+              class="personality-custom-input"
+              type="textarea"
+              :rows="15"
+              :placeholder="$t('settings.agent.personalityCustomPlaceholder')"
+              @update:model-value="updateCustomPersonality" />
+          </el-form-item>
+        </el-tab-pane>
+
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
           <div class="models-layout" :class="{ 'models-layout--single': modelRoles.length === 1 }">
             <div
@@ -687,6 +734,7 @@ import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useWorkflowStore } from '@/stores/workflow'
+import { EXECUTION_STYLE_PRESETS, EXECUTION_STYLE_PRESET_VALUES } from '@/constants/executionStyle'
 import {
   AGENT_ROLE,
   AGENT_ROLE_OPTIONS,
@@ -885,6 +933,14 @@ const shellPolicyPage = ref(1)
 const agentDialogVisible = ref(false)
 const editId = ref(null)
 const activeTab = ref('basic')
+const PERSONALITY_SELECTION = Object.freeze({
+  DEFAULT: 'default',
+  CUSTOM: 'custom'
+})
+const PERSONALITY_PRESETS = EXECUTION_STYLE_PRESETS
+const PERSONALITY_PRESET_VALUES = EXECUTION_STYLE_PRESET_VALUES
+const personalitySelection = ref(PERSONALITY_SELECTION.DEFAULT)
+const customPersonality = ref('')
 const systemSkills = ref([])
 const skillSearchKeyword = ref('')
 const defaultShellPolicies = ref([])
@@ -954,6 +1010,7 @@ const agentThinkingLevelOptions = [
 const defaultFormData = {
   name: '',
   description: '',
+  personality: '',
   role: AGENT_ROLE.PRIMARY,
   parentAgentId: null,
   subAgentRole: '',
@@ -981,6 +1038,34 @@ const defaultFormData = {
 }
 
 const agentForm = ref({ ...defaultFormData })
+
+const syncPersonalitySelection = personality => {
+  const normalized = String(personality || '').trim()
+  personalitySelection.value = !normalized
+    ? PERSONALITY_SELECTION.DEFAULT
+    : PERSONALITY_PRESET_VALUES.has(normalized)
+      ? normalized
+      : PERSONALITY_SELECTION.CUSTOM
+  customPersonality.value =
+    personalitySelection.value === PERSONALITY_SELECTION.CUSTOM ? normalized : ''
+}
+
+const selectPersonality = value => {
+  personalitySelection.value = value
+  if (value === PERSONALITY_SELECTION.DEFAULT) {
+    agentForm.value.personality = ''
+  } else if (value !== PERSONALITY_SELECTION.CUSTOM) {
+    agentForm.value.personality = value
+  } else {
+    agentForm.value.personality = customPersonality.value
+  }
+}
+
+const updateCustomPersonality = value => {
+  customPersonality.value = value
+  personalitySelection.value = PERSONALITY_SELECTION.CUSTOM
+  agentForm.value.personality = value
+}
 
 // Model config temporary state
 const modelModes = reactive({
@@ -1485,6 +1570,7 @@ const normalizeAgentFormForSave = form => {
   if (normalized.role === AGENT_ROLE.CHILD) {
     normalized.planningPrompt = ''
     normalized.imageRecognitionPrompt = ''
+    normalized.personality = ''
     normalized.planModel = defaultAgentModelConfig()
     normalized.visionModel = defaultAgentModelConfig()
     normalized.utilityModel = defaultAgentModelConfig()
@@ -1644,6 +1730,7 @@ const editAgent = async id => {
         sandboxExecutionMode: agentData.sandboxExecutionMode || 'host_only',
         sandboxSchemeId: agentData.sandboxSchemeId || null
       }
+      syncPersonalitySelection(agentForm.value.personality)
       agentForm.value.allowShell = Array.isArray(agentForm.value.availableTools)
         ? agentForm.value.availableTools.includes('bash')
         : false
@@ -1738,6 +1825,7 @@ const editAgent = async id => {
   } else {
     editId.value = null
     agentForm.value = { ...defaultFormData }
+    syncPersonalitySelection(agentForm.value.personality)
     allModelRoles.forEach(role => (modelModes[role.key] = 'provider'))
     agentForm.value.availableTools = availableTools.value
       .map(tool => tool.id)
@@ -1782,6 +1870,7 @@ const copyAgent = async id => {
       subAgentRole: '',
       name: `${agentData.name}-Copy`
     }
+    syncPersonalitySelection(agentForm.value.personality)
     agentForm.value.allowShell = Array.isArray(agentForm.value.availableTools)
       ? agentForm.value.availableTools.includes('bash')
       : false
@@ -2008,6 +2097,7 @@ const toggleAgentStatus = async agent => {
 const onAgentDialogClose = () => {
   // Reset active tab to basic when dialog closes
   activeTab.value = 'basic'
+  personalitySelection.value = PERSONALITY_SELECTION.DEFAULT
   shellPolicyPage.value = 1
   skillSearchKeyword.value = ''
   // Clear form validation errors
@@ -2060,6 +2150,9 @@ watch(
     agentForm.value.skillEnabled = false
     agentForm.value.selectedSkills = []
     agentForm.value.imageRecognitionPrompt = ''
+    if (activeTab.value === 'personality') {
+      activeTab.value = 'basic'
+    }
     agentForm.value.allowShell = false
     agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
       tool => tool !== 'bash'
@@ -2178,6 +2271,70 @@ watch(
     font-size: 12px;
     color: var(--cs-text-color-secondary);
     line-height: 1.5;
+  }
+
+  .personality-options {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    width: 100%;
+    height: 300px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+  }
+
+  .personality-option {
+    display: flex;
+    flex: none;
+    align-items: flex-start;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    height: auto;
+    margin-right: 0;
+    padding: var(--cs-space-xs) var(--cs-space-md);
+    white-space: normal;
+
+    & + .personality-option {
+      border-top: 1px solid var(--cs-border-color-lighter);
+    }
+
+    .el-radio__label {
+      flex: 1;
+      min-width: 0;
+      padding-left: var(--cs-space-sm);
+      white-space: normal;
+    }
+
+    .el-radio__input{
+        padding-top: var(--cs-space-sm);
+    }
+  }
+
+  .personality-option__content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .personality-option__name {
+    display: block;
+    color: var(--cs-text-color-primary);
+    font-weight: 600;
+  }
+
+  .personality-option__description {
+    display: block;
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+    line-height: 1.5;
+  }
+
+  .personality-custom-input {
+    margin-top: var(--cs-space-md);
   }
 
   .security-switch-row {

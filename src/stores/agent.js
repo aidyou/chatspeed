@@ -11,6 +11,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {string} id - The unique identifier of the agent.
  * @property {string} name - The name of the agent.
  * @property {string} description - The description of the agent.
+ * @property {string} personality - The execution and communication style for primary-agent execution.
  * @property {string} systemPrompt - The system prompt for the agent.
  * @property {string[]} availableTools - A list of tool IDs available to the agent.
  * @property {string[]} autoApprove - A list of tool IDs that are auto-approved.
@@ -78,6 +79,7 @@ const _transformFromBackend = (backendAgent) => {
     id: backendAgent.id,
     name: backendAgent.name,
     description: backendAgent.description,
+    personality: backendAgent.personality || '',
     role: backendAgent.role || AGENT_ROLE.PRIMARY,
     parentAgentId: backendAgent.parent_agent_id || null,
     subAgentRole: backendAgent.sub_agent_role || '',
@@ -147,6 +149,7 @@ const _transformToBackend = (frontendAgent) => {
     id: frontendAgent.id || '',
     name: frontendAgent.name.trim(),
     description: frontendAgent.description?.trim() || '',
+    personality: frontendAgent.personality?.trim() || null,
     role: frontendAgent.role || AGENT_ROLE.PRIMARY,
     parent_agent_id: frontendAgent.role === AGENT_ROLE.CHILD ? (frontendAgent.parentAgentId || null) : null,
     sub_agent_role: frontendAgent.role === AGENT_ROLE.CHILD

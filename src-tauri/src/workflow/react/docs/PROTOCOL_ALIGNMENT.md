@@ -25,6 +25,7 @@ Rule:
 | Update model config | `update_model_config` | `SignalType::UpdateModelConfig` | - | Runtime config signal. |
 | Update skills config | `update_skills_config` | `SignalType::UpdateSkillsConfig` | - | Runtime config signal. |
 | Update sandbox config | `update_sandbox_config` | `SignalType::UpdateSandboxConfig` | - | Runtime config signal. |
+| Update execution style | `update_personality` | `SignalType::UpdatePersonality` / `WorkflowSignal::UpdatePersonality` | - | Primary-agent execution preference; does not change Agent capabilities. |
 | Remove shell policy item | `remove_shell_policy_item` | `SignalType::RemoveShellPolicyItem` / `WorkflowSignal::RemoveShellPolicyItem` | - | Supports UI policy updates. |
 | Remove auto-approved tool | `remove_auto_approved_tool` | `SignalType::RemoveAutoApprovedTool` / `WorkflowSignal::RemoveAutoApprovedTool` | - | Supports UI auto-approve updates. |
 | Sub-agent completion | `sub_agent_complete` | `SignalType::SubAgentComplete` / `WorkflowSignal::SubAgentComplete` | - | Valid for `wait_reason=sub_agent`. |

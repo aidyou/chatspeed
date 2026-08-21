@@ -8,6 +8,55 @@
 // These prompts are currently integrated into the ReAct engine logic.
 // =============================================================================
 
+/// Default execution and communication style for primary-agent execution.
+pub const DEFAULT_AGENT_PERSONALITY: &str = "Execute the user's task as a pragmatic, direct, and collaborative engineering partner. Balance initiative with precision, communicate evidence and uncertainty clearly, and keep the user's effective objective ahead of personal preference.";
+
+pub const AGENT_PERSONALITY_PRESET_PREFIX: &str = "preset:";
+pub const AGENT_PERSONALITY_PRESET_DEFAULT_ID: &str = "preset:default";
+pub const AGENT_PERSONALITY_PRESET_EXECUTOR_ID: &str = "preset:executor";
+pub const AGENT_PERSONALITY_PRESET_COMPANION_ID: &str = "preset:companion";
+pub const AGENT_PERSONALITY_PRESET_EXPERT_ID: &str = "preset:expert";
+pub const AGENT_PERSONALITY_PRESET_RESEARCHER_ID: &str = "preset:researcher";
+pub const AGENT_PERSONALITY_PRESET_COACH_ID: &str = "preset:coach";
+pub const AGENT_PERSONALITY_PRESET_REVIEWER_ID: &str = "preset:reviewer";
+
+pub const AGENT_PERSONALITY_PRESET_EXECUTOR: &str = "Work as an execution-focused operator. When the objective and scope are clear, proceed on the user-authorized course without reopening settled decisions or asking unnecessary questions. During active task work, keep user-visible communication concise and directly tied to the objective. Before a tool call, state its immediate purpose briefly when useful, then act. Reserve fuller explanations for design exploration, decision-making, user-requested explanations, and final reports. Avoid filler, repeated status updates, and long narration that does not advance the work, while retaining the evidence and caveats needed for sound decisions.";
+pub const AGENT_PERSONALITY_PRESET_COMPANION: &str = "Work as a considerate, user-aligned operator. Carry the user's objective through to completion with technical rigor while communicating with warmth, patience, and clarity. Explain decisions calmly and respectfully when useful, without substituting reassurance or long narration for necessary action.";
+pub const AGENT_PERSONALITY_PRESET_EXPERT: &str = "Work as a professionally exact operator. Carry the user's objective through to completion using sound technical judgment, clearly separating fact from inference and choosing the level of detail the decision needs. When the requested approach has a material correctness, architecture, security, or maintenance risk, state the concern and recommended correction concisely before executing the safest in-scope course. Make precise, reliable recommendations without replacing practical progress with abstract commentary.";
+pub const AGENT_PERSONALITY_PRESET_RESEARCHER: &str = "Work as a rigorous, evidence-first operator. When the task involves research or information collection, first define the decision-relevant question and the evidence needed to answer it; prefer authoritative and task-local evidence, including local module guidance, project instructions, and concrete codebase evidence. When external facts materially matter, use official documentation or other authoritative sources, then cross-check material claims with independent evidence and distinguish verified findings, inferences, and information gaps. Never invent, fabricate, or falsely claim facts, sources, citations, evidence, or validation results; when evidence is unavailable or conflicting, state the gap and its effect on the conclusion. Carry the user's objective through to completion, resolve only material uncertainty, and do not let investigation outlast its value to the task.";
+pub const AGENT_PERSONALITY_PRESET_COACH: &str = "Work as a transparent, enabling operator. Carry the user's objective through to completion, and explain key decisions, mechanisms, and next steps in accessible language when that helps the user follow the work. Adapt detail to the user's needs without turning execution into an extended lesson.";
+pub const AGENT_PERSONALITY_PRESET_REVIEWER: &str = "Work as a review-minded operator. Carry the user's objective through to completion while actively checking for consequential risks, incomplete reasoning, and boundary conditions. Surface specific, constructive corrections when they matter, without turning minor style preferences or optional hardening into blockers.";
+
+pub fn is_agent_personality_preset(value: &str) -> bool {
+    matches!(
+        value.trim(),
+        AGENT_PERSONALITY_PRESET_DEFAULT_ID
+            | AGENT_PERSONALITY_PRESET_EXECUTOR_ID
+            | AGENT_PERSONALITY_PRESET_COMPANION_ID
+            | AGENT_PERSONALITY_PRESET_EXPERT_ID
+            | AGENT_PERSONALITY_PRESET_RESEARCHER_ID
+            | AGENT_PERSONALITY_PRESET_COACH_ID
+            | AGENT_PERSONALITY_PRESET_REVIEWER_ID
+    )
+}
+
+pub fn resolve_agent_personality(configured: Option<&str>) -> &str {
+    match configured.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(AGENT_PERSONALITY_PRESET_DEFAULT_ID) => DEFAULT_AGENT_PERSONALITY,
+        Some(AGENT_PERSONALITY_PRESET_EXECUTOR_ID) => AGENT_PERSONALITY_PRESET_EXECUTOR,
+        Some(AGENT_PERSONALITY_PRESET_COMPANION_ID) => AGENT_PERSONALITY_PRESET_COMPANION,
+        Some(AGENT_PERSONALITY_PRESET_EXPERT_ID) => AGENT_PERSONALITY_PRESET_EXPERT,
+        Some(AGENT_PERSONALITY_PRESET_RESEARCHER_ID) => AGENT_PERSONALITY_PRESET_RESEARCHER,
+        Some(AGENT_PERSONALITY_PRESET_COACH_ID) => AGENT_PERSONALITY_PRESET_COACH,
+        Some(AGENT_PERSONALITY_PRESET_REVIEWER_ID) => AGENT_PERSONALITY_PRESET_REVIEWER,
+        Some(value) if value.starts_with(AGENT_PERSONALITY_PRESET_PREFIX) => {
+            DEFAULT_AGENT_PERSONALITY
+        }
+        Some(value) => value,
+        None => DEFAULT_AGENT_PERSONALITY,
+    }
+}
+
 /// Core system prompt that defines the basic identity and operational rules of the AI Agent.
 pub const CORE_SYSTEM_PROMPT: &str = r#"You are Chatspeed Harness(csh), a tool-driven autonomous AI Agent.
 
@@ -839,7 +888,82 @@ mod tests {
         assert!(!CODING_SYSTEM_PROMPT.contains("pending completion report draft"));
         assert!(!CODING_SYSTEM_PROMPT.contains("## 1. Modification Completed"));
         assert!(!CODING_SYSTEM_PROMPT.contains("The workflow is not complete until"));
-        assert!(CODING_SYSTEM_PROMPT.len() <= 20_000);
+        assert!(CODING_SYSTEM_PROMPT.len() <= 25_000);
+    }
+
+    #[test]
+    fn coding_prompt_defines_task_sensitive_workflows() {
+        for required in [
+            "# Task-Sensitive Workflows",
+            "For a simple request",
+            "For a question, explanation, or report",
+            "For a proposal or solution discussion",
+            "For a genuinely new project or explicitly new product experience",
+            "For an existing codebase or established product",
+            "For a feature adjustment, refactor, integration, or upgrade",
+            "For a bug fix",
+            "# Frontend Design and Product Experience",
+            "For an existing interface, first understand nearby components",
+            "For a new or intentionally redesigned interface",
+            "# Reviews and Functional Testing",
+            "For code or security review, remain read-only",
+            "For functional testing, do not change source code",
+        ] {
+            assert!(
+                CODING_SYSTEM_PROMPT.contains(required),
+                "task workflow guidance missing: {required}"
+            );
+        }
+
+        for required in [
+            "### Product-Facing and Frontend Work",
+            "whether it extends an existing interface or establishes a new product experience",
+            "a proportionate rendered desktop/mobile or equivalent visual verification",
+        ] {
+            assert!(
+                CODING_PLANNING_PROMPT.contains(required),
+                "frontend planning guidance missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_personality_presets_remain_execution_oriented() {
+        for prompt in [
+            DEFAULT_AGENT_PERSONALITY,
+            AGENT_PERSONALITY_PRESET_EXECUTOR,
+            AGENT_PERSONALITY_PRESET_COMPANION,
+            AGENT_PERSONALITY_PRESET_EXPERT,
+            AGENT_PERSONALITY_PRESET_RESEARCHER,
+            AGENT_PERSONALITY_PRESET_COACH,
+            AGENT_PERSONALITY_PRESET_REVIEWER,
+        ] {
+            assert!(
+                prompt.contains("objective"),
+                "execution style must stay tied to the task objective: {prompt}"
+            );
+        }
+
+        for required in [
+            "decision-relevant question",
+            "authoritative and task-local evidence",
+            "local module guidance, project instructions, and concrete codebase evidence",
+            "When external facts materially matter, use official documentation",
+            "cross-check material claims",
+            "verified findings, inferences, and information gaps",
+            "Never invent, fabricate, or falsely claim",
+        ] {
+            assert!(
+                AGENT_PERSONALITY_PRESET_RESEARCHER.contains(required),
+                "researcher execution style missing: {required}"
+            );
+        }
+
+        assert!(AGENT_PERSONALITY_PRESET_EXECUTOR.contains(
+            "When the objective and scope are clear, proceed on the user-authorized course"
+        ));
+        assert!(AGENT_PERSONALITY_PRESET_EXPERT
+            .contains("material correctness, architecture, security, or maintenance risk"));
     }
 
     #[test]

@@ -685,6 +685,7 @@ impl WorkflowExecutor {
         preserved_config: Option<&crate::db::agent::AgentConfig>,
     ) -> Value {
         let mut agent_config = serde_json::to_value(crate::db::agent::AgentConfig {
+            personality: self.agent_config.personality.clone(),
             allowed_paths: self
                 .agent_config
                 .allowed_paths
@@ -7570,6 +7571,18 @@ impl WorkflowExecutor {
                 .as_ref()
                 .and_then(crate::tools::AgentSandboxConfig::to_json);
             self.rebuild_foundation_tools_for_runtime_update().await?;
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdatePersonality) {
+            let personality = sig_json
+                .get("personality")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            self.agent_config.personality = personality.clone();
+            self.llm_processor.agent_config.personality = personality;
             return Ok(true);
         }
 

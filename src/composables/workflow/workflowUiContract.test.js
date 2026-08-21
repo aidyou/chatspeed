@@ -309,6 +309,48 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
 })
 
+test('execution style popover uses a DOM reference and preserves Agent-scoped choices', async () => {
+  const [inputArea, workflowView, workflowCore] = await Promise.all([
+    readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+  ])
+
+  assert.match(
+    inputArea,
+    /<template #reference>\s*<span class="execution-style-reference">[\s\S]*?<el-tooltip[\s\S]*?<cs name="skill-mindmap-circle"/,
+    'the popover reference must be a concrete DOM element so the click trigger reaches Element Plus'
+  )
+  assert.match(inputArea, /getExecutionStyleOptions\(props\.selectedAgent\)/)
+  assert.match(inputArea, /emit\('update-personality', style\)/)
+  assert.match(workflowView, /@update-personality="updateWorkflowPersonality"/)
+  assert.match(
+    workflowCore,
+    /resolveExecutionStylePreference\(\s*personality,\s*getWorkflowAgentForExecutionStyle\(\)\s*\)/,
+    'the workflow preference must be checked against the current Agent before persistence'
+  )
+})
+
+test('workflow composer keeps Tab as four spaces outside suggestion selection', async () => {
+  const input = await readFile('src/composables/workflow/useWorkflowInput.ts', 'utf8')
+
+  assert.match(
+    input,
+    /if \(event\.key === 'Tab'\) \{[\s\S]*?event\.preventDefault\(\)[\s\S]*?const indentation = '    '[\s\S]*?inputMessage\.value = value\.slice\(0, start\) \+ indentation \+ value\.slice\(end\)/,
+    'Tab must insert four spaces instead of moving focus in the composer'
+  )
+  assert.match(
+    input,
+    /if \(showSkillSuggestions\.value\) \{[\s\S]*?event\.key === 'Tab'[\s\S]*?onSkillSelect/,
+    'Tab must continue selecting a visible skill suggestion'
+  )
+  assert.match(
+    input,
+    /if \(showFileSuggestions\.value\) \{[\s\S]*?event\.key === 'Tab'[\s\S]*?onFileSelect/,
+    'Tab must continue selecting a visible file suggestion'
+  )
+})
+
 test('applied compression clears the indicator and updates context usage', async () => {
   const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
 

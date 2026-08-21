@@ -367,6 +367,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_workflow_allowed_paths,
             update_workflow_final_audit,
             update_workflow_auto_compress,
+            update_workflow_personality,
             update_workflow_approval_level,
             update_workflow_model_config,
             update_workflow_skills_config,

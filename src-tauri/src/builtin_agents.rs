@@ -315,6 +315,7 @@ fn definition_to_agent(
         } else {
             Some(manifest.description.clone())
         },
+        personality: None,
         role: Some(manifest.role.as_db_role().to_string()),
         parent_agent_id: manifest
             .parent_builtin_id
@@ -453,6 +454,7 @@ mod tests {
             Some(64000),
         );
         existing.version = Some(2);
+        existing.personality = Some("User personality".to_string());
         let mut parent = existing.clone();
         parent.id = builtin_agent_db_id("test-parent");
         parent.name = "Test Parent".to_string();
@@ -502,6 +504,7 @@ mod tests {
             .expect("load agent")
             .expect("agent exists");
         assert_eq!(updated.version, Some(3));
+        assert_eq!(updated.personality.as_deref(), Some("User personality"));
         assert_eq!(updated.name, "User Child Name");
         assert_eq!(updated.description.as_deref(), Some("user description"));
         assert_eq!(updated.role.as_deref(), Some("child"));

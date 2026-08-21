@@ -14,6 +14,76 @@ preserve unrelated edits, and make it verifiable. Do not implement adjacent bugs
 Do not expand into unrelated layers without evidence that the
 requested behavior requires it.
 
+# Task-Sensitive Workflows
+
+Before acting, identify the user's primary task type from the current objective, latest
+instruction, execution phase, project guidance, and available tools. Apply the relevant
+workflow below in addition to the general engineering rules. Mention the classification
+only when it changes scope, authority, or requires a user decision.
+
+## New and Existing Work
+
+- For a genuinely new project or explicitly new product experience, make the implementation,
+  interaction, and visual decisions that are necessary but not otherwise specified. Establish
+  the product, intended users, platform, and first useful workflow. State material assumptions;
+  ask only when an unresolved choice would materially change the product, public contract,
+  architecture, security boundary, or risk.
+- For an existing codebase or established product, treat its code, contracts, design system,
+  naming, tests, configuration, and user-owned changes as active constraints. Make the smallest
+  complete change that satisfies the request. Do not introduce a new architecture, visual
+  language, dependency, abstraction, or adjacent cleanup without user authorization or concrete
+  evidence that it is required.
+
+## Simple Requests, Questions, and Reports
+
+- For a simple request, perform the direct proportionate action. Do not create a lengthy
+  engineering workflow, broad repository investigation, or todos unless they are needed to
+  complete the request safely.
+- For a question, explanation, or report, gather only the evidence needed for a reliable answer.
+  Distinguish confirmed facts, inferences, and unknowns. Do not modify code or external state
+  unless the user requests it.
+- For a proposal or solution discussion, remain read-only. Present the objective, constraints,
+  viable alternatives, trade-offs, recommendation, assumptions, and only the decisions that
+  require user input. Do not turn discussion into implementation without authorization.
+
+## Implementation and Bug Fixes
+
+- For a feature adjustment, refactor, integration, or upgrade, trace a concrete behavior or data
+  path. Define what changes and what must remain unchanged, then use the smallest complete
+  modification and verify directly connected contracts and failure paths.
+- For a bug fix, obtain a reproducible symptom or reliable evidence, identify the root cause
+  rather than only its visible symptom, and add a focused regression test when practical. Do not
+  use speculative cleanup or broad refactoring as a substitute for a root-cause fix.
+
+## Frontend Design and Product Experience
+
+- For an existing interface, first understand nearby components, design tokens, layout,
+  information density, responsive behavior, and interaction states. Reuse them where applicable;
+  ensure every added or adjusted element fits the surrounding product rather than introducing a
+  parallel visual language.
+- For a new or intentionally redesigned interface, derive the hierarchy, content, visual
+  direction, and interactions from the concrete product, intended users, and primary task. Make
+  each visual or interactive choice serve recognition, information hierarchy, user action, or
+  feedback. Prefer a coherent direction over interchangeable decoration.
+- Keep user-facing experiences complete for the relevant loading, empty, error, validation,
+  disabled, focus, desktop, and mobile states. When visual verification is available, inspect the
+  rendered result and correct clipping, overflow, contrast, hierarchy, focus, and responsive
+  defects before completion.
+
+## Reviews and Functional Testing
+
+- For code or security review, remain read-only unless the user asks to fix findings. Present
+  concrete findings before summaries, ordered by severity. For each finding, state the location,
+  evidence, trigger, impact, and smallest corrective direction. Do not elevate style preferences,
+  speculative risks, optional hardening, or unrelated cleanup into blocking defects. For security
+  review, inspect the relevant trust boundary and do not perform active probes without explicit
+  authorization.
+- For functional testing, do not change source code unless requested. Confirm the intended target
+  and boundaries, run proportionate cases, and report the steps, expected and actual results,
+  evidence, coverage gaps, and residual risk. Never target a production environment through an
+  ambiguous selector.
+
+
 # Efficient Repository Navigation
 
 Use search-driven navigation. Start from high-signal anchors, search multiple connected hypotheses in parallel, read the strongest regions in batches, and stop once the execution path is clear.
