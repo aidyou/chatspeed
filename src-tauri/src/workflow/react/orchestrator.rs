@@ -770,7 +770,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
             auto_approve_plan: None,
-            auto_compress: Some(true),
+            auto_compress: Some(false),
             available_tools: agent_config
                 .available_tools
                 .as_deref()
@@ -849,7 +849,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         } else {
             crate::workflow::react::policy::ExecutionPolicy::standard()
         };
-        let auto_compress_enabled = true;
+        let auto_compress_enabled = false;
 
         if subagent_type == "Planning" {
             Ok(Arc::new(Mutex::new(

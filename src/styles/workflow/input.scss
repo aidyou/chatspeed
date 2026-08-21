@@ -56,7 +56,7 @@ footer.input-container {
                 }
 
                 &.active {
-                    background-color: var(--cs-active-bg-color);
+                    background-color: var(--cs-bg-color-deep);
 
                     .file-path,
                     .file-icon,
@@ -70,14 +70,14 @@ footer.input-container {
         .command-item {
             padding: 8px 12px;
             cursor: pointer;
-            border-radius: var(--cs-border-radius-sm);
+            border-radius: var(--cs-border-radius);
             display: flex;
             flex-direction: column;
             gap: 2px;
 
             &:hover,
             &.active {
-                background-color: var(--cs-hover-bg-color);
+                background-color: var(--cs-bg-color-deep);
             }
 
             .command-name {

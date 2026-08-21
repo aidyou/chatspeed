@@ -203,6 +203,217 @@
                       <span class="dropdown-text">{{ $t('workflow.skillsConfigTitle') }}</span>
                     </span>
                   </el-dropdown-item>
+
+                  <!-- auto-approved tools and shell commands -->
+                  <el-popover
+                    v-model:visible="autoApprovedPopoverVisible"
+                    placement="right-start"
+                    :width="400"
+                    trigger="click"
+                    popper-class="auto-approved-popover">
+                    <template #reference>
+                      <span class="auto-approved-reference">
+                        <el-dropdown-item class="auto-approved-dropdown-trigger">
+                          <cs name="tool" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-content">
+                            <span class="dropdown-text">{{ $t('workflow.autoApprovedTools') }}</span>
+                          </span>
+                          <cs name="caret-right" size="14px" class="auto-approved-dropdown-arrow" />
+                        </el-dropdown-item>
+                      </span>
+                    </template>
+
+                    <div
+                      v-if="autoApprovedPopoverVisible"
+                      class="auto-approved-panel"
+                      @click.stop
+                      @mousedown.stop>
+                      <el-tabs v-model="approvalToolsTab" class="approval-tools-tabs">
+                        <el-tab-pane :label="`${$t('settings.agent.availableTools')} (${agentAvailableTools.length})`" name="available">
+                          <div v-if="agentAvailableTools.length > 0" class="section-content checkbox-list">
+                            <label v-for="tool in agentAvailableTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
+                              <el-checkbox
+                                :model-value="workflowAvailableToolIds.includes(tool.id)"
+                                @change="checked => toggleWorkflowAvailableTool(tool.id, checked)">
+                                <span class="checkbox-label-wrap">
+                                  <code class="tool-name">{{ tool.id }}</code>
+                                  <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                                </span>
+                              </el-checkbox>
+                            </label>
+                          </div>
+                          <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
+                        </el-tab-pane>
+                        <el-tab-pane :label="`${$t('workflow.autoApprovedTools')} (${autoApprovedTools.length})`" name="autoApprove">
+                          <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
+                            <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
+                              <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
+                                <span class="checkbox-label-wrap">
+                                  <code class="tool-name">{{ tool.id }}</code>
+                                  <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                                </span>
+                              </el-checkbox>
+                            </label>
+                          </div>
+                          <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
+                        </el-tab-pane>
+                        <el-tab-pane :label="`${$t('workflow.allowedShellCommands')} (${shellPolicyRules.length})`" name="shell">
+                          <div class="panel-section">
+                            <div class="section-toolbar shell-policy-search">
+                              <el-input
+                                v-model="shellCommandSearch"
+                                size="small"
+                                clearable
+                                :placeholder="$t('common.search') || 'Search shell command pattern'" />
+                            </div>
+                            <div class="section-toolbar shell-policy-add-row">
+                              <el-input
+                                v-model="newShellCommandPattern"
+                                size="small"
+                                clearable
+                                :placeholder="
+                                  $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
+                                "
+                                @keydown.enter.prevent="addShellPolicyItem" />
+                              <el-radio-group v-model="newShellCommandDecision" class="shell-policy-decision-group">
+                                <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
+                                <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
+                                <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
+                              </el-radio-group>
+                              <el-button
+                                size="small"
+                                type="primary"
+                                :disabled="!canAddShellPolicyItem"
+                                @click="addShellPolicyItem">
+                                {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
+                              </el-button>
+                            </div>
+                            <template v-if="filteredShellPolicyRules.length > 0">
+                              <div class="section-content">
+                                <div
+                                  v-for="(rule, idx) in paginatedShellPolicyRules"
+                                  :key="`${rule.pattern}-${idx}`"
+                                  class="tool-item shell-item">
+                                  <div class="tool-info">
+                                    <code class="tool-name shell-pattern">{{ rule.pattern }}</code>
+                                    <span v-if="rule.description" class="tool-desc">{{ rule.description }}</span>
+                                  </div>
+                                  <el-radio-group
+                                    :model-value="rule.decision || 'review'"
+                                    class="shell-policy-decision-group shell-policy-item-decision"
+                                    @change="decision => updateShellPolicyDecision(rule.pattern, decision)">
+                                    <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
+                                    <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
+                                    <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
+                                  </el-radio-group>
+                                  <el-button
+                                    size="small"
+                                    type="danger"
+                                    text
+                                    class="remove-btn"
+                                    @click="removeShellPolicyItem(rule.pattern)">
+                                    <cs name="trash" size="12px" />
+                                  </el-button>
+                                </div>
+                              </div>
+                              <el-pagination
+                                v-if="filteredShellPolicyRules.length > SHELL_POLICY_PAGE_SIZE"
+                                v-model:current-page="shellPolicyPage"
+                                class="shell-policy-pagination"
+                                :page-size="SHELL_POLICY_PAGE_SIZE"
+                                :total="filteredShellPolicyRules.length"
+                                layout="prev, pager, next"
+                                size="small"
+                                background />
+                            </template>
+                            <div v-else class="section-empty-text">
+                              {{
+                                shellCommandSearch
+                                  ? $t('common.noData') || 'No matching shell command patterns'
+                                  : $t('workflow.noAutoApprovedItems') || 'No auto-approved items'
+                              }}
+                            </div>
+                            <div class="section-footer">
+                              <div class="section-footer-hint">
+                                <cs name="info" size="12px" />
+                                <span>{{
+                                  $t('workflow.shellPolicyClickRemove') || 'Click × to remove items'
+                                }}</span>
+                              </div>
+                              <div class="section-footer-actions">
+                                <el-tooltip
+                                  placement="top"
+                                  :content="$t('settings.agent.shellPolicyImportAgent')"
+                                  :hide-after="0"
+                                  :enterable="false">
+                                  <button
+                                    type="button"
+                                    class="section-footer-action"
+                                    :disabled="isImportingShellPolicies || !currentWorkflowId || !selectedAgent?.id"
+                                    @click="importAgentShellPolicies">
+                                    <cs name="import" size="12px" />
+                                  </button>
+                                </el-tooltip>
+                                <el-tooltip
+                                  placement="top"
+                                  :content="$t('settings.agent.shellPolicyClear')"
+                                  :hide-after="0"
+                                  :enterable="false">
+                                  <button
+                                    type="button"
+                                    class="section-footer-action clear-shell-policy-action"
+                                    :disabled="isClearingShellPolicies || !currentWorkflowId || shellPolicyRules.length === 0"
+                                    @click="clearShellPolicyRules">
+                                    <cs name="trash" size="12px" />
+                                  </button>
+                                </el-tooltip>
+                              </div>
+                            </div>
+                          </div>
+                        </el-tab-pane>
+                      </el-tabs>
+                    </div>
+                  </el-popover>
+
+                  <!-- execution style -->
+                  <el-popover
+                    v-model:visible="executionStylePopoverVisible"
+                    placement="right-start"
+                    :width="360"
+                    trigger="click"
+                    popper-class="workflow-execution-style-popover">
+                    <template #reference>
+                      <span class="execution-style-reference">
+                        <el-dropdown-item class="execution-style-dropdown-trigger">
+                          <cs name="skill-mindmap-circle" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-content">
+                            <span class="dropdown-text">{{ $t('settings.agent.personality') }}</span>
+                          </span>
+                          <cs name="caret-right" size="14px" class="execution-style-dropdown-arrow" />
+                        </el-dropdown-item>
+                      </span>
+                    </template>
+                    <div v-if="executionStylePopoverVisible" class="workflow-execution-style-panel">
+                      <button
+                        v-for="option in executionStyleOptions"
+                        :key="option.value || 'default'"
+                        type="button"
+                        class="execution-style-option"
+                        :class="{ active: selectedExecutionStyle === option.value }"
+                        :disabled="!currentWorkflowId"
+                        @click="selectExecutionStyle(option.value)">
+                        <span class="execution-style-option__copy">
+                          <span class="execution-style-option__title">{{ $t(option.labelKey) }}</span>
+                          <span class="execution-style-option__description">{{ $t(option.descriptionKey) }}</span>
+                        </span>
+                        <cs
+                          v-if="selectedExecutionStyle === option.value"
+                          name="check"
+                          size="14px"
+                          class="dropdown-check" />
+                      </button>
+                    </div>
+                  </el-popover>
                   <div class="quick-actions-divider" />
                   <div class="quick-actions-section-title">
                     {{ $t('workflow.quickActionsRuntime') }}
@@ -371,214 +582,6 @@
                     {{ $t('settings.agent.sandboxProfilesEmpty') }}
                   </div>
                 </template>
-              </div>
-            </el-popover>
-
-            <!-- Auto-Approved Tools & Shell Commands Popover -->
-            <el-popover
-              v-model:visible="autoApprovedPopoverVisible"
-              placement="top"
-              :width="400"
-              trigger="click"
-              popper-class="auto-approved-popover">
-              <template #reference>
-                <label
-                  class="icon-btn upperLayer auto-approve-badge">
-                  <cs name="tool" class="small" />
-                </label>
-              </template>
-
-              <div
-                v-if="autoApprovedPopoverVisible"
-                class="auto-approved-panel"
-                @click.stop
-                @mousedown.stop>
-                <el-tabs v-model="approvalToolsTab" class="approval-tools-tabs">
-                  <el-tab-pane :label="`${$t('settings.agent.availableTools')} (${agentAvailableTools.length})`" name="available">
-                    <div v-if="agentAvailableTools.length > 0" class="section-content checkbox-list">
-                      <label v-for="tool in agentAvailableTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
-                        <el-checkbox
-                          :model-value="workflowAvailableToolIds.includes(tool.id)"
-                          @change="checked => toggleWorkflowAvailableTool(tool.id, checked)">
-                          <span class="checkbox-label-wrap">
-                            <code class="tool-name">{{ tool.id }}</code>
-                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
-                          </span>
-                        </el-checkbox>
-                      </label>
-                    </div>
-                    <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
-                  </el-tab-pane>
-                  <el-tab-pane :label="`${$t('workflow.autoApprovedTools')} (${autoApprovedTools.length})`" name="autoApprove">
-                    <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
-                      <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
-                        <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
-                          <span class="checkbox-label-wrap">
-                            <code class="tool-name">{{ tool.id }}</code>
-                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
-                          </span>
-                        </el-checkbox>
-                      </label>
-                    </div>
-                    <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
-                  </el-tab-pane>
-                  <el-tab-pane :label="`${$t('workflow.allowedShellCommands')} (${shellPolicyRules.length})`" name="shell">
-                    <div class="panel-section">
-                  <div class="section-toolbar shell-policy-search">
-                    <el-input
-                      v-model="shellCommandSearch"
-                      size="small"
-                      clearable
-                      :placeholder="$t('common.search') || 'Search shell command pattern'" />
-                  </div>
-                  <div class="section-toolbar shell-policy-add-row">
-                    <el-input
-                      v-model="newShellCommandPattern"
-                      size="small"
-                      clearable
-                      :placeholder="
-                        $t('settings.agent.shellPolicyPattern') || 'Enter shell command pattern'
-                      "
-                      @keydown.enter.prevent="addShellPolicyItem" />
-                    <el-radio-group v-model="newShellCommandDecision" class="shell-policy-decision-group">
-                      <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
-                      <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
-                      <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
-                    </el-radio-group>
-                    <el-button
-                      size="small"
-                      type="primary"
-                      :disabled="!canAddShellPolicyItem"
-                      @click="addShellPolicyItem">
-                      {{ $t('settings.agent.shellPolicyAdd') || 'Add' }}
-                    </el-button>
-                  </div>
-                  <template v-if="filteredShellPolicyRules.length > 0">
-                    <div class="section-content">
-                      <div
-                        v-for="(rule, idx) in paginatedShellPolicyRules"
-                        :key="`${rule.pattern}-${idx}`"
-                        class="tool-item shell-item">
-                        <div class="tool-info">
-                        <code class="tool-name shell-pattern">{{ rule.pattern }}</code>
-                        <span v-if="rule.description" class="tool-desc">{{ rule.description }}</span>
-                      </div>
-                      <el-radio-group
-                        :model-value="rule.decision || 'review'"
-                        class="shell-policy-decision-group shell-policy-item-decision"
-                        @change="decision => updateShellPolicyDecision(rule.pattern, decision)">
-                        <el-radio-button value="allow">{{ $t('settings.agent.shellDecisionAllow') }}</el-radio-button>
-                        <el-radio-button value="deny">{{ $t('settings.agent.shellDecisionDeny') }}</el-radio-button>
-                        <el-radio-button value="review">{{ $t('settings.agent.shellDecisionReview') }}</el-radio-button>
-                      </el-radio-group>
-                      <el-button
-                        size="small"
-                        type="danger"
-                        text
-                        class="remove-btn"
-                        @click="removeShellPolicyItem(rule.pattern)">
-                        <cs name="trash" size="12px" />
-                      </el-button>
-                    </div>
-                  </div>
-                  <el-pagination
-                    v-if="filteredShellPolicyRules.length > SHELL_POLICY_PAGE_SIZE"
-                    v-model:current-page="shellPolicyPage"
-                    class="shell-policy-pagination"
-                    :page-size="SHELL_POLICY_PAGE_SIZE"
-                    :total="filteredShellPolicyRules.length"
-                    layout="prev, pager, next"
-                    size="small"
-                    background />
-                  </template>
-                  <div v-else class="section-empty-text">
-                    {{
-                      shellCommandSearch
-                        ? $t('common.noData') || 'No matching shell command patterns'
-                        : $t('workflow.noAutoApprovedItems') || 'No auto-approved items'
-                    }}
-                  </div>
-                  <div class="section-footer">
-                    <div class="section-footer-hint">
-                      <cs name="info" size="12px" />
-                      <span>{{
-                        $t('workflow.shellPolicyClickRemove') || 'Click × to remove items'
-                      }}</span>
-                    </div>
-                    <div class="section-footer-actions">
-                      <el-tooltip
-                        placement="top"
-                        :content="$t('settings.agent.shellPolicyImportAgent')"
-                        :hide-after="0"
-                        :enterable="false">
-                        <button
-                          type="button"
-                          class="section-footer-action"
-                          :disabled="isImportingShellPolicies || !currentWorkflowId || !selectedAgent?.id"
-                          @click="importAgentShellPolicies">
-                          <cs name="import" size="12px" />
-                        </button>
-                      </el-tooltip>
-                      <el-tooltip
-                        placement="top"
-                        :content="$t('settings.agent.shellPolicyClear')"
-                        :hide-after="0"
-                        :enterable="false">
-                        <button
-                          type="button"
-                          class="section-footer-action clear-shell-policy-action"
-                          :disabled="isClearingShellPolicies || !currentWorkflowId || shellPolicyRules.length === 0"
-                          @click="clearShellPolicyRules">
-                          <cs name="trash" size="12px" />
-                        </button>
-                      </el-tooltip>
-                    </div>
-                  </div>
-                    </div>
-                  </el-tab-pane>
-                </el-tabs>
-              </div>
-            </el-popover>
-
-            <el-popover
-              v-model:visible="executionStylePopoverVisible"
-              placement="top"
-              :width="360"
-              trigger="click"
-              popper-class="workflow-execution-style-popover">
-              <template #reference>
-                <span class="execution-style-reference">
-                  <el-tooltip
-                    :content="$t('settings.agent.personality')"
-                    :hide-after="0"
-                    :enterable="false"
-                    placement="top">
-                    <label
-                      class="icon-btn upperLayer execution-style-trigger">
-                      <cs name="skill-mindmap-circle" class="small" />
-                    </label>
-                  </el-tooltip>
-                </span>
-              </template>
-              <div v-if="executionStylePopoverVisible" class="workflow-execution-style-panel">
-                <button
-                  v-for="option in executionStyleOptions"
-                  :key="option.value || 'default'"
-                  type="button"
-                  class="execution-style-option"
-                  :class="{ active: selectedExecutionStyle === option.value }"
-                  :disabled="!currentWorkflowId"
-                  @click="selectExecutionStyle(option.value)">
-                  <span class="execution-style-option__copy">
-                    <span class="execution-style-option__title">{{ $t(option.labelKey) }}</span>
-                    <span class="execution-style-option__description">{{ $t(option.descriptionKey) }}</span>
-                  </span>
-                  <cs
-                    v-if="selectedExecutionStyle === option.value"
-                    name="check"
-                    size="14px"
-                    class="dropdown-check" />
-                </button>
               </div>
             </el-popover>
 
@@ -1557,6 +1560,7 @@ const handleQuickActionCommand = command => {
 const selectExecutionStyle = style => {
   if (!props.currentWorkflowId) return
   executionStylePopoverVisible.value = false
+  quickActionsDropdownRef.value?.handleClose?.()
   emit('update-personality', style)
 }
 
@@ -1873,8 +1877,16 @@ defineExpose({
   pointer-events: none;
 }
 
+.auto-approved-reference,
 .execution-style-reference {
-  display: inline-flex;
+  display: block;
+}
+
+.auto-approved-dropdown-arrow,
+.execution-style-dropdown-arrow {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--cs-text-color-secondary);
 }
 
 .workflow-execution-style-panel {

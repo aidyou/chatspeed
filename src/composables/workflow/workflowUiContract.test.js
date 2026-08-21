@@ -309,6 +309,17 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
 })
 
+test('auto-compression starts disabled until explicitly enabled', async () => {
+  const [workflowView, workflowCore] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+  ])
+
+  assert.match(workflowView, /const autoCompressEnabled = ref\(false\)/)
+  assert.match(workflowView, /autoCompressEnabled\.value = agentConfig\?\.autoCompress \?\? false/)
+  assert.match(workflowCore, /autoCompressEnabled\.value = config\.autoCompress \?\? false/)
+})
+
 test('execution style popover uses a DOM reference and preserves Agent-scoped choices', async () => {
   const [inputArea, workflowView, workflowCore] = await Promise.all([
     readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
@@ -318,8 +329,23 @@ test('execution style popover uses a DOM reference and preserves Agent-scoped ch
 
   assert.match(
     inputArea,
-    /<template #reference>\s*<span class="execution-style-reference">[\s\S]*?<el-tooltip[\s\S]*?<cs name="skill-mindmap-circle"/,
-    'the popover reference must be a concrete DOM element so the click trigger reaches Element Plus'
+    /<el-dropdown-item command="skillsConfig"[\s\S]*?<el-popover[\s\S]*?v-model:visible="autoApprovedPopoverVisible"[\s\S]*?placement="right-start"[\s\S]*?<span class="auto-approved-reference">[\s\S]*?<el-dropdown-item class="auto-approved-dropdown-trigger"[\s\S]*?<cs name="caret-right"[\s\S]*?<!-- execution style -->/,
+    'the quick-actions menu must place the auto-approval submenu after Skills and before execution style'
+  )
+  assert.doesNotMatch(
+    inputArea,
+    /<el-dropdown-item class="auto-approved-dropdown-trigger" @click\.stop>/,
+    'the auto-approval submenu trigger must let click events reach its popover reference'
+  )
+  assert.match(
+    inputArea,
+    /<template #reference>\s*<span class="execution-style-reference">[\s\S]*?<el-dropdown-item class="execution-style-dropdown-trigger"[\s\S]*?<cs name="caret-right"/,
+    'the quick-actions execution-style submenu must use a concrete DOM popover reference'
+  )
+  assert.doesNotMatch(
+    inputArea,
+    /<el-dropdown-item class="execution-style-dropdown-trigger" @click\.stop>/,
+    'the submenu trigger must let click events reach its popover reference'
   )
   assert.match(inputArea, /getExecutionStyleOptions\(props\.selectedAgent\)/)
   assert.match(inputArea, /emit\('update-personality', style\)/)

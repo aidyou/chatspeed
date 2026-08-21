@@ -420,7 +420,7 @@ const approvalLevel = ref('default')
 const finalAuditMode = ref('off')
 const planningMode = ref(false)
 const autoApprovePlan = ref(false)
-const autoCompressEnabled = ref(true)
+const autoCompressEnabled = ref(false)
 const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
 const automationDrawerVisible = ref(false)
@@ -2272,7 +2272,7 @@ const onSelectedAgentChange = async agent => {
       planningMode.value = String(agentConfig.phase).toLowerCase() === 'planning'
     }
     autoApprovePlan.value = agentConfig?.autoApprovePlan === true
-    autoCompressEnabled.value = agentConfig?.autoCompress ?? true
+    autoCompressEnabled.value = agentConfig?.autoCompress ?? false
   } catch (error) {
     console.error('Failed to update workflow agent:', error)
   }

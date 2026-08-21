@@ -255,7 +255,7 @@ export function useWorkflowCore({
                 finalAuditMode.value = 'off'
             }
 
-            autoCompressEnabled.value = config.autoCompress ?? true
+            autoCompressEnabled.value = config.autoCompress ?? false
             autoApprovePlan.value = config.autoApprovePlan === true
 
             if (config.approvalLevel) {

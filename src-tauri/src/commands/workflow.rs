@@ -436,7 +436,7 @@ fn workflow_auto_compress_enabled(config: &Value) -> bool {
                 .get("auto_compress")
                 .and_then(|value| value.as_bool())
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessage> {
@@ -6001,6 +6001,15 @@ mod tests {
         fn deref(&self) -> &Self::Target {
             &self.store
         }
+    }
+
+    #[test]
+    fn workflow_auto_compression_defaults_to_disabled() {
+        assert!(!workflow_auto_compress_enabled(&json!({})));
+        assert!(!workflow_auto_compress_enabled(&json!({ "autoCompress": null })));
+        assert!(!workflow_auto_compress_enabled(&json!({ "auto_compress": null })));
+        assert!(workflow_auto_compress_enabled(&json!({ "autoCompress": true })));
+        assert!(workflow_auto_compress_enabled(&json!({ "auto_compress": true })));
     }
 
     #[test]
