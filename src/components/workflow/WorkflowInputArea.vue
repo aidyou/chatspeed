@@ -389,6 +389,7 @@
                           <span class="dropdown-content">
                             <span class="dropdown-text">{{ $t('settings.agent.personality') }}</span>
                           </span>
+                          <span class="execution-style-dropdown-value">{{ selectedExecutionStyleLabel }}</span>
                           <cs name="caret-right" size="14px" class="execution-style-dropdown-arrow" />
                         </el-dropdown-item>
                       </span>
@@ -1448,6 +1449,10 @@ const executionStyleOptions = computed(() => getExecutionStyleOptions(props.sele
 const selectedExecutionStyle = computed(() =>
   resolveExecutionStylePreference(props.currentWorkflow?.agentConfig?.personality, props.selectedAgent)
 )
+const selectedExecutionStyleLabel = computed(() => {
+  const option = executionStyleOptions.value.find(option => option.value === selectedExecutionStyle.value)
+  return option ? t(option.labelKey) : ''
+})
 const activeRuntimeOptionCount = computed(
   () =>
     Number(props.planningMode) +

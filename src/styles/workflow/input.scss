@@ -480,48 +480,14 @@ footer.input-container {
     }
 }
 
-// Approval Level Dropdown Styles
-.el-dropdown-menu.approval-level-dropdown .el-dropdown-menu__item {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center;
-    gap: 8px;
-
-    .dropdown-icon {
-        flex-shrink: 0;
-        color: var(--cs-text-color-secondary);
-    }
-
-    .dropdown-text {
-        flex: 1;
-        text-align: left;
-    }
-
-    .dropdown-check {
-        flex-shrink: 0;
-        color: var(--el-color-primary);
-    }
-
-    &.active {
-        .dropdown-icon {
-            color: var(--el-color-primary);
-        }
-    }
-
-    &.danger-option {
-        .dropdown-icon {
-            color: var(--el-color-danger);
-        }
-
-        &.active .dropdown-check {
-            color: var(--el-color-danger);
-        }
-    }
-}
-
-.danger-option {
+.danger-option.active {
+  .dropdown-icon,
+  .dropdown-content .dropdown-main .dropdown-text,
+  .dropdown-content .dropdown-main .dropdown-check
+  {
     color: var(--el-color-danger) !important;
     font-weight: bold;
+  }
 }
 
 .pin-btn {

@@ -267,10 +267,12 @@
               @change="selectPersonality">
               <el-radio :value="PERSONALITY_SELECTION.DEFAULT" class="personality-option">
                 <div class="personality-option__content">
-                  <div class="personality-option__name">{{ $t('settings.agent.personalityDefault') }}</div>
-                  <div class="personality-option__description">{{
-                    $t('settings.agent.personalityDefaultDescription')
-                  }}</div>
+                  <div class="personality-option__name">
+                    {{ $t('settings.agent.personalityDefault') }}
+                  </div>
+                  <div class="personality-option__description">
+                    {{ $t('settings.agent.personalityDefaultDescription') }}
+                  </div>
                 </div>
               </el-radio>
               <el-radio
@@ -285,10 +287,12 @@
               </el-radio>
               <el-radio :value="PERSONALITY_SELECTION.CUSTOM" class="personality-option">
                 <div class="personality-option__content">
-                  <div class="personality-option__name">{{ $t('settings.agent.personalityCustom') }}</div>
-                  <div class="personality-option__description">{{
-                    $t('settings.agent.personalityCustomHint')
-                  }}</div>
+                  <div class="personality-option__name">
+                    {{ $t('settings.agent.personalityCustom') }}
+                  </div>
+                  <div class="personality-option__description">
+                    {{ $t('settings.agent.personalityCustomHint') }}
+                  </div>
                 </div>
               </el-radio>
             </el-radio-group>
@@ -655,8 +659,12 @@
             <el-form-item :label="$t('settings.agent.sandboxExecutionMode')">
               <el-select v-model="agentForm.sandboxExecutionMode" style="width: 100%">
                 <el-option :label="$t('settings.agent.sandboxExecutionModeAuto')" value="auto" />
-                <el-option :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')" value="sandbox_only" />
-                <el-option :label="$t('settings.agent.sandboxExecutionModeHostOnly')" value="host_only" />
+                <el-option
+                  :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')"
+                  value="sandbox_only" />
+                <el-option
+                  :label="$t('settings.agent.sandboxExecutionModeHostOnly')"
+                  value="host_only" />
               </el-select>
             </el-form-item>
             <el-form-item
@@ -695,7 +703,9 @@
     <p class="shell-policy-import-dialog__hint">
       {{ $t('settings.agent.shellPolicyImportDefaultHint') }}
     </p>
-    <el-checkbox-group v-model="selectedDefaultShellPolicyGroups" class="shell-policy-import-dialog__groups">
+    <el-checkbox-group
+      v-model="selectedDefaultShellPolicyGroups"
+      class="shell-policy-import-dialog__groups">
       <el-checkbox
         v-for="group in defaultShellPolicyGroups"
         :key="group.id"
@@ -707,7 +717,9 @@
       </el-checkbox>
     </el-checkbox-group>
     <template #footer>
-      <el-button @click="shellPolicyImportDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button @click="shellPolicyImportDialogVisible = false">{{
+        $t('common.cancel')
+      }}</el-button>
       <el-button
         type="primary"
         :disabled="selectedDefaultShellPolicyGroups.length === 0"
@@ -716,7 +728,6 @@
       </el-button>
     </template>
   </el-dialog>
-
 </template>
 
 <script setup>
@@ -735,11 +746,7 @@ import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useWorkflowStore } from '@/stores/workflow'
 import { EXECUTION_STYLE_PRESETS, EXECUTION_STYLE_PRESET_VALUES } from '@/constants/executionStyle'
-import {
-  AGENT_ROLE,
-  AGENT_ROLE_OPTIONS,
-  SUB_AGENT_ROLE_OPTIONS
-} from '@/constants/agent'
+import { AGENT_ROLE, AGENT_ROLE_OPTIONS, SUB_AGENT_ROLE_OPTIONS } from '@/constants/agent'
 
 const { t } = useI18n()
 
@@ -787,8 +794,16 @@ const DEFAULT_SHELL_POLICY_GROUPS = [
       'which'
     ]
   },
-  { id: 'rust', label: 'settings.agent.shellPolicyGroupRust', commands: ['cargo', 'rustc', 'rustup'] },
-  { id: 'node', label: 'settings.agent.shellPolicyGroupNode', commands: ['node', 'npm', 'pnpm', 'yarn'] },
+  {
+    id: 'rust',
+    label: 'settings.agent.shellPolicyGroupRust',
+    commands: ['cargo', 'rustc', 'rustup']
+  },
+  {
+    id: 'node',
+    label: 'settings.agent.shellPolicyGroupNode',
+    commands: ['node', 'npm', 'pnpm', 'yarn']
+  },
   {
     id: 'python',
     label: 'settings.agent.shellPolicyGroupPython',
@@ -840,7 +855,11 @@ const DEFAULT_SHELL_POLICY_GROUPS = [
   },
   { id: 'php', label: 'settings.agent.shellPolicyGroupPhp', commands: ['composer', 'php'] },
   { id: 'ruby', label: 'settings.agent.shellPolicyGroupRuby', commands: ['bundle', 'gem', 'ruby'] },
-  { id: 'containers', label: 'settings.agent.shellPolicyGroupContainers', commands: ['docker', 'helm', 'kubectl', 'msb', 'terraform'] },
+  {
+    id: 'containers',
+    label: 'settings.agent.shellPolicyGroupContainers',
+    commands: ['docker', 'helm', 'kubectl', 'msb', 'terraform']
+  },
   {
     id: 'macos',
     label: 'settings.agent.shellPolicyGroupMacos',
@@ -975,7 +994,7 @@ const CORE_MANAGEMENT_TOOLS = [
   'complete_workflow',
   'submit_plan',
   'mcp_tool_load',
-  'read_history_message',
+  'read_history_message'
 ]
 
 const defaultAgentModelConfig = () => ({
@@ -1101,12 +1120,12 @@ const autoApproveOptions = computed(() => {
 
 const availableMcpToolOptions = computed(() => {
   const enabledToolIds = new Set(agentForm.value.availableTools || [])
-  return availableTools.value.filter(
-    tool => tool.category === 'MCP' && enabledToolIds.has(tool.id)
-  )
+  return availableTools.value.filter(tool => tool.category === 'MCP' && enabledToolIds.has(tool.id))
 })
 
-const availableMcpToolIds = computed(() => new Set(availableMcpToolOptions.value.map(tool => tool.id)))
+const availableMcpToolIds = computed(
+  () => new Set(availableMcpToolOptions.value.map(tool => tool.id))
+)
 
 const sortedSystemSkills = computed(() => {
   return [...systemSkills.value]
@@ -1562,8 +1581,8 @@ const normalizeAgentFormForSave = form => {
     ? sortSkillNamesByName(normalized.selectedSkills)
     : []
   normalized.mcpToolExposure = Array.isArray(normalized.mcpToolExposure)
-    ? [...new Set(normalized.mcpToolExposure)].filter(tool =>
-        normalized.availableTools.includes(tool) && availableMcpToolIds.value.has(tool)
+    ? [...new Set(normalized.mcpToolExposure)].filter(
+        tool => normalized.availableTools.includes(tool) && availableMcpToolIds.value.has(tool)
       )
     : []
 
@@ -1592,15 +1611,16 @@ const normalizeAgentFormForSave = form => {
     normalized.availableTools = normalized.availableTools.filter(
       tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
     )
-    normalized.autoApprove = normalized.autoApprove.filter(tool => !CHILD_ONLY_TOOL_IDS.includes(tool))
+    normalized.autoApprove = normalized.autoApprove.filter(
+      tool => !CHILD_ONLY_TOOL_IDS.includes(tool)
+    )
     normalized.skillEnabled = normalized.skillEnabled !== false
 
     if (normalized.allowShell) {
       normalized.availableTools = [...new Set([...normalized.availableTools, 'bash'])]
       normalized.sandboxExecutionMode = normalized.sandboxExecutionMode || 'host_only'
-      normalized.sandboxSchemeId = normalized.sandboxExecutionMode === 'host_only'
-        ? null
-        : (normalized.sandboxSchemeId || null)
+      normalized.sandboxSchemeId =
+        normalized.sandboxExecutionMode === 'host_only' ? null : normalized.sandboxSchemeId || null
     } else {
       normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
       normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
@@ -1986,7 +2006,9 @@ const updateAgent = () => {
           scheme => scheme.id === finalForm.sandboxSchemeId
         )
         const commonProfiles = (selectedScheme?.config?.profiles || []).filter(
-          profile => profile.enabled !== false && (profile.commandPatterns || []).length > 0 &&
+          profile =>
+            profile.enabled !== false &&
+            (profile.commandPatterns || []).length > 0 &&
             (profile.commandPatterns || []).every(pattern =>
               ['.*', '^.*', '.*$', '^.*$'].includes(String(pattern).trim())
             )
@@ -2308,8 +2330,8 @@ watch(
       white-space: normal;
     }
 
-    .el-radio__input{
-        padding-top: var(--cs-space-sm);
+    .el-radio__input {
+      padding-top: var(--cs-space-sm);
     }
   }
 
@@ -2464,8 +2486,11 @@ watch(
   }
 
   .danger-option {
-    color: var(--el-color-danger) !important;
-    font-weight: bold;
+    .dropdown-icon,
+    .dropdown-content {
+      color: var(--el-color-danger) !important;
+      font-weight: bold;
+    }
   }
 
   .shell-policy-import-dialog {
