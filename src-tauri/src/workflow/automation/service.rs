@@ -13,8 +13,6 @@ use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::{json, Value};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, State};

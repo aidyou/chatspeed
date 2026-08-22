@@ -94,23 +94,16 @@ fn get_shell_path() -> Option<String> {
 /// # Returns
 /// - `Some(String)`: The full PATH string if successfully retrieved.
 /// - `None`: If the PATH could not be retrieved using the attempted methods.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
-    #[cfg(unix)]
-    {
-        let mut shell_paths = terminal_shells;
-        for shell in ["/bin/sh", "/usr/bin/sh"] {
-            if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell)
-            {
-                shell_paths.push(shell.to_string());
-            }
+    let mut shell_paths = terminal_shells;
+    for shell in ["/bin/sh", "/usr/bin/sh"] {
+        if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell)
+        {
+            shell_paths.push(shell.to_string());
         }
-        shell_paths
     }
-
-    #[cfg(not(unix))]
-    {
-        terminal_shells
-    }
+    shell_paths
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -488,7 +481,7 @@ mod tests {
         assert_eq!(selected.name, "bash");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn login_path_candidates_retain_posix_sh_for_path_discovery() {
         let candidates = super::login_path_shell_candidates(Vec::new());

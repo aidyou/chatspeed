@@ -577,7 +577,7 @@ fn terminal_session_members(session_id: libc::pid_t) -> Vec<libc::pid_t> {
         .collect()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 fn terminal_session_members(_: i32) -> Vec<i32> {
     Vec::new()
 }
