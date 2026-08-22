@@ -48,6 +48,8 @@ struct JsonErrorPayload<'a> {
 }
 
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
+const MAX_TRANSIENT_RETRIES: u32 = 10;
+const TRANSIENT_RETRY_BASE_DELAY_SECONDS: u64 = 1;
 const THINK_OPEN_TAG_PREFIXES: [&str; 2] = ["<thinking", "<think"];
 const THINK_CLOSE_TAG_PREFIXES: [&str; 2] = ["</thinking", "</think"];
 
@@ -330,6 +332,21 @@ impl OpenAIChat {
             stop_flag: Arc::new(Mutex::new(false)),
             client: DefaultApiClient::new(ErrorFormat::OpenAI),
             main_store,
+        }
+    }
+
+    async fn wait_for_transient_retry(&self, delay_seconds: u64) -> bool {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(delay_seconds);
+        loop {
+            if self.should_stop().await {
+                return false;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return true;
+            }
+            let remaining = deadline - now;
+            tokio::time::sleep(remaining.min(std::time::Duration::from_millis(100))).await;
         }
     }
 
@@ -1613,33 +1630,89 @@ impl AiChatTrait for OpenAIChat {
             selected_endpoint.to_string()
         };
 
-        let response = self
-            .client
-            .post_request(&config, &endpoint, payload, stream_enabled)
-            .await
-            .map_err(|e| {
-                let err = AiError::ApiRequestFailed {
-                    status_code: 0,
-                    provider: model_detail.api_protocol.clone(),
-                    details: e.to_string(),
-                };
+        let mut transient_retries = 0;
+        let response = loop {
+            if self.should_stop().await {
+                break Err("chat request stopped".to_string());
+            }
 
-                let error_payload = JsonErrorPayload {
-                    status: 503,
-                    message: &err.to_string(),
-                };
-                let chunk =
-                    serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+            match self
+                .client
+                .post_request(&config, &endpoint, payload.clone(), stream_enabled)
+                .await
+            {
+                Ok(response)
+                    if !merged_metadata.retry_on_transient_error
+                        || !matches!(response.status_code, 408 | 429 | 500..=599)
+                        || !response.is_error =>
+                {
+                    break Ok(response);
+                }
+                Ok(response)
+                    if merged_metadata.retry_on_transient_error
+                        && matches!(response.status_code, 408 | 429 | 500..=599)
+                        && transient_retries < MAX_TRANSIENT_RETRIES => {
+                    transient_retries += 1;
+                    let delay_seconds = TRANSIENT_RETRY_BASE_DELAY_SECONDS
+                        .saturating_mul(2u64.saturating_pow(transient_retries - 1));
+                    log::warn!(
+                        "Transient chat request failed with status {}. Retrying {}/{} in {}s",
+                        response.status_code,
+                        transient_retries,
+                        MAX_TRANSIENT_RETRIES,
+                        delay_seconds
+                    );
+                    if !self.wait_for_transient_retry(delay_seconds).await {
+                        break Err("chat request stopped".to_string());
+                    }
+                    continue;
+                }
+                Ok(response) => break Ok(response),
+                Err(error)
+                    if merged_metadata.retry_on_transient_error
+                        && transient_retries < MAX_TRANSIENT_RETRIES =>
+                {
+                    transient_retries += 1;
+                    let delay_seconds = TRANSIENT_RETRY_BASE_DELAY_SECONDS
+                        .saturating_mul(2u64.saturating_pow(transient_retries - 1));
+                    log::warn!(
+                        "Transient chat request error. Retrying {}/{} in {}s: {}",
+                        transient_retries,
+                        MAX_TRANSIENT_RETRIES,
+                        delay_seconds,
+                        error
+                    );
+                    if !self.wait_for_transient_retry(delay_seconds).await {
+                        break Err("chat request stopped".to_string());
+                    }
+                    continue;
+                }
+                Err(error) => break Err(error),
+            }
+        };
 
-                callback(ChatResponse::new_with_arc(
-                    chat_id.clone(),
-                    chunk,
-                    MessageType::Error,
-                    merged_metadata.to_value(),
-                    Some(FinishReason::Error),
-                ));
-                err
-            })?;
+        let response = response.map_err(|e| {
+            let err = AiError::ApiRequestFailed {
+                status_code: 0,
+                provider: model_detail.api_protocol.clone(),
+                details: e,
+            };
+
+            let error_payload = JsonErrorPayload {
+                status: 503,
+                message: &err.to_string(),
+            };
+            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+
+            callback(ChatResponse::new_with_arc(
+                chat_id.clone(),
+                chunk,
+                MessageType::Error,
+                merged_metadata.to_value(),
+                Some(FinishReason::Error),
+            ));
+            err
+        })?;
 
         if response.is_error {
             let status_code = response.status_code;

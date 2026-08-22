@@ -360,6 +360,7 @@ pub async fn chat_completion(
 
     // Prepare final_metadata: ensure windowLabel is present.
     let mut final_metadata: ChatMetadata = ChatMetadata::from_value(metadata);
+    final_metadata.retry_on_transient_error = true;
 
     // Ensure window label exists for UI updates
     if final_metadata.window_label.is_none() && final_metadata.label.is_none() {

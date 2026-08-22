@@ -15,6 +15,10 @@
     "conversationNotFound": "Conversation not found or deleted",
     "conversationTitle": "Conversation Title",
     "conversationTitleUpdated": "Conversation title updated",
+    "clearContext": "Clear context",
+    "clearContextDone": "Context cleared for subsequent messages",
+    "clearContextFailed": "Failed to clear context: {error}",
+    "contextCleared": "Context cleared from this point",
     "copyMessage": "Copy Message",
     "date": {
       "earlier": "Earlier",

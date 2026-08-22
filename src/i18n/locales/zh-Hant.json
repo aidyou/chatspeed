@@ -15,6 +15,10 @@
     "conversationNotFound": "對話不存在或已刪除",
     "conversationTitle": "對話主題",
     "conversationTitleUpdated": "對話主題已更新",
+    "clearContext": "清空上下文",
+    "clearContextDone": "上下文已清空，後續訊息將從此處開始",
+    "clearContextFailed": "清空上下文失敗：{error}",
+    "contextCleared": "上下文已從此處清空",
     "copyMessage": "複製訊息",
     "date": {
       "earlier": "更早",

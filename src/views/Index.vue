@@ -110,19 +110,20 @@
 
             <!-- message list -->
             <div
-              class="message"
               v-for="(message, index) in processedMessages"
-              :key="index"
-              :class="[
-                message.role,
-                {
-                  'message-group-start': message.display.isFirstInGroup,
-                  'message-group-end': message.display.isLastInGroup
-                }
-              ]"
-              :id="'message-' + message.id"
-              @mouseenter="hoveredMessageIndex = index"
-              @mouseleave="hoveredMessageIndex = null">
+              :key="index">
+              <div
+                class="message"
+                :class="[
+                  message.role,
+                  {
+                    'message-group-start': message.display.isFirstInGroup,
+                    'message-group-end': message.display.isLastInGroup
+                  }
+                ]"
+                :id="'message-' + message.id"
+                @mouseenter="hoveredMessageIndex = index"
+                @mouseleave="hoveredMessageIndex = null">
               <div class="avatar" v-if="message.display.showAvatar">
                 <cs v-if="message.role === 'user'" name="talk" class="user-icon" />
                 <logo
@@ -238,6 +239,13 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <div v-if="message.metadata?.contextCleared" class="context-cleared">
+              <label>
+                <cs name="clear-context" class="small" />
+                {{ $t('chat.contextCleared') }}
+              </label>
+            </div>
             </div>
 
             <!-- chatting message -->
@@ -404,11 +412,11 @@
                     </label>
                   </el-tooltip>
                   <el-tooltip
-                    :content="$t(`chat.${disableContext ? 'enableContext' : 'disableContext'}`)"
+                    :content="$t('chat.clearContext')"
                     :hide-after="0"
                     :enterable="false"
                     placement="top">
-                    <label @click="onGlobalClearContext" :class="{ active: !disableContext }">
+                    <label @click="onClearContext" :class="{ disabled: isSubmittingMessage }">
                       <cs name="clear-context" class="small" />
                     </label>
                   </el-tooltip>
@@ -699,8 +707,7 @@ const takeNoteRules = {
   tags: [{ required: true, message: t('chat.noteTagsRequired'), trigger: 'blur' }],
   title: [{ required: true, message: t('chat.noteTitleRequired'), trigger: 'blur' }]
 }
-// clear context
-const disableContext = ref(csGetStorage(csStorageKey.disableContext, false))
+// clear context marker is persisted on the latest message for this conversation
 
 /**
  * Try to get the user's language from the setting, if not found, return 'English'
@@ -1088,6 +1095,10 @@ const buildHistoryForSending = (allMessages, roundsToKeep, messageIdToExclude = 
   for (let i = messagesToProcess.length - 1; i >= 0; i--) {
     const currentMessage = messagesToProcess[i]
 
+    if (currentMessage.metadata?.contextCleared) {
+      break
+    }
+
     let processedMessage = { ...currentMessage }
     if (currentMessage.role === 'user' && currentMessage.metadata?.vision_analysis) {
       // Use XML tags which are more effective for modern LLMs to separate context
@@ -1462,7 +1473,7 @@ const dispatchChatCompletion = async (messageId = null) => {
   chatState.value.step = t('chat.generatingResponse')
 
   let historyMessages = []
-  if (settingStore.settings.historyMessages > 0 && !disableContext.value) {
+  if (settingStore.settings.historyMessages > 0) {
     historyMessages = buildHistoryForSending(
       chatStore.messages,
       settingStore.settings.historyMessages,
@@ -2294,11 +2305,21 @@ const onToggleSkillSelector = () => {
   }
 }
 /**
- * Toggle the clear the global context enabled state
+ * Clear the current conversation's context from the latest persisted message onward.
  */
-const onGlobalClearContext = () => {
-  disableContext.value = !disableContext.value
-  csSetStorage(csStorageKey.disableContext, disableContext.value)
+const onClearContext = async () => {
+  if (isSubmittingMessage.value || chatStore.messages.length === 0) {
+    return
+  }
+
+  try {
+    await chatStore.clearContext()
+    resetPagination()
+    await loadMessagesForObserver()
+    showMessage(t('chat.clearContextDone'), 'success', 2000)
+  } catch (error) {
+    showMessage(t('chat.clearContextFailed', { error: String(error) }), 'error', 3000)
+  }
 }
 
 const onGlobalKeyDown = event => {

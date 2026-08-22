@@ -345,6 +345,9 @@ pub struct InternalChatParam {
     pub active_tools_for_turn: Option<Vec<MCPToolDeclaration>>,
     /// Original metadata passed from the frontend to be preserved across tool call turns.
     pub org_metadata: Box<ChatMetadata>,
+    /// Whether transient request failures should be retried for this chat session.
+    #[serde(default)]
+    pub retry_on_transient_error: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,6 +416,8 @@ pub struct ChatMetadata {
     // --- Internal State ---
     #[serde(skip)]
     pub workflow_usage_attribution: Option<WorkflowUsageAttribution>,
+    #[serde(skip)]
+    pub retry_on_transient_error: bool,
     pub chat_param: Option<InternalChatParam>,
 
     // --- Extensibility ---

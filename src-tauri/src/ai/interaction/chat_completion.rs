@@ -379,6 +379,7 @@ pub async fn start_new_chat_interaction(
         model: model.clone(),
         active_tools_for_turn: tools.clone(),
         org_metadata: Box::new(current_metadata.clone()),
+        retry_on_transient_error: current_metadata.retry_on_transient_error,
     };
     current_metadata.chat_param = Some(chat_param);
 
@@ -731,6 +732,9 @@ async fn global_message_processor_loop(
                                 let model = chat_param.model;
                                 let org_metadata = *chat_param.org_metadata;
                                 let tools_for_next_turn = chat_param.active_tools_for_turn;
+                                let retry_on_transient_error = chat_param.retry_on_transient_error;
+                                let mut next_metadata = org_metadata;
+                                next_metadata.retry_on_transient_error = retry_on_transient_error;
 
                                 if let Err(e) = start_new_chat_interaction(
                                     cc_chat_state_clone.clone(),
@@ -739,7 +743,7 @@ async fn global_message_processor_loop(
                                     cc_chat_id_clone.clone(),
                                     messages_for_next_ai_turn,
                                     tools_for_next_turn,
-                                    Some(org_metadata),
+                                    Some(next_metadata),
                                     Some(Box::new(internal_cb_for_next_turn)),
                                 )
                                 .await
