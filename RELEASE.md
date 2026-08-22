@@ -2,6 +2,39 @@
 
 # Release Notes
 
+## [2.0.13]
+
+### 🚀 New Features
+
+- **Agent execution controls**:
+  - Added per-agent execution-style personality presets and custom styles, with the selected style available from the Workflow quick-actions menu.
+  - Moved approval settings and execution-style controls into the quick-actions menu; automatic context compression is now opt-in for new Workflows.
+- **Workflow and cost analysis**:
+  - Preserved user execution requirements, task objectives, and compression handoff context across context compression.
+  - Added cache hit-rate visibility in cost analysis, MCP tool loading, and access to durable user-message history for Agents.
+- **Proxy and chat reliability**:
+  - Added support for multiple proxy servers per API key.
+  - Chat requests now retry transient API failures with exponential backoff, and conversations can retain a persistent cleared-context marker.
+
+### 🪄 Improvements
+
+- **Workflow experience**:
+  - Improved context-compression state and token usage feedback, terminal state handling, message pagination, message and tool-group ordering, and queued-message delivery.
+  - Refined `ask_user` rendering and response handling; restored input focus after selecting a path and clarified relative file references.
+- **Configuration and interface**:
+  - Refined proxy model-selection layout and quick-menu styling.
+  - Japanese is no longer supported as an interface locale; it remains available for chat translation and language detection.
+
+### 🐞 Bug Fixes
+
+- **Workflow reliability**:
+  - Fixed preservation of `ask_user` waiting state, compressed context, durable message ordering, tool-group order, and task objectives after compression.
+  - Fixed stale terminal compression indicators, terminal-session startup projections, and user messages queued while a sub-agent is running.
+- **Shell command policy**: Prevented `awk`, `sed`, and `grep` scripts or patterns from being incorrectly treated as file-path arguments and blocked.
+- **Agent UI**: Fixed sub-agent cards incorrectly inheriting a parent tool's running status.
+
+---
+
 ## [2.0.12]
 
 ### 🚀 New Features
