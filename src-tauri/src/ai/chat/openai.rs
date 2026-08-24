@@ -1651,7 +1651,8 @@ impl AiChatTrait for OpenAIChat {
                 Ok(response)
                     if merged_metadata.retry_on_transient_error
                         && matches!(response.status_code, 408 | 429 | 500..=599)
-                        && transient_retries < MAX_TRANSIENT_RETRIES => {
+                        && transient_retries < MAX_TRANSIENT_RETRIES =>
+                {
                     transient_retries += 1;
                     let delay_seconds = TRANSIENT_RETRY_BASE_DELAY_SECONDS
                         .saturating_mul(2u64.saturating_pow(transient_retries - 1));

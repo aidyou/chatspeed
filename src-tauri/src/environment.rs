@@ -98,8 +98,7 @@ fn get_shell_path() -> Option<String> {
 fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
     let mut shell_paths = terminal_shells;
     for shell in ["/bin/sh", "/usr/bin/sh"] {
-        if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell)
-        {
+        if is_executable_file(Path::new(shell)) && !shell_paths.iter().any(|path| path == shell) {
             shell_paths.push(shell.to_string());
         }
     }

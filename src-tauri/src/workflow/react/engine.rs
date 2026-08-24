@@ -59,7 +59,7 @@ use crate::workflow::react::{
 
 const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
 
-const MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE: &str = "First determine whether the user authorized implementation. If the read-only question, investigation, explanation, review, or report has been answered, call `complete_workflow` with a complete non-empty `summary`. If an unfinished objective genuinely depends on a user decision, call `ask_user`. Only choose a mutating work tool when implementation is explicitly authorized; your own proposal, no user response, or this reminder is not authorization.";
+const MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE: &str = "No tool was called. If a standalone question has already been answered, do not send another text-only reply: call `complete_workflow` with one complete non-empty `summary` and do not ask an optional follow-up. If work remains, call one concrete work tool. Use `ask_user` only for a decision required by the original objective. Only choose a mutating work tool when implementation is explicitly authorized; your own proposal, no user response, or this reminder is not authorization.";
 
 async fn await_with_stop<F, T>(
     session_id: &str,
@@ -1771,7 +1771,9 @@ impl WorkflowExecutor {
             self.sub_agent_sessions = context.sub_agent_sessions.clone();
             self.pending_sub_agent_completions = context.pending_sub_agent_completions.clone();
             self.pending_final_review = context.pending_final_review.clone();
-            self.pending_completion_reports = context.pending_completion_reports.clone();
+            self.pending_completion_reports = Self::reconcile_pending_completion_reports(
+                context.pending_completion_reports.clone(),
+            );
             self.queued_user_messages = context
                 .queued_user_messages
                 .iter()
@@ -1854,7 +1856,9 @@ impl WorkflowExecutor {
                             context.pending_sub_agent_completions.clone();
                         self.pending_final_review = context.pending_final_review.clone();
                         self.pending_completion_reports =
-                            context.pending_completion_reports.clone();
+                            Self::reconcile_pending_completion_reports(
+                                context.pending_completion_reports.clone(),
+                            );
                         self.queued_user_messages = context
                             .queued_user_messages
                             .iter()
@@ -4263,7 +4267,8 @@ impl WorkflowExecutor {
                         available_tools,
                         &self.policy,
                         &mut signal_rx,
-                        false, // allow brief reasoning-only turns; runtime still converges via tool observations and completion tools
+                        self.consecutive_no_tool_calls > 0,
+                        // Allow one brief reasoning-only turn, then require a concrete tool action.
                         runtime_reminder,
                     )
                     .await?;
@@ -8276,7 +8281,9 @@ impl WorkflowExecutor {
             sub_agent_sessions: self.sub_agent_sessions.clone(),
             pending_sub_agent_completions: self.pending_sub_agent_completions.clone(),
             pending_final_review: self.pending_final_review.clone(),
-            pending_completion_reports: self.pending_completion_reports.clone(),
+            pending_completion_reports: Self::reconcile_pending_completion_reports(
+                self.pending_completion_reports.clone(),
+            ),
             removed_queued_user_message_ids: self
                 .removed_queued_user_message_ids
                 .iter()
@@ -10754,10 +10761,13 @@ mod recovery_tests {
     #[test]
     fn no_tool_reminder_requires_authorization_before_mutation() {
         for required in [
-            "First determine whether the user authorized implementation",
-            "read-only question, investigation, explanation, review, or report has been answered",
-            "call `complete_workflow` with a complete non-empty `summary`",
-            "call `ask_user`",
+            "No tool was called",
+            "standalone question has already been answered",
+            "do not send another text-only reply",
+            "call `complete_workflow` with one complete non-empty `summary`",
+            "do not ask an optional follow-up",
+            "call one concrete work tool",
+            "Use `ask_user` only for a decision required by the original objective",
             "Only choose a mutating work tool when implementation is explicitly authorized",
             "your own proposal, no user response, or this reminder is not authorization",
         ] {

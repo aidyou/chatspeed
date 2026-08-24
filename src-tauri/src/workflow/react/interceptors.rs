@@ -109,15 +109,67 @@ impl WorkflowExecutor {
             self.context.current_segment_id,
             self.current_step,
         );
-        if self.pending_completion_reports.iter().any(|existing| {
-            existing.segment_id == draft.segment_id
-                && existing.content_hash == draft.content_hash
-                && existing.content == draft.content
-        }) {
-            return false;
+        let previous = self.pending_completion_reports.clone();
+        let mut candidates = self.pending_completion_reports.clone();
+        candidates.push(draft);
+        self.pending_completion_reports = Self::reconcile_pending_completion_reports(candidates);
+        self.pending_completion_reports != previous
+    }
+
+    pub(crate) fn reconcile_pending_completion_reports(
+        reports: Vec<PendingCompletionReport>,
+    ) -> Vec<PendingCompletionReport> {
+        let mut reconciled = Vec::with_capacity(reports.len());
+        for report in reports {
+            if let Some(existing) =
+                reconciled
+                    .iter_mut()
+                    .find(|existing: &&mut PendingCompletionReport| {
+                        existing.segment_id == report.segment_id
+                    })
+            {
+                if Self::pending_completion_report_is_preferred(&report, existing) {
+                    *existing = report;
+                }
+            } else {
+                reconciled.push(report);
+            }
         }
-        self.pending_completion_reports.push(draft);
-        true
+        reconciled
+    }
+
+    fn pending_completion_report_is_preferred(
+        candidate: &PendingCompletionReport,
+        existing: &PendingCompletionReport,
+    ) -> bool {
+        let candidate_length = candidate
+            .content
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .count();
+        let existing_length = existing
+            .content
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .count();
+
+        if candidate_length != existing_length {
+            return candidate_length > existing_length;
+        }
+
+        // When two reports have equal information density, preserve the existing
+        // similarity semantics and use the newer capture as the final tie-breaker.
+        let same_report_family =
+            Self::completion_reports_are_similar(&candidate.content, &existing.content)
+                || Self::completion_reports_have_high_similarity(
+                    &candidate.content,
+                    &existing.content,
+                );
+        if same_report_family {
+            candidate.created_at_step >= existing.created_at_step
+        } else {
+            false
+        }
     }
 
     fn final_review_mode_enabled(&self) -> bool {
@@ -3264,6 +3316,49 @@ mod tests {
 
         assert_eq!(resolved.content, latest_report);
         assert_eq!(resolved.source_message_id, Some(46));
+    }
+
+    #[test]
+    fn pending_completion_report_reconciliation_prefers_the_longer_report() {
+        let short = report(
+            "Answered the user's question.\nNo tools were needed.",
+            51,
+            3,
+        );
+        let long = report(
+            "Answered the user's question about the workflow runtime and its completion behavior.\nNo tools were needed for this explanation, and no further limitations remain.",
+            52,
+            3,
+        );
+
+        let reconciled = WorkflowExecutor::reconcile_pending_completion_reports(vec![short, long]);
+
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].source_message_id, Some(52));
+        assert!(reconciled[0].content.contains("workflow runtime"));
+    }
+
+    #[test]
+    fn pending_completion_report_reconciliation_keeps_one_report_per_segment() {
+        let reports = vec![
+            report("Completed segment three.\nNo limitations remain.", 53, 3),
+            report("Completed segment four.\nNo limitations remain.", 54, 4),
+            report(
+                "Completed segment three with the focused verification details.\nNo limitations remain.",
+                55,
+                3,
+            ),
+        ];
+
+        let reconciled = WorkflowExecutor::reconcile_pending_completion_reports(reports);
+
+        assert_eq!(reconciled.len(), 2);
+        assert!(reconciled
+            .iter()
+            .any(|report| { report.segment_id == 3 && report.source_message_id == Some(55) }));
+        assert!(reconciled
+            .iter()
+            .any(|report| { report.segment_id == 4 && report.source_message_id == Some(54) }));
     }
 
     #[test]

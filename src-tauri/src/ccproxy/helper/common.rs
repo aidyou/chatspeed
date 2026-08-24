@@ -22,6 +22,11 @@ pub struct CcproxyQuery {
     pub _debug: Option<bool>,
 }
 
+/// Rounds an outbound temperature to the maximum precision accepted by all supported providers.
+pub(crate) fn normalize_temperature_precision(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 /// Macro to unify sampling parameter merging logic across different data structures (JSON Map vs Struct).
 ///
 /// This macro implements the following hierarchy:
@@ -39,16 +44,25 @@ macro_rules! apply_sampling_params {
         // --- Temperature Logic ---
         let client_temp = $target.get("temperature").and_then(|v| v.as_f64());
         if let Some(t) = client_temp {
-            if $proxy.temp_ratio != 1.0 {
-                $target.insert(
-                    "temperature".into(),
-                    serde_json::json!(t * $proxy.temp_ratio as f64),
-                );
-            }
+            $target.insert(
+                "temperature".into(),
+                serde_json::json!(
+                    $crate::ccproxy::helper::common::normalize_temperature_precision(
+                        t * $proxy.temp_ratio as f64,
+                    )
+                ),
+            );
         } else if let Some(model_temp) = $proxy.temperature {
             // Valid range for temperature is typically 0.0 to 2.0
             if model_temp >= 0.0 && model_temp <= 2.0 {
-                $target.insert("temperature".into(), serde_json::json!(model_temp));
+                $target.insert(
+                    "temperature".into(),
+                    serde_json::json!(
+                        $crate::ccproxy::helper::common::normalize_temperature_precision(
+                            model_temp as f64,
+                        )
+                    ),
+                );
             }
         }
 
@@ -105,12 +119,18 @@ macro_rules! apply_sampling_params {
     ($target:expr, $proxy:expr, struct) => {
         // --- Temperature Logic ---
         if let Some(t) = $target.temperature {
-            if $proxy.temp_ratio != 1.0 {
-                $target.temperature = Some(t * $proxy.temp_ratio);
-            }
+            $target.temperature = Some(
+                $crate::ccproxy::helper::common::normalize_temperature_precision(
+                    t as f64 * $proxy.temp_ratio as f64,
+                ) as f32,
+            );
         } else if let Some(model_temp) = $proxy.temperature {
             if model_temp >= 0.0 && model_temp <= 2.0 {
-                $target.temperature = Some(model_temp);
+                $target.temperature = Some(
+                    $crate::ccproxy::helper::common::normalize_temperature_precision(
+                        model_temp as f64,
+                    ) as f32,
+                );
             }
         }
 
@@ -1081,6 +1101,27 @@ mod tests {
             stop: Vec::new(),
             tool_compat_mode: None,
         }
+    }
+
+    #[test]
+    fn sampling_temperature_is_rounded_to_two_decimal_places() {
+        let mut model = proxy_model();
+        model.temp_ratio = 0.3;
+
+        let mut direct_body = serde_json::json!({ "temperature": 0.6 });
+        ModelResolver::merge_parameters_json(&mut direct_body, &model);
+        assert_eq!(direct_body["temperature"], serde_json::json!(0.18));
+        assert_eq!(
+            serde_json::to_string(&direct_body).unwrap(),
+            r#"{"temperature":0.18}"#
+        );
+
+        let mut unified_request = crate::ccproxy::adapter::unified::UnifiedRequest {
+            temperature: Some(0.6),
+            ..Default::default()
+        };
+        ModelResolver::merge_parameters_unified(&mut unified_request, &model);
+        assert_eq!(unified_request.temperature, Some(0.18));
     }
 
     #[test]

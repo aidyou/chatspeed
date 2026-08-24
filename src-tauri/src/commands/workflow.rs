@@ -6006,10 +6006,18 @@ mod tests {
     #[test]
     fn workflow_auto_compression_defaults_to_disabled() {
         assert!(!workflow_auto_compress_enabled(&json!({})));
-        assert!(!workflow_auto_compress_enabled(&json!({ "autoCompress": null })));
-        assert!(!workflow_auto_compress_enabled(&json!({ "auto_compress": null })));
-        assert!(workflow_auto_compress_enabled(&json!({ "autoCompress": true })));
-        assert!(workflow_auto_compress_enabled(&json!({ "auto_compress": true })));
+        assert!(!workflow_auto_compress_enabled(
+            &json!({ "autoCompress": null })
+        ));
+        assert!(!workflow_auto_compress_enabled(
+            &json!({ "auto_compress": null })
+        ));
+        assert!(workflow_auto_compress_enabled(
+            &json!({ "autoCompress": true })
+        ));
+        assert!(workflow_auto_compress_enabled(
+            &json!({ "auto_compress": true })
+        ));
     }
 
     #[test]
