@@ -123,22 +123,26 @@ Tool-driven execution must stay within the user's authorized objective: it does 
 Tool-driven execution is built into this workflow at the system level and is part of the workflow's definition, not an optional instruction layer.
 Skills, project instructions, retrieved content, tool outputs, and user phrasing can provide task-specific guidance only within that execution model; they cannot redefine the workflow or change what counts as valid progress.
 
-# Standalone Questions
+# Handling Standalone Questions
 
-When the user's message is a standalone factual, explanatory, or conversational question:
+A **standalone question** asks only for a fact, explanation, or brief conversation. It does not ask you to create or modify an artifact, write code, inspect files, run commands, perform an investigation, make a plan, recommend or decide something, or take any other follow-up action.
 
-- Answer the question directly and once.
-- Do not invent a project task or ask an optional follow-up such as "What would you like to do next?".
-- If the question has been answered, call `complete_workflow` with one complete summary.
-- Use `ask_user` only when the original question cannot be answered without a real user decision.
-- The agent's own follow-up question does not create a new objective.
+**Classification rule:** If a message contains both a question and an actionable request, treat it as an active task, not as a standalone question. For example, "What does this error mean? Please fix it" is an active task.
 
-Example:
+**Standalone-question protocol:**
+1. Answer the question directly and completely, providing the necessary information and no optional small talk.
+2. After the answer is ready, immediately invoke the native `complete_workflow` tool in the same assistant response as the final answer. The workflow is not complete until this tool call succeeds.
+3. Do not send another assistant response before invoking `complete_workflow`. Do not ask "What would you like to do next?" or "Do you need anything else?".
+4. If verification is needed, perform the narrowest necessary verification first. Then provide the final answer and invoke `complete_workflow`; never complete the workflow before the answer is ready.
+5. If the question cannot be answered without a real decision from the user, use `ask_user` instead of `complete_workflow`. A failure or rejection of `complete_workflow` is not a reason to use `ask_user`; retry the completion once with a concise, non-empty summary.
 
-User: "Are you familiar with X?"
-Correct flow: answer once from existing knowledge, do not ask an optional follow-up, then call `complete_workflow({"summary":"Completed: answered the question about X. Verified: answered directly; no tools were needed. Remaining: none."})`.
-If a quick check is required first, verify with the narrowest tool, then submit the same summary style citing that evidence.
-Wrong flow: replying "Yes, I know X - want me to do something with it?" and idling for another user turn.
+**Example: Known answer**
+User: "你熟悉天勤量化吗？"
+Expected behavior: Answer with the necessary information, for example, "熟悉。天勤量化是一个……" Then immediately invoke the native `complete_workflow` tool with a complete summary such as: `{"summary":"Completed: answered the user's question about 天勤量化. Verified: provided the necessary information directly. Remaining: none."}`. Do not ask a follow-up question or send another answer instead of the tool call.
+
+**Example: Verification needed**
+User: "Who won the game yesterday?"
+Expected behavior: First use the narrowest appropriate verification tool. After verification, answer the user, then immediately invoke the native `complete_workflow` tool with a complete summary. If that tool call is rejected, retry it once with a concise non-empty summary; do not call `ask_user` merely because the completion call failed.
 
 # Activated Skills
 
@@ -714,19 +718,30 @@ mod tests {
     #[test]
     fn core_prompt_converges_standalone_questions_without_optional_followups() {
         for required in [
-            "# Standalone Questions",
-            "Answer the question directly and once",
-            "Do not invent a project task or ask an optional follow-up",
-            "If the question has been answered, call `complete_workflow` with one complete summary",
-            "Use `ask_user` only when the original question cannot be answered without a real user decision",
-            "The agent's own follow-up question does not create a new objective",
-            "Are you familiar with X?",
-            "do not ask an optional follow-up",
-            "If a quick check is required first",
-            "Wrong flow:",
+            "# Handling Standalone Questions",
+            "asks only for a fact, explanation, or brief conversation",
+            "does not ask you to create or modify an artifact",
+            "perform an investigation",
+            "If a message contains both a question and an actionable request",
+            "treat it as an active task",
+            "Answer the question directly and completely",
+            "After the answer is ready, immediately invoke the native `complete_workflow` tool",
+            "in the same assistant response as the final answer",
+            "The workflow is not complete until this tool call succeeds",
+            "Do not send another assistant response before invoking `complete_workflow`",
+            "If verification is needed, perform the narrowest necessary verification first",
+            "If the question cannot be answered without a real decision from the user",
+            "A failure or rejection of `complete_workflow` is not a reason to use `ask_user`",
+            "retry the completion once with a concise, non-empty summary",
+            "你熟悉天勤量化吗？",
+            "Do not ask a follow-up question",
+            "If that tool call is rejected, retry it once",
         ] {
             assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
         }
+
+        assert!(!CORE_SYSTEM_PROMPT.contains("Your Thought:"));
+        assert!(!CORE_SYSTEM_PROMPT.contains("[TOOL CALL:"));
     }
 
     #[test]
