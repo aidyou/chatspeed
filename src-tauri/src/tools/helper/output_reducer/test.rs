@@ -23,10 +23,6 @@ impl CommandOutputReducer for TestOutputReducer {
             None => raw_content.to_string(),
         }
     }
-
-    fn persist_complete_output(&self) -> bool {
-        true
-    }
 }
 
 enum TestFramework {

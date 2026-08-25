@@ -61,9 +61,7 @@ pub(crate) fn prepare_shell_output(
             (
                 reduction.content.clone(),
                 reduction.content.clone(),
-                reduction.persist_complete_output
-                    || reduction.preserve_raw_output
-                    || reduction.content != raw_content,
+                reduction.content != raw_content,
             )
         } else if let Some(json_output) = json_output {
             let json_content = format_json_output(exit_code, &json_output.compact_content);
@@ -86,7 +84,9 @@ pub(crate) fn prepare_shell_output(
             (display_content, llm_content, output_was_reduced)
         };
 
-    if llm_content != raw_content && llm_content.chars().count() >= raw_content.chars().count() {
+    if llm_content != raw_content
+        && reduced_output_with_tags(&llm_content).chars().count() >= raw_content.chars().count()
+    {
         display_content.clone_from(&raw_content);
         llm_content.clone_from(&raw_content);
         output_was_reduced = false;
@@ -451,6 +451,10 @@ pub(crate) fn strip_ansi_escape_sequences(content: &str) -> String {
     AnsiOutputSanitizer::default().sanitize(content)
 }
 
+fn reduced_output_with_tags(content: &str) -> String {
+    format!("<reduced_output>\n{content}\n</reduced_output>")
+}
+
 fn format_json_output(exit_code: i32, compact_json: &str) -> String {
     format!("Exit code: {exit_code}\n\nstdout (JSON):\n{compact_json}")
 }
@@ -597,10 +601,10 @@ fn truncate_with_marker(content: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_compound_shell_tool_result, build_shell_tool_result, normalize_shell_output_streams,
-        prepare_shell_output, should_render_stderr_line_as_stdout,
-        should_suppress_incidental_termination_stderr, strip_ansi_escape_sequences,
-        CompoundShellStageResult, GENERIC_LLM_MAX_CHARS,
+        build_compound_shell_tool_result, build_shell_tool_result, format_shell_output,
+        normalize_shell_output_streams, prepare_shell_output, reduced_output_with_tags,
+        should_render_stderr_line_as_stdout, should_suppress_incidental_termination_stderr,
+        strip_ansi_escape_sequences, CompoundShellStageResult, GENERIC_LLM_MAX_CHARS,
     };
     use crate::libs::ai_temp::{
         resolve_ai_temp_path, PersistedToolOutput, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
@@ -802,33 +806,18 @@ mod tests {
     }
 
     #[test]
-    fn valid_pretty_json_is_compacted_and_original_output_is_persisted() {
+    fn valid_pretty_json_keeps_raw_output_when_reduction_with_tags_is_not_shorter() {
         let stdout = "{\n  \"items\": [\n    { \"id\": 1 },\n    { \"id\": 2 }\n  ]\n}\n";
         let result = build_shell_tool_result("cargo check --workspace", 0, stdout, "");
+        let expected = format!("Exit code: 0\n\nstdout:\n{stdout}");
         let content = result.content.as_deref().expect("display content missing");
         let structured = result
             .structured_content
             .expect("structured content missing");
 
-        assert_eq!(
-            content,
-            "Exit code: 0\n\nstdout (JSON):\n{\"items\":[{\"id\":1},{\"id\":2}]}"
-        );
-        assert_eq!(structured["llm_content"].as_str(), Some(content));
-        assert_eq!(
-            structured["persisted_output"]["reason"].as_str(),
-            Some("reduced")
-        );
-
-        let ai_path = structured["persisted_output"]["path"]
-            .as_str()
-            .expect("persisted output path missing");
-        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
-        assert_eq!(
-            fs::read_to_string(&physical_path).unwrap(),
-            format!("Exit code: 0\n\nstdout:\n{stdout}")
-        );
-        fs::remove_file(physical_path).unwrap();
+        assert_eq!(content, expected);
+        assert_eq!(structured["llm_content"].as_str(), Some(expected.as_str()));
+        assert!(structured.get("persisted_output").is_none());
     }
 
     #[test]
@@ -1154,7 +1143,19 @@ mod tests {
             let structured = result
                 .structured_content
                 .expect("structured content missing");
-            assert_eq!(structured["llm_content"].as_str(), Some(expected));
+            let raw_content = format_shell_output(exit_code, stdout, stderr);
+            let expected_content = if reduced_output_with_tags(expected).chars().count()
+                < raw_content.chars().count()
+            {
+                expected
+            } else {
+                raw_content.as_str()
+            };
+            assert_eq!(structured["llm_content"].as_str(), Some(expected_content));
+            if expected_content == raw_content {
+                assert!(structured.get("persisted_output").is_none());
+                continue;
+            }
             assert_eq!(
                 structured["persisted_output"]["reason"].as_str(),
                 Some("reduced")
@@ -1200,15 +1201,7 @@ mod tests {
                 Some(expected.as_str()),
                 "expected complete diagnostics for {command}"
             );
-            assert_eq!(
-                structured["persisted_output"]["reason"].as_str(),
-                Some("reduced")
-            );
-
-            let ai_path = structured["persisted_output"]["path"]
-                .as_str()
-                .expect("persisted output path missing");
-            fs::remove_file(resolve_ai_temp_path(Path::new(ai_path))).unwrap();
+            assert!(structured.get("persisted_output").is_none());
         }
     }
 
@@ -1236,13 +1229,7 @@ mod tests {
                 Some(expected.as_str()),
                 "expected complete diagnostics for {command}"
             );
-
-            let ai_path = structured["persisted_output"]["path"]
-                .as_str()
-                .expect("persisted output path missing");
-            let physical_path = resolve_ai_temp_path(Path::new(ai_path));
-            assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
-            fs::remove_file(physical_path).unwrap();
+            assert!(structured.get("persisted_output").is_none());
         }
     }
 
@@ -1264,13 +1251,7 @@ mod tests {
                 Some(expected.as_str()),
                 "expected complete diagnostics for {command}"
             );
-
-            let ai_path = structured["persisted_output"]["path"]
-                .as_str()
-                .expect("persisted output path missing");
-            let physical_path = resolve_ai_temp_path(Path::new(ai_path));
-            assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
-            fs::remove_file(physical_path).unwrap();
+            assert!(structured.get("persisted_output").is_none());
         }
     }
 
@@ -1287,12 +1268,7 @@ mod tests {
         let expected = format!("Exit code: 129\n\nstderr:\n{diagnostic}");
         assert_eq!(structured["llm_content"].as_str(), Some(expected.as_str()));
 
-        let ai_path = structured["persisted_output"]["path"]
-            .as_str()
-            .expect("persisted output path missing");
-        let physical_path = resolve_ai_temp_path(Path::new(ai_path));
-        assert_eq!(fs::read_to_string(&physical_path).unwrap(), expected);
-        fs::remove_file(physical_path).unwrap();
+        assert!(structured.get("persisted_output").is_none());
     }
 
     #[test]

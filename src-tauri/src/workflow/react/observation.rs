@@ -48,9 +48,10 @@ fn truncate_text_for_preview(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn line_based_preview(value: &str, max_chars: usize) -> String {
+fn line_based_preview(value: &str, max_chars: usize) -> (String, usize) {
     let mut preview = String::new();
     let mut used_chars = 0;
+    let mut included_lines = 0;
 
     for line in value.lines() {
         let line_chars = line.chars().count();
@@ -65,12 +66,13 @@ fn line_based_preview(value: &str, max_chars: usize) -> String {
         }
         preview.push_str(line);
         used_chars += line_chars;
+        included_lines += 1;
     }
 
     if preview.is_empty() {
-        truncate_text_for_preview(value, max_chars)
+        (truncate_text_for_preview(value, max_chars), 0)
     } else {
-        preview
+        (preview, included_lines)
     }
 }
 
@@ -316,16 +318,22 @@ impl ObservationReinforcer {
                 } else if tool_name == TOOL_BASH && persisted_output.is_some() {
                     let (file_path, file_size, persistence_reason) =
                         persisted_output.unwrap_or_default();
-                    let preview = line_based_preview(&raw_res, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
+                    let (preview, preview_next_offset) =
+                        line_based_preview(&raw_res, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
+                    let next_offset = if persistence_reason == "reduced" {
+                        0
+                    } else {
+                        preview_next_offset
+                    };
                     let reminder = if persistence_reason == "reduced" {
                         format!(
-                            "<SYSTEM_REMINDER>bash output was reduced for this command. The command-aware summary is usually sufficient; inspect the complete output only when it lacks a fact needed for the next action. The complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 or grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
-                            file_path, file_size,
+                            "<SYSTEM_REMINDER>bash output was reduced for this command. The command-aware summary is usually sufficient; only read the complete original output when the summary is missing a fact needed for the next action. The complete output was saved to '{}'. Use read_file with offset=0 or grep on this file path only when that extra information is necessary. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
+                            file_path,
                         )
                     } else {
                         format!(
-                            "<SYSTEM_REMINDER>bash output exceeded {} chars, so the complete output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 to inspect the complete output, or use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
-                            LARGE_TOOL_OUTPUT_CHAR_LIMIT, file_path, file_size,
+                            "<SYSTEM_REMINDER>bash output exceeded {} chars, so the complete output was saved to '{}'. The preview above contains the beginning of the output; if more information is needed, continue with read_file offset={} instead of rereading the preview from the beginning. You can also use grep on this file path to find specific facts. Treat the saved file as the source of truth instead of rerunning the command solely to recover omitted output.</SYSTEM_REMINDER>",
+                            LARGE_TOOL_OUTPUT_CHAR_LIMIT, file_path, next_offset,
                         )
                     };
                     let llm_content = llm_content_override
@@ -343,8 +351,8 @@ impl ObservationReinforcer {
                     };
                     ReinforcedResult {
                         content: format!(
-                            "<{content_tag} path=\"{}\" next_offset=\"0\" file_size_bytes=\"{}\"{additional_attributes}>\n{}\n</{content_tag}>\n{}",
-                            file_path, file_size, preview, reminder,
+                            "<{content_tag} path=\"{}\" next_offset=\"{}\" file_size_bytes=\"{}\"{additional_attributes}>\n{}\n</{content_tag}>\n{}",
+                            file_path, next_offset, file_size, preview, reminder,
                         ),
                         llm_content,
                         title,
@@ -373,30 +381,38 @@ impl ObservationReinforcer {
                         | TOOL_PLAN_WRITE_NOTE
                 ) && res_for_limit.chars().count() > LARGE_TOOL_OUTPUT_CHAR_LIMIT
                 {
-                    let preview =
-                        truncate_text_for_preview(res_for_limit, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
                     match persist_overflow(&raw_res) {
-                        Ok(persisted) => ReinforcedResult {
-                            content: format!(
-                                "<truncated_content path=\"{}\" next_offset=\"0\" file_size_bytes=\"{}\">\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output exceeded {} chars after JSON compaction when applicable, so the complete original output was saved to '{}'. File size: {} bytes. Use read_file with offset=0 or grep on this file path to inspect the omitted content.</SYSTEM_REMINDER>",
-                                persisted.path,
-                                persisted.file_size_bytes,
-                                preview,
-                                LARGE_TOOL_OUTPUT_CHAR_LIMIT,
-                                persisted.path,
-                                persisted.file_size_bytes,
-                            ),
-                            llm_content: llm_content_override.clone(),
-                            title,
-                            summary: format!("{} (Persisted overflow)", summary),
-                            is_error: false,
-                            error_type: None,
-                            display_type: display_type.to_string(),
-                            approval_status: None,
-                            observation_kind: None,
-                        },
+                        Ok(persisted) => {
+                            let (preview, next_offset) =
+                                line_based_preview(res_for_limit, LARGE_TOOL_OUTPUT_CHAR_LIMIT);
+                            ReinforcedResult {
+                                content: format!(
+                                    "<truncated_content path=\"{}\" next_offset=\"{}\" file_size_bytes=\"{}\">\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output exceeded {} chars after JSON compaction when applicable, so the complete original output was saved to '{}'. File size: {} bytes. The preview above contains the beginning of the output; if more information is needed, continue with read_file offset={} instead of rereading the preview from the beginning. You can also use grep on this file path to find specific facts.</SYSTEM_REMINDER>",
+                                    persisted.path,
+                                    next_offset,
+                                    persisted.file_size_bytes,
+                                    preview,
+                                    LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+                                    persisted.path,
+                                    persisted.file_size_bytes,
+                                    next_offset,
+                                ),
+                                llm_content: llm_content_override.clone(),
+                                title,
+                                summary: format!("{} (Persisted overflow)", summary),
+                                is_error: false,
+                                error_type: None,
+                                display_type: display_type.to_string(),
+                                approval_status: None,
+                                observation_kind: None,
+                            }
+                        }
                         Err(error) => {
                             log::warn!("Failed to persist complete tool output: {}", error);
+                            let preview = truncate_text_for_preview(
+                                res_for_limit,
+                                LARGE_TOOL_OUTPUT_CHAR_LIMIT,
+                            );
                             ReinforcedResult {
                                 content: format!(
                                     "<truncated_content>\n{}\n</truncated_content>\n<SYSTEM_REMINDER>Output truncated at {} chars after JSON compaction when applicable. Failed to persist the complete original output, so narrow the next query or request a smaller range.</SYSTEM_REMINDER>",
@@ -966,13 +982,13 @@ mod tests {
         assert!(reinforced
             .content
             .contains("<truncated_content path=\"/tmp/"));
-        assert!(reinforced.content.contains("next_offset=\"0\""));
+        assert!(reinforced.content.contains("next_offset=\"19\""));
         assert!(reinforced
             .content
             .contains("complete original output was saved"));
         assert!(reinforced
             .content
-            .contains("Use read_file with offset=0 or grep"));
+            .contains("continue with read_file offset=19"));
         assert!(reinforced.summary.contains("Persisted overflow"));
 
         let path = persisted_path(&reinforced.content);
@@ -1128,7 +1144,10 @@ mod tests {
         );
 
         assert!(reinforced.content.contains("path=\"/tmp/"));
-        assert!(reinforced.content.contains("read_file with offset=0"));
+        assert!(reinforced.content.contains("next_offset=\"219\""));
+        assert!(reinforced
+            .content
+            .contains("continue with read_file offset=219"));
         assert!(reinforced.summary.contains("Persisted overflow"));
         let llm_content = reinforced.llm_content.as_deref().unwrap_or_default();
         assert!(llm_content.contains("Reduced shell summary"));

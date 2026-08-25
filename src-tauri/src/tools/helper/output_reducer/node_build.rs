@@ -37,10 +37,6 @@ impl CommandOutputReducer for NodeBuildReducer {
             results.join("\n")
         )
     }
-
-    fn persist_complete_output(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Default)]
@@ -327,7 +323,6 @@ mod tests {
             reduction.content,
             "Exit code: 0\n\nBuild result:\nBuild output: 2 files, 3.23 MB (gzip: 1023.37 kB across 1 file)\n✓ built in 15.99s\nFinished `release` profile [optimized] target(s) in 2m 30s\nBundling ChatSpeed.app"
         );
-        assert!(reduction.persist_complete_output);
         assert!(!reduction.content.contains("bin/assets/index.js"));
         assert!(!reduction.content.contains("Some chunks are larger"));
     }
@@ -351,7 +346,6 @@ mod tests {
                 reduction.content,
                 "Exit code: 0\n\nBuild result:\nBuild output: 3 files, 3.23 MB (gzip: 988.06 kB across 2 files)\n✓ built in 15.99s"
             );
-            assert!(reduction.persist_complete_output);
             assert!(!reduction.content.contains("dist/index.html"));
             assert!(!reduction
                 .content
@@ -404,6 +398,5 @@ mod tests {
             .content
             .contains("error: failed to build application"));
         assert!(!reduction.content.contains("output line 1\n"));
-        assert!(reduction.persist_complete_output);
     }
 }

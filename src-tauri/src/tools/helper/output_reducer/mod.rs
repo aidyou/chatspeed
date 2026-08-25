@@ -13,8 +13,6 @@ pub(crate) use rust_go::is_go_build_or_test_command;
 
 pub(crate) struct CommandOutputReduction {
     pub content: String,
-    pub persist_complete_output: bool,
-    pub preserve_raw_output: bool,
 }
 
 pub(crate) trait CommandOutputReducer {
@@ -26,10 +24,6 @@ pub(crate) trait CommandOutputReducer {
     }
 
     fn reduce(&self, normalized_command: &str, exit_code: i32, raw_content: &str) -> String;
-
-    fn persist_complete_output(&self) -> bool {
-        false
-    }
 
     fn preserve_raw_output(&self, _exit_code: i32) -> bool {
         false
@@ -68,11 +62,7 @@ pub(crate) fn reduce_command_output(
         return None;
     }
 
-    Some(CommandOutputReduction {
-        content,
-        persist_complete_output: reducer.persist_complete_output(),
-        preserve_raw_output,
-    })
+    Some(CommandOutputReduction { content })
 }
 
 #[cfg(test)]
