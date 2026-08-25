@@ -7,7 +7,7 @@
             line-height: 1.4;
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: var(--cs-space-xs);
         }
         .approval-menu-summary{
             color: var(--cs-text-color-secondary);
@@ -59,12 +59,12 @@
   .approval-menu-item {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--cs-space-xs);
     min-width: 220px;
   }
 
   .approval-menu-title {
-    font-size: 12px;
+    font-size: var(--cs-font-size-sm);
     font-weight: 600;
     color: var(--cs-text-color-primary);
     display: flex;
@@ -73,7 +73,7 @@
   }
 
   .approval-menu-summary {
-    font-size: 12px;
+    font-size: var(--cs-font-size-sm);
     color: var(--cs-text-color-secondary);
     white-space: nowrap;
     overflow: hidden;

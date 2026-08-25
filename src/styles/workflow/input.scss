@@ -20,26 +20,26 @@ footer.input-container {
         max-height: 300px;
         overflow-y: auto;
         z-index: 100;
-        padding: 4px;
+        padding: var(--cs-space-xs);
 
         &.file-suggestion-panel.compact {
-            padding: 2px;
+            padding: var(--cs-space-xxs);
 
             .command-item {
                 flex-direction: row;
                 align-items: center;
-                padding: 6px 10px;
-                gap: 8px;
+                padding: var(--cs-space-xs) var(--cs-space-sm);
+                gap: var(--cs-space-sm);
 
                 .file-icon {
                     flex-shrink: 0;
                     color: var(--cs-text-color-secondary);
-                    font-size: 14px;
+                    font-size: var(--cs-font-size);
                 }
 
                 .file-path {
                     flex: 1;
-                    font-size: 13px;
+                    font-size: var(--cs-font-size);
                     color: var(--cs-text-color-primary);
                     overflow: hidden;
                     text-overflow: ellipsis;
@@ -49,9 +49,9 @@ footer.input-container {
 
                 .file-root-hint {
                     flex-shrink: 0;
-                    font-size: 11px;
+                    font-size: var(--cs-space-xs);
                     color: var(--cs-text-color-secondary);
-                    margin-left: 4px;
+                    margin-left: var(--cs-space-xs);
                     opacity: 0.7;
                 }
 
@@ -68,12 +68,12 @@ footer.input-container {
         }
 
         .command-item {
-            padding: 8px 12px;
+            padding: var(--cs-space-sm) var(--cs-space);
             cursor: pointer;
             border-radius: var(--cs-border-radius);
             display: flex;
             flex-direction: column;
-            gap: 2px;
+            gap: var(--cs-space-xxs);
 
             &:hover,
             &.active {
@@ -82,12 +82,12 @@ footer.input-container {
 
             .command-name {
                 font-weight: 600;
-                font-size: 13px;
+                font-size: var(--cs-font-size);
                 color: var(--cs-color-primary);
             }
 
             .command-desc {
-                font-size: 12px;
+                font-size: var(--cs-font-size-sm);
                 color: var(--cs-text-color-secondary);
                 white-space: nowrap;
                 overflow: hidden;
@@ -97,15 +97,15 @@ footer.input-container {
 
         .command-group {
             &:not(:first-child) {
-                margin-top: 6px;
-                padding-top: 6px;
+                margin-top: var(--cs-space-xs);
+                padding-top: var(--cs-space-xs);
                 border-top: 1px solid var(--cs-border-color);
             }
         }
 
         .command-group-title {
             padding: 0;
-            font-size: 11px;
+            font-size: var(--cs-font-size-xs);
             font-weight: 600;
             color: var(--cs-text-color-secondary);
             text-transform: uppercase;
@@ -116,8 +116,8 @@ footer.input-container {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 8px;
-            padding: 6px 10px 4px;
+            gap: var(--cs-space-sm);
+            padding: var(--cs-space-xs) var(--cs-space-sm);
         }
 
         .command-group-action {
@@ -176,7 +176,7 @@ footer.input-container {
                     &:before {
                         position: absolute;
                         top: -3px;
-                        left: 3px;
+                        left: var(--cs-space-xxs);
                     }
                 }
             }
@@ -270,8 +270,8 @@ footer.input-container {
 
             &::before {
                 position: absolute;
-                top: 3px;
-                right: 3px;
+                top: var(--cs-space-xxs);
+                right: var(--cs-space-xxs);
                 width: 11px;
                 height: 11px;
                 border-top: 1px solid color-mix(in srgb, var(--cs-text-color-primary) 42%, transparent);
@@ -393,12 +393,12 @@ footer.input-container {
                 flex-direction: row;
                 justify-content: flex-start;
                 align-items: center;
-                gap: 8px;
+                gap: var(--cs-space-sm);
 
                 .final-audit-toggle {
                     display: flex;
                     align-items: center;
-                    gap: 4px;
+                    gap: var(--cs-space-xs);
                     cursor: pointer;
                     transition: all 0.2s;
 
@@ -416,11 +416,11 @@ footer.input-container {
                     }
 
                     .cs {
-                        font-size: 14px;
+                        font-size: var(--cs-font-size);
                     }
 
                     .audit-label {
-                        font-size: 9px;
+                        font-size: var(--cs-font-size-xs);
                         font-weight: bold;
                         color: var(--cs-text-color-secondary);
                     }
@@ -590,7 +590,7 @@ footer.input-container {
     }
 
     .thinking-level-option {
-        padding: 2px 7px;
+        padding: var(--cs-space-xxs) var(--cs-space-xs);
         border: 1px solid var(--cs-border-color);
         border-radius: var(--cs-border-radius-sm);
         background: transparent;
@@ -632,11 +632,11 @@ footer.input-container {
         justify-content: center;
         min-width: 15px;
         height: 15px;
-        padding: 0 3px;
+        padding: 0 var(--cs-space-xxs);
         border-radius: var(--cs-border-radius-lg);
         background: var(--el-color-primary);
         color: var(--cs-text-color-on-primary);
-        font-size: 9px;
+        font-size: var(--cs-font-size-xs);
         font-weight: 700;
         line-height: 1;
     }
@@ -706,15 +706,15 @@ footer.input-container {
     .auto-approved-panel {
         max-height: 400px;
         overflow-y: auto;
-        padding: 12px;
+        padding: var(--cs-space-sm);
 
         .panel-section {
             .section-header {
                 display: flex;
                 align-items: center;
-                gap: 8px;
-                padding-bottom: 10px;
-                margin-bottom: 8px;
+                gap: var(--cs-space-sm);
+                padding-bottom: var(--cs-space-sm);
+                margin-bottom: var(--cs-space-sm);
                 border-bottom: 1px solid var(--cs-border-color-light);
 
                 .section-icon {
@@ -729,11 +729,11 @@ footer.input-container {
                 }
 
                 .section-count {
-                    font-size: 11px;
+                    font-size: var(--cs-font-size-sm);
                     font-weight: 600;
                     color: var(--cs-text-color-secondary);
                     background: var(--cs-fill-color-light);
-                    padding: 2px 8px;
+                    padding: var(--cs-space-xxs) var(--cs-space-sm);
                     border-radius: var(--cs-border-radius-round);
                     min-width: 20px;
                     text-align: center;
@@ -743,18 +743,18 @@ footer.input-container {
             .section-content {
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
+                gap: var(--cs-space-xs);
             }
 
             .section-footer {
                 display: flex;
                 align-items: center;
-                gap: 6px;
-                margin-top: 10px;
-                padding: 8px;
+                gap: var(--cs-space-xs);
+                margin-top: var(--cs-space-sm);
+                padding: var(--cs-space-sm);
                 background: var(--el-color-primary-light-9);
                 border-radius: var(--cs-border-radius-sm);
-                font-size: 11px;
+                font-size: var(--cs-font-size-sm);
                 color: var(--el-color-primary);
 
                 .cs {
@@ -766,17 +766,17 @@ footer.input-container {
         .section-divider {
             height: 1px;
             background: var(--cs-border-color);
-            margin: 16px 0;
+            margin: var(--cs-space) 0;
         }
 
         .tool-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 8px 10px;
+            padding: var(--cs-space-sm);
             border-radius: var(--cs-border-radius-sm);
             transition: all 0.2s;
-            gap: 8px;
+            gap: var(--cs-space-sm);
 
             &:hover {
                 background-color: var(--cs-bg-color-light);
@@ -785,7 +785,7 @@ footer.input-container {
             &.shell-item {
                 flex-direction: row;
                 align-items: flex-start;
-                gap: 4px;
+                gap: var(--cs-space-xs);
             }
 
             .tool-info {
@@ -793,11 +793,11 @@ footer.input-container {
                 min-width: 0;
                 display: flex;
                 flex-direction: column;
-                gap: 2px;
+                gap: var(--cs-space-xxs);
             }
 
             .tool-name {
-                font-size: 12px;
+                font-size: var(--cs-font-size-sm);
                 color: var(--cs-text-color-primary);
                 font-family: var(--cs-font-family-mono, monospace);
                 overflow: hidden;
@@ -806,14 +806,14 @@ footer.input-container {
 
                 &.shell-pattern {
                     color: var(--cs-color-primary);
-                    font-size: 11px;
+                    font-size: var(--cs-font-size-sm);
                     word-break: break-all;
                     white-space: pre-wrap;
                 }
             }
 
             .tool-desc {
-                font-size: 11px;
+                font-size: var(--cs-font-size-sm);
                 color: var(--cs-text-color-secondary);
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -822,7 +822,7 @@ footer.input-container {
 
             .remove-btn {
                 flex-shrink: 0;
-                padding: 4px;
+                padding: var(--cs-space-xs);
                 height: 24px;
                 width: 24px;
 
@@ -837,8 +837,8 @@ footer.input-container {
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 24px;
-            gap: 8px;
+            padding: var(--cs-space-md);
+            gap: var(--cs-space-sm);
 
             .empty-icon {
                 color: var(--cs-text-color-disabled);
@@ -862,8 +862,8 @@ footer.input-container {
         right: -6px;
         min-width: 16px;
         height: 16px;
-        padding: 0 4px;
-        font-size: 10px;
+        padding: 0 var(--cs-space-xs);
+        font-size: var(--cs-font-size-xs);
         font-weight: 600;
         color: white;
         background: var(--el-color-primary);
@@ -884,10 +884,10 @@ footer.input-container {
 .auto-approved-tools {
     .header {
         font-weight: 600;
-        font-size: 14px;
+        font-size: var(--cs-font-size);
         color: var(--cs-text-color-primary);
-        margin-bottom: 8px;
-        padding-bottom: 8px;
+        margin-bottom: var(--cs-space-sm);
+        padding-bottom: var(--cs-space-sm);
         border-bottom: 1px solid var(--cs-border-color);
     }
 
@@ -895,8 +895,8 @@ footer.input-container {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 6px 8px;
-        border-radius: 4px;
+        padding: var(--cs-space-xs) var(--cs-space-sm);
+        border-radius: var(--cs-border-radius);
         transition: background-color 0.2s;
 
         &:hover {
@@ -915,8 +915,8 @@ footer.input-container {
 
         .el-button {
             flex-shrink: 0;
-            margin-left: 8px;
-            padding: 4px;
+            margin-left: var(--cs-space-sm);
+            padding: var(--cs-space-xs);
         }
     }
 }

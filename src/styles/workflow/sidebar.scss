@@ -12,7 +12,7 @@
 
     :deep(.el-tabs__header) {
       margin: 0;
-      padding: 0 15px;
+      padding: 0 var(--cs-space);
       background: var(--cs-bg-color);
     }
 
@@ -54,7 +54,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      gap: var(--cs-space-xs);
       padding: var(--cs-space-sm) 0;
       border-bottom: 1px solid var(--cs-border-color);
     }
@@ -111,7 +111,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      gap: var(--cs-space-xs);
     }
 
     .compact-automation-group + .compact-automation-group {
@@ -358,7 +358,7 @@
         transition: background-color 0.2s ease;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: var(--cs-space-xs);
         position: relative;
 
         &:hover:not(.disabled) {
@@ -382,13 +382,13 @@
           text-overflow: ellipsis;
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: var(--cs-space-xs);
         }
 
         .workflow-status {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: var(--cs-space-xs);
           font-size: var(--cs-font-size-xs);
           color: var(--cs-text-color-secondary);
 
@@ -449,7 +449,7 @@
           top: 50%;
           transform: translateY(-50%);
           display: flex;
-          gap: 4px;
+          gap: var(--cs-space-xs);
           opacity: 0;
           transition: opacity 0.2s ease;
 
@@ -503,7 +503,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--cs-space);
-    margin-top: 4px;
+    margin-top: var(--cs-space-xs);
     color: var(--cs-text-color-secondary);
     font-size: var(--cs-font-size-xs);
   }
@@ -512,13 +512,13 @@
     display: flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 6px;
+    gap: var(--cs-space-xs);
   }
 
   .workflow-sidebar-tooltip__root {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--cs-space-xs);
     min-width: 0;
     overflow: hidden;
     text-align: right;
@@ -582,7 +582,7 @@
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: var(--cs-space-sm);
 
     &.active {
       color: var(--cs-text-color-primary);
@@ -619,8 +619,8 @@
 .todo-floating-panel {
   position: absolute;
   bottom: 100%; // Sit on top of the footer
-  left: 20px;
-  right: 20px;
+  left: var(--cs-space-md);
+  right: var(--cs-space-md);
   z-index: 100;
   pointer-events: none; // Allow clicks to pass through to messages below
   display: flex;
@@ -633,7 +633,7 @@
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-lg);
     box-shadow: var(--el-box-shadow-light);
-    padding: 8px 12px;
+    padding: var(--cs-space-sm) var(--cs-space);
     max-width: 600px;
     width: 100%;
     opacity: 0.95;

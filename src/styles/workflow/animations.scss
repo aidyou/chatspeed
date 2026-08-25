@@ -45,12 +45,12 @@
   to {
     opacity: 1;
     max-height: 500px;
-    margin-top: 8px;
+    margin-top: var(--cs-space-sm);
   }
 }
 
 .rotating {
   animation: cs-rotate 2s linear infinite;
   display: inline-block;
-  margin-right: 4px;
+  margin-right: var(--cs-space-xs);
 }
