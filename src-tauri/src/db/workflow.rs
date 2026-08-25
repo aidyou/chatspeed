@@ -593,11 +593,32 @@ fn reverted_pending_approval_metadata(message: &WorkflowMessage) -> Option<Value
     Some(metadata)
 }
 
-fn latest_user_input_wait_event_id(events: &[WorkflowEventRecord]) -> Option<i64> {
-    let latest_wait = events
-        .iter()
-        .rev()
-        .find(|event| is_user_input_wait_event(event))?;
+fn is_rewindable_user_message(message: &WorkflowMessage) -> bool {
+    message.role == "user"
+        && message.step_type.as_deref() != Some("observe")
+        && message.message_kind != "runtime_observation"
+        && !message.metadata.as_ref().is_some_and(|metadata| {
+            metadata
+                .get("runtime_observation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+}
+
+fn wait_event_matches_ask_user_tool_call(event: &WorkflowEventRecord, tool_call_id: &str) -> bool {
+    event.event_data["awaiting_user_tool_call_id"]
+        .as_str()
+        .is_none_or(|waiting_tool_call_id| waiting_tool_call_id == tool_call_id)
+}
+
+fn latest_unanswered_user_input_wait_event_id(
+    events: &[WorkflowEventRecord],
+    tool_call_id: &str,
+) -> Option<i64> {
+    let latest_wait = events.iter().rev().find(|event| {
+        is_user_input_wait_event(event)
+            && wait_event_matches_ask_user_tool_call(event, tool_call_id)
+    })?;
     let resumed = events
         .iter()
         .rev()
@@ -609,11 +630,16 @@ fn latest_user_input_wait_event_id(events: &[WorkflowEventRecord]) -> Option<i64
     }
 }
 
-fn latest_answered_user_input_wait_event_ids(events: &[WorkflowEventRecord]) -> Option<(i64, i64)> {
-    let latest_wait = events
-        .iter()
-        .rev()
-        .find(|event| is_user_input_wait_event(event))?;
+fn latest_answered_user_input_wait_event_ids(
+    events: &[WorkflowEventRecord],
+    tool_call_id: Option<&str>,
+) -> Option<(i64, i64)> {
+    let latest_wait = events.iter().rev().find(|event| {
+        is_user_input_wait_event(event)
+            && tool_call_id.is_none_or(|tool_call_id| {
+                wait_event_matches_ask_user_tool_call(event, tool_call_id)
+            })
+    })?;
     let latest_resume = events
         .iter()
         .rev()
@@ -621,11 +647,56 @@ fn latest_answered_user_input_wait_event_ids(events: &[WorkflowEventRecord]) -> 
     Some((latest_wait.id, latest_resume.id))
 }
 
-fn latest_user_input_event_id(events: &[WorkflowEventRecord]) -> Option<i64> {
+fn answered_ask_user_event_id_for_message(
+    events: &[WorkflowEventRecord],
+    message: &WorkflowMessage,
+    legacy_tool_call_id: Option<&str>,
+) -> Option<i64> {
+    if !is_rewindable_user_message(message) {
+        return None;
+    }
+
+    let metadata = message.metadata.as_ref();
+    let is_canonical_answer = metadata
+        .and_then(|metadata| metadata.get("ask_user_response"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let canonical_tool_call_id = metadata
+        .and_then(|metadata| metadata.get("tool_call_id"))
+        .and_then(Value::as_str);
+
+    if is_canonical_answer {
+        return canonical_tool_call_id.and_then(|tool_call_id| {
+            latest_answered_user_input_wait_event_ids(events, Some(tool_call_id))
+                .map(|(_, resume_event_id)| resume_event_id)
+        });
+    }
+
+    // Historical answer rows did not persist a structured ask_user association. Restrict this
+    // compatibility path to a direct preceding ask_user observation and a matching durable
+    // user_input_received event; new rows must use the canonical metadata above.
+    let legacy_tool_call_id = legacy_tool_call_id?;
+    let (_, resume_event_id) =
+        latest_answered_user_input_wait_event_ids(events, Some(legacy_tool_call_id))?;
+    (metadata.is_none()
+        && events.iter().any(|event| {
+            event.id == resume_event_id
+                && event.event_data["content"].as_str() == Some(message.message.as_str())
+        }))
+    .then_some(resume_event_id)
+}
+
+fn latest_user_input_event_id_for_message(
+    events: &[WorkflowEventRecord],
+    message: &WorkflowMessage,
+) -> Option<i64> {
     events
         .iter()
         .rev()
-        .find(|event| event.event_type == "user_input_received")
+        .find(|event| {
+            event.event_type == "user_input_received"
+                && event.event_data["content"].as_str() == Some(message.message.as_str())
+        })
         .map(|event| event.id)
 }
 
@@ -666,49 +737,12 @@ fn determine_tail_rewind_plan(
         .rev()
         .find(|message| message.id.is_some() && is_pending_submit_plan_message(message));
 
-    if let Some((_, resume_event_id)) = latest_answered_user_input_wait_event_ids(events) {
-        if let Some(user_message) = messages.iter().rev().find(|message| {
-            message.id.is_some()
-                && message.role == "user"
-                && message.step_type.as_deref() != Some("observe")
-                && message.metadata.is_none()
-        }) {
-            return Some(TailRewindPlan {
-                kind: "ask_user_answered",
-                delete_message_boundary_id: Some(user_message.id?),
-                event_boundary_id: Some(resume_event_id),
-                phase: RewindPhase::Preserve,
-                message_metadata_updates: Vec::new(),
-            });
-        }
-    }
-
-    if let Some(wait_event_id) = latest_user_input_wait_event_id(events) {
-        if let Some(ask_user_message) = messages.iter().rev().find(|message| {
-            message.id.is_some()
-                && message_tool_name(message) == Some(crate::tools::TOOL_ASK_USER)
-                && message.step_type.as_deref() == Some("observe")
-        }) {
-            let delete_boundary_id = message_tool_call_id(ask_user_message)
-                .and_then(|tool_call_id| {
-                    assistant_batch_message_id_for_tool_call(messages, tool_call_id)
-                })
-                .or(ask_user_message.id);
-            return Some(TailRewindPlan {
-                kind: "ask_user_wait",
-                delete_message_boundary_id: delete_boundary_id,
-                event_boundary_id: Some(wait_event_id),
-                phase: if latest_pending_submit_plan.is_some() {
-                    RewindPhase::Planning
-                } else {
-                    RewindPhase::Implementation
-                },
-                message_metadata_updates: Vec::new(),
-            });
-        }
-    }
-
-    for message in messages.iter().rev().filter(|message| message.id.is_some()) {
+    for (index, message) in messages
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, message)| message.id.is_some())
+    {
         if is_manual_clear_context_message(message) {
             return Some(TailRewindPlan {
                 kind: "manual_clear_context",
@@ -719,17 +753,36 @@ fn determine_tail_rewind_plan(
             });
         }
 
-        if message.role == "user"
-            && message.step_type.as_deref() != Some("observe")
-            && message.metadata.is_none()
-        {
+        if is_rewindable_user_message(message) {
+            let preceding_ask_user_tool_call_id = messages[..index]
+                .iter()
+                .rev()
+                .find(|candidate| {
+                    message_tool_name(candidate) == Some(crate::tools::TOOL_ASK_USER)
+                        && candidate.step_type.as_deref() == Some("observe")
+                })
+                .and_then(message_tool_call_id);
+            if let Some(event_boundary_id) = answered_ask_user_event_id_for_message(
+                events,
+                message,
+                preceding_ask_user_tool_call_id,
+            ) {
+                return Some(TailRewindPlan {
+                    kind: "ask_user_answered",
+                    delete_message_boundary_id: Some(message.id?),
+                    event_boundary_id: Some(event_boundary_id),
+                    phase: RewindPhase::Preserve,
+                    message_metadata_updates: Vec::new(),
+                });
+            }
+
             return Some(TailRewindPlan {
                 kind: "user_message",
                 delete_message_boundary_id: Some(message.id?),
                 // Continuation messages append runtime events after a prior
                 // terminal state. Trim those events together with the
                 // message so replay restores the state shown by the tail.
-                event_boundary_id: latest_user_input_event_id(events),
+                event_boundary_id: latest_user_input_event_id_for_message(events, message),
                 phase: RewindPhase::Preserve,
                 message_metadata_updates: Vec::new(),
             });
@@ -748,6 +801,23 @@ fn determine_tail_rewind_plan(
         let execution_status = message_execution_status(message);
 
         if tool_name == Some(crate::tools::TOOL_ASK_USER) {
+            if let Some(wait_event_id) =
+                latest_unanswered_user_input_wait_event_id(events, tool_call_id)
+            {
+                let delete_boundary_id =
+                    assistant_batch_message_id_for_tool_call(messages, tool_call_id).or(message.id);
+                return Some(TailRewindPlan {
+                    kind: "ask_user_wait",
+                    delete_message_boundary_id: delete_boundary_id,
+                    event_boundary_id: Some(wait_event_id),
+                    phase: if latest_pending_submit_plan.is_some() {
+                        RewindPhase::Planning
+                    } else {
+                        RewindPhase::Implementation
+                    },
+                    message_metadata_updates: Vec::new(),
+                });
+            }
             continue;
         }
 
@@ -1342,6 +1412,14 @@ impl MainStore {
             return Ok(false);
         };
 
+        log::info!(
+            "[Workflow][session={}][phase=rewind] Deleting tail interaction kind={} message_boundary={:?} event_boundary={:?}",
+            session_id,
+            plan.kind,
+            plan.delete_message_boundary_id,
+            plan.event_boundary_id
+        );
+
         let remaining_segment_id = match plan.delete_message_boundary_id {
             Some(boundary_id) => messages
                 .iter()
@@ -1905,7 +1983,7 @@ impl MainStore {
                         id,
                         '' AS session_id,
                         role,
-                        '' AS message,
+                        message,
                         NULL AS reasoning,
                         message_kind,
                         message_subtype,
@@ -6349,6 +6427,325 @@ mod tests {
                 .as_str(),
             Some("planning")
         );
+    }
+
+    #[test]
+    fn tail_rewind_prefers_manual_clear_context_over_historical_answered_ask_user() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "tool".to_string(),
+                message: "ask user".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask-user-1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "user".to_string(),
+                message: "A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "subtype": "manual_clear_context",
+                    "previous_segment_id": 1
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "rewind-manual-clear-tail".to_string(),
+                event_type: "wait_entered".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({
+                    "wait_reason": "user_input",
+                    "awaiting_user_tool_call_id": "ask-user-1"
+                }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "rewind-manual-clear-tail".to_string(),
+                event_type: "user_input_received".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "content": "A" }),
+                created_at: String::new(),
+            },
+        ];
+
+        let plan = determine_tail_rewind_plan(&messages, &events)
+            .expect("manual clear marker should be rewindable");
+        assert_eq!(plan.kind, "manual_clear_context");
+        assert_eq!(plan.delete_message_boundary_id, Some(3));
+        assert_eq!(plan.event_boundary_id, None);
+    }
+
+    #[test]
+    fn tail_rewind_prefers_latest_tool_over_historical_answered_ask_user() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "tool".to_string(),
+                message: "ask user".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask-user-1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "user".to_string(),
+                message: "A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "ask_user_response": true,
+                    "tool_call_id": "ask-user-1"
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "assistant".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{ "id": "read-1", "function": { "name": "read_file" } }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(4),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "tool".to_string(),
+                message: "contents".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "read-1",
+                    "tool_name": "read_file",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "wait_entered".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({
+                    "wait_reason": "user_input",
+                    "awaiting_user_tool_call_id": "ask-user-1"
+                }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "user_input_received".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "content": "A" }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 3,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "tool_started".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "tool_call_id": "read-1" }),
+                created_at: String::new(),
+            },
+        ];
+
+        let plan = determine_tail_rewind_plan(&messages, &events)
+            .expect("completed tail tool should be rewindable");
+        assert_eq!(plan.kind, "completed_tool");
+        assert_eq!(plan.delete_message_boundary_id, Some(4));
+        assert_eq!(plan.event_boundary_id, Some(3));
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_restores_completed_manual_clear_context() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-completed-manual-clear";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let completion = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Task completed".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: Some("tool_completed".to_string()),
+                metadata: Some(json!({
+                    "tool_call_id": "complete-1",
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
+                    "approval_status": "approved",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion message");
+        let mut completed_context = ExecutionContext::new(session_id.to_string());
+        completed_context.state = RuntimeState::Completed;
+        completed_context.current_segment_id = 1;
+        completed_context.current_context_tokens = Some(144);
+        completed_context.max_context_tokens = Some(4096);
+        let clear_marker = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "type": "summary",
+                    "subtype": "manual_clear_context",
+                    "previous_segment_id": 1,
+                    "previous_context_tokens": 144,
+                    "previous_max_context_tokens": 4096,
+                    "previous_execution_context": completed_context
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add manual clear marker");
+        let mut pending_context = completed_context;
+        pending_context.state = RuntimeState::Pending;
+        pending_context.current_segment_id = 2;
+        store
+            .upsert_execution_context(&pending_context)
+            .expect("failed to persist manual-clear pending context");
+        store
+            .update_workflow_status(session_id, "pending")
+            .expect("failed to persist manual-clear pending status");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to delete manual clear marker"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load rewound workflow snapshot");
+        assert_eq!(snapshot.workflow.status, "completed");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].id, completion.id);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != clear_marker.id));
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rewound execution context")
+            .expect("rewound execution context should exist");
+        assert_eq!(restored.state, RuntimeState::Completed);
+        assert_eq!(restored.current_segment_id, 1);
     }
 
     #[test]

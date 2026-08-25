@@ -194,7 +194,7 @@
 
         .cli-tool-call {
           font-family: var(--cs-font-family-mono, monospace);
-          font-size: var(--cs-font-size);
+          font-size: var(--cs-font-size-sm);
           line-height: 1.5;
           margin-bottom: var(--cs-space-sm);
           display: block; // Force block container
