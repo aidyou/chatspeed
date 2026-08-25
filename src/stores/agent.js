@@ -25,13 +25,44 @@ import { sendSyncState } from '@/libs/sync';
  * @property {Object} browsingModel - The model used for browsing tasks.
  * @property {string} models - Unified JSON string for all models.
  * @property {number} maxContexts - The maximum context length.
- * @property {string[]} mcpToolExposure - MCP tool names exposed with full parameter schemas in workflows.
+ * @property {Object} mcpTools - MCP tool permissions with available, autoApprove, and autoExpand lists.
  * @property {Object | null} sandboxConfig - Shell sandbox execution configuration.
  * @property {string} approvalLevel - Approval level (default, smart, full).
  * @property {string} subAgentRole - Stable responsibility of a child agent, or an empty string.
  */
 
 const label = getCurrentWebviewWindow().label;
+
+const normalizeMcpTools = (backendAgent, availableTools, autoApprove) => {
+  const rawValue = backendAgent.mcp_tools ?? backendAgent.mcpTools ?? backendAgent.mcp_tool_exposure
+  let raw = rawValue
+  if (typeof rawValue === 'string') {
+    try {
+      raw = JSON.parse(rawValue)
+    } catch {
+      raw = []
+    }
+  }
+  const legacyExposure = Array.isArray(raw) ? raw : []
+  const object = raw && !Array.isArray(raw) && typeof raw === 'object' ? raw : {}
+  const available = new Set(Array.isArray(object.available) ? object.available : [])
+  const autoApproveMcp = new Set(Array.isArray(object.autoApprove) ? object.autoApprove : [])
+  const autoExpand = new Set(
+    (Array.isArray(object.autoExpand) ? object.autoExpand : []).concat(legacyExposure)
+  )
+
+  availableTools.forEach(tool => {
+    if (!String(tool).includes('__MCP__')) return
+    available.add(tool)
+    if (available.has(tool) && autoApprove.includes(tool)) autoApproveMcp.add(tool)
+  })
+
+  return {
+    available: [...available],
+    autoApprove: [...autoApproveMcp].filter(tool => available.has(tool)),
+    autoExpand: [...autoExpand].filter(tool => available.has(tool))
+  }
+}
 
 /**
  * Transforms agent data from the backend (snake_case, JSON strings)
@@ -75,9 +106,17 @@ const _transformFromBackend = (backendAgent) => {
     }
   }
 
+  const parsedAvailableTools = backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : []
+  const parsedAutoApprove = backendAgent.auto_approve ? JSON.parse(backendAgent.auto_approve) : []
+  const ordinaryAvailableTools = parsedAvailableTools.filter(tool => !String(tool).includes('__MCP__'))
+  const ordinaryAutoApprove = parsedAutoApprove.filter(tool => !String(tool).includes('__MCP__'))
+  const mcpTools = normalizeMcpTools(backendAgent, parsedAvailableTools, parsedAutoApprove)
+
   return {
     id: backendAgent.id,
-    name: backendAgent.name,
+    // Older or partially migrated records may omit the display name. Keep the
+    // frontend contract string-shaped so Agent list avatars can render safely.
+    name: String(backendAgent.name || backendAgent.id || ''),
     description: backendAgent.description,
     personality: backendAgent.personality || '',
     role: backendAgent.role || AGENT_ROLE.PRIMARY,
@@ -88,8 +127,8 @@ const _transformFromBackend = (backendAgent) => {
     imageRecognitionPrompt: backendAgent.image_recognition_prompt || '',
 
     // These are JSON strings, need to parse
-    availableTools: backendAgent.available_tools ? JSON.parse(backendAgent.available_tools) : [],
-    autoApprove: backendAgent.auto_approve ? JSON.parse(backendAgent.auto_approve) : [],
+    availableTools: ordinaryAvailableTools,
+    autoApprove: ordinaryAutoApprove,
 
     // Models are already objects
     planModel: models.plan,
@@ -113,7 +152,7 @@ const _transformFromBackend = (backendAgent) => {
       ? Boolean(backendAgent.skill_enabled)
       : (backendAgent.role || AGENT_ROLE.PRIMARY) !== AGENT_ROLE.CHILD,
     selectedSkills: backendAgent.selected_skills ? JSON.parse(backendAgent.selected_skills) : null,
-    mcpToolExposure: backendAgent.mcp_tool_exposure ? JSON.parse(backendAgent.mcp_tool_exposure) : []
+    mcpTools
   };
 };
 
@@ -145,6 +184,20 @@ const _transformToBackend = (frontendAgent) => {
     utility: buildModelConfig(frontendAgent.utilityModel)
   };
 
+  const mcpTools = frontendAgent.mcpTools || { available: [], autoApprove: [], autoExpand: [] }
+  const mcpAvailable = [...new Set(mcpTools.available || [])].filter(tool => String(tool).includes('__MCP__'))
+  const availableTools = [...new Set(frontendAgent.availableTools || [])].filter(
+    tool => !String(tool).includes('__MCP__')
+  )
+  const autoApprove = [...new Set(frontendAgent.autoApprove || [])].filter(
+    tool => !String(tool).includes('__MCP__') && availableTools.includes(tool)
+  )
+  const normalizedMcpTools = {
+    available: mcpAvailable,
+    autoApprove: [...new Set(mcpTools.autoApprove || [])].filter(tool => mcpAvailable.includes(tool)),
+    autoExpand: [...new Set(mcpTools.autoExpand || [])].filter(tool => mcpAvailable.includes(tool))
+  }
+
   return {
     id: frontendAgent.id || '',
     name: frontendAgent.name.trim(),
@@ -159,8 +212,8 @@ const _transformToBackend = (frontendAgent) => {
     planning_prompt: frontendAgent.planningPrompt?.trim() || '',
     image_recognition_prompt: frontendAgent.imageRecognitionPrompt?.trim() || '',
     // JSON strings
-    available_tools: JSON.stringify(frontendAgent.availableTools || []),
-    auto_approve: JSON.stringify(frontendAgent.autoApprove || []),
+    available_tools: JSON.stringify(availableTools),
+    auto_approve: JSON.stringify(autoApprove),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
     sandbox_execution_mode: frontendAgent.sandboxExecutionMode || 'host_only',
     sandbox_scheme_id: frontendAgent.sandboxExecutionMode === 'host_only'
@@ -178,7 +231,7 @@ const _transformToBackend = (frontendAgent) => {
     selected_skills: frontendAgent.selectedSkills === null
       ? null
       : JSON.stringify(frontendAgent.selectedSkills || []),
-    mcp_tool_exposure: JSON.stringify(frontendAgent.mcpToolExposure || []),
+    mcp_tool_exposure: JSON.stringify(normalizedMcpTools),
     is_system: frontendAgent.isSystem ?? false,
     disabled: frontendAgent.disabled ?? false
   };

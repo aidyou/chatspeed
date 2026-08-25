@@ -99,6 +99,7 @@ pub enum SignalType {
     UpdateSandboxConfig,
     UpdatePersonality,
     UpdateAvailableTools,
+    UpdateMcpTools,
     UpdateAutoApprovedTools,
     RemoveShellPolicyItem,
     RemoveAutoApprovedTool,
@@ -129,6 +130,7 @@ impl SignalType {
             "update_sandbox_config" => Some(SignalType::UpdateSandboxConfig),
             "update_personality" => Some(SignalType::UpdatePersonality),
             "update_available_tools" => Some(SignalType::UpdateAvailableTools),
+            "update_mcp_tools" => Some(SignalType::UpdateMcpTools),
             "update_auto_approved_tools" => Some(SignalType::UpdateAutoApprovedTools),
             "remove_shell_policy_item" => Some(SignalType::RemoveShellPolicyItem),
             "remove_auto_approved_tool" => Some(SignalType::RemoveAutoApprovedTool),
@@ -161,6 +163,7 @@ impl SignalType {
             SignalType::UpdateSandboxConfig => "update_sandbox_config",
             SignalType::UpdatePersonality => "update_personality",
             SignalType::UpdateAvailableTools => "update_available_tools",
+            SignalType::UpdateMcpTools => "update_mcp_tools",
             SignalType::UpdateAutoApprovedTools => "update_auto_approved_tools",
             SignalType::RemoveShellPolicyItem => "remove_shell_policy_item",
             SignalType::RemoveAutoApprovedTool => "remove_auto_approved_tool",
@@ -315,6 +318,15 @@ mod tests {
             Some(SignalType::ManualCompress)
         );
         assert_eq!(SignalType::ManualCompress.as_str(), "manual_compress");
+    }
+
+    #[test]
+    fn mcp_tools_signal_type_round_trips() {
+        assert_eq!(
+            SignalType::from_str("update_mcp_tools"),
+            Some(SignalType::UpdateMcpTools)
+        );
+        assert_eq!(SignalType::UpdateMcpTools.as_str(), "update_mcp_tools");
     }
 
     #[test]

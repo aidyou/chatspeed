@@ -219,6 +219,13 @@
       "imageRecognitionPrompt": "Image Recognition Prompt",
       "imageRecognitionPromptPlaceholder": "Leave blank to use the default image analysis prompt. If customizing, describe the recognition focus and output style you want.",
       "finalAudit": "Final Audit",
+      "mcpToolsTitle": "MCP Tools",
+      "mcpToolsHint": "Configure MCP availability, automatic approval, and full schema expansion independently.",
+      "mcpToolsSearchPlaceholder": "Search MCP tools",
+      "mcpToolsEmpty": "No MCP tools were discovered.",
+      "mcpToolAvailable": "Available",
+      "mcpToolAutoApprove": "Auto-approve",
+      "mcpToolAutoExpand": "Expand schema",
       "mcpToolExposure": "Direct MCP Tools",
       "mcpToolExposureTip": "Selected MCP tools include their full parameter schemas in tasks; all others remain folded.",
       "models": "Model Configuration",
@@ -1172,6 +1179,7 @@
       "validationRequired": "Please select an option for every item."
     },
     "autoApprovedTools": "Auto-Approved Tools",
+    "mcpConfig": "MCP Configuration",
     "automation": {
       "addDirectory": "Add directory",
       "additionalInfo": "Additional info",
@@ -1388,6 +1396,7 @@
       "thinking": "Thinking"
     },
     "skillsConfigTitle": "Skills Configuration",
+    "toolConfig": "Tool Configuration",
     "skillsSearchEmpty": "No matching skills.",
     "skillsSearchPlaceholder": "Search by skill name",
     "startFailed": "Failed to start task: {error}",

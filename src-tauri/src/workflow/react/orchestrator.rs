@@ -525,6 +525,24 @@ fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
     serde_json::to_string(&tools).ok()
 }
 
+fn filter_sub_agent_mcp_config(
+    config: Option<crate::db::McpToolConfig>,
+) -> Option<crate::db::McpToolConfig> {
+    let mut config = config?;
+    config.available.retain(|tool| {
+        tool != crate::tools::TOOL_BASH
+            && tool != crate::tools::TOOL_SUB_AGENT_RUN
+            && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
+            && tool != crate::tools::TOOL_SUB_AGENT_STOP
+            && tool != crate::tools::TOOL_PLAN_READ_NOTE
+            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
+            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
+            && tool != crate::tools::TOOL_ASK_USER
+    });
+    config.normalize();
+    Some(config)
+}
+
 fn is_task_output_id(task_id: &str) -> bool {
     task_id.starts_with("subagent_")
 }
@@ -723,6 +741,13 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.available_tools =
             filter_sub_agent_tool_ids(agent_config.available_tools.as_deref());
         agent_config.auto_approve = filter_sub_agent_tool_ids(agent_config.auto_approve.as_deref());
+        let mcp_config = agent_config
+            .mcp_tool_exposure
+            .as_deref()
+            .and_then(|config| serde_json::from_str(config).ok());
+        let filtered_mcp_config = filter_sub_agent_mcp_config(mcp_config);
+        agent_config.mcp_tool_exposure =
+            filtered_mcp_config.and_then(|config| serde_json::to_string(&config).ok());
 
         let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
             let store = self.main_store.as_ref();
@@ -792,7 +817,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             mcp_tool_exposure: agent_config
                 .mcp_tool_exposure
                 .as_deref()
-                .and_then(|tools| serde_json::from_str(tools).ok()),
+                .and_then(|config| serde_json::from_str(config).ok()),
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,

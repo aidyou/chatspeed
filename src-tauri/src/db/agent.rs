@@ -6,7 +6,8 @@ use crate::db::ThinkingConfig;
 use crate::db::{MainStore, StoreError};
 use rusqlite::{params, OptionalExtension, Row};
 use rust_i18n::t;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 // Re-export ShellPolicyRule for backward compatibility
 pub use crate::tools::ShellPolicyRule;
@@ -19,6 +20,126 @@ pub fn is_supported_sub_agent_role(role: &str) -> bool {
     matches!(
         role,
         SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER
+    )
+}
+
+/// Canonical MCP tool permissions for an Agent or workflow snapshot.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolConfig {
+    pub available: Vec<String>,
+    pub auto_approve: Vec<String>,
+    pub auto_expand: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for McpToolConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if let Some(tools) = value.as_array() {
+            return Ok(Self {
+                // The legacy exposure list only controlled schema expansion. It
+                // must not grant a tool that was absent from available_tools.
+                available: Vec::new(),
+                auto_approve: Vec::new(),
+                auto_expand: tools
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect(),
+            });
+        }
+        serde_json::from_value::<McpToolConfigPayload>(value)
+            .map(|payload| Self {
+                available: payload.available,
+                auto_approve: payload.auto_approve,
+                auto_expand: payload.auto_expand,
+            })
+            .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct McpToolConfigPayload {
+    #[serde(default)]
+    available: Vec<String>,
+    #[serde(default)]
+    auto_approve: Vec<String>,
+    #[serde(default)]
+    auto_expand: Vec<String>,
+}
+
+impl McpToolConfig {
+    pub fn normalize(&mut self) {
+        deduplicate_tools(&mut self.available);
+        deduplicate_tools(&mut self.auto_approve);
+        deduplicate_tools(&mut self.auto_expand);
+        self.available.retain(|tool| is_mcp_tool_name(tool));
+        self.auto_approve
+            .retain(|tool| self.available.iter().any(|available| available == tool));
+        self.auto_expand
+            .retain(|tool| self.available.iter().any(|available| available == tool));
+    }
+}
+
+pub fn is_mcp_tool_name(tool: &str) -> bool {
+    tool.contains(crate::tools::MCP_TOOL_NAME_SPLIT)
+}
+
+fn deduplicate_tools(tools: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    tools.retain(|tool| seen.insert(tool.clone()));
+}
+
+/// Splits legacy mixed tool lists into ordinary tools and the canonical MCP permissions.
+pub fn normalize_agent_tool_config(
+    available_tools: Option<Vec<String>>,
+    auto_approve: Option<Vec<String>>,
+    mcp_tools: Option<McpToolConfig>,
+) -> (
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+    Option<McpToolConfig>,
+) {
+    let mcp_was_configured = mcp_tools.is_some();
+    let mut mcp = mcp_tools.unwrap_or_default();
+    let legacy_available = available_tools.unwrap_or_default();
+    let legacy_auto = auto_approve.unwrap_or_default();
+    let mut available = Vec::new();
+    let mut auto = Vec::new();
+    let had_mcp_values = !mcp.available.is_empty()
+        || !mcp.auto_approve.is_empty()
+        || !mcp.auto_expand.is_empty()
+        || legacy_available.iter().any(|tool| is_mcp_tool_name(tool))
+        || legacy_auto.iter().any(|tool| is_mcp_tool_name(tool));
+
+    for tool in legacy_available {
+        if is_mcp_tool_name(&tool) {
+            mcp.available.push(tool);
+        } else {
+            available.push(tool);
+        }
+    }
+    for tool in legacy_auto {
+        if is_mcp_tool_name(&tool) {
+            mcp.auto_approve.push(tool);
+        } else {
+            auto.push(tool);
+        }
+    }
+
+    deduplicate_tools(&mut available);
+    deduplicate_tools(&mut auto);
+    auto.retain(|tool| available.iter().any(|available| available == tool));
+    mcp.normalize();
+
+    (
+        Some(available),
+        Some(auto),
+        (had_mcp_values || mcp_was_configured).then_some(mcp),
     )
 }
 
@@ -44,7 +165,13 @@ pub struct AgentConfig {
     pub final_review_mode: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<Vec<String>>,
-    pub mcp_tool_exposure: Option<Vec<String>>,
+    /// MCP permissions. Legacy arrays deserialize as `auto_expand`.
+    #[serde(
+        rename = "mcpTools",
+        alias = "mcpToolExposure",
+        alias = "mcp_tool_exposure"
+    )]
+    pub mcp_tool_exposure: Option<McpToolConfig>,
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
@@ -52,11 +179,29 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn from_json(json: &str) -> Option<Self> {
-        serde_json::from_str(json).ok()
+        let mut config = serde_json::from_str::<Self>(json).ok()?;
+        let (available_tools, auto_approve, mcp_tools) = normalize_agent_tool_config(
+            config.available_tools.take(),
+            config.auto_approve.take(),
+            config.mcp_tool_exposure.take(),
+        );
+        config.available_tools = available_tools;
+        config.auto_approve = auto_approve;
+        config.mcp_tool_exposure = mcp_tools;
+        Some(config)
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        let mut canonical = self.clone();
+        let (available_tools, auto_approve, mcp_tools) = normalize_agent_tool_config(
+            canonical.available_tools.take(),
+            canonical.auto_approve.take(),
+            canonical.mcp_tool_exposure.take(),
+        );
+        canonical.available_tools = available_tools;
+        canonical.auto_approve = auto_approve;
+        canonical.mcp_tool_exposure = mcp_tools;
+        serde_json::to_string(&canonical).unwrap_or_default()
     }
 
     pub fn normalized_final_review_mode(&self) -> &'static str {
@@ -778,11 +923,49 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_agent_tool_config_splits_legacy_mcp_lists() {
+        let (available, auto_approve, mcp) = normalize_agent_tool_config(
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__read".to_string(),
+                "server__MCP__read".to_string(),
+            ]),
+            Some(vec![
+                "read_file".to_string(),
+                "server__MCP__read".to_string(),
+                "stale".to_string(),
+            ]),
+            Some(McpToolConfig {
+                available: vec!["server__MCP__write".to_string()],
+                auto_approve: vec!["server__MCP__write".to_string()],
+                auto_expand: vec!["server__MCP__write".to_string()],
+            }),
+        );
+
+        assert_eq!(available, Some(vec!["read_file".to_string()]));
+        assert_eq!(auto_approve, Some(vec!["read_file".to_string()]));
+        assert_eq!(
+            mcp,
+            Some(McpToolConfig {
+                available: vec![
+                    "server__MCP__write".to_string(),
+                    "server__MCP__read".to_string(),
+                ],
+                auto_approve: vec![
+                    "server__MCP__write".to_string(),
+                    "server__MCP__read".to_string()
+                ],
+                auto_expand: vec!["server__MCP__write".to_string()],
+            })
+        );
+    }
+
+    #[test]
     fn test_mcp_tool_exposure_persists_with_agent() {
         let (_temp_dir, store) = create_test_store();
         let mut agent = make_agent("agent-mcp", "MCP Agent", None);
         agent.mcp_tool_exposure =
-            Some(serde_json::json!(["server__MCP__important_tool"]).to_string());
+            Some(serde_json::json!({"available": ["server__MCP__important_tool"], "autoExpand": ["server__MCP__important_tool"]}).to_string());
 
         store.add_agent(&agent).expect("failed to add agent");
         let stored = store
@@ -790,9 +973,18 @@ mod tests {
             .expect("failed to load agent")
             .expect("agent should exist");
 
+        let persisted = stored
+            .mcp_tool_exposure
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .expect("MCP config should be persisted as JSON");
         assert_eq!(
-            stored.mcp_tool_exposure,
-            Some(serde_json::json!(["server__MCP__important_tool"]).to_string())
+            persisted.get("available"),
+            Some(&serde_json::json!(["server__MCP__important_tool"]))
+        );
+        assert_eq!(
+            persisted.get("autoExpand"),
+            Some(&serde_json::json!(["server__MCP__important_tool"]))
         );
     }
 

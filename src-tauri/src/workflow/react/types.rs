@@ -333,6 +333,11 @@ pub enum WorkflowSignal {
         #[serde(alias = "tools", default)]
         available_tools: Vec<String>,
     },
+    /// Replace the workflow MCP permissions at runtime.
+    UpdateMcpTools {
+        #[serde(alias = "mcpTools", alias = "mcp_tool_exposure")]
+        mcp_tools: crate::db::agent::McpToolConfig,
+    },
     /// Replace auto-approve tool list at runtime
     UpdateAutoApprovedTools {
         #[serde(alias = "tools", default)]
@@ -389,6 +394,7 @@ impl WorkflowSignal {
             (WorkflowSignal::UpdateSandboxConfig { .. }, _) => true,
             (WorkflowSignal::UpdatePersonality { .. }, _) => true,
             (WorkflowSignal::UpdateAvailableTools { .. }, _) => true,
+            (WorkflowSignal::UpdateMcpTools { .. }, _) => true,
             (WorkflowSignal::UpdateAutoApprovedTools { .. }, _) => true,
             (WorkflowSignal::RemoveAutoApprovedTool { .. }, _) => true,
             (WorkflowSignal::RemoveShellPolicyItem { .. }, _) => true,
@@ -428,6 +434,7 @@ impl WorkflowSignal {
             WorkflowSignal::UpdateSandboxConfig { .. } => "update_sandbox_config",
             WorkflowSignal::UpdatePersonality { .. } => "update_personality",
             WorkflowSignal::UpdateAvailableTools { .. } => "update_available_tools",
+            WorkflowSignal::UpdateMcpTools { .. } => "update_mcp_tools",
             WorkflowSignal::UpdateAutoApprovedTools { .. } => "update_auto_approved_tools",
             WorkflowSignal::RemoveAutoApprovedTool { .. } => "remove_auto_approved_tool",
             WorkflowSignal::RemoveShellPolicyItem { .. } => "remove_shell_policy_item",
@@ -1118,6 +1125,15 @@ mod tests {
         let json = r#"{"type":"manual_compress"}"#;
         let signal = WorkflowSignal::parse(json).unwrap();
         assert!(matches!(signal, WorkflowSignal::ManualCompress));
+
+        let json = r#"{"type":"update_mcp_tools","mcp_tools":{"available":["server__MCP__read"],"autoApprove":["server__MCP__read"],"autoExpand":[]}}"#;
+        let signal = WorkflowSignal::parse(json).unwrap();
+        assert!(matches!(
+            signal,
+            WorkflowSignal::UpdateMcpTools { mcp_tools }
+                if mcp_tools.available == vec!["server__MCP__read"]
+                    && mcp_tools.auto_approve == vec!["server__MCP__read"]
+        ));
 
         let json = r#"{"type":"remove_queued_user_message","queued_user_message_id":"queue_1"}"#;
         let signal = WorkflowSignal::parse(json).unwrap();

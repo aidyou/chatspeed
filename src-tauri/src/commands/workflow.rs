@@ -1,4 +1,5 @@
 use crate::ai::interaction::chat_completion::ChatState;
+use crate::db::agent::normalize_agent_tool_config;
 use crate::db::{
     Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
     WorkflowSnapshot,
@@ -274,6 +275,7 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
             | "update_approval_level"
             | "update_phase"
             | "update_available_tools"
+            | "update_mcp_tools"
             | "update_auto_approved_tools"
             | "remove_auto_approved_tool"
             | "remove_shell_policy_item"
@@ -1128,22 +1130,28 @@ fn build_agent_config_from_agent(
         }
         .to_string(),
     );
-    config.skill_enabled = agent.skill_enabled;
-    config.mcp_tool_exposure = agent
+    let available_tools = agent
+        .available_tools
+        .as_deref()
+        .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok());
+    let auto_approve = agent
+        .auto_approve
+        .as_deref()
+        .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok());
+    let legacy_mcp_config = agent
         .mcp_tool_exposure
         .as_deref()
         .and_then(|tools| serde_json::from_str(tools).ok());
+    let (available_tools, auto_approve, mcp_tools) =
+        normalize_agent_tool_config(available_tools, auto_approve, legacy_mcp_config);
+    config.mcp_tool_exposure = mcp_tools;
     config.phase = agent.phase.clone();
 
-    if let Some(approve_str) = &agent.auto_approve {
-        config.auto_approve = serde_json::from_str(approve_str).ok();
-    }
+    config.auto_approve = auto_approve;
 
     config.approval_level = agent.approval_level.clone();
 
-    if let Some(tools_str) = &agent.available_tools {
-        config.available_tools = serde_json::from_str(tools_str).ok();
-    }
+    config.available_tools = available_tools;
 
     if let Some(skills_str) = &agent.selected_skills {
         config.selected_skills = serde_json::from_str(skills_str).ok();
@@ -1248,6 +1256,9 @@ fn enforce_auto_approve_tool_visibility(config: &mut AgentConfig) {
                     .unwrap_or(true)
         });
     }
+    if let Some(mcp) = config.mcp_tool_exposure.as_mut() {
+        mcp.normalize();
+    }
 }
 
 fn merge_shell_allow_rules(
@@ -1343,12 +1354,42 @@ fn merge_inherited_workflow_config(
         })
     };
 
-    merged.mcp_tool_exposure = agent_config.mcp_tool_exposure.clone().map(|tools| {
-        tools
+    let mut mcp_tools = agent_config.mcp_tool_exposure.clone();
+    if let Some(mcp) = mcp_tools.as_mut() {
+        if let Some(inherited_mcp) = inherited_config.mcp_tool_exposure.as_ref() {
+            mcp.available.retain(|tool| {
+                inherited_mcp
+                    .available
+                    .iter()
+                    .any(|selected| selected == tool)
+            });
+            let effective_available = mcp.available.clone();
+            mcp.auto_approve = merge_unique_tools([
+                Some(mcp.auto_approve.clone()),
+                Some(inherited_mcp.auto_approve.clone()),
+            ])
             .into_iter()
-            .filter(|tool| is_tool_allowed(tool))
-            .collect()
-    });
+            .filter(|tool| {
+                effective_available
+                    .iter()
+                    .any(|available| available == tool)
+            })
+            .collect();
+            mcp.auto_expand = merge_unique_tools([
+                Some(mcp.auto_expand.clone()),
+                Some(inherited_mcp.auto_expand.clone()),
+            ])
+            .into_iter()
+            .filter(|tool| {
+                effective_available
+                    .iter()
+                    .any(|available| available == tool)
+            })
+            .collect();
+        }
+        mcp.normalize();
+    }
+    merged.mcp_tool_exposure = mcp_tools;
 
     merged.auto_approve = Some(
         merge_unique_tools([
@@ -5789,6 +5830,27 @@ pub async fn update_workflow_agent_config(
                 .map_err(|error| format!("Invalid Agent available tools: {error}"))?;
             selected_tools.retain(|tool| agent_tools.contains(tool));
         }
+
+        let agent_mcp_tools = agent
+            .mcp_tool_exposure
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<crate::db::McpToolConfig>(value).ok());
+        if let Some(selected_mcp) = normalized_config.mcp_tool_exposure.as_mut() {
+            let allowed_mcp = agent_mcp_tools.as_ref().map(|config| {
+                config
+                    .available
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+            });
+            if let Some(allowed_mcp) = allowed_mcp {
+                selected_mcp
+                    .available
+                    .retain(|tool| allowed_mcp.contains(tool));
+            } else {
+                selected_mcp.available.clear();
+            }
+            selected_mcp.normalize();
+        }
     }
     enforce_auto_approve_tool_visibility(&mut normalized_config);
     let normalized_config_json = normalized_config.to_json();
@@ -5827,6 +5889,21 @@ pub async fn update_workflow_agent_config(
             serde_json::json!({
                 "type": "update_auto_approved_tools",
                 "auto_approve": auto_approve
+            }),
+        )
+        .await?;
+    }
+
+    if let Some(mcp_tools) = signal_agent_config.get("mcpTools").cloned() {
+        inject_runtime_config_signal(
+            gateway.inner(),
+            workflow_manager.inner(),
+            state.inner(),
+            &session_id,
+            &previous_config_json,
+            serde_json::json!({
+                "type": "update_mcp_tools",
+                "mcp_tools": mcp_tools
             }),
         )
         .await?;
@@ -7623,10 +7700,14 @@ mod tests {
                 "read_file".to_string(),
                 "server__MCP__new_tool".to_string(),
             ]),
-            mcp_tool_exposure: Some(vec![
-                "server__MCP__new_tool".to_string(),
-                "server__MCP__disabled_tool".to_string(),
-            ]),
+            mcp_tool_exposure: Some(crate::db::McpToolConfig {
+                available: vec![
+                    "server__MCP__new_tool".to_string(),
+                    "server__MCP__disabled_tool".to_string(),
+                ],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__new_tool".to_string()],
+            }),
             auto_approve: Some(vec!["read_file".to_string()]),
             max_contexts: Some(128_000),
             ..AgentConfig::default()
@@ -7637,7 +7718,7 @@ mod tests {
                 "server__MCP__removed_tool".to_string(),
                 crate::tools::TOOL_BASH.to_string(),
             ]),
-            mcp_tool_exposure: Some(Vec::new()),
+            mcp_tool_exposure: Some(crate::db::McpToolConfig::default()),
             auto_approve: Some(vec![
                 "server__MCP__new_tool".to_string(),
                 "server__MCP__removed_tool".to_string(),
@@ -7650,7 +7731,10 @@ mod tests {
         let merged = merge_inherited_workflow_config(&agent_config, &inherited_config);
 
         assert_eq!(merged.available_tools, Some(vec!["read_file".to_string()]));
-        assert_eq!(merged.mcp_tool_exposure, Some(Vec::new()));
+        assert_eq!(
+            merged.mcp_tool_exposure,
+            Some(crate::db::McpToolConfig::default())
+        );
         assert_eq!(merged.auto_approve, Some(vec!["read_file".to_string()]));
         assert_eq!(merged.max_contexts, Some(128_000));
         assert!(merged.shell_policy.is_none());
@@ -7751,7 +7835,11 @@ mod tests {
                 "read_file".to_string(),
                 "server__MCP__removed_tool".to_string(),
             ]),
-            mcp_tool_exposure: Some(vec!["server__MCP__removed_tool".to_string()]),
+            mcp_tool_exposure: Some(crate::db::McpToolConfig {
+                available: Vec::new(),
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__removed_tool".to_string()],
+            }),
             shell_policy: Some(vec![crate::tools::ShellPolicyRule {
                 pattern: "^git diff$".to_string(),
                 decision: crate::tools::ShellDecision::Allow,
@@ -7772,40 +7860,22 @@ mod tests {
         let synced = sync_workflow_agent_config_at_tool_boundary(&store, session_id)
             .expect("failed to synchronize Agent tool config");
 
-        assert_eq!(
-            synced.available_tools,
-            Some(vec![
-                "read_file".to_string(),
-                "server__MCP__new_tool".to_string(),
-                crate::tools::TOOL_BASH.to_string(),
-            ])
-        );
-        assert_eq!(
-            synced.auto_approve,
-            Some(vec![
-                "server__MCP__new_tool".to_string(),
-                "read_file".to_string(),
-            ])
-        );
+        assert_eq!(synced.available_tools, Some(vec!["read_file".to_string()]));
+        assert_eq!(synced.auto_approve, Some(vec!["read_file".to_string()]));
         assert_eq!(
             synced.mcp_tool_exposure,
-            Some(vec!["server__MCP__new_tool".to_string()])
+            Some(crate::db::McpToolConfig::default())
         );
         assert_eq!(synced.allowed_paths, Some(vec!["/workflow".to_string()]));
         let shell_policy = synced
             .shell_policy
             .as_ref()
             .expect("missing synchronized shell policy");
-        assert_eq!(shell_policy.len(), 2);
+        assert_eq!(shell_policy.len(), 1);
         assert_eq!(shell_policy[0].pattern, "^git status$");
         assert!(matches!(
             shell_policy[0].decision,
             crate::tools::ShellDecision::Review(_)
-        ));
-        assert_eq!(shell_policy[1].pattern, "^git diff$");
-        assert!(matches!(
-            shell_policy[1].decision,
-            crate::tools::ShellDecision::Allow
         ));
 
         let persisted = store
@@ -7943,13 +8013,21 @@ mod tests {
         };
         let unrestricted_agent = AgentConfig {
             available_tools: None,
-            mcp_tool_exposure: Some(vec!["server__MCP__tool".to_string()]),
+            mcp_tool_exposure: Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__tool".to_string()],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__tool".to_string()],
+            }),
             auto_approve: Some(vec!["agent_only".to_string()]),
             ..AgentConfig::default()
         };
         let empty_agent = AgentConfig {
             available_tools: Some(Vec::new()),
-            mcp_tool_exposure: Some(vec!["server__MCP__tool".to_string()]),
+            mcp_tool_exposure: Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__tool".to_string()],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__tool".to_string()],
+            }),
             auto_approve: Some(vec!["agent_only".to_string()]),
             ..AgentConfig::default()
         };
@@ -7957,7 +8035,11 @@ mod tests {
         let unrestricted = merge_inherited_workflow_config(&unrestricted_agent, &inherited_config);
         assert_eq!(
             unrestricted.mcp_tool_exposure,
-            Some(vec!["server__MCP__tool".to_string()])
+            Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__tool".to_string()],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__tool".to_string()],
+            })
         );
         assert_eq!(
             unrestricted.auto_approve,
@@ -7965,7 +8047,14 @@ mod tests {
         );
 
         let empty = merge_inherited_workflow_config(&empty_agent, &inherited_config);
-        assert_eq!(empty.mcp_tool_exposure, Some(Vec::new()));
+        assert_eq!(
+            empty.mcp_tool_exposure,
+            Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__tool".to_string()],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__tool".to_string()],
+            })
+        );
         assert_eq!(empty.auto_approve, Some(Vec::new()));
     }
 
@@ -8088,7 +8177,7 @@ mod tests {
                         "server__MCP__removed_tool".to_string(),
                         crate::tools::TOOL_BASH.to_string(),
                     ]),
-                    mcp_tool_exposure: Some(Vec::new()),
+                    mcp_tool_exposure: Some(crate::db::McpToolConfig::default()),
                     auto_approve: Some(vec![
                         "server__MCP__new_tool".to_string(),
                         "server__MCP__removed_tool".to_string(),
@@ -8122,7 +8211,11 @@ mod tests {
         );
         assert_eq!(
             persisted.mcp_tool_exposure,
-            Some(vec!["server__MCP__new_tool".to_string()])
+            Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__new_tool".to_string()],
+                auto_approve: Vec::new(),
+                auto_expand: vec!["server__MCP__new_tool".to_string()],
+            })
         );
         assert_eq!(
             persisted.auto_approve,

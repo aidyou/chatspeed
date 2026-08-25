@@ -9,7 +9,10 @@ use tauri::State;
 use crate::{
     ai::interaction::chat_completion::ChatState,
     builtin_agents::load_default_shell_policy_from_resources,
-    db::{agent::is_supported_sub_agent_role, Agent, MainStore},
+    db::{
+        agent::{is_supported_sub_agent_role, normalize_agent_tool_config, McpToolConfig},
+        Agent, MainStore,
+    },
     tools::ShellExecutionMode,
 };
 
@@ -47,6 +50,24 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
         .take()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+
+    let available_tools = agent
+        .available_tools
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok());
+    let auto_approve = agent
+        .auto_approve
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok());
+    let mcp_tools = agent
+        .mcp_tool_exposure
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<McpToolConfig>(value).ok());
+    let (available_tools, auto_approve, mcp_tools) =
+        normalize_agent_tool_config(available_tools, auto_approve, mcp_tools);
+    agent.available_tools = serde_json::to_string(&available_tools.unwrap_or_default()).ok();
+    agent.auto_approve = serde_json::to_string(&auto_approve.unwrap_or_default()).ok();
+    agent.mcp_tool_exposure = mcp_tools.and_then(|config| serde_json::to_string(&config).ok());
 
     let available_tools = agent
         .available_tools

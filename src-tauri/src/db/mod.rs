@@ -20,7 +20,7 @@ mod types;
 mod workflow;
 pub mod workflow_usage;
 
-pub use agent::{Agent, AgentConfig};
+pub use agent::{Agent, AgentConfig, McpToolConfig};
 pub use automation::{
     WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationRunInsert,
     WorkflowAutomationUpsert,

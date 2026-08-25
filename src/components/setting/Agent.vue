@@ -260,7 +260,7 @@
           :label="$t('settings.agent.personality')"
           name="personality"
           lazy>
-          <el-form-item :label="$t('settings.agent.personality')" prop="personality">
+          <div class="personality-config">
             <el-radio-group
               v-model="personalitySelection"
               class="personality-options"
@@ -303,7 +303,7 @@
               :rows="15"
               :placeholder="$t('settings.agent.personalityCustomPlaceholder')"
               @update:model-value="updateCustomPersonality" />
-          </el-form-item>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
@@ -495,6 +495,7 @@
               {{ $t('workflow.skillsSearchEmpty') }}
             </div>
           </el-form-item>
+
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
@@ -524,24 +525,6 @@
                 :value="tool.id" />
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.mcpToolExposure')" prop="mcpToolExposure">
-            <el-select
-              v-model="agentForm.mcpToolExposure"
-              :placeholder="$t('settings.agent.selectMcpToolExposure')"
-              multiple
-              filterable
-              collapse-tags
-              :max-collapse-tags="2"
-              collapse-tags-tooltip>
-              <el-option
-                v-for="tool in availableMcpToolOptions"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id"
-                :title="tool.description" />
-            </el-select>
-            <div class="form-tip">{{ $t('settings.agent.mcpToolExposureTip') }}</div>
-          </el-form-item>
           <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove">
             <el-select
               v-model="agentForm.autoApprove"
@@ -558,6 +541,55 @@
                 :value="tool.id" />
             </el-select>
           </el-form-item>
+
+          <div class="mcp-tools-config">
+            <div class="mcp-tools-config__header">
+              <h3>{{ $t('settings.agent.mcpToolsTitle') }}</h3>
+              <span class="form-tip">{{ $t('settings.agent.mcpToolsHint') }}</span>
+            </div>
+            <el-input
+              v-if="mcpToolOptions.length"
+              v-model="mcpSearchKeyword"
+              clearable
+              class="skill-search-input"
+              :placeholder="$t('settings.agent.mcpToolsSearchPlaceholder')" />
+            <div v-if="filteredMcpToolOptions.length" class="mcp-tools-list">
+              <div v-for="tool in filteredMcpToolOptions" :key="tool.id" class="mcp-tool-item">
+                <div class="mcp-tool-info">
+                  <code class="tool-name">{{ tool.id }}</code>
+                  <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                </div>
+                <div class="mcp-tool-switches">
+                  <label>
+                    <span>{{ $t('settings.agent.mcpToolAvailable') }}</span>
+                    <el-switch
+                      size="small"
+                      :model-value="agentForm.mcpTools.available.includes(tool.id)"
+                      @change="checked => toggleMcpToolConfig(tool.id, 'available', checked)" />
+                  </label>
+                  <label>
+                    <span>{{ $t('settings.agent.mcpToolAutoApprove') }}</span>
+                    <el-switch
+                      size="small"
+                      :model-value="agentForm.mcpTools.autoApprove.includes(tool.id)"
+                      :disabled="!agentForm.mcpTools.available.includes(tool.id)"
+                      @change="checked => toggleMcpToolConfig(tool.id, 'autoApprove', checked)" />
+                  </label>
+                  <label>
+                    <span>{{ $t('settings.agent.mcpToolAutoExpand') }}</span>
+                    <el-switch
+                      size="small"
+                      :model-value="agentForm.mcpTools.autoExpand.includes(tool.id)"
+                      :disabled="!agentForm.mcpTools.available.includes(tool.id)"
+                      @change="checked => toggleMcpToolConfig(tool.id, 'autoExpand', checked)" />
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div v-else class="form-tip">
+              {{ $t('settings.agent.mcpToolsEmpty') }}
+            </div>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.security')" name="security" lazy>
@@ -962,6 +994,7 @@ const personalitySelection = ref(PERSONALITY_SELECTION.DEFAULT)
 const customPersonality = ref('')
 const systemSkills = ref([])
 const skillSearchKeyword = ref('')
+const mcpSearchKeyword = ref('')
 const defaultShellPolicies = ref([])
 const shellPolicyImportDialogVisible = ref(false)
 const selectedDefaultShellPolicyGroups = ref([])
@@ -1045,7 +1078,7 @@ const defaultFormData = {
   autoApprove: [],
   skillEnabled: true,
   selectedSkills: [],
-  mcpToolExposure: [],
+  mcpTools: { available: [], autoApprove: [], autoExpand: [] },
   shellPolicy: [],
   allowedPaths: [],
   planModel: defaultAgentModelConfig(),
@@ -1103,6 +1136,7 @@ const sortedAvailableTools = computed(() => {
       t =>
         !CORE_MANAGEMENT_TOOLS.includes(t.id) &&
         !HIDDEN_AGENT_TOOL_IDS.includes(t.id) &&
+        t.category !== 'MCP' &&
         (agentForm.value.role === AGENT_ROLE.CHILD || !CHILD_ONLY_TOOL_IDS.includes(t.id))
     )
     .sort((a, b) => {
@@ -1118,13 +1152,22 @@ const autoApproveOptions = computed(() => {
   )
 })
 
-const availableMcpToolOptions = computed(() => {
-  const enabledToolIds = new Set(agentForm.value.availableTools || [])
-  return availableTools.value.filter(tool => tool.category === 'MCP' && enabledToolIds.has(tool.id))
+const mcpToolOptions = computed(() => {
+  return availableTools.value
+    .filter(tool => tool.category === 'MCP')
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans'))
+})
+
+const filteredMcpToolOptions = computed(() => {
+  const query = mcpSearchKeyword.value.trim().toLowerCase()
+  if (!query) return mcpToolOptions.value
+  return mcpToolOptions.value.filter(tool =>
+    `${tool.id} ${tool.name || ''}`.toLowerCase().includes(query)
+  )
 })
 
 const availableMcpToolIds = computed(
-  () => new Set(availableMcpToolOptions.value.map(tool => tool.id))
+  () => new Set(mcpToolOptions.value.map(tool => tool.id))
 )
 
 const sortedSystemSkills = computed(() => {
@@ -1552,6 +1595,29 @@ const setSelectedSkillsFromSource = selectedSkills => {
   return [...defaultSelectedSkillNames.value]
 }
 
+const normalizeMcpToolsForForm = value => {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const available = [...new Set(Array.isArray(raw.available) ? raw.available : [])]
+  return {
+    available,
+    autoApprove: [...new Set(Array.isArray(raw.autoApprove) ? raw.autoApprove : [])].filter(tool => available.includes(tool)),
+    autoExpand: [...new Set(Array.isArray(raw.autoExpand) ? raw.autoExpand : [])].filter(tool => available.includes(tool))
+  }
+}
+
+const toggleMcpToolConfig = (toolId, key, checked) => {
+  const current = normalizeMcpToolsForForm(agentForm.value.mcpTools)
+  const next = new Set(current[key])
+  if (checked) next.add(toolId)
+  else next.delete(toolId)
+  if (key === 'available' && !checked) {
+    current.autoApprove = current.autoApprove.filter(tool => tool !== toolId)
+    current.autoExpand = current.autoExpand.filter(tool => tool !== toolId)
+  }
+  current[key] = [...next]
+  agentForm.value.mcpTools = current
+}
+
 const normalizeAgentFormForSave = form => {
   const normalized = JSON.parse(JSON.stringify(form))
 
@@ -1580,11 +1646,10 @@ const normalizeAgentFormForSave = form => {
   normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
     ? sortSkillNamesByName(normalized.selectedSkills)
     : []
-  normalized.mcpToolExposure = Array.isArray(normalized.mcpToolExposure)
-    ? [...new Set(normalized.mcpToolExposure)].filter(
-        tool => normalized.availableTools.includes(tool) && availableMcpToolIds.value.has(tool)
-      )
-    : []
+  normalized.mcpTools = normalizeMcpToolsForForm(normalized.mcpTools)
+  normalized.mcpTools.available = normalized.mcpTools.available.filter(tool => availableMcpToolIds.value.has(tool))
+  normalized.mcpTools.autoApprove = normalized.mcpTools.autoApprove.filter(tool => normalized.mcpTools.available.includes(tool))
+  normalized.mcpTools.autoExpand = normalized.mcpTools.autoExpand.filter(tool => normalized.mcpTools.available.includes(tool))
 
   if (normalized.role === AGENT_ROLE.CHILD) {
     normalized.planningPrompt = ''
@@ -1748,7 +1813,8 @@ const editAgent = async id => {
         ...defaultFormData,
         ...agentData,
         sandboxExecutionMode: agentData.sandboxExecutionMode || 'host_only',
-        sandboxSchemeId: agentData.sandboxSchemeId || null
+        sandboxSchemeId: agentData.sandboxSchemeId || null,
+        mcpTools: normalizeMcpToolsForForm(agentData.mcpTools)
       }
       syncPersonalitySelection(agentForm.value.personality)
       agentForm.value.allowShell = Array.isArray(agentForm.value.availableTools)
@@ -2190,12 +2256,18 @@ watch(
 )
 
 watch(
-  [() => agentForm.value.availableTools, availableMcpToolIds],
+  [() => agentForm.value.mcpTools?.available, availableMcpToolIds],
   ([availableToolIds, mcpToolIds]) => {
-    const enabledToolIds = new Set(availableToolIds || [])
-    agentForm.value.mcpToolExposure = (agentForm.value.mcpToolExposure || []).filter(
-      tool => enabledToolIds.has(tool) && mcpToolIds.has(tool)
-    )
+    const available = (availableToolIds || []).filter(tool => mcpToolIds.has(tool))
+    const current = normalizeMcpToolsForForm(agentForm.value.mcpTools)
+    if (available.length !== current.available.length || available.some((tool, index) => tool !== current.available[index])) {
+      agentForm.value.mcpTools = {
+        ...current,
+        available,
+        autoApprove: current.autoApprove.filter(tool => available.includes(tool)),
+        autoExpand: current.autoExpand.filter(tool => available.includes(tool))
+      }
+    }
   },
   { deep: true, immediate: true }
 )
@@ -2295,6 +2367,10 @@ watch(
     line-height: 1.5;
   }
 
+  .personality-config {
+    width: 100%;
+  }
+
   .personality-options {
     display: flex;
     flex-direction: row;
@@ -2383,7 +2459,7 @@ watch(
     margin-bottom: 8px;
   }
 
-  .skill-checklist {
+      .skill-checklist {
     max-height: 500px;
     overflow-y: auto;
     border: 1px solid var(--cs-border-color);
@@ -2423,10 +2499,89 @@ watch(
       max-height: 100px;
       overflow: hidden;
       line-height: 1.4;
-    }
-  }
+        }
+      }
 
-  .model-item-compact {
+      .mcp-tools-config {
+        margin-top: var(--cs-space-lg);
+
+        &__header {
+          display: flex;
+          flex-direction: column;
+          gap: var(--cs-space-xs);
+          margin-bottom: var(--cs-space-sm);
+
+          h3 {
+            margin: 0;
+            font-size: var(--cs-font-size-md);
+            color: var(--cs-text-color-primary);
+          }
+        }
+      }
+
+      .mcp-tools-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--cs-space-xs);
+        max-height: 360px;
+        overflow-y: auto;
+        padding: var(--cs-space-xs);
+        border: 1px solid var(--cs-border-color);
+        border-radius: var(--cs-border-radius-md);
+        background: var(--cs-bg-color-light);
+      }
+
+      .mcp-tool-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--cs-space-sm);
+        min-width: 0;
+        padding: var(--cs-space-sm);
+        border-radius: var(--cs-border-radius-sm);
+        background: var(--cs-bg-color);
+      }
+
+      .mcp-tool-info {
+        display: flex;
+        flex-direction: column;
+        gap: var(--cs-space-2xs);
+        min-width: 0;
+
+        .tool-name,
+        .tool-desc {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .tool-name {
+          color: var(--cs-text-color-primary);
+        }
+
+        .tool-desc {
+          color: var(--cs-text-color-secondary);
+          font-size: var(--cs-font-size-sm);
+        }
+      }
+
+      .mcp-tool-switches {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(72px, auto));
+        gap: var(--cs-space-sm);
+        flex-shrink: 0;
+
+        label {
+          display: flex;
+          align-items: center;
+          gap: var(--cs-space-xs);
+          color: var(--cs-text-color-secondary);
+          font-size: var(--cs-font-size-xs);
+          white-space: nowrap;
+        }
+      }
+
+      .model-item-compact {
     padding: 8px;
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-md);

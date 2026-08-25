@@ -204,7 +204,68 @@
                     </span>
                   </el-dropdown-item>
 
-                  <!-- auto-approved tools and shell commands -->
+                  <el-popover
+                    v-model:visible="mcpConfigPopoverVisible"
+                    placement="right-start"
+                    :width="460"
+                    trigger="click"
+                    popper-class="mcp-config-popover">
+                    <template #reference>
+                      <span class="mcp-config-reference">
+                        <el-dropdown-item class="mcp-config-dropdown-trigger">
+                          <cs name="mcp" size="14px" class="dropdown-icon" />
+                          <span class="dropdown-content">
+                            <span class="dropdown-text">{{ $t('workflow.mcpConfig') }}</span>
+                          </span>
+                          <cs name="caret-right" size="14px" class="mcp-config-dropdown-arrow" />
+                        </el-dropdown-item>
+                      </span>
+                    </template>
+
+                    <div
+                      v-if="mcpConfigPopoverVisible"
+                      class="mcp-config-panel"
+                      @click.stop
+                      @mousedown.stop>
+                      <div class="mcp-config-panel__header">
+                        <div class="mcp-config-panel__title">
+                          <cs name="mcp" size="16px" />
+                          <span>{{ $t('workflow.mcpConfig') }}</span>
+                        </div>
+                        <span>{{ $t('settings.agent.mcpToolAvailable') }}</span>
+                        <span>{{ $t('settings.agent.mcpToolAutoApprove') }}</span>
+                        <span>{{ $t('settings.agent.mcpToolAutoExpand') }}</span>
+                      </div>
+                      <div v-if="workflowMcpTools.length > 0" class="mcp-config-panel__content checkbox-list">
+                        <div v-for="tool in workflowMcpTools" :key="tool.id" class="mcp-config-panel__row">
+                          <span class="checkbox-label-wrap">
+                            <code class="tool-name">{{ tool.id }}</code>
+                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                          </span>
+                          <el-switch
+                            size="small"
+                            :model-value="tool.available"
+                            :aria-label="$t('settings.agent.mcpToolAvailable')"
+                            @change="checked => toggleWorkflowMcpConfig(tool.id, 'available', checked)" />
+                          <el-switch
+                            size="small"
+                            :model-value="tool.autoApprove"
+                            :disabled="!tool.available"
+                            :aria-label="$t('settings.agent.mcpToolAutoApprove')"
+                            @change="checked => toggleWorkflowMcpConfig(tool.id, 'autoApprove', checked)" />
+                          <el-switch
+                            size="small"
+                            :model-value="tool.autoExpand"
+                            :disabled="!tool.available"
+                            :aria-label="$t('settings.agent.mcpToolAutoExpand')"
+                            @change="checked => toggleWorkflowMcpConfig(tool.id, 'autoExpand', checked)" />
+                        </div>
+                      </div>
+                      <div v-else class="section-empty-text">{{ $t('settings.agent.mcpToolsEmpty') }}</div>
+                    </div>
+                  </el-popover>
+
+                  <!-- tool configuration and shell commands -->
                   <el-popover
                     v-model:visible="autoApprovedPopoverVisible"
                     placement="right-start"
@@ -212,13 +273,13 @@
                     trigger="click"
                     popper-class="auto-approved-popover">
                     <template #reference>
-                      <span class="auto-approved-reference">
-                        <el-dropdown-item class="auto-approved-dropdown-trigger">
-                          <cs name="tool" size="14px" class="dropdown-icon" />
+                      <span class="tool-config-reference">
+                        <el-dropdown-item class="tool-config-dropdown-trigger">
+                          <cs name="hammer" size="14px" class="dropdown-icon" />
                           <span class="dropdown-content">
-                            <span class="dropdown-text">{{ $t('workflow.autoApprovedTools') }}</span>
+                            <span class="dropdown-text">{{ $t('workflow.toolConfig') }}</span>
                           </span>
-                          <cs name="caret-right" size="14px" class="auto-approved-dropdown-arrow" />
+                          <cs name="caret-right" size="14px" class="tool-config-dropdown-arrow" />
                         </el-dropdown-item>
                       </span>
                     </template>
@@ -244,7 +305,7 @@
                           </div>
                           <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
                         </el-tab-pane>
-                        <el-tab-pane :label="`${$t('workflow.autoApprovedTools')} (${autoApprovedTools.length})`" name="autoApprove">
+                        <el-tab-pane :label="`${$t('workflow.toolConfig')} (${autoApprovedTools.length})`" name="autoApprove">
                           <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
                             <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
                               <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
@@ -1040,6 +1101,7 @@ watch(
 )
 
 const autoApprovedPopoverVisible = ref(false)
+const mcpConfigPopoverVisible = ref(false)
 const approvalToolsTab = ref('available')
 const isImportingShellPolicies = ref(false)
 const isClearingShellPolicies = ref(false)
@@ -1050,21 +1112,53 @@ const shellPolicyPage = ref(1)
 const SHELL_POLICY_PAGE_SIZE = 10
 
 const agentAvailableTools = computed(() => {
-  const agentToolIds = Array.isArray(props.selectedAgent?.availableTools)
-    ? props.selectedAgent.availableTools
-    : []
   const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
 
-  return agentToolIds
+  return workflowAvailableToolIds.value
+    .filter(id => !String(id).includes('__MCP__'))
     .map(id => ({ id, name: toolDetails.get(id)?.name || id }))
+    .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
+})
+
+const workflowMcpTools = computed(() => {
+  const config = props.currentWorkflow?.agentConfig?.mcpTools || props.selectedAgent?.mcpTools || {}
+  const available = new Set(Array.isArray(config.available) ? config.available : [])
+  const autoApprove = new Set(Array.isArray(config.autoApprove) ? config.autoApprove : [])
+  const autoExpand = new Set(Array.isArray(config.autoExpand) ? config.autoExpand : [])
+  const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+  const currentlyAvailableMcpTools = new Set(
+    agentStore.availableTools
+      .filter(tool => tool.category === 'MCP' || String(tool.id).includes('__MCP__'))
+      .map(tool => tool.id)
+  )
+  const agentMcpTools = Array.isArray(props.selectedAgent?.mcpTools?.available)
+    ? props.selectedAgent.mcpTools.available
+    : []
+  const configuredMcpTools = new Set([...available, ...autoApprove, ...autoExpand])
+  return [...new Set([...agentMcpTools, ...configuredMcpTools])]
+    .filter(id => currentlyAvailableMcpTools.has(id))
+    .map(id => ({
+      id,
+      name: toolDetails.get(id)?.name || id,
+      available: available.has(id),
+      autoApprove: autoApprove.has(id),
+      autoExpand: autoExpand.has(id)
+    }))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 
 const workflowAvailableToolIds = computed(() => {
   if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
-    return props.currentWorkflow.agentConfig.availableTools
+    const ordinary = props.currentWorkflow.agentConfig.availableTools
+      .filter(id => !String(id).includes('__MCP__'))
+    const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
+    return [...new Set([...ordinary, ...mcp])]
   }
-  return Array.isArray(props.selectedAgent?.availableTools) ? props.selectedAgent.availableTools : []
+  const ordinary = Array.isArray(props.selectedAgent?.availableTools)
+    ? props.selectedAgent.availableTools
+    : []
+  const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
+  return [...new Set([...ordinary, ...mcp])]
 })
 const autoApprovedTools = computed(() => {
   const availableSet = new Set(workflowAvailableToolIds.value)
@@ -1276,6 +1370,39 @@ const toggleWorkflowAvailableTool = async (toolId, checked) => {
     workflowStore.setAutoApprovedTools(nextAutoApprove)
   } catch (error) {
     console.error('Failed to update workflow available tools:', error)
+  }
+}
+
+const toggleWorkflowMcpConfig = async (toolId, key, checked) => {
+  if (!props.currentWorkflowId) return
+  const current = props.currentWorkflow?.agentConfig?.mcpTools || props.selectedAgent?.mcpTools || {
+    available: [],
+    autoApprove: [],
+    autoExpand: []
+  }
+  const next = {
+    available: [...new Set(Array.isArray(current.available) ? current.available : [])],
+    autoApprove: [...new Set(Array.isArray(current.autoApprove) ? current.autoApprove : [])],
+    autoExpand: [...new Set(Array.isArray(current.autoExpand) ? current.autoExpand : [])]
+  }
+  const values = new Set(next[key])
+  if (checked) values.add(toolId)
+  else values.delete(toolId)
+  next[key] = [...values]
+  if (key === 'available' && !checked) {
+    next.autoApprove = next.autoApprove.filter(id => id !== toolId)
+    next.autoExpand = next.autoExpand.filter(id => id !== toolId)
+  }
+  next.autoApprove = next.autoApprove.filter(id => next.available.includes(id))
+  next.autoExpand = next.autoExpand.filter(id => next.available.includes(id))
+  try {
+    await persistAgentConfig({ mcpTools: next })
+    workflowStore.setAutoApprovedTools([
+      ...(props.currentWorkflow?.agentConfig?.autoApprove || []).filter(id => id !== toolId),
+      ...next.autoApprove
+    ])
+  } catch (error) {
+    console.error('Failed to update workflow MCP tools:', error)
   }
 }
 
@@ -1883,15 +2010,76 @@ defineExpose({
 }
 
 .auto-approved-reference,
+.tool-config-reference,
+.mcp-config-reference,
 .execution-style-reference {
   display: block;
 }
 
 .auto-approved-dropdown-arrow,
+.tool-config-dropdown-arrow,
+.mcp-config-dropdown-arrow,
 .execution-style-dropdown-arrow {
   margin-left: auto;
   flex-shrink: 0;
   color: var(--cs-text-color-secondary);
+}
+
+.mcp-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.mcp-config-panel__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xs) 0;
+  border-bottom: 1px solid var(--cs-border-color);
+  background: var(--cs-bg-color);
+  color: var(--cs-text-color-primary);
+  font-weight: 600;
+  font-size: var(--cs-font-size-xs);
+  text-align: center;
+}
+
+.mcp-config-panel__title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--cs-space-xs);
+  font-size: var(--cs-font-size);
+  text-align: left;
+}
+
+.mcp-config-panel__content {
+  gap: var(--cs-space-xs);
+}
+
+.mcp-config-panel__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  align-items: center;
+  gap: var(--cs-space-xs);
+  min-height: 42px;
+  padding: var(--cs-space-xs);
+  border-radius: var(--cs-border-radius);
+  background: var(--cs-bg-color);
+}
+
+.mcp-config-panel__row .checkbox-label-wrap {
+  min-width: 0;
+}
+
+.mcp-config-panel__row .el-switch {
+  justify-self: center;
 }
 
 .workflow-execution-style-panel {

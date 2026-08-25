@@ -219,6 +219,13 @@
       "imageRecognitionPrompt": "圖片辨識提示詞",
       "imageRecognitionPromptPlaceholder": "留空時將使用預設圖片分析提示詞。若自訂，請描述你希望的辨識重點與輸出風格。",
       "finalAudit": "執行終審",
+      "mcpToolsTitle": "MCP 工具",
+      "mcpToolsHint": "分別設定 MCP 工具的可用、自動核准和完整參數展開狀態。",
+      "mcpToolsSearchPlaceholder": "搜尋 MCP 工具",
+      "mcpToolsEmpty": "未發現 MCP 工具。",
+      "mcpToolAvailable": "可用",
+      "mcpToolAutoApprove": "自動核准",
+      "mcpToolAutoExpand": "展開參數",
       "models": "模型",
       "modeProvider": "供應商",
       "modeProxy": "代理",
@@ -1172,6 +1179,7 @@
       "validationRequired": "請為每一項選擇一個選項。"
     },
     "autoApprovedTools": "自動審批工具",
+    "mcpConfig": "MCP 設定",
     "automation": {
       "addDirectory": "新增目錄",
       "additionalInfo": "附加資訊",
@@ -1388,6 +1396,7 @@
       "thinking": "思考中"
     },
     "skillsConfigTitle": "Skills 設定",
+    "toolConfig": "工具設定",
     "skillsSearchEmpty": "沒有符合的 Skills。",
     "skillsSearchPlaceholder": "按 Skills 名稱搜尋",
     "startFailed": "啟動任務失敗：{error}",

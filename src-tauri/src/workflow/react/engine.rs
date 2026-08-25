@@ -583,18 +583,35 @@ impl WorkflowExecutor {
             .collect()
     }
 
-    fn mcp_tool_exposure_set(&self) -> HashSet<String> {
+    fn mcp_tool_config(&self) -> Option<crate::db::McpToolConfig> {
         self.agent_config
             .mcp_tool_exposure
             .as_deref()
-            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .and_then(|tools| serde_json::from_str::<crate::db::McpToolConfig>(tools).ok())
+    }
+
+    fn mcp_tool_exposure_set(&self) -> HashSet<String> {
+        self.mcp_tool_config()
+            .map(|config| config.auto_expand.into_iter().collect())
             .unwrap_or_default()
-            .into_iter()
-            .collect()
     }
 
     fn available_tools_allowlist(raw_tools: Option<&str>) -> Option<HashSet<String>> {
         raw_tools.map(|tools| serde_json::from_str::<HashSet<String>>(tools).unwrap_or_default())
+    }
+
+    fn mcp_tools_allowlist(&self) -> Option<HashSet<String>> {
+        if let Some(config) = self.mcp_tool_config() {
+            return Some(config.available.into_iter().collect());
+        }
+
+        self.agent_config.available_tools.as_deref().map(|tools| {
+            serde_json::from_str::<Vec<String>>(tools)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|tool| tool.contains(MCP_TOOL_NAME_SPLIT))
+                .collect()
+        })
     }
 
     fn is_mcp_tool_allowed_by_config(
@@ -605,8 +622,7 @@ impl WorkflowExecutor {
     }
 
     fn is_mcp_tool_allowed(&self, tool_name: &str) -> bool {
-        let configured_tools =
-            Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
+        let configured_tools = self.mcp_tools_allowlist();
         Self::is_mcp_tool_allowed_by_config(configured_tools.as_ref(), tool_name)
     }
 
@@ -2058,6 +2074,7 @@ impl WorkflowExecutor {
             .await;
         let configured_tools =
             Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
+        let configured_mcp_tools = self.mcp_tools_allowlist();
         let is_sub_agent = self.subagent_type.is_some();
 
         // Helper to check if a tool is allowed in Workflow scope
@@ -2080,12 +2097,17 @@ impl WorkflowExecutor {
                 })
                 .unwrap_or(true); // Default to allowed for safety if not found in meta
 
-            let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
-                is_core_workflow_builtin_tool(name)
-                    || tools.contains(name)
-                    || (name == TOOL_MCP_TOOL_LOAD
-                        && tools.iter().any(|tool| tool.contains(MCP_TOOL_NAME_SPLIT)))
-            });
+            let config_allowed = if name.contains(MCP_TOOL_NAME_SPLIT) {
+                configured_mcp_tools
+                    .as_ref()
+                    .map_or(true, |tools| tools.contains(name))
+            } else {
+                configured_tools.as_ref().map_or(true, |tools| {
+                    is_core_workflow_builtin_tool(name)
+                        || tools.contains(name)
+                        || (name == TOOL_MCP_TOOL_LOAD && configured_mcp_tools.is_some())
+                })
+            };
 
             scope_allowed && config_allowed
         };
@@ -7109,6 +7131,13 @@ impl WorkflowExecutor {
                 }
             }
         }
+        if let Some(config) = self.mcp_tool_config() {
+            for tool in config.auto_approve {
+                if config.available.iter().any(|available| available == &tool) {
+                    self.auto_approve.insert(tool);
+                }
+            }
+        }
         if self.policy.is_strict_manual_planning() {
             self.auto_approve
                 .insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
@@ -7167,8 +7196,7 @@ impl WorkflowExecutor {
         }
 
         let exposed_mcp_tools = self.mcp_tool_exposure_set();
-        let configured_mcp_tools =
-            Self::available_tools_allowlist(self.agent_config.available_tools.as_deref());
+        let configured_mcp_tools = self.mcp_tools_allowlist();
         let available_mcp_tools = self
             .global_tool_manager
             .get_tool_calling_spec(Some(ToolScope::Workflow), None)
@@ -7223,8 +7251,9 @@ impl WorkflowExecutor {
             available_mcp_tools.len(),
             expected_folded_names.len(),
         );
-        let registrations_changed =
-            registered_mcp_names != expected_exposed_names || had_loader != should_have_loader;
+        let registrations_changed = registered_mcp_names != expected_exposed_names
+            || had_loader != should_have_loader
+            || summaries_changed;
 
         if summaries_changed {
             log::info!(
@@ -7675,6 +7704,35 @@ impl WorkflowExecutor {
             self.auto_approve
                 .retain(|tool| available_tools.contains(tool));
             self.rebuild_foundation_tools_for_runtime_update().await?;
+            return Ok(true);
+        }
+
+        if sig_type_enum == Some(SignalType::UpdateMcpTools) {
+            let Some(mut mcp_tools) = sig_json
+                .get("mcp_tools")
+                .or_else(|| sig_json.get("mcpTools"))
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<crate::db::agent::McpToolConfig>(value).ok()
+                })
+            else {
+                return Ok(false);
+            };
+
+            mcp_tools.normalize();
+            log::info!(
+                "WorkflowExecutor {}: Updating MCP tools configuration (available={}, auto_approve={}, auto_expand={})",
+                self.session_id,
+                mcp_tools.available.len(),
+                mcp_tools.auto_approve.len(),
+                mcp_tools.auto_expand.len()
+            );
+            self.agent_config.mcp_tool_exposure = serde_json::to_string(&mcp_tools).ok();
+            self.rebuild_auto_approve_from_agent_config();
+            self.refresh_workflow_mcp_runtime_capabilities(true).await?;
+            let tools = self.get_auto_approved_tools();
+            self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
+                .await?;
             return Ok(true);
         }
 

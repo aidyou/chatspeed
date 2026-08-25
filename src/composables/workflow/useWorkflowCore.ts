@@ -376,6 +376,7 @@ export function useWorkflowCore({
             'finalAudit',
             'finalReviewMode',
             'models',
+            'mcpTools',
             'personality',
             'phase',
             'sandboxConfig',

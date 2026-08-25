@@ -314,8 +314,10 @@ assert.ok(
 assert.match(visibleAutoApprovalTools, /filter\(tool => availableSet\.has\(tool\)\)/)
 assert.match(
   workflowInputArea,
-  /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.autoApprovedTools[\s\S]*workflow\.allowedShellCommands/
+  /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.toolConfig[\s\S]*workflow\.allowedShellCommands/
 )
+assert.match(workflowInputArea, /workflow\.mcpConfig[\s\S]*name="mcp"|name="mcp"[\s\S]*workflow\.mcpConfig/)
+assert.match(workflowInputArea, /settings\.agent\.mcpToolAvailable[\s\S]*settings\.agent\.mcpToolAutoApprove[\s\S]*settings\.agent\.mcpToolAutoExpand/)
 assert.match(
   workflowInputArea,
   /toggleWorkflowAvailableTool[\s\S]*availableTools: nextAvailableTools[\s\S]*autoApprove: nextAutoApprove/
