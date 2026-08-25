@@ -460,7 +460,7 @@ impl ToolDefinition for FinishTask {
                     "summary": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "The complete user-visible completion report. Required unless a valid report is already present in the current assistant response or was explicitly captured by the runtime."
+                        "description": "The complete user-visible completion report, formatted as readable standard Markdown. Separate distinct topics with blank lines, and use short headings plus bullet or numbered lists for multi-topic reports instead of one long paragraph. Clearly cover what was completed, what was verified, and remaining limitations or notes; write 'None' when nothing remains. Do not wrap the entire report in a code fence or include JSON, HTML, or hidden reasoning. Required unless a valid report is already present in the current assistant response or was explicitly captured by the runtime."
                     }
                 },
                 "additionalProperties": false
@@ -694,6 +694,22 @@ mod tests {
             declaration.input_schema["properties"]["summary"]["minLength"],
             1
         );
+        let summary_description = declaration.input_schema["properties"]["summary"]["description"]
+            .as_str()
+            .expect("summary description should be a string");
+        for required_phrase in [
+            "standard Markdown",
+            "blank lines",
+            "bullet or numbered lists",
+            "what was completed",
+            "what was verified",
+            "remaining limitations",
+        ] {
+            assert!(
+                summary_description.contains(required_phrase),
+                "summary description missing: {required_phrase}"
+            );
+        }
         assert_eq!(declaration.input_schema["additionalProperties"], false);
         assert!(declaration.input_schema.get("required").is_none());
 
