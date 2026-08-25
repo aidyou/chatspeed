@@ -8,6 +8,7 @@ import {
   excludeLeadingWorkflowTaskBoundaryMessages,
   excludeManualClearContextMarkers,
   getStructuredWorkflowToolName,
+  getWorkflowMessageWindowAnchorId,
   getWorkflowPersistedMessageId,
   getWorkflowToolGroupRenderOrders,
   hasIncompleteWorkflowToolCallChain,
@@ -804,6 +805,43 @@ assert.equal(
   longRunningTaskWindow.groups[0].messages[199].id,
   'long-task-message-5000'
 )
+
+const anchoredReadingMessages = Array.from({ length: 305 }, (_, index) => ({
+  id: `anchored-message-${index + 1}`,
+  role: 'assistant'
+}))
+const anchoredReadingWindow = selectVisibleWorkflowMessageWindow(
+  [{ id: 'anchored-reading-task', isCompleted: false, messages: anchoredReadingMessages }],
+  300,
+  getWorkflowMessageWindowAnchorId(anchoredReadingMessages[1])
+)
+assert.equal(
+  anchoredReadingWindow.hiddenMessageCount,
+  1,
+  'an off-bottom reading anchor must remain in the projected message window'
+)
+assert.deepEqual(
+  anchoredReadingWindow.groups[0].messages.map(message => message.id).slice(0, 2),
+  ['anchored-message-2', 'anchored-message-3'],
+  'new messages may extend the reading window without removing the anchored message'
+)
+assert.equal(
+  anchoredReadingWindow.groups[0].messages.length,
+  304,
+  'the anchored window must retain all messages from the reading anchor through the newest message'
+)
+
+const defaultAnchoredReadingWindow = selectVisibleWorkflowMessageWindow(
+  [{ id: 'anchored-reading-task', isCompleted: false, messages: anchoredReadingMessages }],
+  300,
+  'missing-reading-anchor'
+)
+assert.equal(
+  defaultAnchoredReadingWindow.hiddenMessageCount,
+  5,
+  'a stale anchor must fall back to the normal bounded latest-message window'
+)
+assert.equal(defaultAnchoredReadingWindow.groups[0].messages[0].id, 'anchored-message-6')
 
 const createTaskWindowHarness = () => {
   const acceptedCompletionIds = new Set()

@@ -213,13 +213,57 @@ export const selectVisibleWorkflowTaskGroups = (
  * Limit the message projection before expensive display enhancement and Vue rendering.
  * Whole groups keep their original references so completed-group caches remain reusable.
  */
-export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCount = 200) => {
+export const getWorkflowMessageWindowAnchorId = message => {
+  const persistedId = message?.id
+  if (persistedId !== null && persistedId !== undefined && persistedId !== '') {
+    return `${String(persistedId)}:${getWorkflowMessageIdentityDiscriminator(message)}`
+  }
+
+  const metadata = message?.metadata || {}
+  const stableId = String(
+    metadata.tool_call_id ||
+      metadata.toolCallId ||
+      metadata.queued_user_message_id ||
+      metadata.queuedUserMessageId ||
+      metadata.client_message_id ||
+      metadata.clientMessageId ||
+      ''
+  ).trim()
+
+  return stableId ? `${stableId}:${getWorkflowMessageIdentityDiscriminator(message)}` : ''
+}
+
+export const selectVisibleWorkflowMessageWindow = (
+  groups = [],
+  visibleMessageCount = 200,
+  windowAnchorId = ''
+) => {
   const normalizedLimit = Math.max(0, Math.floor(Number(visibleMessageCount) || 0))
   const totalMessageCount = groups.reduce(
     (total, group) => total + (group?.messages?.length || 0),
     0
   )
+  const normalizedAnchorId = String(windowAnchorId || '').trim()
+  let anchorIndex = -1
+  let messageIndex = 0
+
+  if (normalizedAnchorId) {
+    for (const group of groups) {
+      for (const message of group?.messages || []) {
+        if (getWorkflowMessageWindowAnchorId(message) === normalizedAnchorId) {
+          anchorIndex = messageIndex
+          break
+        }
+        messageIndex += 1
+      }
+      if (anchorIndex >= 0) break
+    }
+  }
+
   let remainingHiddenCount = Math.max(0, totalMessageCount - normalizedLimit)
+  if (anchorIndex >= 0) {
+    remainingHiddenCount = Math.min(remainingHiddenCount, anchorIndex)
+  }
   const visibleGroups = []
 
   for (const group of groups) {
@@ -233,7 +277,8 @@ export const selectVisibleWorkflowMessageWindow = (groups = [], visibleMessageCo
       let visibleStartIndex = remainingHiddenCount
       while (
         visibleStartIndex < messages.length &&
-        isWorkflowTaskBoundaryMessage(messages[visibleStartIndex])
+        isWorkflowTaskBoundaryMessage(messages[visibleStartIndex]) &&
+        getWorkflowMessageWindowAnchorId(messages[visibleStartIndex]) !== normalizedAnchorId
       ) {
         visibleStartIndex += 1
       }

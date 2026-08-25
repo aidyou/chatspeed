@@ -35,7 +35,8 @@
       v-for="(message, index) in visibleMessages"
       :key="message.displayId"
       class="message"
-      :data-message-id="message.displayId || message.id || null"
+      :data-message-id="message.windowAnchorId || message.displayId || message.id || null"
+      :data-window-anchor-id="message.windowAnchorId || null"
       :data-child-task-id="getMessageSubAgentId(message)"
       :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
       <div class="avatar" v-if="message.role === 'user'">
@@ -1178,7 +1179,6 @@ const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const OTHER_ASK_USER_VALUE = '__other__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
-const MAX_VISIBLE_WORKFLOW_MESSAGES = 300
 const STREAMING_REASONING_ID = '__streaming_reasoning__'
 
 const props = defineProps({
@@ -1300,6 +1300,7 @@ const props = defineProps({
 const emit = defineEmits([
   'toggle-expand',
   'toggle-reasoning',
+  'message-window-anchor-change',
   'scroll-bottom',
   'reveal-earlier-messages',
   'approve-tool',
@@ -1316,9 +1317,9 @@ const askUserDrafts = ref({})
 const approvedSubmissionIds = new Set()
 const userMessageOverflowMap = ref({})
 const userMessageCollapsedHeightMap = ref({})
-const visibleMessageLimit = ref(MAX_VISIBLE_WORKFLOW_MESSAGES)
 const AUTO_SCROLL_THRESHOLD = 64
 const shouldAutoScroll = ref(true)
+const readingScrollAnchor = ref(null)
 let userMessageResizeObserver = null
 let messageContentResizeObserver = null
 let scrollFrameId = null
@@ -1338,8 +1339,10 @@ const isNearBottom = el => {
 
 const canRemoveQueuedMessage = item => item?.removable !== false
 
-const handleScroll = () => {
-  shouldAutoScroll.value = isNearBottom(messagesRef.value)
+const clearReadingScrollAnchor = () => {
+  if (!readingScrollAnchor.value) return
+  readingScrollAnchor.value = null
+  emit('message-window-anchor-change', '')
 }
 
 const captureScrollAnchor = container => {
@@ -1347,16 +1350,42 @@ const captureScrollAnchor = container => {
 
   const containerRect = container.getBoundingClientRect()
   const anchorTop = containerRect.top
-  const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]')).find(
+  const messageElements = Array.from(container.querySelectorAll('.message[data-message-id]')).filter(
     element => element.getBoundingClientRect().bottom > anchorTop + 1
+  )
+  const anchorElement = messageElements.find(
+    element => !!element.getAttribute('data-window-anchor-id')
   )
   if (!anchorElement) return null
 
   const rect = anchorElement.getBoundingClientRect()
   return {
     id: anchorElement.getAttribute('data-message-id') || '',
+    windowAnchorId: anchorElement.getAttribute('data-window-anchor-id') || '',
     offsetTop: rect.top - containerRect.top
   }
+}
+
+const syncReadingScrollAnchor = () => {
+  const container = messagesRef.value
+  if (!container || isNearBottom(container)) {
+    clearReadingScrollAnchor()
+    return
+  }
+
+  const anchor = captureScrollAnchor(container)
+  if (!anchor) return
+
+  const previousWindowAnchorId = readingScrollAnchor.value?.windowAnchorId || ''
+  readingScrollAnchor.value = anchor
+  if (anchor.windowAnchorId && anchor.windowAnchorId !== previousWindowAnchorId) {
+    emit('message-window-anchor-change', anchor.windowAnchorId)
+  }
+}
+
+const handleScroll = () => {
+  shouldAutoScroll.value = isNearBottom(messagesRef.value)
+  syncReadingScrollAnchor()
 }
 
 const restoreScrollPosition = ({
@@ -1392,35 +1421,35 @@ const restoreScrollPosition = ({
   }
 }
 
+const restoreReadingScrollAnchor = () => {
+  const container = messagesRef.value
+  const anchor = readingScrollAnchor.value
+  if (!container || !anchor?.id || isNearBottom(container)) return false
+
+  const containerRect = container.getBoundingClientRect()
+  const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]')).find(
+    element => element.getAttribute('data-message-id') === anchor.id
+  )
+  if (!anchorElement) return false
+
+  const currentOffsetTop = anchorElement.getBoundingClientRect().top - containerRect.top
+  const offsetDelta = currentOffsetTop - anchor.offsetTop
+  if (Math.abs(offsetDelta) > 0.5) {
+    container.scrollTop += offsetDelta
+  }
+  return true
+}
+
 const revealEarlierMessages = () => {
+  if (props.hiddenEarlierMessageCount <= 0) return
+
   const container = messagesRef.value
   const previousScrollHeight = container?.scrollHeight || 0
   const previousScrollTop = container?.scrollTop || 0
   const scrollAnchor = captureScrollAnchor(container)
 
-  if (hasCollapsedMessageOverflow.value) {
-    visibleMessageLimit.value += MAX_VISIBLE_WORKFLOW_MESSAGES
-    nextTick(() => {
-      if (container) {
-        restoreScrollPosition({
-          container,
-          anchor: scrollAnchor,
-          previousScrollTop,
-          previousScrollHeight
-        })
-      }
-    })
-    return
-  }
-
-  if (props.hiddenEarlierMessageCount <= 0) return
-
   emit('reveal-earlier-messages', () => {
     nextTick(() => {
-      if (hasCollapsedMessageOverflow.value) {
-        visibleMessageLimit.value += MAX_VISIBLE_WORKFLOW_MESSAGES
-      }
-
       nextTick(() => {
         if (container) {
           restoreScrollPosition({
@@ -1429,6 +1458,7 @@ const revealEarlierMessages = () => {
             previousScrollTop,
             previousScrollHeight
           })
+          syncReadingScrollAnchor()
         }
       })
     })
@@ -1957,13 +1987,8 @@ const collapsedMessages = computed(() =>
     translate: t
   })
 )
-const hasCollapsedMessageOverflow = computed(
-  () => collapsedMessages.value.length > visibleMessageLimit.value
-)
-const hasHiddenEarlierMessages = computed(
-  () => hasCollapsedMessageOverflow.value || props.hiddenEarlierMessageCount > 0
-)
-const visibleMessages = computed(() => collapsedMessages.value.slice(-visibleMessageLimit.value))
+const hasHiddenEarlierMessages = computed(() => props.hiddenEarlierMessageCount > 0)
+const visibleMessages = computed(() => collapsedMessages.value)
 const lastVisibleMessage = computed(
   () => visibleMessages.value[visibleMessages.value.length - 1] || null
 )
@@ -2841,6 +2866,7 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
       const target = currentEl.scrollHeight - currentEl.clientHeight
       currentEl.scrollTop = Math.max(0, target)
       shouldAutoScroll.value = true
+      clearReadingScrollAnchor()
 
       if (currentFrameBudget <= 1) return
 
@@ -2857,6 +2883,7 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 }
 
 const scrollToBottom = (force = false) => {
+  if (force) clearReadingScrollAnchor()
   performScrollToBottom(force)
 }
 
@@ -2875,8 +2902,12 @@ const streamingLayoutState = computed(() => {
 
 watch(
   [visibleMessages, collapsedMessages],
-  ([messages]) => {
-    performScrollToBottom()
+  () => {
+    if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
+      performScrollToBottom()
+    } else {
+      nextTick(() => restoreReadingScrollAnchor())
+    }
     scheduleMeasureUserMessageOverflow()
     syncMessageContentResizeObserver()
   },
@@ -2886,7 +2917,11 @@ watch(
 watch(
   streamingLayoutState,
   () => {
-    performScrollToBottom()
+    if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
+      performScrollToBottom()
+    } else {
+      nextTick(() => restoreReadingScrollAnchor())
+    }
     syncMessageContentResizeObserver()
   },
   { flush: 'post' }
@@ -2895,7 +2930,7 @@ watch(
 watch(
   () => props.currentWorkflowId,
   () => {
-    visibleMessageLimit.value = MAX_VISIBLE_WORKFLOW_MESSAGES
+    readingScrollAnchor.value = null
     shouldAutoScroll.value = true
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
@@ -2915,7 +2950,11 @@ onMounted(() => {
   componentUnmounted = false
   if (typeof ResizeObserver !== 'undefined') {
     messageContentResizeObserver = new ResizeObserver(() => {
-      performScrollToBottom()
+      if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
+        performScrollToBottom()
+      } else {
+        restoreReadingScrollAnchor()
+      }
     })
     userMessageResizeObserver = new ResizeObserver(entries => {
       const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0

@@ -6,6 +6,7 @@ import {
   dedupeQueuedUserMessageProjection,
   excludeLeadingWorkflowTaskBoundaryMessages,
   getStructuredWorkflowToolName,
+  getWorkflowMessageWindowAnchorId,
   isWorkflowManualClearContextMessage,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
@@ -36,6 +37,7 @@ export function useWorkflowMessages() {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
   const loadedTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
+  const messageWindowAnchorId = ref('')
 
   const expandedMessages = ref(new Set())
   const expandedReasonings = ref(new Set())
@@ -397,6 +399,7 @@ export function useWorkflowMessages() {
     () => workflowStore.currentWorkflowId,
     () => {
       loadedTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
+      messageWindowAnchorId.value = ''
     },
     { flush: 'sync' }
   )
@@ -404,7 +407,8 @@ export function useWorkflowMessages() {
   const visibleTaskMessageWindow = computed(() =>
     selectVisibleWorkflowMessageWindow(
       visibleTaskGroupsState.value.groups,
-      loadedTaskMessageCount.value
+      loadedTaskMessageCount.value,
+      messageWindowAnchorId.value
     )
   )
 
@@ -421,6 +425,10 @@ export function useWorkflowMessages() {
     if (hiddenMessageCount <= 0) return false
     loadedTaskMessageCount.value += DEFAULT_VISIBLE_TASK_MESSAGES
     return true
+  }
+
+  const setMessageWindowAnchor = anchorId => {
+    messageWindowAnchorId.value = String(anchorId || '').trim()
   }
 
   const revealEarlierMessages = () => expandLoadedMessageWindow()
@@ -1022,6 +1030,7 @@ export function useWorkflowMessages() {
               ? toolGroupOrderById.get(String(message.metadata?.tool_call_id || '').trim()) ?? message.sourceOrder
               : message.groupOrder ?? message.sourceOrder,
           displayId,
+          windowAnchorId: getWorkflowMessageWindowAnchorId(message),
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),
           subAgentCard: buildSubAgentCard(message),
@@ -1873,6 +1882,7 @@ export function useWorkflowMessages() {
     expandedReasonings,
     enhancedMessages,
     hiddenEarlierMessageCount,
+    setMessageWindowAnchor,
     revealEarlierMessages,
     lastAssistantMessage,
     toggleMessageExpand,

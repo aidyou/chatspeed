@@ -220,6 +220,7 @@
                 :current-workflow-id="currentWorkflowId"
                 :wait-reason="waitReason"
                 :is-approval-submitting="isApprovalSubmitting"
+                @message-window-anchor-change="setMessageWindowAnchor"
                 @toggle-expand="toggleMessageExpand"
                 @toggle-reasoning="toggleReasoningExpand"
                 @reveal-earlier-messages="loadEarlierMessagePage"
@@ -606,6 +607,7 @@ const {
   expandedReasonings,
   enhancedMessages,
   hiddenEarlierMessageCount,
+  setMessageWindowAnchor,
   revealEarlierMessages: expandVisibleMessageWindow,
   lastAssistantMessage,
   toggleMessageExpand,

@@ -402,6 +402,50 @@ test('message resize observer is hoisted for immediate watchers', async () => {
   )
 })
 
+test('off-bottom readers preserve a message window anchor while new messages render', async () => {
+  const [workflowView, workflowMessages, messageList] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+  ])
+
+  assert.match(
+    workflowView,
+    /@message-window-anchor-change="setMessageWindowAnchor"/,
+    'the workflow view must pass the reader anchor from the message list to the projection'
+  )
+  assert.match(
+    workflowMessages,
+    /selectVisibleWorkflowMessageWindow\([\s\S]*?loadedTaskMessageCount\.value,[\s\S]*?messageWindowAnchorId\.value/,
+    'the upstream message window must retain the reported reader anchor'
+  )
+  assert.match(
+    messageList,
+    /:data-window-anchor-id="message\.windowAnchorId \|\| null"/,
+    'rendered messages must expose the upstream-stable anchor identity'
+  )
+  assert.match(
+    messageList,
+    /const syncReadingScrollAnchor = \(\) => \{[\s\S]*?emit\('message-window-anchor-change', anchor\.windowAnchorId\)/,
+    'scrolling away from the bottom must report the first readable persisted message'
+  )
+  assert.match(
+    messageList,
+    /const restoreReadingScrollAnchor = \(\) => \{[\s\S]*?container\.scrollTop \+= offsetDelta/,
+    'message updates must restore the anchored message to its previous viewport offset'
+  )
+  assert.match(
+    messageList,
+    /messageContentResizeObserver = new ResizeObserver\(\(\) => \{[\s\S]*?restoreReadingScrollAnchor\(\)/,
+    'asynchronous message height changes must also preserve the reader anchor'
+  )
+  assert.doesNotMatch(
+    messageList,
+    /slice\(-visibleMessageLimit\.value\)/,
+    'the message list must not apply a second tail-only window that can discard the reader anchor'
+  )
+})
+
 test('switching workflows clears an unobserved compression indicator from the previous session', async () => {
   const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
 
