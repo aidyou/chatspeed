@@ -1354,39 +1354,18 @@ fn merge_inherited_workflow_config(
         })
     };
 
-    let mut mcp_tools = agent_config.mcp_tool_exposure.clone();
+    // MCP availability comes from the live ToolManager. The Agent and
+    // inherited workflow values are preferences: preserve the workflow's
+    // explicit choices across task boundaries, falling back to the Agent
+    // defaults only when the workflow has no MCP preference yet. Stale IDs
+    // remain persisted so a temporarily disabled server can be re-enabled
+    // with the user's previous choice; runtime registration still filters
+    // them against currently discovered tools.
+    let mut mcp_tools = inherited_config
+        .mcp_tool_exposure
+        .clone()
+        .or_else(|| agent_config.mcp_tool_exposure.clone());
     if let Some(mcp) = mcp_tools.as_mut() {
-        if let Some(inherited_mcp) = inherited_config.mcp_tool_exposure.as_ref() {
-            mcp.available.retain(|tool| {
-                inherited_mcp
-                    .available
-                    .iter()
-                    .any(|selected| selected == tool)
-            });
-            let effective_available = mcp.available.clone();
-            mcp.auto_approve = merge_unique_tools([
-                Some(mcp.auto_approve.clone()),
-                Some(inherited_mcp.auto_approve.clone()),
-            ])
-            .into_iter()
-            .filter(|tool| {
-                effective_available
-                    .iter()
-                    .any(|available| available == tool)
-            })
-            .collect();
-            mcp.auto_expand = merge_unique_tools([
-                Some(mcp.auto_expand.clone()),
-                Some(inherited_mcp.auto_expand.clone()),
-            ])
-            .into_iter()
-            .filter(|tool| {
-                effective_available
-                    .iter()
-                    .any(|available| available == tool)
-            })
-            .collect();
-        }
         mcp.normalize();
     }
     merged.mcp_tool_exposure = mcp_tools;
@@ -5831,24 +5810,11 @@ pub async fn update_workflow_agent_config(
             selected_tools.retain(|tool| agent_tools.contains(tool));
         }
 
-        let agent_mcp_tools = agent
-            .mcp_tool_exposure
-            .as_deref()
-            .and_then(|value| serde_json::from_str::<crate::db::McpToolConfig>(value).ok());
         if let Some(selected_mcp) = normalized_config.mcp_tool_exposure.as_mut() {
-            let allowed_mcp = agent_mcp_tools.as_ref().map(|config| {
-                config
-                    .available
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-            });
-            if let Some(allowed_mcp) = allowed_mcp {
-                selected_mcp
-                    .available
-                    .retain(|tool| allowed_mcp.contains(tool));
-            } else {
-                selected_mcp.available.clear();
-            }
+            // MCP availability is supplied by the live ToolManager capability
+            // layer. Agent MCP fields are workflow preferences, so a task may
+            // enable any currently discovered MCP tool without first editing
+            // the Agent form.
             selected_mcp.normalize();
         }
     }
@@ -7864,7 +7830,11 @@ mod tests {
         assert_eq!(synced.auto_approve, Some(vec!["read_file".to_string()]));
         assert_eq!(
             synced.mcp_tool_exposure,
-            Some(crate::db::McpToolConfig::default())
+            Some(crate::db::McpToolConfig {
+                available: vec!["server__MCP__removed_tool".to_string()],
+                auto_approve: vec!["server__MCP__removed_tool".to_string()],
+                auto_expand: vec!["server__MCP__removed_tool".to_string()],
+            })
         );
         assert_eq!(synced.allowed_paths, Some(vec!["/workflow".to_string()]));
         let shell_policy = synced
@@ -7886,6 +7856,7 @@ mod tests {
             .expect("missing persisted Agent config");
         assert_eq!(persisted.available_tools, synced.available_tools);
         assert_eq!(persisted.auto_approve, synced.auto_approve);
+        assert_eq!(persisted.mcp_tool_exposure, synced.mcp_tool_exposure);
     }
 
     #[test]
@@ -8202,28 +8173,16 @@ mod tests {
             AgentConfig::from_json(&build_workflow_config_for_request(&agent, &request).to_json())
                 .expect("persisted config should deserialize");
 
-        assert_eq!(
-            persisted.available_tools,
-            Some(vec![
-                "read_file".to_string(),
-                "server__MCP__new_tool".to_string(),
-            ])
-        );
+        assert_eq!(persisted.available_tools, Some(Vec::new()));
         assert_eq!(
             persisted.mcp_tool_exposure,
             Some(crate::db::McpToolConfig {
-                available: vec!["server__MCP__new_tool".to_string()],
-                auto_approve: Vec::new(),
-                auto_expand: vec!["server__MCP__new_tool".to_string()],
+                available: vec!["server__MCP__removed_tool".to_string()],
+                auto_approve: vec!["server__MCP__removed_tool".to_string()],
+                auto_expand: Vec::new(),
             })
         );
-        assert_eq!(
-            persisted.auto_approve,
-            Some(vec![
-                "read_file".to_string(),
-                "server__MCP__new_tool".to_string()
-            ])
-        );
+        assert_eq!(persisted.auto_approve, Some(Vec::new()));
         assert!(persisted.shell_policy.is_some_and(|rules| rules.is_empty()));
         assert_eq!(
             persisted.allowed_paths,

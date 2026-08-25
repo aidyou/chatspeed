@@ -1113,8 +1113,13 @@ const SHELL_POLICY_PAGE_SIZE = 10
 
 const agentAvailableTools = computed(() => {
   const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+  const configuredNativeTools = Array.isArray(props.selectedAgent?.availableTools)
+    ? props.selectedAgent.availableTools
+    : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
+      ? props.currentWorkflow.agentConfig.availableTools
+      : []
 
-  return workflowAvailableToolIds.value
+  return configuredNativeTools
     .filter(id => !String(id).includes('__MCP__'))
     .map(id => ({ id, name: toolDetails.get(id)?.name || id }))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
@@ -1131,11 +1136,8 @@ const workflowMcpTools = computed(() => {
       .filter(tool => tool.category === 'MCP' || String(tool.id).includes('__MCP__'))
       .map(tool => tool.id)
   )
-  const agentMcpTools = Array.isArray(props.selectedAgent?.mcpTools?.available)
-    ? props.selectedAgent.mcpTools.available
-    : []
   const configuredMcpTools = new Set([...available, ...autoApprove, ...autoExpand])
-  return [...new Set([...agentMcpTools, ...configuredMcpTools])]
+  return [...new Set([...currentlyAvailableMcpTools, ...configuredMcpTools])]
     .filter(id => currentlyAvailableMcpTools.has(id))
     .map(id => ({
       id,
@@ -1148,14 +1150,18 @@ const workflowMcpTools = computed(() => {
 })
 
 const workflowAvailableToolIds = computed(() => {
+  const nativeCapabilityIds = new Set(
+    agentAvailableTools.value.map(tool => tool.id)
+  )
   if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
     const ordinary = props.currentWorkflow.agentConfig.availableTools
-      .filter(id => !String(id).includes('__MCP__'))
+      .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
     const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
     return [...new Set([...ordinary, ...mcp])]
   }
   const ordinary = Array.isArray(props.selectedAgent?.availableTools)
     ? props.selectedAgent.availableTools
+        .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
     : []
   const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
   return [...new Set([...ordinary, ...mcp])]
@@ -2146,7 +2152,7 @@ defineExpose({
   align-items: flex-start;
   gap: var(--cs-space-xs);
   margin: 1px 0;
-  padding: var(--cs-space-xs) var(--cs-space-sm);
+  padding: var(--cs-space-sm);
   border-radius: var(--cs-border-radius);
   line-height: 1.35;
   transition:

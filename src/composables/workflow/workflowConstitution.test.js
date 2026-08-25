@@ -306,6 +306,33 @@ const visibleAutoApprovalTools = sourceSection(
   'const workflowAvailableToolIds',
   'const allowedShellCommands'
 )
+const nativeToolProjection = sourceSection(
+  workflowInputArea,
+  'const agentAvailableTools',
+  'const workflowMcpTools'
+)
+assert.match(
+  nativeToolProjection,
+  /props\.selectedAgent\?\.availableTools[\s\S]*configuredNativeTools/
+)
+assert.doesNotMatch(
+  nativeToolProjection,
+  /return workflowAvailableToolIds\.value/,
+  'native capability rows must remain visible after a workflow preference is unchecked'
+)
+const mcpToolProjection = sourceSection(
+  workflowInputArea,
+  'const workflowMcpTools',
+  'const workflowAvailableToolIds'
+)
+assert.match(
+  mcpToolProjection,
+  /currentlyAvailableMcpTools[\s\S]*currentlyAvailableMcpTools, \.\.\.configuredMcpTools/
+)
+assert.doesNotMatch(
+  mcpToolProjection,
+  /props\.selectedAgent\?\.mcpTools\?\.available/
+)
 assert.ok(
   visibleAutoApprovalTools.indexOf('props.currentWorkflow?.agentConfig?.availableTools') <
     visibleAutoApprovalTools.indexOf('props.selectedAgent?.availableTools'),
