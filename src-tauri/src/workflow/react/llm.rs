@@ -3,7 +3,7 @@ use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{
     ChatMetadata, CustomHeader, MCPToolDeclaration, MessageType, WorkflowUsageAttribution,
 };
-use crate::db::{Agent, WorkflowMessage};
+use crate::db::{Agent, ThinkingConfig, WorkflowMessage};
 use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
@@ -71,6 +71,19 @@ impl LlmProcessor {
 
     fn should_schedule_retry(failure_count: u32, max_failures: u32) -> bool {
         failure_count < max_failures
+    }
+
+    fn should_require_tool_call(
+        require_tool_call: bool,
+        tools_available: bool,
+        thinking: Option<&ThinkingConfig>,
+    ) -> bool {
+        // Thinking-enabled requests must not force `tool_choice=required`. DeepSeek rejects
+        // `required` (and object tool choices) in thinking mode; tools remain available while
+        // the model decides whether a tool call is appropriate.
+        require_tool_call
+            && tools_available
+            && !thinking.is_some_and(|config| config.r#type.eq_ignore_ascii_case("enabled"))
     }
 
     async fn await_with_stop<F, T>(
@@ -550,6 +563,14 @@ impl LlmProcessor {
                 }
             }
 
+            // Do not use `tool_choice=required` when thinking is enabled; some providers,
+            // including DeepSeek, reject forced tool choice in thinking mode.
+            let force_tool_choice = Self::should_require_tool_call(
+                require_tool_call,
+                !tools.is_empty(),
+                thinking.as_ref(),
+            );
+
             let chat_future = chat_interface.chat(
                 self.active_provider_id,
                 &self.active_model_name,
@@ -567,7 +588,7 @@ impl LlmProcessor {
                         extra.insert("functionCall".to_string(), serde_json::json!(enabled));
                         extra
                     }),
-                    tool_choice: if require_tool_call && !tools.is_empty() {
+                    tool_choice: if force_tool_choice {
                         Some(serde_json::json!("required"))
                     } else {
                         None
@@ -1527,8 +1548,8 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 mod tests {
     use super::LlmProcessor;
     use crate::ai::traits::chat::MCPToolDeclaration;
-    use crate::db::Agent;
     use crate::db::WorkflowMessage;
+    use crate::db::{Agent, ThinkingConfig};
     use crate::tools::ToolScope;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
@@ -1545,6 +1566,43 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::{Arc, RwLock};
+
+    #[test]
+    fn required_tool_choice_is_disabled_for_thinking_requests() {
+        let thinking = ThinkingConfig {
+            r#type: "enabled".to_string(),
+            budget_tokens: Some(1024),
+        };
+
+        assert!(!LlmProcessor::should_require_tool_call(
+            true,
+            true,
+            Some(&thinking)
+        ));
+        assert!(!LlmProcessor::should_require_tool_call(
+            true,
+            true,
+            Some(&ThinkingConfig {
+                r#type: "ENABLED".to_string(),
+                budget_tokens: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn required_tool_choice_remains_enabled_for_non_thinking_requests() {
+        assert!(LlmProcessor::should_require_tool_call(true, true, None));
+        assert!(LlmProcessor::should_require_tool_call(
+            true,
+            true,
+            Some(&ThinkingConfig {
+                r#type: "disabled".to_string(),
+                budget_tokens: None,
+            })
+        ));
+        assert!(!LlmProcessor::should_require_tool_call(true, false, None));
+        assert!(!LlmProcessor::should_require_tool_call(false, true, None));
+    }
 
     #[test]
     fn workflow_responses_tool_calls_preserve_original_call_ids() {

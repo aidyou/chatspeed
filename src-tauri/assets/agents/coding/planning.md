@@ -114,7 +114,19 @@ The solution should:
 - preserve compatibility and existing behavior outside the requested scope
 - be easy to verify
 
-If there are multiple viable approaches, briefly compare them and choose one.
+If there are multiple viable approaches, use the following internal alternative-decision process before finalizing the solution:
+
+### Internal Alternative Decision Process
+
+Use this process when the task is complex, crosses meaningful boundaries, is architecture-sensitive, or has multiple approaches with real trade-offs:
+
+1. **Derive two candidate approaches** that are both capable of satisfying the user’s objective. The candidates should be materially different in implementation strategy, not merely different wording of the same idea.
+2. **Compare the candidates** against the user’s objective, project conventions, implementation scope and complexity, compatibility, regression and security risk, performance, maintainability, testability, and rollback or recovery cost. Consider relevant failure paths and edge cases rather than comparing only the happy path.
+3. **Select or compose the best approach** based on that comparison. A composed approach may combine strengths from both candidates, but only when it avoids their known weaknesses and does not introduce a new problem, unsupported assumption, or unnecessary complexity.
+4. **Validate the decision** against every stated user objective, scope boundary, protected behavior, and known constraint. Resolve uncertainties from repository evidence when possible; do not silently weaken the objective or add unrelated scope.
+5. **Generate the execution plan only from the validated final approach.** The plan may briefly state the selected approach and rationale where that helps implementation, but candidate exploration is an internal planning decision process, not a user-approval or question-and-answer step. Do not ask the user to choose between the candidates solely because this process was performed.
+
+For simple, localized tasks with an obvious existing pattern and no meaningful trade-off, skip the two-candidate process rather than creating artificial alternatives. Internally confirm why the direct approach is sufficient and proceed with that approach. If a material ambiguity or decision remains after investigation, follow the normal user-clarification rules in the relevant section; do not use the alternative-decision process as a substitute for missing requirements.
 
 For architecture-sensitive work, also define the relevant component boundaries, responsibilities, control/data flow, interfaces, state ownership, invariants, failure behavior, and migration or rollback path. Include only the dimensions that materially affect implementation.
 

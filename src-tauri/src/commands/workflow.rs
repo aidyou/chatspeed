@@ -16,6 +16,7 @@ use crate::workflow::react::orchestrator::{
     clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
     stop_background_task, BackgroundTask, SubAgentFactory, BACKGROUND_TASKS,
 };
+
 use crate::workflow::react::prompts::{
     is_agent_personality_preset, AGENT_PERSONALITY_PRESET_DEFAULT_ID,
     AGENT_PERSONALITY_PRESET_PREFIX,
@@ -400,6 +401,25 @@ fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Resu
         .map_err(|error| error.to_string())?
     {
         context.state = RuntimeState::Cancelled;
+        context.wait_reason = None;
+        store
+            .upsert_execution_context(&context)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn persist_failed_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
+    store
+        .update_workflow_status(session_id, &WorkflowState::Error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    if let Some(mut context) = store
+        .get_execution_context(session_id)
+        .map_err(|error| error.to_string())?
+    {
+        context.state = RuntimeState::Failed;
         context.wait_reason = None;
         store
             .upsert_execution_context(&context)
@@ -3399,8 +3419,26 @@ async fn try_resume_completed_live_session(
                 session_id_for_spawn,
                 e
             );
+            if let Err(error) =
+                persist_failed_workflow_state(main_store_for_spawn.as_ref(), &session_id_for_spawn)
+            {
+                log::error!(
+                    "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state after completed-session resume: {}",
+                    session_id_for_spawn,
+                    error
+                );
+            }
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: WorkflowState::Error,
+                        wait_reason: None,
+                    },
+                )
+                .await;
             let _ = gateway_for_spawn
                 .send(
                     &session_id_for_spawn,
@@ -4142,9 +4180,27 @@ pub async fn workflow_start(
                 session_id_for_spawn,
                 e
             );
+            if let Err(error) =
+                persist_failed_workflow_state(main_store_for_spawn.as_ref(), &session_id_for_spawn)
+            {
+                log::error!(
+                    "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state: {}",
+                    session_id_for_spawn,
+                    error
+                );
+            }
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
 
+            let _ = gateway_for_spawn
+                .send(
+                    &session_id_for_spawn,
+                    crate::workflow::react::types::GatewayPayload::State {
+                        state: WorkflowState::Error,
+                        wait_reason: None,
+                    },
+                )
+                .await;
             let _ = gateway_for_spawn
                 .send(
                     &session_id_for_spawn,
@@ -7199,6 +7255,37 @@ mod tests {
             .expect("execution context should exist");
         assert_eq!(snapshot.workflow.status, "cancelled");
         assert_eq!(execution_context.state, RuntimeState::Cancelled);
+        assert_eq!(execution_context.wait_reason, None);
+    }
+
+    #[test]
+    fn test_persist_failed_workflow_state_updates_execution_context() {
+        let store = create_test_store();
+        let session_id = "failed-context-state";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::Approval);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        persist_failed_workflow_state(&store, session_id)
+            .expect("failed to persist failed workflow state");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        let execution_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("execution context should exist");
+        assert_eq!(snapshot.workflow.status, "error");
+        assert_eq!(execution_context.state, RuntimeState::Failed);
         assert_eq!(execution_context.wait_reason, None);
     }
 

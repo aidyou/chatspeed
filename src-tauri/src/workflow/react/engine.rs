@@ -4267,8 +4267,10 @@ impl WorkflowExecutor {
                         available_tools,
                         &self.policy,
                         &mut signal_rx,
+                        // Consecutive text-only turns request a tool in normal mode. The LLM
+                        // boundary deliberately suppresses this requirement for thinking models,
+                        // because DeepSeek rejects tool_choice=required while thinking is enabled.
                         self.consecutive_no_tool_calls > 0,
-                        // Allow one brief reasoning-only turn, then require a concrete tool action.
                         runtime_reminder,
                     )
                     .await?;
