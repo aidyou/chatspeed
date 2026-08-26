@@ -1438,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn build_payload_requests_detailed_reasoning_summary() {
+    fn build_payload_requests_concise_reasoning_summary() {
         let messages = vec![json!({ "role": "user", "content": "hello" })];
 
         let payload = build_responses_payload(ResponsesRequestContext {
@@ -1449,11 +1449,11 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            reasoning_summary: Some("detailed"),
+            reasoning_summary: Some("concise"),
             prompt_cache_key: None,
         });
 
-        assert_eq!(payload["reasoning"]["summary"], "detailed");
+        assert_eq!(payload["reasoning"]["summary"], "concise");
     }
 
     #[test]

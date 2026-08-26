@@ -1110,15 +1110,19 @@ pub(crate) fn build_prompt_cache_key(
         .or_else(|| Some(format!("conv_{chat_id}")))
 }
 
-fn responses_reasoning_summary(model_metadata: &Option<Value>) -> Option<&'static str> {
-    match model_metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("responsesReasoningSummary"))
-        .and_then(Value::as_str)
-    {
-        Some("off") => None,
+fn is_gpt_56_model_id(model_id: &str) -> bool {
+    model_id.to_ascii_lowercase().contains("gpt-5.6")
+}
+
+fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'static str> {
+    let model_config = model_config.filter(|model| is_gpt_56_model_id(&model.id))?;
+
+    match model_config.reasoning_summary.as_deref() {
+        Some("none") => None,
+        Some("concise") => Some("concise"),
         Some("detailed") => Some("detailed"),
-        _ => Some("auto"),
+        Some("auto") => Some("auto"),
+        None | Some(_) => None,
     }
 }
 
@@ -1407,19 +1411,53 @@ mod tests {
     }
 
     #[test]
-    fn responses_reasoning_summary_respects_model_setting() {
-        assert_eq!(responses_reasoning_summary(&None), Some("auto"));
+    fn responses_reasoning_summary_respects_model_setting_and_id() {
         assert_eq!(
-            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "off" }))),
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "openai@gpt-5.6-luna-pro".to_string(),
+                reasoning_summary: Some("none".to_string()),
+                ..Default::default()
+            })),
             None
         );
         assert_eq!(
-            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "detailed" }))),
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "openai/gpt-5.6-terra-pro".to_string(),
+                reasoning_summary: Some("concise".to_string()),
+                ..Default::default()
+            })),
+            Some("concise")
+        );
+        assert_eq!(
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "openai/gpt-5.6-sol:batch".to_string(),
+                reasoning_summary: Some("detailed".to_string()),
+                ..Default::default()
+            })),
             Some("detailed")
         );
         assert_eq!(
-            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "invalid" }))),
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "gpt-5.6".to_string(),
+                ..Default::default()
+            })),
+            None
+        );
+        assert_eq!(
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "gpt-5.6".to_string(),
+                reasoning_summary: Some("auto".to_string()),
+                ..Default::default()
+            })),
             Some("auto")
+        );
+        assert_eq!(
+            responses_reasoning_summary(Some(&ModelConfig {
+                id: "gpt-4.1".to_string(),
+                reasoning_summary: Some("detailed".to_string()),
+                ..Default::default()
+            })),
+            None
         );
     }
 }
@@ -1445,6 +1483,7 @@ impl AiChatTrait for OpenAIChat {
 
         let mut final_model = model.to_string();
         let mut proxy_group: Option<String> = None;
+        let mut responses_summary_model_config: Option<ModelConfig> = None;
 
         let model_detail = if provider_id == 0 {
             // Proxy Mode: Parse group and alias from model string (format: "group@alias")
@@ -1457,7 +1496,7 @@ impl AiChatTrait for OpenAIChat {
                 .and_then(|m| m.extra.as_ref())
                 .and_then(|extra| extra.get("functionCall"))
                 .and_then(|value| value.as_bool());
-            let proxy_function_call = proxy_group.as_ref().and_then(|group| {
+            let proxy_model_config = proxy_group.as_ref().and_then(|group| {
                 let store = self.main_store.as_ref();
                 let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
                     store.get_config(crate::constants::CFG_CHAT_COMPLETION_PROXY, HashMap::new());
@@ -1467,8 +1506,8 @@ impl AiChatTrait for OpenAIChat {
                     .models
                     .into_iter()
                     .find(|model_config| model_config.id == target.model)
-                    .and_then(|model_config| model_config.function_call)
             });
+            responses_summary_model_config = proxy_model_config.clone();
             let proxy_metadata = proxy_group.as_ref().and_then(|group| {
                 let store = self.main_store.as_ref();
                 let proxy_config: crate::ccproxy::ChatCompletionProxyConfig =
@@ -1476,17 +1515,17 @@ impl AiChatTrait for OpenAIChat {
                 let target = proxy_config.get(group)?.get(&final_model)?.first()?;
                 store.config.get_ai_model_by_id(target.id).ok()?.metadata
             });
-            let function_call = metadata_function_call.or(proxy_function_call);
+            let function_call = metadata_function_call.or(proxy_model_config
+                .as_ref()
+                .and_then(|model| model.function_call));
+            let mut proxy_model_config = proxy_model_config.unwrap_or_default();
+            proxy_model_config.id = final_model.clone();
+            proxy_model_config.function_call = function_call;
 
-            // Return a default model config for proxy mode
             AiModel {
                 name: "Internal Proxy".to_string(),
                 api_protocol: "openai".to_string(),
-                models: vec![ModelConfig {
-                    id: final_model.clone(),
-                    function_call,
-                    ..ModelConfig::default()
-                }],
+                models: vec![proxy_model_config],
                 metadata: proxy_metadata,
                 ..Default::default()
             }
@@ -1703,7 +1742,14 @@ impl AiChatTrait for OpenAIChat {
             openai_responses::RESPONSES_API_ENABLED,
         );
         if use_responses_api {
-            let reasoning_summary = responses_reasoning_summary(&model_detail.metadata);
+            let reasoning_summary = responses_reasoning_summary(
+                responses_summary_model_config.as_ref().or_else(|| {
+                    model_detail
+                        .models
+                        .iter()
+                        .find(|model_config| model_config.id == final_model)
+                }),
+            );
             let prompt_cache_key = build_prompt_cache_key(
                 merged_metadata.workflow_usage_attribution.as_ref(),
                 merged_metadata.extra.as_ref(),

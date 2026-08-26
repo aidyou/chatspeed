@@ -94,15 +94,6 @@
               </el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item
-            v-if="modelForm.supportsResponsesApi && modelForm.responsesApiPreference === 'responses'"
-            :label="$t('settings.model.responsesReasoningSummary')" prop="responsesReasoningSummary">
-            <el-radio-group v-model="modelForm.responsesReasoningSummary">
-              <el-radio value="off">{{ $t('settings.model.summaryOff') }}</el-radio>
-              <el-radio value="auto">{{ $t('settings.model.summaryAuto') }}</el-radio>
-              <el-radio value="detailed">{{ $t('settings.model.summaryDetailed') }}</el-radio>
-            </el-radio-group>
-          </el-form-item>
           <el-form-item :label="$t('settings.model.proxyMode')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
               <el-radio :value="proxyType.value" v-for="proxyType in proxyTypeOptions" :key="proxyType.value">{{
@@ -384,6 +375,15 @@
           </el-form-item>
           <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
             <el-switch v-model="modelConfigForm.reasoning" />
+          </el-form-item>
+          <el-form-item v-if="isGpt56ModelId(modelConfigForm.id)"
+            :label="$t('settings.model.responsesReasoningSummary')" prop="reasoningSummary">
+            <el-radio-group v-model="modelConfigForm.reasoningSummary">
+              <el-radio value="none">{{ $t('settings.model.summaryNone') }}</el-radio>
+              <el-radio value="auto">{{ $t('settings.model.summaryAuto') }}</el-radio>
+              <el-radio value="concise">{{ $t('settings.model.summaryConcise') }}</el-radio>
+              <el-radio value="detailed">{{ $t('settings.model.summaryDetailed') }}</el-radio>
+            </el-radio-group>
           </el-form-item>
           <el-form-item v-if="modelConfigForm.reasoning" :label="$t('settings.model.thinkingLevel')">
             <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
@@ -695,7 +695,6 @@ const defaultFormData = {
   proxyServers: [],
   supportsResponsesApi: false,
   responsesApiPreference: 'responses',
-  responsesReasoningSummary: 'auto',
   customHeaders: [],
   disabled: false
 }
@@ -858,12 +857,6 @@ const createFromModel = srcModel => {
       srcModel?.metadata?.responsesApiPreference === 'chatCompletions'
         ? 'chatCompletions'
         : 'responses',
-    responsesReasoningSummary:
-      srcModel?.metadata?.responsesReasoningSummary === 'off'
-        ? 'off'
-        : srcModel?.metadata?.responsesReasoningSummary === 'detailed'
-          ? 'detailed'
-          : 'auto',
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -1025,7 +1018,6 @@ const updateModel = () => {
           })),
           supportsResponsesApi: modelForm.value.supportsResponsesApi,
           responsesApiPreference: modelForm.value.responsesApiPreference,
-          responsesReasoningSummary: modelForm.value.responsesReasoningSummary,
           customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
       }
@@ -1119,6 +1111,12 @@ const toggleModelStatus = async model => {
 // =================================================
 // Model Config area
 // =================================================
+const isGpt56ModelId = id => String(id || '').toLowerCase().includes('gpt-5.6')
+const normalizeGpt56ReasoningSummary = value => {
+  const normalized = value === 'off' ? 'none' : value
+  return ['none', 'auto', 'concise', 'detailed'].includes(normalized) ? normalized : 'none'
+}
+
 // Reactive object to hold the form data for the model config
 const createDefaultModelConfig = () => ({
   id: '',
@@ -1126,6 +1124,7 @@ const createDefaultModelConfig = () => ({
   group: '',
   functionCall: false,
   reasoning: false,
+  reasoningSummary: 'none',
   thinking: null,
   thinkingLevel: 'low',
   imageInput: false,
@@ -1190,6 +1189,9 @@ const onModelConfig = model => {
       thinking: model.thinking || null,
       thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
+    modelConfigForm.value.reasoningSummary = isGpt56ModelId(model.id)
+      ? normalizeGpt56ReasoningSummary(model.reasoningSummary)
+      : 'none'
   } else {
     prevModelConfigId.value = ''
     modelConfigForm.value = createDefaultModelConfig()
@@ -1238,6 +1240,13 @@ const updateModelConfig = () => {
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
   delete updatedModelConfig.thinkingLevel
+  if (isGpt56ModelId(trimmedId)) {
+    updatedModelConfig.reasoningSummary = normalizeGpt56ReasoningSummary(
+      modelConfigForm.value.reasoningSummary
+    )
+  } else {
+    delete updatedModelConfig.reasoningSummary
+  }
 
   if (index !== -1) {
     if (prevModelConfigId.value && prevModelConfigId.value === modelForm.value.defaultModel) {

@@ -231,6 +231,8 @@ pub struct ModelConfig {
     pub group: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
+    #[serde(rename = "reasoningSummary", skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
     #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
@@ -254,6 +256,7 @@ impl Default for ModelConfig {
             name: String::new(),
             group: String::new(),
             reasoning: Some(false),
+            reasoning_summary: None,
             thinking: None,
             function_call: None,
             context_size: Some(128000),
