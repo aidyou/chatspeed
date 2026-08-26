@@ -426,6 +426,16 @@ mod tests {
     }
 
     #[test]
+    fn responses_support_ignores_chat_completions_preference() {
+        assert!(supports_responses_api(&proxy_model_with_metadata(Some(
+            json!({
+                "supportsResponsesApi": true,
+                "responsesApiPreference": "chatCompletions"
+            })
+        ))));
+    }
+
+    #[test]
     fn responses_routing_accepts_structured_custom_tool_output() {
         let request = json!({
             "model": "gpt-5.6",

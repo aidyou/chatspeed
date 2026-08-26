@@ -1035,7 +1035,14 @@ impl OpenAIChat {
         model_metadata: &Option<Value>,
         responses_api_enabled: bool,
     ) -> bool {
+        let prefers_chat_completions = model_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("responsesApiPreference"))
+            .and_then(Value::as_str)
+            == Some("chatCompletions");
+
         responses_api_enabled
+            && !prefers_chat_completions
             && base_endpoint != "/compat_mode/v1/chat/completions"
             && openai_responses::supports_responses_api(model_metadata)
     }
@@ -1162,7 +1169,7 @@ mod tests {
         assert!(!OpenAIChat::should_use_responses_api(
             "/v1/chat/completions",
             &responses_metadata,
-            super::openai_responses::RESPONSES_API_ENABLED,
+            false,
         ));
         assert!(OpenAIChat::should_use_responses_api(
             "/v1/chat/completions",
@@ -1177,6 +1184,14 @@ mod tests {
         assert!(!OpenAIChat::should_use_responses_api(
             "/v1/chat/completions",
             &None,
+            true,
+        ));
+        assert!(!OpenAIChat::should_use_responses_api(
+            "/v1/chat/completions",
+            &Some(json!({
+                "supportsResponsesApi": true,
+                "responsesApiPreference": "chatCompletions"
+            })),
             true,
         ));
     }

@@ -126,7 +126,16 @@
             prop="supportsResponsesApi">
             <el-switch v-model="modelForm.supportsResponsesApi" />
           </el-form-item>
-          <el-form-item :label="$t('settings.general.proxyType')" prop="proxyType">
+          <el-form-item v-if="modelForm.supportsResponsesApi" :label="$t('settings.model.responsesApiPreference')"
+            prop="responsesApiPreference">
+            <el-radio-group v-model="modelForm.responsesApiPreference">
+              <el-radio value="responses">{{ $t('settings.model.responsesApi') }}</el-radio>
+              <el-radio value="chatCompletions">
+                {{ $t('settings.model.chatCompletionsApi') }}
+              </el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.proxyMode')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
               <el-radio
                 :value="proxyType.value"
@@ -956,6 +965,7 @@ const defaultFormData = {
   proxyType: 'bySetting',
   proxyServers: [],
   supportsResponsesApi: false,
+  responsesApiPreference: 'responses',
   customHeaders: [],
   disabled: false
 }
@@ -1114,6 +1124,10 @@ const createFromModel = srcModel => {
       srcModel?.metadata?.supportsResponsesApi ||
       srcModel?.metadata?.supports_responses_api ||
       false,
+    responsesApiPreference:
+      srcModel?.metadata?.responsesApiPreference === 'chatCompletions'
+        ? 'chatCompletions'
+        : 'responses',
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -1274,6 +1288,7 @@ const updateModel = () => {
             password: server.password.trim()
           })),
           supportsResponsesApi: modelForm.value.supportsResponsesApi,
+          responsesApiPreference: modelForm.value.responsesApiPreference,
           customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
       }
