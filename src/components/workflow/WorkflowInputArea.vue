@@ -239,8 +239,10 @@
                       <div v-if="workflowMcpTools.length > 0" class="mcp-config-panel__content checkbox-list">
                         <div v-for="tool in workflowMcpTools" :key="tool.id" class="mcp-config-panel__row">
                           <span class="checkbox-label-wrap">
-                            <code class="tool-name">{{ tool.id }}</code>
-                            <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                            <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
+                            <span v-if="getMcpToolServerName(tool)" class="tool-server">
+                              {{ getMcpToolServerName(tool) }}
+                            </span>
                           </span>
                           <el-switch
                             size="small"
@@ -1110,6 +1112,22 @@ const newShellCommandDecision = ref('review')
 const shellCommandSearch = ref('')
 const shellPolicyPage = ref(1)
 const SHELL_POLICY_PAGE_SIZE = 10
+const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
+
+const getMcpToolDisplayName = tool => {
+  const id = String(tool?.id || '').trim()
+  const name = String(tool?.name || '').trim()
+  if (name && name !== id) return name
+
+  const separatorIndex = id.indexOf(MCP_TOOL_NAME_SEPARATOR)
+  return separatorIndex >= 0 ? id.slice(separatorIndex + MCP_TOOL_NAME_SEPARATOR.length) : id
+}
+
+const getMcpToolServerName = tool => {
+  const id = String(tool?.id || '').trim()
+  const separatorIndex = id.indexOf(MCP_TOOL_NAME_SEPARATOR)
+  return separatorIndex > 0 ? id.slice(0, separatorIndex) : ''
+}
 
 const agentAvailableTools = computed(() => {
   const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
@@ -2082,6 +2100,18 @@ defineExpose({
 
 .mcp-config-panel__row .checkbox-label-wrap {
   min-width: 0;
+}
+
+.mcp-config-panel__row .tool-name,
+.mcp-config-panel__row .tool-server {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-config-panel__row .tool-server {
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
 }
 
 .mcp-config-panel__row .el-switch {
