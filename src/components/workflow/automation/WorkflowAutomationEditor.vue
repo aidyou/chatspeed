@@ -31,7 +31,7 @@
               <div class="selection-field">
                 <div class="selection-row">
                   <el-button class="selection-button" @click="selectPromptFile" round>
-                    <cs name="folder" />
+                    <cs name="ext-folder" />
                     {{ $t('chat.selectFile') }}
                   </el-button>
                 </div>
@@ -134,7 +134,7 @@
               <div class="selection-field paths-field">
                 <div class="selection-row">
                   <el-button class="selection-button" @click="selectAllowedDirectory" round>
-                    <cs name="folder" />
+                    <cs name="ext-folder" />
                     {{ $t('workflow.automation.addDirectory') }}
                   </el-button>
                 </div>
