@@ -274,6 +274,17 @@ pub struct UnifiedResponse {
     pub usage: UnifiedUsage,
 }
 
+impl UnifiedResponse {
+    pub fn has_output(&self) -> bool {
+        self.content.iter().any(|block| match block {
+            UnifiedContentBlock::Text { text } => !text.is_empty(),
+            UnifiedContentBlock::Thinking { thinking } => !thinking.is_empty(),
+            UnifiedContentBlock::ToolUse { .. } => true,
+            _ => false,
+        })
+    }
+}
+
 /// The protocol-agnostic representation of an error returned by a backend.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnifiedErrorResponse {
@@ -401,6 +412,16 @@ pub struct StreamLogRecorder {
     pub output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u64>,
+    #[serde(skip)]
+    pub has_content: bool,
+    #[serde(skip)]
+    pub has_thinking: bool,
+    #[serde(skip)]
+    pub has_tool_calls: bool,
+    #[serde(skip)]
+    pub stream_failed: bool,
     #[serde(skip)]
     pub stream_response_logged: bool,
 }

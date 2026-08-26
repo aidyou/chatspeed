@@ -1091,37 +1091,44 @@ impl OpenAIChat {
 /// Builds a prompt cache key for the Responses API.
 ///
 /// Priority:
-/// 1. Workflow: `{session_id}_{segment_id}` from `WorkflowUsageAttribution`
-/// 2. Chat: `{conversationId}_{segment}` from `ChatMetadata.extra`
-/// 3. Fallback: `{chat_id}_0`
+/// 1. Workflow: `wf_{session_id}` from `WorkflowUsageAttribution`
+/// 2. Chat: `conv_{conversation_id}` from `ChatMetadata.extra`
+/// 3. Fallback: `conv_{chat_id}`
 pub(crate) fn build_prompt_cache_key(
     workflow_attribution: Option<&crate::ai::traits::chat::WorkflowUsageAttribution>,
     extra: Option<&serde_json::Map<String, serde_json::Value>>,
     chat_id: &str,
 ) -> Option<String> {
     workflow_attribution
-        .map(|attr| format!("{}_{}", attr.workflow_session_id, attr.workflow_segment_id))
+        .map(|attr| format!("wf_{}", attr.workflow_session_id))
         .or_else(|| {
-            let conv_id = extra
+            extra
                 .and_then(|extra| extra.get("conversationId"))
-                .and_then(|v| v.as_u64());
-            let segment = extra
-                .and_then(|extra| extra.get("prompt_cache_segment"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            conv_id
-                .map(|id| format!("{}_{}", id, segment))
-                .or_else(|| Some(format!("{}_0", chat_id)))
+                .and_then(|value| value.as_u64())
+                .map(|id| format!("conv_{id}"))
         })
+        .or_else(|| Some(format!("conv_{chat_id}")))
+}
+
+fn responses_reasoning_summary(model_metadata: &Option<Value>) -> Option<&'static str> {
+    match model_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("responsesReasoningSummary"))
+        .and_then(Value::as_str)
+    {
+        Some("off") => None,
+        Some("detailed") => Some("detailed"),
+        _ => Some("auto"),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         build_prompt_cache_key, extract_inline_reasoning_content,
-        extract_reasoning_from_openai_message, sanitize_reasoning_content,
-        should_emit_reasoning_chunk, EmptyHtmlCommentStreamState, InlineThinkStreamState,
-        OpenAIChat,
+        extract_reasoning_from_openai_message, responses_reasoning_summary,
+        sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
+        InlineThinkStreamState, OpenAIChat,
     };
     use crate::db::ModelConfig;
     use serde_json::json;
@@ -1382,31 +1389,38 @@ mod tests {
             request_kind: "llm".to_string(),
         };
         let key = build_prompt_cache_key(Some(&attr), None, "fallback_id");
-        assert_eq!(key, Some("session_abc_5".to_string()));
+        assert_eq!(key, Some("wf_session_abc".to_string()));
     }
 
     #[test]
-    fn build_prompt_cache_key_uses_conversation_id_with_segment() {
+    fn build_prompt_cache_key_uses_conversation_id() {
         let mut extra = serde_json::Map::new();
         extra.insert("conversationId".to_string(), json!(12345));
-        extra.insert("prompt_cache_segment".to_string(), json!(3));
         let key = build_prompt_cache_key(None, Some(&extra), "fallback_id");
-        assert_eq!(key, Some("12345_3".to_string()));
-    }
-
-    #[test]
-    fn build_prompt_cache_key_defaults_to_segment_zero() {
-        let mut extra = serde_json::Map::new();
-        extra.insert("conversationId".to_string(), json!(12345));
-        // No prompt_cache_segment → defaults to 0
-        let key = build_prompt_cache_key(None, Some(&extra), "fallback_id");
-        assert_eq!(key, Some("12345_0".to_string()));
+        assert_eq!(key, Some("conv_12345".to_string()));
     }
 
     #[test]
     fn build_prompt_cache_key_falls_back_to_chat_id() {
         let key = build_prompt_cache_key(None, None, "fallback_id");
-        assert_eq!(key, Some("fallback_id_0".to_string()));
+        assert_eq!(key, Some("conv_fallback_id".to_string()));
+    }
+
+    #[test]
+    fn responses_reasoning_summary_respects_model_setting() {
+        assert_eq!(responses_reasoning_summary(&None), Some("auto"));
+        assert_eq!(
+            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "off" }))),
+            None
+        );
+        assert_eq!(
+            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "detailed" }))),
+            Some("detailed")
+        );
+        assert_eq!(
+            responses_reasoning_summary(&Some(json!({ "responsesReasoningSummary": "invalid" }))),
+            Some("auto")
+        );
     }
 }
 
@@ -1689,6 +1703,7 @@ impl AiChatTrait for OpenAIChat {
             openai_responses::RESPONSES_API_ENABLED,
         );
         if use_responses_api {
+            let reasoning_summary = responses_reasoning_summary(&model_detail.metadata);
             let prompt_cache_key = build_prompt_cache_key(
                 merged_metadata.workflow_usage_attribution.as_ref(),
                 merged_metadata.extra.as_ref(),
@@ -1708,7 +1723,7 @@ impl AiChatTrait for OpenAIChat {
                 model_metadata: &model_detail.metadata,
                 params: &params,
                 stream: stream_enabled,
-                enable_reasoning_summary: false,
+                reasoning_summary,
                 prompt_cache_key: prompt_cache_key.as_deref(),
             });
         }

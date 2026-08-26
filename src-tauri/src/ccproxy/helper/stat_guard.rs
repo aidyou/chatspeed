@@ -1,4 +1,7 @@
-use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder};
+use crate::ccproxy::{
+    adapter::unified::{SseStatus, StreamLogRecorder},
+    utils::token_estimator::token_usage_is_missing_or_zero,
+};
 use crate::db::{CcproxyStat, MainStore};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -46,19 +49,25 @@ impl StreamStatGuard {
 
 impl Drop for StreamStatGuard {
     fn drop(&mut self) {
-        let (input, output, cache) = {
+        let (input, output, cache, cache_creation, has_output, stream_failed) = {
             if let Ok(recorder) = self.log_recorder.lock() {
                 (
-                    recorder.input_tokens.unwrap_or(0),
-                    recorder.output_tokens.unwrap_or(0),
-                    recorder.cache_tokens.unwrap_or(0),
+                    recorder.input_tokens,
+                    recorder.output_tokens,
+                    recorder.cache_tokens,
+                    recorder.cache_creation_tokens,
+                    recorder.has_content || recorder.has_thinking || recorder.has_tool_calls,
+                    recorder.stream_failed,
                 )
             } else {
-                (0, 0, 0)
+                (None, None, None, None, false, true)
             }
         };
 
-        let store = &self.main_store;
+        if stream_failed || !has_output {
+            return;
+        }
+
         let (est_input, est_output) = if let Ok(status) = self.sse_status.read() {
             (
                 status.estimated_input_tokens,
@@ -68,51 +77,51 @@ impl Drop for StreamStatGuard {
             (0.0, 0.0)
         };
 
-        let final_input = if input > 0 {
-            input
-        } else {
+        let should_estimate =
+            token_usage_is_missing_or_zero(&[input, output, cache, cache_creation]);
+        let final_input = if should_estimate {
             est_input.ceil() as u64
-        };
-        let final_output = if output > 0 {
-            output
         } else {
-            est_output.ceil() as u64
+            input.unwrap_or(0)
         };
+        let final_output = if should_estimate {
+            est_output.ceil() as u64
+        } else {
+            output.unwrap_or(0)
+        };
+        let final_cache = cache.unwrap_or(0);
 
-        // Only record if we actually processed some tokens or input
-        if final_input > 0 || final_output > 0 {
-            #[cfg(debug_assertions)]
-            log::debug!(
-                "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
-                &self.provider,
-                &self.backend_model,
-                final_input,
-                final_output,
-                cache
-            );
+        #[cfg(debug_assertions)]
+        log::debug!(
+            "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
+            &self.provider,
+            &self.backend_model,
+            final_input,
+            final_output,
+            final_cache
+        );
 
-            let _ = store.record_ccproxy_stat(CcproxyStat {
-                id: None,
-                workflow_session_id: self.workflow_session_id.clone(),
-                workflow_task_run_id: self.workflow_task_run_id.clone(),
-                workflow_segment_id: self.workflow_segment_id,
-                root_session_id: self.root_session_id.clone(),
-                root_task_run_id: self.root_task_run_id.clone(),
-                request_kind: self.request_kind.clone(),
-                client_model: self.client_model.clone(),
-                backend_model: self.backend_model.clone(),
-                provider_id: Some(self.provider_id),
-                provider: self.provider.clone(),
-                protocol: self.protocol.clone(),
-                tool_compat_mode: if self.tool_compat_mode { 1 } else { 0 },
-                status_code: 200,
-                error_message: None,
-                input_tokens: final_input as i64,
-                output_tokens: final_output as i64,
-                cache_tokens: cache as i64,
-                request_at: None,
-            });
-        }
+        let _ = self.main_store.record_ccproxy_stat(CcproxyStat {
+            id: None,
+            workflow_session_id: self.workflow_session_id.clone(),
+            workflow_task_run_id: self.workflow_task_run_id.clone(),
+            workflow_segment_id: self.workflow_segment_id,
+            root_session_id: self.root_session_id.clone(),
+            root_task_run_id: self.root_task_run_id.clone(),
+            request_kind: self.request_kind.clone(),
+            client_model: self.client_model.clone(),
+            backend_model: self.backend_model.clone(),
+            provider_id: Some(self.provider_id),
+            provider: self.provider.clone(),
+            protocol: self.protocol.clone(),
+            tool_compat_mode: if self.tool_compat_mode { 1 } else { 0 },
+            status_code: 200,
+            error_message: None,
+            input_tokens: final_input as i64,
+            output_tokens: final_output as i64,
+            cache_tokens: final_cache as i64,
+            request_at: None,
+        });
     }
 }
 
@@ -136,11 +145,12 @@ mod tests {
         ] {
             headers.insert(name, value.parse().unwrap());
         }
+        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder {
+            has_content: true,
+            ..StreamLogRecorder::new("stream".to_string(), "backend".to_string())
+        }));
         let guard = StreamStatGuard {
-            log_recorder: Arc::new(Mutex::new(StreamLogRecorder::new(
-                "stream".to_string(),
-                "backend".to_string(),
-            ))),
+            log_recorder,
             sse_status: Arc::new(RwLock::new(SseStatus::new(
                 "message".to_string(),
                 "alias".to_string(),
@@ -208,5 +218,107 @@ mod tests {
                 0,
             )
         );
+    }
+
+    #[tokio::test]
+    async fn stream_guard_preserves_explicit_zero_input_when_output_exists() {
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(MainStore::new(directory.path().join("stream-zero-input.db")).unwrap());
+        let log_recorder = Arc::new(Mutex::new(StreamLogRecorder {
+            input_tokens: Some(0),
+            output_tokens: Some(7),
+            has_content: true,
+            ..StreamLogRecorder::new("stream".to_string(), "backend".to_string())
+        }));
+        let guard = StreamStatGuard {
+            log_recorder,
+            sse_status: Arc::new(RwLock::new(SseStatus::new(
+                "message".to_string(),
+                "alias".to_string(),
+                false,
+                120.0,
+            ))),
+            main_store: store.clone(),
+            client_model: "alias".to_string(),
+            backend_model: "backend".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            protocol: "openai".to_string(),
+            tool_compat_mode: false,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+        };
+        drop(guard);
+        let runtime = store.db_runtime().unwrap();
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .unwrap()
+            .unwrap();
+        let row = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT input_tokens, output_tokens FROM ccproxy_stats",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(row, (0, 7));
+    }
+
+    #[tokio::test]
+    async fn stream_guard_skips_empty_responses() {
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("empty-stream.db")).unwrap());
+        let guard = StreamStatGuard {
+            log_recorder: Arc::new(Mutex::new(StreamLogRecorder::new(
+                "stream".to_string(),
+                "backend".to_string(),
+            ))),
+            sse_status: Arc::new(RwLock::new(SseStatus::new(
+                "message".to_string(),
+                "alias".to_string(),
+                false,
+                120.0,
+            ))),
+            main_store: store.clone(),
+            client_model: "alias".to_string(),
+            backend_model: "backend".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            protocol: "openai".to_string(),
+            tool_compat_mode: false,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+        };
+        drop(guard);
+        let runtime = store.db_runtime().unwrap();
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .unwrap()
+            .unwrap();
+        let count = runtime
+            .read(|conn| {
+                Ok(
+                    conn.query_row("SELECT COUNT(*) FROM ccproxy_stats", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

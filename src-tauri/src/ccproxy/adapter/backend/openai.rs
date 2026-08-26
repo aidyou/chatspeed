@@ -770,12 +770,14 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
                 let prompt_cached_tokens = u.cached_tokens_value();
+                let cache_creation_input_tokens = u.cache_creation_tokens_value();
 
                 UnifiedUsage {
                     input_tokens: u.prompt_tokens,
                     output_tokens: u.completion_tokens,
                     thoughts_tokens,
                     prompt_cached_tokens,
+                    cache_creation_input_tokens,
                     ..Default::default()
                 }
             })
@@ -1253,12 +1255,14 @@ impl OpenAIBackendAdapter {
                     .as_ref()
                     .and_then(|d| d.reasoning_tokens);
                 let prompt_cached_tokens = u.cached_tokens_value();
+                let cache_creation_input_tokens = u.cache_creation_tokens_value();
 
                 UnifiedUsage {
                     input_tokens: u.prompt_tokens,
                     output_tokens: u.completion_tokens,
                     thoughts_tokens,
                     prompt_cached_tokens,
+                    cache_creation_input_tokens,
                     ..Default::default()
                 }
             })

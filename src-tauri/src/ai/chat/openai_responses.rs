@@ -17,8 +17,6 @@ use super::openai::OpenAIChat;
 
 const RESPONSES_ENDPOINT: &str = "/v1/responses";
 
-// Keep disabled because Responses API cache hit rates currently increase request costs.
-// Re-enable only if upstream requires Responses API exclusively or its cache behavior becomes reliable.
 pub(crate) const RESPONSES_API_ENABLED: bool = true;
 
 pub(crate) struct ResponsesRequestContext<'a> {
@@ -29,7 +27,7 @@ pub(crate) struct ResponsesRequestContext<'a> {
     pub model_metadata: &'a Option<Value>,
     pub params: &'a Value,
     pub stream: bool,
-    pub enable_reasoning_summary: bool,
+    pub reasoning_summary: Option<&'a str>,
     pub prompt_cache_key: Option<&'a str>,
 }
 
@@ -216,12 +214,12 @@ pub(crate) fn build_responses_payload(ctx: ResponsesRequestContext<'_>) -> Value
             );
         }
 
-        if ctx.enable_reasoning_summary {
+        if let Some(summary) = ctx.reasoning_summary {
             let reasoning = obj
                 .entry("reasoning".to_string())
                 .or_insert_with(|| json!({}));
             if let Some(reasoning) = reasoning.as_object_mut() {
-                reasoning.insert("summary".to_string(), json!("auto"));
+                reasoning.insert("summary".to_string(), json!(summary));
             }
         }
 
@@ -1212,7 +1210,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: true,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1252,7 +1250,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1296,7 +1294,7 @@ mod tests {
             model_metadata: &None,
             params: &params,
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1367,7 +1365,7 @@ mod tests {
             })),
             params: &params,
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1409,7 +1407,7 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1421,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn build_payload_requests_reasoning_summary_when_enabled() {
+    fn build_payload_requests_auto_reasoning_summary() {
         let messages = vec![json!({ "role": "user", "content": "hello" })];
 
         let payload = build_responses_payload(ResponsesRequestContext {
@@ -1432,11 +1430,30 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: true,
+            reasoning_summary: Some("auto"),
             prompt_cache_key: None,
         });
 
         assert_eq!(payload["reasoning"]["summary"], "auto");
+    }
+
+    #[test]
+    fn build_payload_requests_detailed_reasoning_summary() {
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            reasoning_summary: Some("detailed"),
+            prompt_cache_key: None,
+        });
+
+        assert_eq!(payload["reasoning"]["summary"], "detailed");
     }
 
     #[test]
@@ -1462,7 +1479,7 @@ mod tests {
             })),
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 
@@ -1484,17 +1501,17 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
-            prompt_cache_key: Some("chat_42_0"),
+            reasoning_summary: None,
+            prompt_cache_key: Some("conv_fallback_id"),
         });
 
-        assert_eq!(payload["prompt_cache_key"], "chat_42_0");
+        assert_eq!(payload["prompt_cache_key"], "conv_fallback_id");
     }
 
     #[test]
     fn build_payload_injects_cache_key_with_conversation_id_format() {
         let messages = vec![json!({ "role": "user", "content": "hello" })];
-        // Simulates the chat path: conversationId_segment format
+        // Simulates the chat path: namespaced conversation ID.
         let payload = build_responses_payload(ResponsesRequestContext {
             model: "gpt-4.1",
             messages: &messages,
@@ -1503,17 +1520,17 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
-            prompt_cache_key: Some("123_0"),
+            reasoning_summary: None,
+            prompt_cache_key: Some("conv_123"),
         });
 
-        assert_eq!(payload["prompt_cache_key"], "123_0");
+        assert_eq!(payload["prompt_cache_key"], "conv_123");
     }
 
     #[test]
     fn build_payload_injects_cache_key_with_workflow_format() {
         let messages = vec![json!({ "role": "user", "content": "hello" })];
-        // Simulates the workflow path: session_id_segment_id format
+        // Simulates the workflow path: namespaced stable session ID.
         let payload = build_responses_payload(ResponsesRequestContext {
             model: "gpt-4.1",
             messages: &messages,
@@ -1522,11 +1539,11 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
-            prompt_cache_key: Some("session_abc_42_5"),
+            reasoning_summary: None,
+            prompt_cache_key: Some("wf_session_abc_42"),
         });
 
-        assert_eq!(payload["prompt_cache_key"], "session_abc_42_5");
+        assert_eq!(payload["prompt_cache_key"], "wf_session_abc_42");
     }
 
     #[test]
@@ -1541,7 +1558,7 @@ mod tests {
             model_metadata: &None,
             params: &json!({}),
             stream: false,
-            enable_reasoning_summary: false,
+            reasoning_summary: None,
             prompt_cache_key: None,
         });
 

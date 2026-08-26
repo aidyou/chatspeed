@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
-use crate::ccproxy::adapter::unified::{UnifiedContentBlock, UnifiedRequest};
+use crate::ccproxy::adapter::unified::{
+    UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedUsage,
+};
 
 /// A rough heuristic for token estimation.
 ///
@@ -263,47 +265,67 @@ fn estimate_openai_like_content_tokens(content: &Value) -> f64 {
     }
 }
 
+pub fn estimate_unified_response_tokens(response: &UnifiedResponse) -> f64 {
+    response
+        .content
+        .iter()
+        .map(|block| match block {
+            UnifiedContentBlock::Text { text } => estimate_tokens(text),
+            UnifiedContentBlock::Thinking { thinking } => estimate_tokens(thinking),
+            UnifiedContentBlock::ToolUse { id, name, input } => {
+                estimate_tokens(id) + estimate_tokens(name) + estimate_json_value_tokens(input)
+            }
+            _ => 0.0,
+        })
+        .sum()
+}
+
+pub fn token_usage_is_missing_or_zero(values: &[Option<u64>]) -> bool {
+    values.iter().all(|value| value.unwrap_or(0) == 0)
+}
+
+pub fn should_estimate_usage(usage: &UnifiedUsage) -> bool {
+    token_usage_is_missing_or_zero(&[
+        Some(usage.input_tokens),
+        Some(usage.output_tokens),
+        usage.cache_read_input_tokens,
+        usage.prompt_cached_tokens,
+        usage.cached_content_tokens,
+        usage.cache_creation_input_tokens,
+    ])
+}
+
 pub fn resolve_usage_with_estimate(
     protocol: &str,
-    usage_input_tokens: u64,
-    usage_output_tokens: u64,
+    usage: &UnifiedUsage,
     estimated_input_tokens: f64,
     estimated_output_tokens: f64,
     context: &str,
 ) -> (u64, u64) {
-    let input_tokens = if usage_input_tokens > 0 {
-        usage_input_tokens
-    } else {
-        estimated_input_tokens.ceil() as u64
-    };
-    let output_tokens = if usage_output_tokens > 0 {
-        usage_output_tokens
-    } else {
-        estimated_output_tokens.ceil() as u64
-    };
-
-    if usage_input_tokens == 0 || usage_output_tokens == 0 {
+    if should_estimate_usage(usage) {
+        let input_tokens = estimated_input_tokens.ceil() as u64;
+        let output_tokens = estimated_output_tokens.ceil() as u64;
         log::debug!(
-            "[ccproxy][token_estimate][protocol={}][context={}] upstream usage incomplete, using estimated tokens input={} output={} (upstream input={} output={})",
+            "[ccproxy][token_estimate][protocol={}][context={}] upstream usage missing or all zero, using estimated tokens input={} output={}",
             protocol,
             context,
             input_tokens,
             output_tokens,
-            usage_input_tokens,
-            usage_output_tokens
         );
+        (input_tokens, output_tokens)
+    } else {
+        (usage.input_tokens, usage.output_tokens)
     }
-
-    (input_tokens, output_tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         estimate_known_request_json_tokens, estimate_tokens, estimate_unified_request_tokens,
+        resolve_usage_with_estimate, should_estimate_usage,
     };
     use crate::ccproxy::adapter::unified::{
-        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool,
+        UnifiedContentBlock, UnifiedMessage, UnifiedRequest, UnifiedRole, UnifiedTool, UnifiedUsage,
     };
     use serde_json::json;
 
@@ -335,6 +357,39 @@ mod tests {
         let baseline = estimate_tokens("system prompt");
 
         assert!(estimated > baseline);
+    }
+
+    #[test]
+    fn usage_with_output_or_cache_is_not_estimated() {
+        let output_usage = UnifiedUsage {
+            output_tokens: 7,
+            ..Default::default()
+        };
+        assert!(!should_estimate_usage(&output_usage));
+        assert_eq!(
+            resolve_usage_with_estimate("test", &output_usage, 100.0, 50.0, "unit"),
+            (0, 7)
+        );
+
+        let cache_creation_usage = UnifiedUsage {
+            cache_creation_input_tokens: Some(100),
+            ..Default::default()
+        };
+        assert!(!should_estimate_usage(&cache_creation_usage));
+        assert_eq!(
+            resolve_usage_with_estimate("test", &cache_creation_usage, 100.0, 50.0, "unit"),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn all_zero_usage_is_estimated() {
+        let usage = UnifiedUsage::default();
+        assert!(should_estimate_usage(&usage));
+        assert_eq!(
+            resolve_usage_with_estimate("test", &usage, 100.1, 50.1, "unit"),
+            (101, 51)
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_n
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::helper::{get_tool_id, send_with_retry, RetryConfig};
 use crate::ccproxy::openai::OpenAIUsage;
-use crate::ccproxy::utils::token_estimator::estimate_tokens;
+use crate::ccproxy::utils::token_estimator::{estimate_tokens, token_usage_is_missing_or_zero};
 use crate::ccproxy::{
     errors::{CCProxyError, ProxyResult},
     helper::{get_provider_chat_full_url, stat_guard::StreamStatGuard, ModelResolver},
@@ -184,35 +184,8 @@ pub async fn handle_direct_forward(
 
         *response.headers_mut() = filtered_headers;
 
-        // Record error for non-streaming direct forward
+        // Error responses are reported to the caller but excluded from token statistics.
         let error_msg = String::from_utf8_lossy(&error_body_bytes).to_string();
-        {
-            let store = main_store_arc.as_ref();
-            let _ = store.record_ccproxy_stat(
-                CcproxyStat {
-                    id: None,
-                    workflow_session_id: None,
-                    workflow_task_run_id: None,
-                    workflow_segment_id: None,
-                    root_session_id: None,
-                    root_task_run_id: None,
-                    request_kind: None,
-                    client_model: proxy_model.client_alias.clone(),
-                    backend_model: model_name.clone(),
-                    provider_id: Some(proxy_model.provider_id),
-                    provider: provider_name.clone(),
-                    protocol: chat_protocol_for_stat.to_string(),
-                    tool_compat_mode: 0,
-                    status_code: status_code.as_u16() as i32,
-                    error_message: Some(error_msg.clone()),
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_tokens: 0,
-                    request_at: None,
-                }
-                .with_workflow_attribution(&client_headers),
-            );
-        }
 
         log_direct_backend_error(&format!(
             "Response status: {}\nBody:\n{}",
@@ -282,25 +255,31 @@ pub async fn handle_direct_forward(
             let sse_status = sse_status.clone();
             let log_recorder = log_recorder_clone.clone();
             let chat_protocol = chat_protocol.clone();
-            // Move the guard into the closure so it lives as long as the stream
             let _guard = stat_guard.clone();
 
-            chunk.map(move |bytes| {
-                // Always parse for statistics, but only log to file if enabled.
-                chunk_parser_and_log(
-                    &bytes,
-                    log_recorder.clone(),
-                    &chat_protocol,
-                    sse_status.clone(),
-                    log_proxy_to_file,
-                );
-                inject_openai_estimated_usage_before_done(
-                    bytes,
-                    log_recorder,
-                    sse_status,
-                    &chat_protocol,
-                )
-            })
+            match chunk {
+                Ok(bytes) => {
+                    chunk_parser_and_log(
+                        &bytes,
+                        log_recorder.clone(),
+                        &chat_protocol,
+                        sse_status.clone(),
+                        log_proxy_to_file,
+                    );
+                    Ok(inject_openai_estimated_usage_before_done(
+                        bytes,
+                        log_recorder,
+                        sse_status,
+                        &chat_protocol,
+                    ))
+                }
+                Err(error) => {
+                    if let Ok(mut recorder) = log_recorder.lock() {
+                        recorder.stream_failed = true;
+                    }
+                    Err(error)
+                }
+            }
         });
         let stream = stream.chain(stream::once(async move {
             log_direct_stream_response(
@@ -336,42 +315,62 @@ pub async fn handle_direct_forward(
                 let store = main_store_arc.as_ref();
                 // For direct forward, we try a simple extraction of tokens from the JSON body
                 let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
-                let (input, output, cache) =
+                let (input, output, cache, cache_creation) =
                     extract_usage_from_value(&body_json, &chat_protocol_for_stat);
+                let has_output = direct_response_has_output(&body_json, &chat_protocol_for_stat);
+                let should_estimate = token_usage_is_missing_or_zero(&[
+                    Some(input as u64),
+                    Some(output as u64),
+                    Some(cache as u64),
+                    Some(cache_creation as u64),
+                ]);
+                let final_input = if should_estimate {
+                    estimated_input_tokens.ceil() as i64
+                } else {
+                    input
+                };
+                let final_output = if should_estimate {
+                    estimate_direct_response_output_tokens(&body_json, &chat_protocol_for_stat)
+                        .ceil() as i64
+                } else {
+                    output
+                };
 
                 #[cfg(debug_assertions)]
                 log::debug!(
                     "Recording non-streaming direct stat: provider='{}', model='{}', tokens={}/{}",
                     &provider_name,
                     &model_name,
-                    input,
-                    output
+                    final_input,
+                    final_output
                 );
 
-                let _ = store.record_ccproxy_stat(
-                    CcproxyStat {
-                        id: None,
-                        workflow_session_id: None,
-                        workflow_task_run_id: None,
-                        workflow_segment_id: None,
-                        root_session_id: None,
-                        root_task_run_id: None,
-                        request_kind: None,
-                        client_model: proxy_model.client_alias.clone(),
-                        backend_model: model_name.clone(),
-                        provider_id: Some(proxy_model.provider_id),
-                        provider: provider_name.clone(),
-                        protocol: chat_protocol_for_stat.to_string(),
-                        tool_compat_mode: 0,
-                        status_code: status_code.as_u16() as i32,
-                        error_message: None,
-                        input_tokens: input,
-                        output_tokens: output,
-                        cache_tokens: cache,
-                        request_at: None,
-                    }
-                    .with_workflow_attribution(&client_headers),
-                );
+                if has_output {
+                    let _ = store.record_ccproxy_stat(
+                        CcproxyStat {
+                            id: None,
+                            workflow_session_id: None,
+                            workflow_task_run_id: None,
+                            workflow_segment_id: None,
+                            root_session_id: None,
+                            root_task_run_id: None,
+                            request_kind: None,
+                            client_model: proxy_model.client_alias.clone(),
+                            backend_model: model_name.clone(),
+                            provider_id: Some(proxy_model.provider_id),
+                            provider: provider_name.clone(),
+                            protocol: chat_protocol_for_stat.to_string(),
+                            tool_compat_mode: 0,
+                            status_code: status_code.as_u16() as i32,
+                            error_message: None,
+                            input_tokens: final_input,
+                            output_tokens: final_output,
+                            cache_tokens: cache,
+                            request_at: None,
+                        }
+                        .with_workflow_attribution(&client_headers),
+                    );
+                }
             }
         }
 
@@ -535,17 +534,41 @@ fn inject_openai_estimated_usage_before_done(
         return bytes;
     }
 
-    let (recorded_input, recorded_output, chat_id, model) =
-        if let Ok(recorder) = log_recorder.lock() {
-            (
-                recorder.input_tokens.unwrap_or(0),
-                recorder.output_tokens.unwrap_or(0),
-                recorder.chat_id.clone(),
-                recorder.model.clone(),
-            )
-        } else {
-            (0, 0, String::new(), String::new())
-        };
+    let (
+        recorded_input,
+        recorded_output,
+        recorded_cache,
+        recorded_cache_creation,
+        has_output,
+        stream_failed,
+        chat_id,
+        model,
+    ) = if let Ok(recorder) = log_recorder.lock() {
+        (
+            recorder.input_tokens,
+            recorder.output_tokens,
+            recorder.cache_tokens,
+            recorder.cache_creation_tokens,
+            recorder.has_content || recorder.has_thinking || recorder.has_tool_calls,
+            recorder.stream_failed,
+            recorder.chat_id.clone(),
+            recorder.model.clone(),
+        )
+    } else {
+        (
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
+            String::new(),
+            String::new(),
+        )
+    };
+    if stream_failed || !has_output {
+        return bytes;
+    }
     let (estimated_input, estimated_output) = if let Ok(status) = sse_status.read() {
         (
             status.estimated_input_tokens.ceil() as u64,
@@ -555,15 +578,21 @@ fn inject_openai_estimated_usage_before_done(
         (0, 0)
     };
 
-    let prompt_tokens = if recorded_input > 0 {
-        recorded_input
-    } else {
+    let should_estimate = token_usage_is_missing_or_zero(&[
+        recorded_input,
+        recorded_output,
+        recorded_cache,
+        recorded_cache_creation,
+    ]);
+    let prompt_tokens = if should_estimate {
         estimated_input
-    };
-    let completion_tokens = if recorded_output > 0 {
-        recorded_output
     } else {
+        recorded_input.unwrap_or(0)
+    };
+    let completion_tokens = if should_estimate {
         estimated_output
+    } else {
+        recorded_output.unwrap_or(0)
     };
 
     if prompt_tokens == 0 && completion_tokens == 0 {
@@ -616,10 +645,16 @@ fn log_direct_stream_response(
             return;
         }
 
-        if recorder.input_tokens.is_none() && estimated_input > 0 {
+        let should_estimate = token_usage_is_missing_or_zero(&[
+            recorder.input_tokens,
+            recorder.output_tokens,
+            recorder.cache_tokens,
+            recorder.cache_creation_tokens,
+        ]);
+        if should_estimate
+            && (recorder.has_content || recorder.has_thinking || recorder.has_tool_calls)
+        {
             recorder.input_tokens = Some(estimated_input);
-        }
-        if recorder.output_tokens.is_none() && estimated_output > 0 {
             recorder.output_tokens = Some(estimated_output);
         }
         recorder.stream_response_logged = true;
@@ -665,6 +700,10 @@ fn chunk_parser_and_log(
                     }
                 }
 
+                if json_data.get("error").is_some_and(|error| !error.is_null()) {
+                    recorder.stream_failed = true;
+                }
+
                 match chat_protocol {
                     ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
                         if let Some(detlta) = json_data
@@ -674,6 +713,7 @@ fn chunk_parser_and_log(
                         {
                             if let Some(text) = detlta.get("content").and_then(|c| c.as_str()) {
                                 if !text.is_empty() {
+                                    recorder.has_content = true;
                                     if let Ok(mut status) = sse_status.write() {
                                         status.estimated_output_tokens += estimate_tokens(text);
                                     }
@@ -687,6 +727,7 @@ fn chunk_parser_and_log(
                                 detlta.get("reasoning_content").and_then(|c| c.as_str())
                             {
                                 if !text.is_empty() {
+                                    recorder.has_thinking = true;
                                     if let Ok(mut status) = sse_status.write() {
                                         status.estimated_output_tokens += estimate_tokens(text);
                                     }
@@ -708,6 +749,9 @@ fn chunk_parser_and_log(
                             .and_then(|d| d.get("tool_calls"))
                             .and_then(|t| t.as_array())
                         {
+                            if !tool_calls.is_empty() {
+                                recorder.has_tool_calls = true;
+                            }
                             for tc in tool_calls {
                                 let tool_id = tc
                                     .get("id")
@@ -774,6 +818,8 @@ fn chunk_parser_and_log(
                                 serde_json::from_value::<OpenAIUsage>(usage.clone())
                             {
                                 recorder.cache_tokens = parsed_usage.cached_tokens_value();
+                                recorder.cache_creation_tokens =
+                                    parsed_usage.cache_creation_tokens_value();
                             } else {
                                 recorder.cache_tokens = usage
                                     .get("prompt_tokens_details")
@@ -797,6 +843,15 @@ fn chunk_parser_and_log(
                                             .get("prompt_cache_hit_tokens")
                                             .and_then(|t| t.as_u64())
                                     });
+                                recorder.cache_creation_tokens = usage
+                                    .get("prompt_tokens_details")
+                                    .and_then(|d| d.get("cache_creation_input_tokens"))
+                                    .and_then(|t| t.as_u64())
+                                    .or_else(|| {
+                                        usage
+                                            .get("cache_creation_input_tokens")
+                                            .and_then(|t| t.as_u64())
+                                    });
                             }
                         }
                     }
@@ -818,6 +873,7 @@ fn chunk_parser_and_log(
                                     if let Some(block) = claude_event.content_block {
                                         match block.block_type.as_str() {
                                             "tool_use" => {
+                                                recorder.has_tool_calls = true;
                                                 let tool_name = block.name.unwrap_or_default();
                                                 let tool_id =
                                                     block.id.clone().unwrap_or(get_tool_id());
@@ -854,6 +910,7 @@ fn chunk_parser_and_log(
                                             Some("text_delta") => {
                                                 if let Some(text) = delta.text {
                                                     if !text.is_empty() {
+                                                        recorder.has_content = true;
                                                         if let Ok(mut status) = sse_status.write() {
                                                             status.estimated_output_tokens +=
                                                                 estimate_tokens(&text);
@@ -867,6 +924,7 @@ fn chunk_parser_and_log(
                                             Some("thinking_delta") => {
                                                 if let Some(text) = delta.text {
                                                     if !text.is_empty() {
+                                                        recorder.has_thinking = true;
                                                         if let Ok(mut status) = sse_status.write() {
                                                             status.estimated_output_tokens +=
                                                                 estimate_tokens(&text);
@@ -887,6 +945,7 @@ fn chunk_parser_and_log(
                                             Some("input_json_delta") => {
                                                 if let Some(partial_json) = delta.partial_json {
                                                     if !partial_json.is_empty() {
+                                                        recorder.has_tool_calls = true;
                                                         if let Ok(mut status) = sse_status.write() {
                                                             status.estimated_output_tokens +=
                                                                 estimate_tokens(&partial_json);
@@ -933,6 +992,8 @@ fn chunk_parser_and_log(
                                         recorder.output_tokens =
                                             Some(usage.output_tokens.unwrap_or(0));
                                         recorder.cache_tokens = Some(cache_tokens);
+                                        recorder.cache_creation_tokens =
+                                            usage.cache_creation_input_tokens;
                                     }
                                 }
                                 _ => {}
@@ -950,6 +1011,7 @@ fn chunk_parser_and_log(
                             .and_then(|t| t.as_str())
                         {
                             if !text.is_empty() {
+                                recorder.has_content = true;
                                 if let Ok(mut status) = sse_status.write() {
                                     status.estimated_output_tokens += estimate_tokens(text);
                                 }
@@ -965,6 +1027,9 @@ fn chunk_parser_and_log(
                             .and_then(|c| c.get("parts"))
                             .and_then(|p| p.as_array())
                         {
+                            if !tool_calls.is_empty() {
+                                recorder.has_tool_calls = true;
+                            }
                             for tc in tool_calls {
                                 if let Some(name) = tc
                                     .get("functionCall")
@@ -1026,6 +1091,7 @@ fn chunk_parser_and_log(
                         if let Some(message) = json_data.get("message") {
                             if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
                                 if !text.is_empty() {
+                                    recorder.has_content = true;
                                     if let Ok(mut status) = sse_status.write() {
                                         status.estimated_output_tokens += estimate_tokens(text);
                                     }
@@ -1038,6 +1104,7 @@ fn chunk_parser_and_log(
                             if let Some(thinking) = message.get("thinking").and_then(|t| t.as_str())
                             {
                                 if !thinking.is_empty() {
+                                    recorder.has_thinking = true;
                                     if let Ok(mut status) = sse_status.write() {
                                         status.estimated_output_tokens += estimate_tokens(thinking);
                                     }
@@ -1054,6 +1121,9 @@ fn chunk_parser_and_log(
                             if let Some(tool_calls) =
                                 message.get("tool_calls").and_then(|t| t.as_array())
                             {
+                                if !tool_calls.is_empty() {
+                                    recorder.has_tool_calls = true;
+                                }
                                 for tc in tool_calls {
                                     if let Some(args) = tc
                                         .get("function")
@@ -1117,7 +1187,139 @@ fn chunk_parser_and_log(
     }
 }
 
-fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64) {
+fn value_has_nonempty_text(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(items)) => items.iter().any(|item| value_has_nonempty_text(Some(item))),
+        Some(Value::Object(map)) => map
+            .get("text")
+            .or_else(|| map.get("thinking"))
+            .or_else(|| map.get("content"))
+            .is_some_and(|item| value_has_nonempty_text(Some(item))),
+        _ => false,
+    }
+}
+
+fn direct_response_has_output(value: &Value, protocol: &ChatProtocol) -> bool {
+    match protocol {
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => value
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| {
+                choices.iter().any(|choice| {
+                    let message = choice.get("message").or_else(|| choice.get("delta"));
+                    value_has_nonempty_text(message.and_then(|message| message.get("content")))
+                        || value_has_nonempty_text(
+                            message.and_then(|message| message.get("reasoning_content")),
+                        )
+                        || message
+                            .and_then(|message| message.get("tool_calls"))
+                            .and_then(Value::as_array)
+                            .is_some_and(|tool_calls| !tool_calls.is_empty())
+                })
+            }),
+        ChatProtocol::Claude => {
+            value
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        value_has_nonempty_text(Some(block))
+                            || matches!(block.get("type").and_then(Value::as_str), Some("tool_use"))
+                    })
+                })
+        }
+        ChatProtocol::Gemini => value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|candidates| {
+                candidates.iter().any(|candidate| {
+                    candidate
+                        .get("content")
+                        .and_then(|content| content.get("parts"))
+                        .and_then(Value::as_array)
+                        .is_some_and(|parts| {
+                            parts.iter().any(|part| {
+                                value_has_nonempty_text(Some(part))
+                                    || part.get("functionCall").is_some()
+                            })
+                        })
+                })
+            }),
+        ChatProtocol::Ollama => value.get("message").is_some_and(|message| {
+            value_has_nonempty_text(message.get("content"))
+                || value_has_nonempty_text(message.get("thinking"))
+                || message
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tool_calls| !tool_calls.is_empty())
+        }),
+    }
+}
+
+fn estimate_direct_response_output_tokens(value: &Value, protocol: &ChatProtocol) -> f64 {
+    match protocol {
+        ChatProtocol::OpenAI | ChatProtocol::HuggingFace => value
+            .get("choices")
+            .and_then(Value::as_array)
+            .map(|choices| {
+                choices
+                    .iter()
+                    .map(|choice| {
+                        let message = choice.get("message").or_else(|| choice.get("delta"));
+                        [
+                            message.and_then(|message| message.get("content")),
+                            message.and_then(|message| message.get("reasoning_content")),
+                            message.and_then(|message| message.get("tool_calls")),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .map(|output| estimate_tokens(&output.to_string()))
+                        .sum::<f64>()
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0),
+        ChatProtocol::Claude => value
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .map(|block| estimate_tokens(&block.to_string()))
+                    .sum()
+            })
+            .unwrap_or(0.0),
+        ChatProtocol::Gemini => value
+            .get("candidates")
+            .and_then(Value::as_array)
+            .map(|candidates| {
+                candidates
+                    .iter()
+                    .map(|candidate| {
+                        candidate
+                            .get("content")
+                            .and_then(|content| content.get("parts"))
+                            .and_then(Value::as_array)
+                            .map(|parts| {
+                                parts
+                                    .iter()
+                                    .map(|part| estimate_tokens(&part.to_string()))
+                                    .sum::<f64>()
+                            })
+                            .unwrap_or(0.0)
+                    })
+                    .sum()
+            })
+            .unwrap_or(0.0),
+        ChatProtocol::Ollama => value
+            .get("message")
+            .map(|message| estimate_tokens(&message.to_string()))
+            .unwrap_or(0.0),
+    }
+}
+
+fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64, i64) {
     match protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
             let usage_value = value.get("usage").cloned().unwrap_or(Value::Null);
@@ -1126,6 +1328,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                     usage.prompt_tokens as i64,
                     usage.completion_tokens as i64,
                     usage.cached_tokens_value().unwrap_or(0) as i64,
+                    usage.cache_creation_tokens_value().unwrap_or(0) as i64,
                 );
             }
 
@@ -1162,7 +1365,17 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                         .and_then(|v| v.as_i64())
                 })
                 .unwrap_or(0);
-            (input, output, cache)
+            let cache_creation = usage_value
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cache_creation_input_tokens"))
+                .and_then(|v| v.as_i64())
+                .or_else(|| {
+                    usage_value
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                })
+                .unwrap_or(0);
+            (input, output, cache, cache_creation)
         }
         ChatProtocol::Claude => {
             let usage = value.get("usage");
@@ -1181,7 +1394,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
             // Claude reports uncached input separately from cache reads. Normalize stored input to
             // total input (uncached + cache read) so the shared cost formula can subtract cache
             // tokens exactly once, matching OpenAI and Gemini statistics.
-            (input.saturating_add(cache), output, cache)
+            (input.saturating_add(cache), output, cache, 0)
         }
         ChatProtocol::Gemini => {
             let usage = value.get("usageMetadata");
@@ -1197,7 +1410,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .and_then(|u| u.get("cachedContentTokenCount"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            (input, output, cache)
+            (input, output, cache, 0)
         }
         ChatProtocol::Ollama => {
             let input = value
@@ -1208,7 +1421,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .get("eval_count")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            (input, output, 0)
+            (input, output, 0, 0)
         }
     }
 }
@@ -1507,7 +1720,7 @@ mod tests {
 
     #[test]
     fn claude_usage_normalizes_uncached_and_cache_read_tokens() {
-        let (input, output, cache) = extract_usage_from_value(
+        let (input, output, cache, cache_creation) = extract_usage_from_value(
             &json!({
                 "usage": {
                     "input_tokens": 114,
@@ -1518,6 +1731,6 @@ mod tests {
             &ChatProtocol::Claude,
         );
 
-        assert_eq!((input, output, cache), (1138, 13, 1024));
+        assert_eq!((input, output, cache, cache_creation), (1138, 13, 1024, 0));
     }
 }

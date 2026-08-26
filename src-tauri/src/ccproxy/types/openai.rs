@@ -152,6 +152,8 @@ pub struct OpenAIUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_hit_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content_tokens: Option<u64>,
@@ -163,6 +165,8 @@ pub struct PromptTokensDetails {
     pub cached_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_content_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -194,6 +198,13 @@ impl OpenAIUsage {
             .or(self.cache_read_input_tokens)
             .or(self.cached_content_tokens)
             .or(self.prompt_cache_hit_tokens)
+    }
+
+    pub fn cache_creation_tokens_value(&self) -> Option<u64> {
+        self.prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_creation_input_tokens)
+            .or(self.cache_creation_input_tokens)
     }
 }
 

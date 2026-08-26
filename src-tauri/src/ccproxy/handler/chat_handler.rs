@@ -30,6 +30,7 @@ use crate::ccproxy::{
     },
     openai::OpenAIChatCompletionRequest,
     types::{ollama::OllamaChatCompletionRequest, ProxyModel},
+    utils::token_estimator::{estimate_unified_response_tokens, should_estimate_usage},
 };
 use crate::constants::{
     CFG_CCPROXY_LOG_PROXY_TO_FILE, CFG_CCPROXY_LOG_TO_FILE, CFG_CCPROXY_RETRY_ON_429,
@@ -378,34 +379,6 @@ pub(crate) async fn execute_unified_chat_request(
                 log::info!(target: "ccproxy_upstream_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
             }
 
-            {
-                let store = main_store_arc.as_ref();
-                let _ = store.record_ccproxy_stat(
-                    CcproxyStat {
-                        id: None,
-                        workflow_session_id: None,
-                        workflow_task_run_id: None,
-                        workflow_segment_id: None,
-                        root_session_id: None,
-                        root_task_run_id: None,
-                        request_kind: None,
-                        client_model: proxy_model.client_alias.clone(),
-                        backend_model: proxy_model.model.clone(),
-                        provider_id: Some(proxy_model.provider_id),
-                        provider: proxy_model.provider.clone(),
-                        protocol: client_protocol.to_string(),
-                        tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
-                        status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
-                        error_message: Some(message.clone()),
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_tokens: 0,
-                        request_at: None,
-                    }
-                    .with_workflow_attribution(&client_headers),
-                );
-            }
-
             let response = output_adapter.adapt_error_response(UnifiedErrorResponse {
                 status_code: http::StatusCode::BAD_GATEWAY.as_u16(),
                 message,
@@ -454,36 +427,6 @@ pub(crate) async fn execute_unified_chat_request(
         if unified_error.request_id.is_none() {
             unified_error.request_id = Some(message_id.clone());
         }
-        let message_content = unified_error.message.clone();
-
-        {
-            let store = main_store_arc.as_ref();
-            let _ = store.record_ccproxy_stat(
-                CcproxyStat {
-                    id: None,
-                    workflow_session_id: None,
-                    workflow_task_run_id: None,
-                    workflow_segment_id: None,
-                    root_session_id: None,
-                    root_task_run_id: None,
-                    request_kind: None,
-                    client_model: proxy_model.client_alias.clone(),
-                    backend_model: proxy_model.model.clone(),
-                    provider_id: Some(proxy_model.provider_id),
-                    provider: proxy_model.provider.clone(),
-                    protocol: client_protocol.to_string(),
-                    tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
-                    status_code: status_code.as_u16() as i32,
-                    error_message: Some(message_content),
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_tokens: 0,
-                    request_at: None,
-                }
-                .with_workflow_attribution(&client_headers),
-            );
-        }
-
         let mut response = output_adapter.adapt_error_response(unified_error);
 
         let filtered_headers =
@@ -580,31 +523,44 @@ pub(crate) async fn execute_unified_chat_request(
                 .or(unified_response.usage.prompt_cached_tokens)
                 .or(unified_response.usage.cached_content_tokens)
                 .unwrap_or(0);
+            let should_estimate = should_estimate_usage(&unified_response.usage);
+            let input_tokens = if should_estimate {
+                estimated_input_tokens.ceil() as i64
+            } else {
+                unified_response.usage.input_tokens as i64
+            };
+            let output_tokens = if should_estimate {
+                estimate_unified_response_tokens(&unified_response).ceil() as i64
+            } else {
+                unified_response.usage.output_tokens as i64
+            };
 
-            let _ = store.record_ccproxy_stat(
-                CcproxyStat {
-                    id: None,
-                    workflow_session_id: None,
-                    workflow_task_run_id: None,
-                    workflow_segment_id: None,
-                    root_session_id: None,
-                    root_task_run_id: None,
-                    request_kind: None,
-                    client_model: proxy_model.client_alias.clone(),
-                    backend_model: proxy_model.model.clone(),
-                    provider_id: Some(proxy_model.provider_id),
-                    provider: proxy_model.provider.clone(),
-                    protocol: client_protocol.to_string(),
-                    tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
-                    status_code: 200,
-                    error_message: None,
-                    input_tokens: unified_response.usage.input_tokens as i64,
-                    output_tokens: unified_response.usage.output_tokens as i64,
-                    cache_tokens: cache_tokens as i64,
-                    request_at: None,
-                }
-                .with_workflow_attribution(&client_headers),
-            );
+            if unified_response.has_output() {
+                let _ = store.record_ccproxy_stat(
+                    CcproxyStat {
+                        id: None,
+                        workflow_session_id: None,
+                        workflow_task_run_id: None,
+                        workflow_segment_id: None,
+                        root_session_id: None,
+                        root_task_run_id: None,
+                        request_kind: None,
+                        client_model: proxy_model.client_alias.clone(),
+                        backend_model: proxy_model.model.clone(),
+                        provider_id: Some(proxy_model.provider_id),
+                        provider: proxy_model.provider.clone(),
+                        protocol: client_protocol.to_string(),
+                        tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                        status_code: 200,
+                        error_message: None,
+                        input_tokens,
+                        output_tokens,
+                        cache_tokens: cache_tokens as i64,
+                        request_at: None,
+                    }
+                    .with_workflow_attribution(&client_headers),
+                );
+            }
         }
 
         let mut response = output_adapter

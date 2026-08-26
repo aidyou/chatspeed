@@ -133,7 +133,6 @@ pub async fn handle_streamed_response(
         let output_adapter = output_adapter.clone();
         let sse_status = sse_status.clone();
         let inner_log_recorder = log_recorder_clone.clone();
-        // Move guard into closure
         let _guard = stat_guard.clone();
 
         async move {
@@ -217,6 +216,7 @@ pub fn adapt_stream_chunk_to_log(
         }
         UnifiedStreamChunk::Thinking { delta } => {
             if !delta.trim().is_empty() {
+                recorder.has_thinking = true;
                 if let Some(reasoning) = &mut recorder.thinking {
                     reasoning.push_str(delta);
                 } else {
@@ -226,10 +226,12 @@ pub fn adapt_stream_chunk_to_log(
         }
         UnifiedStreamChunk::Text { delta } => {
             if !delta.trim().is_empty() {
+                recorder.has_content = true;
                 recorder.content.push_str(delta);
             }
         }
         UnifiedStreamChunk::ToolUseStart { id, name, .. } => {
+            recorder.has_tool_calls = true;
             if recorder.tool_calls.is_none() {
                 recorder.tool_calls = Some(Default::default());
             }
@@ -244,6 +246,9 @@ pub fn adapt_stream_chunk_to_log(
             }
         }
         UnifiedStreamChunk::ToolUseDelta { id, delta, .. } => {
+            if !delta.is_empty() {
+                recorder.has_tool_calls = true;
+            }
             if let Some(tool_calls) = &mut recorder.tool_calls {
                 if let Some(tool) = tool_calls.get_mut(id) {
                     tool.args.push_str(delta);
@@ -257,10 +262,14 @@ pub fn adapt_stream_chunk_to_log(
                 .prompt_cached_tokens
                 .or(usage.cache_read_input_tokens)
                 .or(usage.cached_content_tokens);
+            recorder.cache_creation_tokens = usage.cache_creation_input_tokens;
 
             if log_to_file {
                 log::info!(target: "ccproxy_client_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
             }
+        }
+        UnifiedStreamChunk::Error { .. } => {
+            recorder.stream_failed = true;
         }
         _ => {}
     }

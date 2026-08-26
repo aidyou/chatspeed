@@ -82,8 +82,6 @@ pub struct ChatState {
     pub workflow_keys: Arc<DashMap<String, String>>,
     /// Session-level guard preventing duplicate workflow title generation tasks.
     pub workflow_title_generation_in_flight: Arc<DashMap<String, ()>>,
-    /// Per-chat prompt cache segment counters, incremented on contextCleared.
-    pub context_clear_counters: Arc<DashMap<String, u32>>,
 }
 
 impl ChatState {
@@ -107,7 +105,6 @@ impl ChatState {
             main_store,
             workflow_keys: Arc::new(DashMap::new()),
             workflow_title_generation_in_flight: Arc::new(DashMap::new()),
-            context_clear_counters: Arc::new(DashMap::new()),
         });
 
         let processor_state_clone = Arc::clone(&state);

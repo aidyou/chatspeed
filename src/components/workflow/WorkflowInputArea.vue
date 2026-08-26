@@ -2182,7 +2182,7 @@ defineExpose({
   align-items: flex-start;
   gap: var(--cs-space-xs);
   margin: 1px 0;
-  padding: var(--cs-space-sm);
+  padding: var(--cs-space-xs) var(--cs-space-sm);
   border-radius: var(--cs-border-radius);
   line-height: 1.35;
   transition:

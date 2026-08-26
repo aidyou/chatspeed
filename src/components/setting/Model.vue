@@ -94,6 +94,15 @@
               </el-radio>
             </el-radio-group>
           </el-form-item>
+          <el-form-item
+            v-if="modelForm.supportsResponsesApi && modelForm.responsesApiPreference === 'responses'"
+            :label="$t('settings.model.responsesReasoningSummary')" prop="responsesReasoningSummary">
+            <el-radio-group v-model="modelForm.responsesReasoningSummary">
+              <el-radio value="off">{{ $t('settings.model.summaryOff') }}</el-radio>
+              <el-radio value="auto">{{ $t('settings.model.summaryAuto') }}</el-radio>
+              <el-radio value="detailed">{{ $t('settings.model.summaryDetailed') }}</el-radio>
+            </el-radio-group>
+          </el-form-item>
           <el-form-item :label="$t('settings.model.proxyMode')" prop="proxyType">
             <el-radio-group v-model="modelForm.proxyType">
               <el-radio :value="proxyType.value" v-for="proxyType in proxyTypeOptions" :key="proxyType.value">{{
@@ -686,6 +695,7 @@ const defaultFormData = {
   proxyServers: [],
   supportsResponsesApi: false,
   responsesApiPreference: 'responses',
+  responsesReasoningSummary: 'auto',
   customHeaders: [],
   disabled: false
 }
@@ -848,6 +858,12 @@ const createFromModel = srcModel => {
       srcModel?.metadata?.responsesApiPreference === 'chatCompletions'
         ? 'chatCompletions'
         : 'responses',
+    responsesReasoningSummary:
+      srcModel?.metadata?.responsesReasoningSummary === 'off'
+        ? 'off'
+        : srcModel?.metadata?.responsesReasoningSummary === 'detailed'
+          ? 'detailed'
+          : 'auto',
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -1009,6 +1025,7 @@ const updateModel = () => {
           })),
           supportsResponsesApi: modelForm.value.supportsResponsesApi,
           responsesApiPreference: modelForm.value.responsesApiPreference,
+          responsesReasoningSummary: modelForm.value.responsesReasoningSummary,
           customHeaders: modelForm.value.customHeaders.filter(h => h.key.trim() !== '')
         }
       }

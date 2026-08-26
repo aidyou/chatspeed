@@ -85,8 +85,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
 
         let (input_tokens, output_tokens) = resolve_usage_with_estimate(
             "claude",
-            response.usage.input_tokens,
-            response.usage.output_tokens,
+            &response.usage,
             estimated_input_tokens_f64,
             estimated_output_tokens_f64,
             "response",
@@ -229,8 +228,7 @@ impl OutputAdapter for ClaudeOutputAdapter {
 
                 let (input_tokens, output_tokens) = resolve_usage_with_estimate(
                     "claude",
-                    usage.input_tokens,
-                    usage.output_tokens,
+                    &usage,
                     estimated_input_tokens_f64,
                     estimated_output_tokens_f64,
                     "stream_stop",

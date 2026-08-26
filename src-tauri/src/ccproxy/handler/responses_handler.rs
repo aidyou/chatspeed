@@ -17,6 +17,7 @@ use crate::ccproxy::{
     },
     helper::{get_msg_id, send_with_retry, CcproxyQuery, ModelResolver, RetryConfig},
     types::{openai_responses::OpenAIResponsesRequest, ProxyModel},
+    utils::token_estimator::{estimate_known_request_json_tokens, token_usage_is_missing_or_zero},
     ChatProtocol,
 };
 use crate::constants::{
@@ -69,11 +70,11 @@ fn prepare_direct_responses_body(
     Ok(body_json)
 }
 
-fn response_usage_tokens(body_json: &Value) -> (i64, i64, i64) {
+fn response_usage_tokens(body_json: &Value) -> (i64, i64, i64, i64) {
     response_usage_tokens_from_usage(body_json.get("usage").unwrap_or(&Value::Null))
 }
 
-fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64) {
+fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64, i64) {
     let input = usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
@@ -93,10 +94,21 @@ fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64) {
         .or_else(|| usage.get("cached_content_tokens").and_then(Value::as_i64))
         .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_i64))
         .unwrap_or(0);
-    (input, output, cache)
+    let cache_creation = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"))
+        .and_then(|details| details.get("cache_creation_input_tokens"))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            usage
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(0);
+    (input, output, cache, cache_creation)
 }
 
-fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64) {
+fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64, i64) {
     if let Ok(body_json) = serde_json::from_slice::<Value>(body_bytes) {
         return response_usage_tokens(&body_json);
     }
@@ -123,7 +135,58 @@ fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64) {
         return response_usage_tokens_from_usage(usage);
     }
 
-    (0, 0, 0)
+    (0, 0, 0, 0)
+}
+
+fn response_output_item_has_content(item: &Value) -> bool {
+    match item.get("type").and_then(Value::as_str) {
+        Some("function_call") | Some("custom_tool_call") => true,
+        Some("reasoning") => item
+            .get("summary")
+            .and_then(Value::as_array)
+            .is_some_and(|summary| {
+                summary.iter().any(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+            }),
+        Some("message") => item
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                content.iter().any(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+            }),
+        _ => false,
+    }
+}
+
+fn response_output_has_content(output: &[Value]) -> bool {
+    output.iter().any(response_output_item_has_content)
+}
+
+fn responses_has_output(body_bytes: &[u8]) -> bool {
+    if let Ok(body) = serde_json::from_slice::<Value>(body_bytes) {
+        return body
+            .get("output")
+            .and_then(Value::as_array)
+            .is_some_and(|output| response_output_has_content(output));
+    }
+
+    String::from_utf8_lossy(body_bytes).lines().any(|line| {
+        let Some(data) = line.strip_prefix("data:") else {
+            return false;
+        };
+        serde_json::from_str::<Value>(data.trim())
+            .ok()
+            .and_then(|event| event.get("response").cloned())
+            .and_then(|response| response.get("output").and_then(Value::as_array).cloned())
+            .is_some_and(|output| response_output_has_content(&output))
+    })
 }
 
 async fn direct_forward_responses(
@@ -207,10 +270,23 @@ async fn direct_forward_responses(
         .map_err(|e| CCProxyError::InternalError(format!("Failed to build response: {}", e)))?;
     *response.headers_mut() = filtered_headers;
 
-    let (input_tokens, output_tokens, cache_tokens) = if status_code.is_success() {
-        response_usage_tokens_from_body(&body_bytes)
+    let (input_tokens, output_tokens, cache_tokens, cache_creation_tokens) =
+        if status_code.is_success() {
+            response_usage_tokens_from_body(&body_bytes)
+        } else {
+            (0, 0, 0, 0)
+        };
+    let should_estimate = status_code.is_success()
+        && token_usage_is_missing_or_zero(&[
+            Some(input_tokens as u64),
+            Some(output_tokens as u64),
+            Some(cache_tokens as u64),
+            Some(cache_creation_tokens as u64),
+        ]);
+    let estimated_input_tokens = if should_estimate {
+        estimate_known_request_json_tokens(&body_json).ceil() as i64
     } else {
-        (0, 0, 0)
+        input_tokens
     };
     let error_message = if status_code.is_success() {
         None
@@ -218,7 +294,7 @@ async fn direct_forward_responses(
         Some(String::from_utf8_lossy(&body_bytes).to_string())
     };
 
-    {
+    if status_code.is_success() && responses_has_output(&body_bytes) {
         let store = main_store_arc.as_ref();
         let _ = store.record_ccproxy_stat(
             CcproxyStat {
@@ -237,7 +313,7 @@ async fn direct_forward_responses(
                 tool_compat_mode: 0,
                 status_code: status_code.as_u16() as i32,
                 error_message,
-                input_tokens,
+                input_tokens: estimated_input_tokens,
                 output_tokens,
                 cache_tokens,
                 request_at: None,
@@ -504,7 +580,7 @@ mod tests {
 
     #[test]
     fn responses_usage_tokens_reads_direct_response_usage() {
-        let (input, output, cache) = response_usage_tokens(&json!({
+        let (input, output, cache, cache_creation) = response_usage_tokens(&json!({
             "usage": {
                 "input_tokens": 120,
                 "output_tokens": 35,
@@ -518,11 +594,12 @@ mod tests {
         assert_eq!(input, 120);
         assert_eq!(output, 35);
         assert_eq!(cache, 80);
+        assert_eq!(cache_creation, 0);
     }
 
     #[test]
     fn responses_usage_tokens_accepts_openai_compatible_usage_names() {
-        let (input, output, cache) = response_usage_tokens(&json!({
+        let (input, output, cache, cache_creation) = response_usage_tokens(&json!({
             "usage": {
                 "prompt_tokens": 120,
                 "completion_tokens": 35,
@@ -535,6 +612,7 @@ mod tests {
         assert_eq!(input, 120);
         assert_eq!(output, 35);
         assert_eq!(cache, 80);
+        assert_eq!(cache_creation, 0);
     }
 
     #[tokio::test]
@@ -548,6 +626,7 @@ mod tests {
             "id": "resp_test",
             "object": "response",
             "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
             "usage": {
                 "input_tokens": 120,
                 "output_tokens": 35,
@@ -703,11 +782,13 @@ data: {"type":"response.completed","response":{"id":"resp_123","status":"complet
 
 "#;
 
-        let (input, output, cache) = response_usage_tokens_from_body(body.as_bytes());
+        let (input, output, cache, cache_creation) =
+            response_usage_tokens_from_body(body.as_bytes());
 
         assert_eq!(input, 81345);
         assert_eq!(output, 397);
         assert_eq!(cache, 76672);
+        assert_eq!(cache_creation, 0);
     }
 
     #[tokio::test]
@@ -721,7 +802,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","status":"complet
             "event: response.created\n",
             "data: {\"type\":\"response.created\"}\n\n",
             "event: response.completed\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens\":35}}}\n\n"
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens\":35}}}\n\n"
         );
         let content_length = response_body.len().to_string();
         let (headers_tx, mut headers_rx) = mpsc::channel(1);
