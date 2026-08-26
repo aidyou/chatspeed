@@ -19,6 +19,8 @@ for (const toolName of ['server__MCP__search', 'SERVER__mcp__WRITE', 'mcp_tool_l
   assert.equal(isWorkflowMcpTool(toolName), true, `${toolName} must be classified as MCP`)
 }
 
+assert.equal(isWorkflowMcpTool('codegraph_callees', 'MCP'), true, 'MCP aliases use category metadata')
+
 for (const toolName of ['mcp', 'mcp_search', 'server_mcp_search', 'load_mcp_tool']) {
   assert.equal(isWorkflowMcpTool(toolName), false, `${toolName} must not be inferred as MCP`)
 }

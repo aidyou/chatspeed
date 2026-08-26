@@ -88,12 +88,24 @@ pub enum GatewayPayload {
         tool_call_id: String,
         tool_name: String,
         arguments: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        canonical_tool_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_category: Option<String>,
     },
     ToolCompleted {
         tool_call_id: String,
         tool_name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        canonical_tool_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_category: Option<String>,
     },
     ToolFailed {
         tool_call_id: String,
@@ -103,6 +115,12 @@ pub enum GatewayPayload {
         error_type: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_details: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        canonical_tool_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_category: Option<String>,
     },
     /// A top-level workflow task passed all completion checks and any configured final review.
     TaskCompleted {

@@ -29,8 +29,13 @@ pub type ToolResult = Result<Value, ToolError>;
 /// A trait defining the characteristics of a function.
 #[async_trait]
 pub trait ToolDefinition: Send + Sync {
-    /// Gets the name of the function.
+    /// Gets the public name exposed to model-facing tool declarations.
     fn name(&self) -> &str;
+
+    /// Gets the stable internal registry name. Native tools use their public name.
+    fn registry_name(&self) -> &str {
+        self.name()
+    }
 
     /// Gets the description of the function.
     fn description(&self) -> &str;
@@ -68,13 +73,131 @@ pub struct McpToolWrapper {
     pub server_name: String,
     pub tool_decl: MCPToolDeclaration,
     pub client: Arc<dyn McpClient>,
-    pub combined_name: String,
+    pub canonical_name: String,
+    pub public_name: String,
+}
+
+#[derive(Default)]
+struct McpAliasRegistry {
+    alias_to_canonical: HashMap<String, String>,
+    canonical_to_alias: HashMap<String, String>,
+}
+
+impl McpAliasRegistry {
+    fn resolve(&self, name: &str) -> Option<String> {
+        self.alias_to_canonical.get(name).cloned()
+    }
+
+    fn alias_for(&self, canonical_name: &str) -> Option<String> {
+        self.canonical_to_alias.get(canonical_name).cloned()
+    }
+}
+
+#[derive(Clone)]
+struct McpAliasInput {
+    canonical_name: String,
+    server_name: String,
+    tool_name: String,
+}
+
+fn normalize_mcp_alias(value: &str) -> String {
+    let normalized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        "mcp_tool".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn reserved_mcp_aliases() -> HashSet<String> {
+    [
+        crate::tools::TOOL_BASH,
+        crate::tools::TOOL_READ_FILE,
+        crate::tools::TOOL_WRITE_FILE,
+        crate::tools::TOOL_EDIT_FILE,
+        crate::tools::TOOL_LIST_DIR,
+        crate::tools::TOOL_GLOB,
+        crate::tools::TOOL_GREP,
+        crate::tools::TOOL_GIT_DIFF,
+        crate::tools::TOOL_GIT_INSPECT,
+        crate::tools::TOOL_WEB_SEARCH,
+        crate::tools::TOOL_WEB_FETCH,
+        crate::tools::TOOL_SUB_AGENT_RUN,
+        crate::tools::TOOL_SUB_AGENT_OUTPUT,
+        crate::tools::TOOL_SUB_AGENT_STOP,
+        crate::tools::TOOL_TODO_CREATE,
+        crate::tools::TOOL_TODO_LIST,
+        crate::tools::TOOL_TODO_UPDATE,
+        crate::tools::TOOL_TODO_GET,
+        crate::tools::TOOL_SKILL,
+        crate::tools::TOOL_ASK_USER,
+        crate::tools::TOOL_COMPLETE_WORKFLOW,
+        crate::tools::TOOL_SUBMIT_RESULT,
+        crate::tools::TOOL_SUBMIT_PLAN,
+        crate::tools::TOOL_MCP_TOOL_LOAD,
+        crate::tools::TOOL_READ_HISTORY_MESSAGE,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn allocate_mcp_aliases(
+    mut inputs: Vec<McpAliasInput>,
+    native_names: impl IntoIterator<Item = String>,
+) -> McpAliasRegistry {
+    inputs.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
+    let mut occupied = reserved_mcp_aliases();
+    occupied.extend(native_names);
+    let mut registry = McpAliasRegistry::default();
+
+    for input in inputs {
+        let tool_name = normalize_mcp_alias(&input.tool_name);
+        let server_tool_name = format!("{}_{}", normalize_mcp_alias(&input.server_name), tool_name);
+        let alias = if !occupied.contains(&tool_name) {
+            tool_name
+        } else if !occupied.contains(&server_tool_name) {
+            server_tool_name
+        } else {
+            let mut index = 2;
+            loop {
+                let candidate = format!("{}_{}", server_tool_name, index);
+                if !occupied.contains(&candidate) {
+                    break candidate;
+                }
+                index += 1;
+            }
+        };
+        occupied.insert(alias.clone());
+        registry
+            .alias_to_canonical
+            .insert(alias.clone(), input.canonical_name.clone());
+        registry
+            .canonical_to_alias
+            .insert(input.canonical_name, alias);
+    }
+
+    registry
 }
 
 #[async_trait]
 impl ToolDefinition for McpToolWrapper {
     fn name(&self) -> &str {
-        &self.combined_name
+        &self.public_name
+    }
+
+    fn registry_name(&self) -> &str {
+        &self.canonical_name
     }
 
     fn description(&self) -> &str {
@@ -91,7 +214,7 @@ impl ToolDefinition for McpToolWrapper {
 
     fn tool_calling_spec(&self) -> MCPToolDeclaration {
         let mut spec = self.tool_decl.clone();
-        spec.name = self.combined_name.clone();
+        spec.name = self.public_name.clone();
         spec
     }
 
@@ -118,6 +241,20 @@ impl ToolDefinition for McpToolWrapper {
     }
 }
 
+fn scope_allows(tool_scope: ToolScope, scope_filter: Option<ToolScope>) -> bool {
+    match scope_filter {
+        Some(ToolScope::Chat) => tool_scope == ToolScope::Chat || tool_scope == ToolScope::Both,
+        Some(ToolScope::Both) => tool_scope == ToolScope::Both,
+        Some(ToolScope::Workflow) | None => true,
+    }
+}
+
+#[derive(Clone)]
+pub struct McpToolSpec {
+    pub canonical_name: String,
+    pub declaration: MCPToolDeclaration,
+}
+
 /// Manages the registration and execution of workflow functions.
 ///
 /// This struct is responsible for maintaining a collection of functions
@@ -126,8 +263,10 @@ pub struct ToolManager {
     tools: RwLock<HashMap<String, Arc<dyn ToolDefinition>>>,
     /// A map of registered MCP servers.
     mcp_servers: RwLock<HashMap<String, Arc<dyn McpClient>>>,
-    /// A map of registered MCP tools. The key is the server name, and the value is a vector of ToolDeclaration.
+    /// A map of registered MCP tools. The key is the server name, and the value is a vector of declarations.
     mcp_tools: RwLock<HashMap<String, Vec<MCPToolDeclaration>>>,
+    /// A registry mapping public MCP aliases to canonical internal tool IDs.
+    mcp_alias_registry: RwLock<McpAliasRegistry>,
     /// A channel for sending MCP status events.
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
     /// A channel for notifying consumers that the externally visible MCP tool list changed.
@@ -146,6 +285,7 @@ impl ToolManager {
             tools: RwLock::new(HashMap::new()),
             mcp_servers: RwLock::new(HashMap::new()),
             mcp_tools: RwLock::new(HashMap::new()),
+            mcp_alias_registry: RwLock::new(McpAliasRegistry::default()),
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
             ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
@@ -154,11 +294,75 @@ impl ToolManager {
 
     pub async fn clear(&self, clear_mcp: bool) {
         self.tools.write().await.clear();
+        self.mcp_alias_registry
+            .write()
+            .await
+            .alias_to_canonical
+            .clear();
+        self.mcp_alias_registry
+            .write()
+            .await
+            .canonical_to_alias
+            .clear();
         if clear_mcp {
             self.mcp_servers.write().await.clear();
             self.mcp_tools.write().await.clear();
             self.notify_mcp_tools_changed();
         }
+    }
+
+    async fn rebuild_mcp_wrappers(&self) {
+        // Keep the established lock order: mcp_tools -> mcp_servers -> tools -> aliases.
+        let mcp_tools = self.mcp_tools.read().await;
+        let mcp_servers = self.mcp_servers.read().await;
+        let mut tools = self.tools.write().await;
+        let native_names = tools
+            .iter()
+            .filter(|(_, tool)| tool.category() != ToolCategory::Mcp)
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        let inputs = mcp_tools
+            .iter()
+            .flat_map(|(server_name, declarations)| {
+                declarations
+                    .iter()
+                    .filter(|declaration| !declaration.disabled)
+                    .map(move |declaration| McpAliasInput {
+                        canonical_name: format!(
+                            "{}{}{}",
+                            server_name, MCP_TOOL_NAME_SPLIT, declaration.name
+                        ),
+                        server_name: server_name.clone(),
+                        tool_name: declaration.name.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        let registry = allocate_mcp_aliases(inputs, native_names);
+
+        tools.retain(|_, tool| tool.category() != ToolCategory::Mcp);
+        for (server_name, declarations) in mcp_tools.iter() {
+            let Some(client) = mcp_servers.get(server_name) else {
+                continue;
+            };
+            for declaration in declarations {
+                let canonical_name =
+                    format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, declaration.name);
+                // Disabled MCP tools stay canonically addressable for management and security
+                // checks, but must not reserve a model-facing alias.
+                let public_name = registry
+                    .alias_for(&canonical_name)
+                    .unwrap_or_else(|| canonical_name.clone());
+                let wrapper = Arc::new(McpToolWrapper {
+                    server_name: server_name.clone(),
+                    tool_decl: declaration.clone(),
+                    client: client.clone(),
+                    canonical_name: canonical_name.clone(),
+                    public_name,
+                });
+                tools.insert(canonical_name, wrapper);
+            }
+        }
+        *self.mcp_alias_registry.write().await = registry;
     }
 
     fn notify_mcp_tools_changed(&self) {
@@ -321,43 +525,65 @@ impl ToolManager {
         &self, // This can remain &self as it doesn't spawn long tasks
         tool: Arc<dyn ToolDefinition>,
     ) -> Result<(), ToolError> {
-        let name = tool.name().to_string();
-        let mut tools = self.tools.write().await;
-
-        if tools.contains_key(&name) {
-            return Err(ToolError::FunctionAlreadyExists(name));
+        let registry_name = tool.registry_name().to_string();
+        let public_name = tool.name().to_string();
+        let is_mcp = tool.category() == ToolCategory::Mcp;
+        {
+            let mut tools = self.tools.write().await;
+            if tools.contains_key(&registry_name) {
+                return Err(ToolError::FunctionAlreadyExists(registry_name));
+            }
+            tools.insert(registry_name.clone(), tool);
         }
 
-        tools.insert(name, tool);
+        if is_mcp {
+            let mut aliases = self.mcp_alias_registry.write().await;
+            aliases
+                .alias_to_canonical
+                .insert(public_name.clone(), registry_name.clone());
+            aliases
+                .canonical_to_alias
+                .insert(registry_name, public_name);
+        } else {
+            // A newly registered native tool must not be shadowed by an existing MCP alias.
+            self.rebuild_mcp_wrappers().await;
+        }
         Ok(())
     }
 
-    /// Gets a tool by its name.
-    ///
-    /// # Arguments
-    /// * `name` - The name of the tool to get.
-    ///
-    /// # Returns
-    /// * `Result<Arc<dyn FunctionDefinition>, ToolError>` - The result of the function retrieval.
-    pub async fn get_tool(&self, name: &str) -> Result<Arc<dyn ToolDefinition>, ToolError> {
-        let tools = self.tools.read().await;
+    pub async fn resolve_tool_name(&self, name: &str) -> String {
+        if self.tools.read().await.contains_key(name) {
+            return name.to_string();
+        }
+        self.mcp_alias_registry
+            .read()
+            .await
+            .resolve(name)
+            .unwrap_or_else(|| name.to_string())
+    }
 
+    pub async fn resolve_mcp_tool_name(&self, name: &str) -> Option<String> {
+        let canonical_name = self.resolve_tool_name(name).await;
+        let tools = self.tools.read().await;
         tools
-            .get(name)
+            .get(&canonical_name)
+            .filter(|tool| tool.category() == ToolCategory::Mcp)
+            .map(|_| canonical_name)
+    }
+
+    /// Gets a tool by its public alias or canonical registry name.
+    pub async fn get_tool(&self, name: &str) -> Result<Arc<dyn ToolDefinition>, ToolError> {
+        let canonical_name = self.resolve_tool_name(name).await;
+        let tools = self.tools.read().await;
+        tools
+            .get(&canonical_name)
             .cloned()
             .ok_or_else(|| ToolError::FunctionNotFound(name.to_string()))
     }
 
-    /// Checks if a tool exists by its name.
-    ///
-    /// # Arguments
-    /// * `name` - The name of the tool to check.
-    ///
-    /// # Returns
-    /// * `bool` - True if the tool exists, false otherwise.
+    /// Checks whether a public alias or canonical registry name exists.
     pub async fn has_tool(&self, name: &str) -> bool {
-        let tools = self.tools.read().await;
-        tools.contains_key(name)
+        self.get_tool(name).await.is_ok()
     }
 
     /// Returns metadata for all registered native tools.
@@ -365,12 +591,12 @@ impl ToolManager {
     pub async fn get_all_native_tool_metadata(&self) -> Vec<Value> {
         let tools = self.tools.read().await;
         let mut meta = Vec::new();
-        for tool in tools.values() {
+        for (registry_name, tool) in tools.iter() {
             if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
                 continue;
             }
             meta.push(json!({
-                "id": tool.name(),
+                "id": registry_name,
                 "name": tool.name(),
                 "category": tool.category().to_string(),
                 "scope": tool.scope()
@@ -429,11 +655,18 @@ impl ToolManager {
     ) -> Result<Vec<MCPToolDeclaration>, ToolError> {
         let mut specs = Vec::new();
         let excluded: HashSet<String> = exclude.unwrap_or_default();
+        let resolved_excluded = {
+            let aliases = self.mcp_alias_registry.read().await;
+            excluded
+                .iter()
+                .map(|name| aliases.resolve(name).unwrap_or_else(|| name.clone()))
+                .collect::<HashSet<_>>()
+        };
 
         // Collect all tools from the unified map
         {
             let tools = self.tools.read().await;
-            for tool in tools.values() {
+            for (registry_name, tool) in tools.iter() {
                 // Apply scope filter if provided
                 if let Some(filter) = scope_filter {
                     match filter {
@@ -456,7 +689,7 @@ impl ToolManager {
                 }
 
                 // Apply exclusion filter
-                if !excluded.contains(tool.name()) {
+                if !resolved_excluded.contains(registry_name) {
                     let spec = tool.tool_calling_spec();
                     if !spec.disabled {
                         specs.push(spec);
@@ -475,28 +708,35 @@ impl ToolManager {
         Ok(specs)
     }
 
-    /// Get the complete tool declaration for a specific MCP tool.
-    /// Returns the full MCPToolDeclaration including input_schema and output_schema.
-    ///
-    /// # Arguments
-    /// * `tool_name` - The combined name of the MCP tool (format: {server_name}__MCP__{tool_name})
-    ///
-    /// # Returns
-    /// The complete MCPToolDeclaration for the specified tool.
+    /// Returns enabled MCP declarations together with their canonical identities.
+    pub async fn get_mcp_tool_specs(&self, scope_filter: Option<ToolScope>) -> Vec<McpToolSpec> {
+        let tools = self.tools.read().await;
+        let mut specs = tools
+            .iter()
+            .filter_map(|(canonical_name, tool)| {
+                (tool.category() == ToolCategory::Mcp
+                    && !tool.tool_calling_spec().disabled
+                    && scope_allows(tool.scope(), scope_filter))
+                .then(|| McpToolSpec {
+                    canonical_name: canonical_name.clone(),
+                    declaration: tool.tool_calling_spec(),
+                })
+            })
+            .collect::<Vec<_>>();
+        specs.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
+        specs
+    }
+
+    /// Get the complete public declaration for a MCP alias or canonical name.
     pub async fn get_mcp_tool_declaration(
         &self,
         tool_name: &str,
     ) -> Result<MCPToolDeclaration, ToolError> {
-        let tools = self.tools.read().await;
-        let tool = tools
-            .get(tool_name)
-            .ok_or_else(|| ToolError::FunctionNotFound(tool_name.to_string()))?;
-
-        // Verify it's an MCP tool
-        if !tool_name.contains(MCP_TOOL_NAME_SPLIT) {
-            return Err(ToolError::InvalidParams("Not an MCP tool".to_string()));
-        }
-
+        let canonical_name = self
+            .resolve_mcp_tool_name(tool_name)
+            .await
+            .ok_or_else(|| ToolError::InvalidParams("Not an MCP tool".to_string()))?;
+        let tool = self.get_tool(&canonical_name).await?;
         let declaration = tool.tool_calling_spec();
         if declaration.disabled {
             return Err(ToolError::Security(format!(
@@ -504,7 +744,6 @@ impl ToolManager {
                 tool_name
             )));
         }
-
         Ok(declaration)
     }
 
@@ -740,58 +979,16 @@ impl ToolManager {
             log::debug!("register_mcp_server_inner: client.name() = {}", &name);
         }
 
-        // Adhere to a consistent locking order (mcp_tools -> mcp_servers -> tools) to prevent deadlocks.
-        let mut mcp_tools_guard = self.mcp_tools.write().await;
-        let mut servers_guard = self.mcp_servers.write().await;
-        let mut tools_guard = self.tools.write().await;
-
-        if servers_guard.contains_key(&name) {
-            log::warn!("MCP server {} is already in mcp_servers map during inner registration. Overwriting.", &name);
-        }
-        servers_guard.insert(name.clone(), client.clone()); // client.clone() is cheap (Arc clone)
-
-        #[cfg(debug_assertions)]
+        // Update server/declaration state, then rebuild all MCP wrappers and aliases as one set.
         {
-            log::debug!("MCP server {} added/updated in mcp_servers.", &name);
-        }
-
-        // Register MCP tools if available
-        if let Some(declarations) = tools_declarations {
-            #[cfg(debug_assertions)]
-            {
-                let tool_count = declarations.len();
-                log::debug!(
-                    "MCP tools for server {} registered (count: {}).",
-                    name,
-                    tool_count
-                );
-            }
-
-            // 1. Update the legacy mcp_tools map for UI/metadata
-            mcp_tools_guard.insert(name.clone(), declarations.clone());
-
-            // 2. Register each tool as a first-class ToolDefinition in the main tools map
-            for decl in declarations {
-                let combined_name = format!("{}{}{}", &name, MCP_TOOL_NAME_SPLIT, &decl.name);
-                let wrapper = Arc::new(McpToolWrapper {
-                    server_name: name.clone(),
-                    tool_decl: decl,
-                    client: client.clone(),
-                    combined_name: combined_name.clone(),
-                });
-                tools_guard.insert(combined_name, wrapper);
-            }
-        } else {
-            // tools_declarations was None, e.g. if list_tools failed.
-            #[cfg(debug_assertions)]
-            {
-                log::debug!("No tool declarations (Option was None) provided for MCP server {}. Not updating mcp_tools.", name);
+            let mut mcp_tools_guard = self.mcp_tools.write().await;
+            let mut servers_guard = self.mcp_servers.write().await;
+            servers_guard.insert(name.clone(), client);
+            if let Some(declarations) = tools_declarations {
+                mcp_tools_guard.insert(name.clone(), declarations);
             }
         }
-
-        drop(tools_guard);
-        drop(servers_guard);
-        drop(mcp_tools_guard);
+        self.rebuild_mcp_wrappers().await;
         self.notify_mcp_tools_changed();
 
         #[cfg(debug_assertions)]
@@ -812,24 +1009,15 @@ impl ToolManager {
     pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), ToolError> {
         // Scope the locks to ensure they are released before awaiting .stop()
         {
-            // 1. Remove from legacy mcp_tools map
             let mut mcp_tools = self.mcp_tools.write().await;
             mcp_tools.remove(name);
-
-            // 2. Remove all associated wrappers from the main tools map
-            let mut tools_guard = self.tools.write().await;
-            let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
-            tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
         }
-        self.notify_mcp_tools_changed();
-
-        // Get the server Arc to stop it *after* removing it from the map
-        // and releasing the FunctionManager's mcp_servers lock.
         let server_to_stop = {
-            // Acquire write lock for mcp_servers
             let mut servers_guard = self.mcp_servers.write().await;
-            servers_guard.remove(name) // This removes and returns the Arc<dyn McpClient>
-        }; // servers_guard (write lock on mcp_servers) is released here
+            servers_guard.remove(name)
+        };
+        self.rebuild_mcp_wrappers().await;
+        self.notify_mcp_tools_changed();
 
         // Stop the server client if it was found
         if let Some(server_arc) = server_to_stop {
@@ -909,27 +1097,9 @@ impl ToolManager {
 
                 {
                     let mut mcp_tools_guard = self.mcp_tools.write().await;
-                    let mut tools_guard = self.tools.write().await;
-
-                    // 1. Update legacy map
-                    mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag.clone());
-
-                    // 2. Update unified tools map (Remove old and add new)
-                    let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
-                    tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
-
-                    for decl in tools_with_disabled_flag {
-                        let combined_name =
-                            format!("{}{}{}", name, MCP_TOOL_NAME_SPLIT, &decl.name);
-                        let wrapper = Arc::new(McpToolWrapper {
-                            server_name: name.to_string(),
-                            tool_decl: decl,
-                            client: client.clone(),
-                            combined_name: combined_name.clone(),
-                        });
-                        tools_guard.insert(combined_name, wrapper);
-                    }
+                    mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag);
                 }
+                self.rebuild_mcp_wrappers().await;
                 self.notify_mcp_tools_changed();
 
                 // On success, notify that it's "Running" again.
@@ -947,12 +1117,9 @@ impl ToolManager {
                 );
                 {
                     let mut mcp_tools_guard = self.mcp_tools.write().await;
-                    let mut tools_guard = self.tools.write().await;
                     mcp_tools_guard.insert(name.to_string(), Vec::new());
-
-                    let prefix = format!("{}{}", name, MCP_TOOL_NAME_SPLIT);
-                    tools_guard.retain(|tool_name, _| !tool_name.starts_with(&prefix));
                 }
+                self.rebuild_mcp_wrappers().await;
                 self.notify_mcp_tools_changed();
 
                 // On failure, notify "Error" status.
@@ -1078,107 +1245,31 @@ impl ToolManager {
             log::warn!("Server {} not found in mcp_servers cache while trying to update its internal config for tool {}.", mcp_server_name, mcp_tool_name);
         }
 
-        // Phase 2: Update the in-memory cache for mcp_tools.
-        let mut mcp_tools_guard = self.mcp_tools.write().await;
-        let mut tools_guard = self.tools.write().await;
-
-        let result = if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
-            // find the tool in the list by name
-            if let Some(tool_decl) = tools.iter_mut().find(|td| td.name == mcp_tool_name) {
-                // 1. Update the legacy declaration
-                tool_decl.disabled = is_disabled;
-
-                // 2. Update the wrapper in the unified tools map
-                let combined_name = format!(
-                    "{}{}{}",
-                    mcp_server_name, MCP_TOOL_NAME_SPLIT, mcp_tool_name
-                );
-
-                // We need the client to create a new wrapper. We can try to get it from the existing wrapper if it exists.
-                if let Some(_existing_tool) = tools_guard.get(&combined_name) {
-                    // Try to downcast to McpToolWrapper or just get the client from the server map
-                    if let Ok(client) = self.get_mcp_server(mcp_server_name).await {
-                        let wrapper = Arc::new(McpToolWrapper {
-                            server_name: mcp_server_name.to_string(),
-                            tool_decl: tool_decl.clone(),
-                            client,
-                            combined_name: combined_name.clone(),
-                        });
-                        tools_guard.insert(combined_name, wrapper);
-                    }
+        // Phase 2: Update the in-memory declaration cache, then rebuild the wrappers.
+        let result = {
+            let mut mcp_tools_guard = self.mcp_tools.write().await;
+            if let Some(tools) = mcp_tools_guard.get_mut(mcp_server_name) {
+                if let Some(tool_decl) = tools.iter_mut().find(|td| td.name == mcp_tool_name) {
+                    tool_decl.disabled = is_disabled;
+                    Ok(())
+                } else {
+                    Err(ToolError::FunctionNotFound(format!(
+                        "Tool {} not found on server {} in mcp_tools cache.",
+                        mcp_tool_name, mcp_server_name
+                    )))
                 }
-
-                log::debug!(
-                    "In-memory caches updated: tool {} on server {} set to disabled={}",
-                    mcp_tool_name,
-                    mcp_server_name,
-                    is_disabled
-                );
-                Ok(())
             } else {
-                // tool not found in the list
-                Err(ToolError::FunctionNotFound(format!(
-                    "Tool {} not found on server {} in mcp_tools cache.",
-                    mcp_tool_name, mcp_server_name
+                Err(ToolError::McpServerNotFound(format!(
+                    "Server {} not found in mcp_tools cache.",
+                    mcp_server_name
                 )))
             }
-        } else {
-            // server not found in the cache
-            Err(ToolError::McpServerNotFound(format!(
-                "Server {} not found in mcp_tools cache.",
-                mcp_server_name
-            )))
         };
-
-        drop(tools_guard);
-        drop(mcp_tools_guard);
         if result.is_ok() {
+            self.rebuild_mcp_wrappers().await;
             self.notify_mcp_tools_changed();
         }
         result
-    }
-
-    pub async fn mcp_tool_call(
-        &self,
-        mcp_name: &str,
-        tool_name: &str,
-        params: Value,
-    ) -> ToolResult {
-        {
-            let tools = self.mcp_tools.read().await;
-            let declaration = tools
-                .get(mcp_name)
-                .and_then(|tools| tools.iter().find(|tool| tool.name == tool_name))
-                .ok_or_else(|| {
-                    ToolError::FunctionNotFound(format!(
-                        "{}{}{}",
-                        mcp_name, MCP_TOOL_NAME_SPLIT, tool_name
-                    ))
-                })?;
-            if declaration.disabled {
-                return Err(ToolError::Security(format!(
-                    "MCP tool '{}{}{}' is disabled",
-                    mcp_name, MCP_TOOL_NAME_SPLIT, tool_name
-                )));
-            }
-        }
-
-        let client_arc = self.get_mcp_server(mcp_name).await?;
-        client_arc
-            .call(tool_name, params.clone())
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(
-                    t!(
-                        "mcp.client.failed_to_call_tool",
-                        server_name = mcp_name,
-                        tool_name = tool_name,
-                        args = params.to_string(),
-                        error = e
-                    )
-                    .to_string(),
-                )
-            })
     }
 
     pub fn subscribe_mcp_status_events(&self) -> broadcast::Receiver<(String, McpStatus)> {
@@ -1229,6 +1320,152 @@ mod tests {
         async fn call(&self, _params: Value) -> NativeToolResult {
             Ok(ToolCallResult::success(Some("ok".into()), None))
         }
+    }
+
+    #[test]
+    fn allocates_mcp_aliases_deterministically_without_shadowing_reserved_names() {
+        let inputs = vec![
+            McpAliasInput {
+                canonical_name: "beta__MCP__read file".into(),
+                server_name: "beta".into(),
+                tool_name: "read file".into(),
+            },
+            McpAliasInput {
+                canonical_name: "alpha__MCP__read_file".into(),
+                server_name: "alpha".into(),
+                tool_name: "read_file".into(),
+            },
+            McpAliasInput {
+                canonical_name: "gamma__MCP__bash".into(),
+                server_name: "gamma".into(),
+                tool_name: "bash".into(),
+            },
+        ];
+        let registry = allocate_mcp_aliases(inputs.clone(), vec!["web_search".into()]);
+        let reversed = allocate_mcp_aliases(
+            inputs.into_iter().rev().collect(),
+            vec!["web_search".into()],
+        );
+
+        assert_eq!(
+            registry.alias_for("alpha__MCP__read_file").as_deref(),
+            Some("alpha_read_file")
+        );
+        assert_eq!(
+            registry.alias_for("beta__MCP__read file").as_deref(),
+            Some("beta_read_file")
+        );
+        assert_eq!(
+            registry.alias_for("gamma__MCP__bash").as_deref(),
+            Some("gamma_bash")
+        );
+        assert_eq!(registry.alias_to_canonical, reversed.alias_to_canonical);
+    }
+
+    #[test]
+    fn allocates_numeric_mcp_alias_suffixes_after_server_prefix_collisions() {
+        let registry = allocate_mcp_aliases(
+            vec![
+                McpAliasInput {
+                    canonical_name: "one__MCP__tool".into(),
+                    server_name: "server".into(),
+                    tool_name: "tool".into(),
+                },
+                McpAliasInput {
+                    canonical_name: "two__MCP__tool".into(),
+                    server_name: "server".into(),
+                    tool_name: "tool".into(),
+                },
+                McpAliasInput {
+                    canonical_name: "three__MCP__tool".into(),
+                    server_name: "server".into(),
+                    tool_name: "tool".into(),
+                },
+            ],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            registry.alias_for("one__MCP__tool").as_deref(),
+            Some("tool")
+        );
+        assert_eq!(
+            registry.alias_for("three__MCP__tool").as_deref(),
+            Some("server_tool")
+        );
+        assert_eq!(
+            registry.alias_for("two__MCP__tool").as_deref(),
+            Some("server_tool_2")
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_mcp_tools_do_not_reserve_public_aliases() {
+        let manager = Arc::new(ToolManager::new());
+        let declaration = |disabled| MCPToolDeclaration {
+            name: "search".into(),
+            description: "Search".into(),
+            input_schema: json!({}),
+            output_schema: None,
+            disabled,
+            scope: Some(ToolScope::Both),
+        };
+        let client = |name: &str| {
+            Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: name.to_string(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .expect("test MCP client"),
+            ) as Arc<dyn McpClient>
+        };
+
+        manager.mcp_servers.write().await.extend([
+            (String::from("alpha"), client("alpha")),
+            (String::from("beta"), client("beta")),
+        ]);
+        manager.mcp_tools.write().await.extend([
+            (String::from("alpha"), vec![declaration(true)]),
+            (String::from("beta"), vec![declaration(false)]),
+        ]);
+
+        manager.rebuild_mcp_wrappers().await;
+
+        let specs = manager.get_mcp_tool_specs(None).await;
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].canonical_name, "beta__MCP__search");
+        assert_eq!(specs[0].declaration.name, "search");
+        assert_eq!(
+            manager.resolve_mcp_tool_name("search").await.as_deref(),
+            Some("beta__MCP__search")
+        );
+        assert_eq!(
+            manager
+                .resolve_mcp_tool_name("alpha__MCP__search")
+                .await
+                .as_deref(),
+            Some("alpha__MCP__search")
+        );
+        assert!(manager
+            .resolve_mcp_tool_name("alpha_search")
+            .await
+            .is_none());
+
+        let loader = crate::tools::McpToolLoad {
+            tool_manager: manager.clone(),
+            allowed_tools: Some(HashSet::from(["beta__MCP__search".to_string()])),
+        };
+        let loaded = loader
+            .call(json!({ "tool_name": "search" }))
+            .await
+            .expect("public MCP alias must resolve through mcp_tool_load");
+        let declaration = loaded
+            .structured_content
+            .expect("mcp_tool_load must return a declaration");
+        assert_eq!(declaration["name"], "search");
     }
 
     #[tokio::test]
@@ -1296,13 +1533,10 @@ mod tests {
             scope: Some(ToolScope::Chat),
         };
 
-        // We can't easily mock McpClient without extra traits, but we can manually
-        // trigger register_mcp_server_inner with a dummy client if needed.
-        // For simplicity, let's verify if the registry handles combined names correctly.
+        let canonical_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, "test_tool");
+        let public_name = "test_tool".to_string();
 
-        let combined_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, "test_tool");
-
-        // Manually register a wrapper to see if calling spec works
+        // Manually register a wrapper to verify public declarations retain canonical keys.
         let wrapper = Arc::new(McpToolWrapper {
             server_name: server_name.into(),
             tool_decl: tool_decl.clone(),
@@ -1316,14 +1550,17 @@ mod tests {
                 })
                 .unwrap(),
             ), // Dummy
-            combined_name: combined_name.clone(),
+            canonical_name: canonical_name.clone(),
+            public_name: public_name.clone(),
         });
 
         manager.register_tool(wrapper).await.unwrap();
 
         let specs = manager.get_tool_calling_spec(None, None).await.unwrap();
         let names: HashSet<_> = specs.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(combined_name.as_str()));
+        assert!(names.contains(public_name.as_str()));
+        assert!(manager.has_tool(&canonical_name).await);
+        assert!(manager.has_tool(&public_name).await);
     }
 
     #[tokio::test]

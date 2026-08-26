@@ -56,7 +56,6 @@ use crate::db::MainStore;
 use crate::error::{AppError, Result};
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::sensitive::manager::{FilterManager, SensitiveConfig};
-use crate::tools::MCP_TOOL_NAME_SPLIT;
 
 use chrono::{DateTime, Local};
 use rust_i18n::t;
@@ -492,17 +491,23 @@ pub async fn chat_completion(
                 tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
             });
         }
-        // When MCP is enabled, filter out MCP tools (they will be loaded via mcp_tool_load)
-        // But keep the mcp_tool_load tool itself
+        let mcp_tool_names = chat_state
+            .tool_manager
+            .get_mcp_tool_specs(Some(crate::tools::ToolScope::Chat))
+            .await
+            .into_iter()
+            .map(|tool| tool.declaration.name)
+            .collect::<std::collections::HashSet<_>>();
+        // When MCP is enabled, fold MCP schemas into summaries but retain the loader.
         if mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
-                !tool.name.contains(MCP_TOOL_NAME_SPLIT)
+                !mcp_tool_names.contains(&tool.name)
                     || tool.name == crate::tools::TOOL_MCP_TOOL_LOAD
             });
         }
-        // When MCP is disabled, remove all MCP tools
+        // When MCP is disabled, remove MCP declarations using structured ToolManager metadata.
         if !mcp_enabled.unwrap_or(false) {
-            available_tools.retain(|tool| !tool.name.contains(MCP_TOOL_NAME_SPLIT));
+            available_tools.retain(|tool| !mcp_tool_names.contains(&tool.name));
         }
         Some(available_tools)
     } else {
@@ -513,14 +518,14 @@ pub async fn chat_completion(
     let mcp_summaries = if mcp_enabled.unwrap_or(false) {
         chat_state
             .tool_manager
-            .get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None)
-            .await?
+            .get_mcp_tool_specs(Some(crate::tools::ToolScope::Chat))
+            .await
             .into_iter()
-            .filter(|t| t.name.contains(MCP_TOOL_NAME_SPLIT))
-            .map(|mut t| {
-                // Clear input_schema, only keep name and description
-                t.input_schema = serde_json::json!({});
-                t
+            .map(|tool| {
+                let mut declaration = tool.declaration;
+                // Clear input_schema, only keep public alias and description.
+                declaration.input_schema = serde_json::json!({});
+                declaration
             })
             .collect()
     } else {

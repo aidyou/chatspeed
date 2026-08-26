@@ -1776,7 +1776,11 @@ const getToolCallArguments = message => {
   return typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : null
 }
 
-const isMcpToolMessage = message => isWorkflowMcpTool(getMessageToolName(message))
+const getMessageToolCategory = message =>
+  message?.metadata?.tool_category || message?.metadata?.toolCategory || null
+
+const isMcpToolMessage = message =>
+  isWorkflowMcpTool(getMessageToolName(message), getMessageToolCategory(message))
 
 const formatJsonIfValid = value => {
   if (typeof value !== 'string') {

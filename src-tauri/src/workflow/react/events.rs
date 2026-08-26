@@ -182,11 +182,32 @@ impl WorkflowEvent {
         )
     }
 
+    #[cfg(test)]
     pub fn tool_started(
         session_id: String,
         tool_call_id: String,
         tool_name: String,
         arguments: Value,
+    ) -> Self {
+        Self::tool_started_with_metadata(
+            session_id,
+            tool_call_id,
+            tool_name,
+            arguments,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn tool_started_with_metadata(
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: Value,
+        canonical_tool_name: Option<String>,
+        display_name: Option<String>,
+        tool_category: Option<String>,
     ) -> Self {
         Self::new(
             WorkflowEventType::ToolStarted,
@@ -194,7 +215,10 @@ impl WorkflowEvent {
             serde_json::json!({
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "arguments": arguments
+                "arguments": arguments,
+                "canonical_tool_name": canonical_tool_name,
+                "display_name": display_name,
+                "tool_category": tool_category
             }),
         )
     }
@@ -205,23 +229,69 @@ impl WorkflowEvent {
         tool_name: String,
         result: Option<Value>,
     ) -> Self {
+        Self::tool_completed_with_metadata(
+            session_id,
+            tool_call_id,
+            tool_name,
+            result,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn tool_completed_with_metadata(
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        result: Option<Value>,
+        canonical_tool_name: Option<String>,
+        display_name: Option<String>,
+        tool_category: Option<String>,
+    ) -> Self {
         Self::new(
             WorkflowEventType::ToolCompleted,
             session_id,
             serde_json::json!({
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "result": result
+                "result": result,
+                "canonical_tool_name": canonical_tool_name,
+                "display_name": display_name,
+                "tool_category": tool_category
             }),
         )
     }
 
+    #[cfg(test)]
     pub fn tool_failed(
         session_id: String,
         tool_call_id: String,
         tool_name: String,
         error: String,
         error_details: Option<Value>,
+    ) -> Self {
+        Self::tool_failed_with_metadata(
+            session_id,
+            tool_call_id,
+            tool_name,
+            error,
+            error_details,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn tool_failed_with_metadata(
+        session_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        error: String,
+        error_details: Option<Value>,
+        canonical_tool_name: Option<String>,
+        display_name: Option<String>,
+        tool_category: Option<String>,
     ) -> Self {
         Self::new(
             WorkflowEventType::ToolFailed,
@@ -230,7 +300,10 @@ impl WorkflowEvent {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "error": error,
-                "error_details": error_details
+                "error_details": error_details,
+                "canonical_tool_name": canonical_tool_name,
+                "display_name": display_name,
+                "tool_category": tool_category
             }),
         )
     }
@@ -388,6 +461,27 @@ mod tests {
         );
         assert_eq!(resolved.event_type, WorkflowEventType::ApprovalResolved);
         assert_eq!(resolved.event_data["approved"], true);
+    }
+
+    #[test]
+    fn mcp_tool_events_preserve_structured_identity() {
+        let event = WorkflowEvent::tool_started_with_metadata(
+            "test-session".to_string(),
+            "call_123".to_string(),
+            "codegraph_node".to_string(),
+            serde_json::json!({ "symbol": "ToolManager" }),
+            Some("codegraph__MCP__codegraph_node".to_string()),
+            Some("codegraph_node".to_string()),
+            Some("MCP".to_string()),
+        );
+
+        assert_eq!(event.event_data["tool_name"], "codegraph_node");
+        assert_eq!(
+            event.event_data["canonical_tool_name"],
+            "codegraph__MCP__codegraph_node"
+        );
+        assert_eq!(event.event_data["display_name"], "codegraph_node");
+        assert_eq!(event.event_data["tool_category"], "MCP");
     }
 
     #[test]

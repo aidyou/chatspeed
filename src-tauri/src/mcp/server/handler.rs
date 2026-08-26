@@ -40,18 +40,13 @@ impl From<MCPToolDeclaration> for Tool {
 
 #[derive(Clone)]
 struct ToolReference {
-    /// MCP server name if this is an MCP tool, None for native tools
-    server_name: Option<String>,
-    /// The actual tool name
-    tool_name: String,
+    /// Canonical registry name for a native or MCP tool.
+    registry_name: String,
 }
 
 impl ToolReference {
-    fn new(server_name: Option<String>, tool_name: String) -> Self {
-        Self {
-            server_name,
-            tool_name,
-        }
+    fn new(registry_name: String) -> Self {
+        Self { registry_name }
     }
 }
 
@@ -112,6 +107,44 @@ impl McpProxyHandler {
         });
     }
 
+    async fn load_tool_map(&self) -> Result<Vec<Tool>, McpError> {
+        let exclude_tools = HashSet::from(["chat_completion".to_string()]);
+        let all_tools = self
+            .chat_state
+            .tool_manager
+            .get_tool_calling_spec(None, Some(exclude_tools))
+            .await
+            .unwrap_or_default();
+        let mut display_tools = Vec::new();
+        let mut new_tool_map = HashMap::new();
+
+        for tool_spec in all_tools {
+            if tool_spec.disabled
+                || !matches!(
+                    tool_spec.scope,
+                    Some(crate::tools::ToolScope::Chat) | Some(crate::tools::ToolScope::Both)
+                )
+            {
+                continue;
+            }
+            let registry_name = self
+                .chat_state
+                .tool_manager
+                .resolve_tool_name(&tool_spec.name)
+                .await;
+            // Keep the existing nested-proxy guard, but apply it to canonical identity.
+            if registry_name.matches(MCP_TOOL_NAME_SPLIT).count() > 1 {
+                continue;
+            }
+            let public_name = tool_spec.name.clone();
+            display_tools.push(tool_spec.into());
+            new_tool_map.insert(public_name, ToolReference::new(registry_name));
+        }
+
+        *self.tool_map.write().await = new_tool_map;
+        Ok(display_tools)
+    }
+
     /// Ensures the tool map is loaded, reloads if empty
     async fn ensure_tool_map_loaded(&self) -> Result<(), McpError> {
         let tool_map_guard = self.tool_map.read().await;
@@ -121,68 +154,7 @@ impl McpProxyHandler {
         drop(tool_map_guard);
 
         log::debug!("Tool map is empty, reloading tools...");
-
-        // Rebuild tool map using the same logic as list_tools
-        let exclude_tools = HashSet::from(["chat_completion".to_string()]);
-        let all_tools = self
-            .chat_state
-            .tool_manager
-            .get_tool_calling_spec(None, Some(exclude_tools))
-            .await
-            .unwrap_or_default();
-
-        let mut new_tool_map = HashMap::new();
-        let mut used_short_names = HashSet::new();
-
-        for tool_spec in all_tools {
-            if tool_spec.disabled {
-                continue;
-            }
-
-            // Built-in tools
-            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
-                && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)
-                    || tool_spec.scope == Some(crate::tools::ToolScope::Both))
-            {
-                let tool_name = tool_spec.name.clone();
-                new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));
-                continue;
-            }
-
-            // mcp tools
-            // disable the tool of mcp proxy itself
-            if tool_spec.name.matches(MCP_TOOL_NAME_SPLIT).count() > 1 {
-                continue;
-            }
-
-            let parts: Vec<&str> = tool_spec.name.splitn(2, MCP_TOOL_NAME_SPLIT).collect();
-            if parts.len() == 2 {
-                let server_name = parts[0].to_string();
-                let original_tool_name = parts[1].to_string();
-
-                let display_name = if !used_short_names.contains(&original_tool_name) {
-                    original_tool_name.clone()
-                } else {
-                    format!("{}_{}", server_name, original_tool_name)
-                };
-
-                if new_tool_map.contains_key(&display_name) {
-                    continue;
-                }
-
-                used_short_names.insert(display_name.clone());
-                new_tool_map.insert(
-                    display_name.clone(),
-                    ToolReference::new(Some(server_name.clone()), original_tool_name.clone()),
-                );
-            }
-        }
-
-        // Update the shared tool map
-        let mut tool_map = self.tool_map.write().await;
-        *tool_map = new_tool_map;
-
-        Ok(())
+        self.load_tool_map().await.map(|_| ())
     }
 }
 
@@ -218,74 +190,7 @@ impl ServerHandler for McpProxyHandler {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, rmcp::model::ErrorData> {
-        let exclude_tools = HashSet::from(["chat_completion".to_string()]);
-        let all_tools = self
-            .chat_state
-            .tool_manager
-            .get_tool_calling_spec(None, Some(exclude_tools))
-            .await
-            .unwrap_or_default();
-
-        let mut display_tools = Vec::new();
-        let mut new_tool_map = HashMap::new();
-        let mut used_short_names = HashSet::new();
-
-        for tool_spec in all_tools {
-            if tool_spec.disabled {
-                continue;
-            }
-
-            // Built-in tools
-            if !tool_spec.name.contains(MCP_TOOL_NAME_SPLIT)
-                && (tool_spec.scope == Some(crate::tools::ToolScope::Chat)
-                    || tool_spec.scope == Some(crate::tools::ToolScope::Both))
-            {
-                let tool_name = tool_spec.name.clone();
-                display_tools.push(tool_spec.into());
-                new_tool_map.insert(tool_name.clone(), ToolReference::new(None, tool_name));
-                continue;
-            }
-
-            // mcp tools
-
-            // disable the tool of mcp proxy itself
-            if tool_spec.name.matches(MCP_TOOL_NAME_SPLIT).count() > 1 {
-                continue;
-            }
-
-            let parts: Vec<&str> = tool_spec.name.splitn(2, MCP_TOOL_NAME_SPLIT).collect();
-            if parts.len() == 2 {
-                let server_name = parts[0].to_string();
-                let original_tool_name = parts[1].to_string();
-
-                let display_name = if !used_short_names.contains(&original_tool_name) {
-                    original_tool_name.clone()
-                } else {
-                    format!("{}_{}", server_name, original_tool_name)
-                };
-
-                if new_tool_map.contains_key(&display_name) {
-                    // This means the prefixed name also conflicts, which implies a duplicate tool from the same server.
-                    // As per the user's request, we skip it.
-                    continue;
-                }
-
-                used_short_names.insert(display_name.clone());
-                new_tool_map.insert(
-                    display_name.clone(),
-                    ToolReference::new(Some(server_name.clone()), original_tool_name.clone()),
-                );
-
-                let mut new_tool: Tool = tool_spec.into();
-                new_tool.name = display_name.into();
-                display_tools.push(new_tool);
-            }
-        }
-
-        // Update the shared tool map
-        let mut tool_map = self.tool_map.write().await;
-        *tool_map = new_tool_map;
-
+        let display_tools = self.load_tool_map().await?;
         Ok(ListToolsResult::with_all_items(display_tools))
     }
 
@@ -311,26 +216,17 @@ impl ServerHandler for McpProxyHandler {
         let arguments = request.arguments.unwrap_or_default();
 
         log::debug!(
-            "MCP client calling tool '{}', which maps to internal tool ('{}', '{}'), with arguments: {:?}",
+            "MCP client calling public tool '{}', which maps to registry '{}', with arguments: {:?}",
             request.name,
-            tool_ref.server_name.as_deref().unwrap_or_default(),
-             &tool_ref.tool_name,
+            &tool_ref.registry_name,
             arguments
         );
 
-        // Call the tool manager to execute the tool
-        let result = if let Some(server_name) = tool_ref.server_name.as_deref() {
-            self.chat_state
-                .tool_manager
-                .mcp_tool_call(server_name, &tool_ref.tool_name, Value::Object(arguments))
-                .await
-        } else {
-            self.chat_state
-                .tool_manager
-                .native_tool_call(&tool_ref.tool_name, Value::Object(arguments))
-                .await
-                .map(|r| r.into())
-        };
+        let result = self
+            .chat_state
+            .tool_manager
+            .tool_call(&tool_ref.registry_name, Value::Object(arguments))
+            .await;
 
         match result {
             Ok(tool_result) => {

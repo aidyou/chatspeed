@@ -160,7 +160,10 @@ test('empty new workflows require an authorized directory before accepting input
 test('MCP tool calls show their arguments and format only valid JSON results', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
 
-  assert.match(messageList, /const isMcpToolMessage = message => isWorkflowMcpTool\(getMessageToolName\(message\)\)/)
+  assert.match(
+    messageList,
+    /const isMcpToolMessage = message =>[\s\S]*?isWorkflowMcpTool\(getMessageToolName\(message\), getMessageToolCategory\(message\)\)/
+  )
   assert.match(messageList, /class="mcp-tool-arguments"/)
   assert.match(messageList, /getFormattedMcpToolArguments\(tool\)/)
   assert.match(messageList, /getFormattedMcpToolArguments\(message\)/)

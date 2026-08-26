@@ -51,7 +51,7 @@ impl ToolDefinition for McpToolLoad {
                 "properties": {
                     "tool_name": {
                         "type": "string",
-                        "description": "The combined name of the MCP tool (format: server__MCP__tool)"
+                        "description": "The public short name of an MCP tool listed in the available tool declarations"
                     }
                 },
                 "required": ["tool_name"]
@@ -67,20 +67,26 @@ impl ToolDefinition for McpToolLoad {
             .as_str()
             .ok_or_else(|| ToolError::InvalidParams("tool_name is required".to_string()))?;
 
-        if self
-            .allowed_tools
-            .as_ref()
-            .is_some_and(|tools| !tools.contains(tool_name))
-        {
+        let canonical_name = self.tool_manager.resolve_mcp_tool_name(tool_name).await;
+
+        if self.allowed_tools.as_ref().is_some_and(|tools| {
+            !tools.contains(tool_name)
+                && !canonical_name
+                    .as_ref()
+                    .is_some_and(|canonical_name| tools.contains(canonical_name))
+        }) {
             return Err(ToolError::Security(format!(
                 "MCP tool '{}' is not available in this workflow",
                 tool_name
             )));
         }
 
+        let canonical_name = canonical_name
+            .ok_or_else(|| ToolError::InvalidParams("Not an MCP tool".to_string()))?;
+
         let declaration = self
             .tool_manager
-            .get_mcp_tool_declaration(tool_name)
+            .get_mcp_tool_declaration(&canonical_name)
             .await?;
 
         Ok(ToolCallResult::success(

@@ -905,6 +905,8 @@ export const projectWorkflowMessageList = (
   const isApprovalPending = message =>
     isWorkflowMessagePendingApproval(message, pendingApprovalIds)
   const getToolName = message => getStructuredWorkflowToolName(message)
+  const getToolCategory = message =>
+    message?.metadata?.tool_category || message?.metadata?.toolCategory || null
   const isFinishTaskErrorMessage = message =>
     !!(
       message &&
@@ -950,7 +952,8 @@ export const projectWorkflowMessageList = (
     isCollapsibleToolMessage(message) &&
     COLLAPSIBLE_MUTATION_TOOL_NAMES.has(getToolName(message))
   const isCollapsibleMcpToolMessage = message =>
-    isCollapsibleToolMessage(message) && isWorkflowMcpTool(getToolName(message))
+    isCollapsibleToolMessage(message) &&
+    isWorkflowMcpTool(getToolName(message), getToolCategory(message))
   const isCollapsibleSubAgentResultToolMessage = message =>
     isCollapsibleToolMessage(message) && getToolName(message) === 'sub_agent_output'
   const getCollapsibleToolGroupKind = message => {
@@ -966,7 +969,7 @@ export const projectWorkflowMessageList = (
   const getToolGroupLabel = message => {
     const toolName = getToolName(message)
     if (TODO_TOOL_NAMES.has(toolName)) return translate('workflow.toolGroups.taskChanges')
-    if (isWorkflowMcpTool(toolName)) return translate('workflow.toolGroups.callMcp')
+    if (isWorkflowMcpTool(toolName, getToolCategory(message))) return translate('workflow.toolGroups.callMcp')
     return translate(TOOL_GROUP_LABEL_KEYS[toolName] || 'workflow.toolGroups.useTool')
   }
   const truncateToolGroupText = (value, maxLength = 48) => {

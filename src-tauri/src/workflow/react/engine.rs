@@ -343,6 +343,24 @@ impl WorkflowExecutor {
         }
     }
 
+    async fn enrich_mcp_tool_observation_metadata(
+        &self,
+        tool_name: &str,
+        metadata: &mut serde_json::Value,
+    ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
+        if let Some(canonical_tool_name) = canonical_tool_name {
+            metadata["canonical_tool_name"] = serde_json::json!(canonical_tool_name);
+        }
+        if let Some(display_name) = display_name {
+            metadata["display_name"] = serde_json::json!(display_name);
+        }
+        if let Some(tool_category) = tool_category {
+            metadata["tool_category"] = serde_json::json!(tool_category);
+        }
+    }
+
     fn normalize_pending_tool_details(value: serde_json::Value) -> serde_json::Value {
         crate::workflow::react::file_preview::normalize_preview_details(value)
     }
@@ -609,6 +627,7 @@ impl WorkflowExecutor {
             serde_json::from_str::<Vec<String>>(tools)
                 .unwrap_or_default()
                 .into_iter()
+                // Legacy mixed arrays only contain canonical MCP identities here.
                 .filter(|tool| tool.contains(MCP_TOOL_NAME_SPLIT))
                 .collect()
         })
@@ -1583,6 +1602,8 @@ impl WorkflowExecutor {
             actual_config.as_ref(),
             &initial_model_name,
         );
+        // Keep initial execution aligned with later runtime MCP configuration updates.
+        executor.rebuild_auto_approve_from_agent_config();
 
         executor
     }
@@ -1768,6 +1789,8 @@ impl WorkflowExecutor {
             }
         }
         self.sync_runtime_skills_from_agent_config();
+        self.rebuild_auto_approve_from_agent_config();
+        self.resolve_mcp_auto_approve_public_names().await;
         self.refresh_workflow_mcp_runtime_capabilities(false)
             .await?;
 
@@ -2097,17 +2120,11 @@ impl WorkflowExecutor {
                 })
                 .unwrap_or(true); // Default to allowed for safety if not found in meta
 
-            let config_allowed = if name.contains(MCP_TOOL_NAME_SPLIT) {
-                configured_mcp_tools
-                    .as_ref()
-                    .map_or(true, |tools| tools.contains(name))
-            } else {
-                configured_tools.as_ref().map_or(true, |tools| {
-                    is_core_workflow_builtin_tool(name)
-                        || tools.contains(name)
-                        || (name == TOOL_MCP_TOOL_LOAD && configured_mcp_tools.is_some())
-                })
-            };
+            let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
+                is_core_workflow_builtin_tool(name)
+                    || tools.contains(name)
+                    || (name == TOOL_MCP_TOOL_LOAD && configured_mcp_tools.is_some())
+            });
 
             scope_allowed && config_allowed
         };
@@ -2363,20 +2380,25 @@ impl WorkflowExecutor {
             let exposed_mcp_tools = self.mcp_tool_exposure_set();
             let mcp_specs = self
                 .global_tool_manager
-                .get_tool_calling_spec(Some(ToolScope::Workflow), None)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
-                .collect::<Vec<_>>();
+                .get_mcp_tool_specs(Some(ToolScope::Workflow))
+                .await;
 
             let allowed_mcp_tools = mcp_specs
                 .iter()
-                .filter(|tool| is_allowed(&tool.name))
+                .filter(|tool| {
+                    Self::is_mcp_tool_allowed_by_config(
+                        self.mcp_tools_allowlist().as_ref(),
+                        &tool.canonical_name,
+                    )
+                })
                 .collect::<Vec<_>>();
             for tool in &allowed_mcp_tools {
-                if exposed_mcp_tools.contains(&tool.name) {
-                    if let Ok(mcp_tool) = self.global_tool_manager.get_tool(&tool.name).await {
+                if exposed_mcp_tools.contains(&tool.canonical_name) {
+                    if let Ok(mcp_tool) = self
+                        .global_tool_manager
+                        .get_tool(&tool.canonical_name)
+                        .await
+                    {
                         tm.register_tool(mcp_tool).await?;
                     }
                 }
@@ -2384,8 +2406,8 @@ impl WorkflowExecutor {
 
             let folded_mcp_tools = allowed_mcp_tools
                 .iter()
-                .filter(|tool| !exposed_mcp_tools.contains(&tool.name))
-                .map(|tool| tool.name.clone())
+                .filter(|tool| !exposed_mcp_tools.contains(&tool.canonical_name))
+                .map(|tool| tool.canonical_name.clone())
                 .collect::<HashSet<_>>();
             if Self::should_register_mcp_tool_loader(
                 allowed_mcp_tools.len(),
@@ -2599,6 +2621,9 @@ impl WorkflowExecutor {
                     "display_type": "markdown",
                     "approval_source": approval_source
                 })),
+                canonical_tool_name: None,
+                display_name: None,
+                tool_category: None,
             })
             .await
         {
@@ -3314,7 +3339,8 @@ impl WorkflowExecutor {
                                         &tool_call_id,
                                         &tool_name,
                                         &tool_args_obj,
-                                    );
+                                    )
+                                    .await;
                                     self.dispatch_tool_started_payload(
                                         &tool_call_id,
                                         &tool_name,
@@ -3323,7 +3349,15 @@ impl WorkflowExecutor {
                                     .await;
 
                                     let execution_started_at = Instant::now();
-                                    let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
+                                    let canonical_mcp_tool_name = self
+                                        .global_tool_manager
+                                        .resolve_mcp_tool_name(&tool_name)
+                                        .await;
+                                    let mcp_tool_allowed = canonical_mcp_tool_name
+                                        .as_ref()
+                                        .is_none_or(|canonical_name| {
+                                            self.is_mcp_tool_allowed(canonical_name)
+                                        });
                                     let tool_manager = self.tool_manager.clone();
                                     let global_tool_manager = self.global_tool_manager.clone();
                                     let tool_name_for_call = tool_name.clone();
@@ -3331,9 +3365,7 @@ impl WorkflowExecutor {
                                         &self.session_id,
                                         &mut signal_rx,
                                         async move {
-                                            if tool_name_for_call
-                                                .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
-                                            {
+                                            if canonical_mcp_tool_name.is_some() {
                                                 if mcp_tool_allowed {
                                                     global_tool_manager
                                                         .tool_call(
@@ -3361,7 +3393,8 @@ impl WorkflowExecutor {
                                         &tool_call_id,
                                         &tool_name,
                                         &result,
-                                    );
+                                    )
+                                    .await;
                                     self.dispatch_tool_terminal_payload(
                                         &tool_call_id,
                                         &tool_name,
@@ -3417,6 +3450,11 @@ impl WorkflowExecutor {
                                         &mut metadata,
                                         &reinforced,
                                     );
+                                    self.enrich_mcp_tool_observation_metadata(
+                                        &tool_name,
+                                        &mut metadata,
+                                    )
+                                    .await;
                                     self.add_message_and_notify_internal(
                                         "tool".to_string(),
                                         reinforced.content,
@@ -3857,7 +3895,8 @@ impl WorkflowExecutor {
                             let enriched_args =
                                 Self::enrich_tool_arguments_with_call_id(&tool_args_obj, signal_id);
 
-                            self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj);
+                            self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj)
+                                .await;
                             self.dispatch_tool_started_payload(
                                 signal_id,
                                 &tool_name,
@@ -3866,15 +3905,22 @@ impl WorkflowExecutor {
                             .await;
 
                             let execution_started_at = Instant::now();
-                            let mcp_tool_allowed = self.is_mcp_tool_allowed(&tool_name);
+                            let canonical_mcp_tool_name = self
+                                .global_tool_manager
+                                .resolve_mcp_tool_name(&tool_name)
+                                .await;
+                            let mcp_tool_allowed =
+                                canonical_mcp_tool_name
+                                    .as_ref()
+                                    .is_none_or(|canonical_name| {
+                                        self.is_mcp_tool_allowed(canonical_name)
+                                    });
                             let tool_manager = self.tool_manager.clone();
                             let global_tool_manager = self.global_tool_manager.clone();
                             let tool_name_for_call = tool_name.clone();
                             let result =
                                 await_with_stop(&self.session_id, &mut signal_rx, async move {
-                                    if tool_name_for_call
-                                        .contains(crate::tools::MCP_TOOL_NAME_SPLIT)
-                                    {
+                                    if canonical_mcp_tool_name.is_some() {
                                         if mcp_tool_allowed {
                                             global_tool_manager
                                                 .tool_call(&tool_name_for_call, enriched_args)
@@ -3893,7 +3939,8 @@ impl WorkflowExecutor {
                                 })
                                 .await?;
                             let duration_ms = Self::execution_duration_ms(execution_started_at);
-                            self.append_tool_terminal_event(signal_id, &tool_name, &result);
+                            self.append_tool_terminal_event(signal_id, &tool_name, &result)
+                                .await;
                             self.dispatch_tool_terminal_payload(signal_id, &tool_name, &result)
                                 .await;
 
@@ -3945,6 +3992,8 @@ impl WorkflowExecutor {
                                 &mut metadata,
                                 &reinforced,
                             );
+                            self.enrich_mcp_tool_observation_metadata(&tool_name, &mut metadata)
+                                .await;
                             self.add_message_and_notify_internal(
                                 "tool".to_string(),
                                 reinforced.content,
@@ -4529,6 +4578,8 @@ impl WorkflowExecutor {
                         );
                     }
                     Self::enrich_tool_observation_metadata(tool_name, &mut metadata, reinforced);
+                    self.enrich_mcp_tool_observation_metadata(tool_name, &mut metadata)
+                        .await;
                     if tool_name == crate::tools::TOOL_SUB_AGENT_RUN
                         || (tool_name == crate::tools::TOOL_COMPLETE_WORKFLOW
                             && reinforced.approval_status.as_deref() == Some("pending"))
@@ -4996,17 +5047,47 @@ impl WorkflowExecutor {
         enriched_args
     }
 
-    fn append_tool_started_event(
+    async fn resolve_mcp_tool_event_metadata(
+        &self,
+        tool_name: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let Some(canonical_tool_name) = self
+            .global_tool_manager
+            .resolve_mcp_tool_name(tool_name)
+            .await
+        else {
+            return (None, None, None);
+        };
+        let display_name = self
+            .global_tool_manager
+            .get_mcp_tool_declaration(&canonical_tool_name)
+            .await
+            .map(|declaration| declaration.name)
+            .unwrap_or_else(|_| tool_name.to_string());
+
+        (
+            Some(canonical_tool_name),
+            Some(display_name),
+            Some(ToolCategory::Mcp.to_string()),
+        )
+    }
+
+    async fn append_tool_started_event(
         &self,
         tool_call_id: &str,
         tool_name: &str,
         arguments: &serde_json::Value,
     ) {
-        let event = WorkflowEvent::tool_started(
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
+        let event = WorkflowEvent::tool_started_with_metadata(
             self.session_id.clone(),
             tool_call_id.to_string(),
             tool_name.to_string(),
             arguments.clone(),
+            canonical_tool_name,
+            display_name,
+            tool_category,
         );
         if let Err(e) = self.append_event(&event) {
             log::error!(
@@ -5024,11 +5105,16 @@ impl WorkflowExecutor {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
         if let Err(e) = self
             .dispatch_ui_payload(GatewayPayload::ToolStarted {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: tool_name.to_string(),
                 arguments: arguments.clone(),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             })
             .await
         {
@@ -5047,11 +5133,16 @@ impl WorkflowExecutor {
         tool_name: &str,
         result: &Result<serde_json::Value, crate::tools::ToolError>,
     ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
         let payload = match result {
             Ok(value) => GatewayPayload::ToolCompleted {
                 tool_call_id: tool_call_id.to_string(),
                 tool_name: tool_name.to_string(),
                 result: Some(value.clone()),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             },
             Err(error) => GatewayPayload::ToolFailed {
                 tool_call_id: tool_call_id.to_string(),
@@ -5059,6 +5150,9 @@ impl WorkflowExecutor {
                 error: error.to_string(),
                 error_type: Some(Self::tool_error_type(error).to_string()),
                 error_details: Self::tool_error_details(error),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             },
         };
 
@@ -5101,25 +5195,33 @@ impl WorkflowExecutor {
         }
     }
 
-    fn append_tool_terminal_event(
+    async fn append_tool_terminal_event(
         &self,
         tool_call_id: &str,
         tool_name: &str,
         result: &Result<serde_json::Value, crate::tools::ToolError>,
     ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
         let event = match result {
-            Ok(value) => WorkflowEvent::tool_completed(
+            Ok(value) => WorkflowEvent::tool_completed_with_metadata(
                 self.session_id.clone(),
                 tool_call_id.to_string(),
                 tool_name.to_string(),
                 Some(value.clone()),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             ),
-            Err(error) => WorkflowEvent::tool_failed(
+            Err(error) => WorkflowEvent::tool_failed_with_metadata(
                 self.session_id.clone(),
                 tool_call_id.to_string(),
                 tool_name.to_string(),
                 error.to_string(),
                 Self::tool_error_details(error),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             ),
         };
         if let Err(e) = self.append_event(&event) {
@@ -5132,14 +5234,16 @@ impl WorkflowExecutor {
         }
     }
 
-    fn append_reinforced_tool_terminal_event(
+    async fn append_reinforced_tool_terminal_event(
         &self,
         tool_call_id: &str,
         tool_name: &str,
         reinforced: &ReinforcedResult,
     ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
         let event = if reinforced.is_error {
-            WorkflowEvent::tool_failed(
+            WorkflowEvent::tool_failed_with_metadata(
                 self.session_id.clone(),
                 tool_call_id.to_string(),
                 tool_name.to_string(),
@@ -5148,9 +5252,12 @@ impl WorkflowExecutor {
                     .clone()
                     .unwrap_or_else(|| reinforced.content.clone()),
                 None,
+                canonical_tool_name,
+                display_name,
+                tool_category,
             )
         } else {
-            WorkflowEvent::tool_completed(
+            WorkflowEvent::tool_completed_with_metadata(
                 self.session_id.clone(),
                 tool_call_id.to_string(),
                 tool_name.to_string(),
@@ -5162,6 +5269,9 @@ impl WorkflowExecutor {
                     "summary": reinforced.summary,
                     "display_type": reinforced.display_type,
                 })),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             )
         };
 
@@ -5181,6 +5291,8 @@ impl WorkflowExecutor {
         tool_name: &str,
         reinforced: &ReinforcedResult,
     ) {
+        let (canonical_tool_name, display_name, tool_category) =
+            self.resolve_mcp_tool_event_metadata(tool_name).await;
         let payload = if reinforced.is_error {
             GatewayPayload::ToolFailed {
                 tool_call_id: tool_call_id.to_string(),
@@ -5191,6 +5303,9 @@ impl WorkflowExecutor {
                     .unwrap_or_else(|| reinforced.content.clone()),
                 error_type: reinforced.error_type.clone(),
                 error_details: None,
+                canonical_tool_name,
+                display_name,
+                tool_category,
             }
         } else {
             GatewayPayload::ToolCompleted {
@@ -5204,6 +5319,9 @@ impl WorkflowExecutor {
                     "summary": reinforced.summary,
                     "display_type": reinforced.display_type,
                 })),
+                canonical_tool_name,
+                display_name,
+                tool_category,
             }
         };
 
@@ -5589,7 +5707,8 @@ impl WorkflowExecutor {
                     let approval_intercepted =
                         early_result.approval_status.as_deref() == Some("pending");
                     if !approval_intercepted {
-                        self.append_reinforced_tool_terminal_event(&id, &name, &early_result);
+                        self.append_reinforced_tool_terminal_event(&id, &name, &early_result)
+                            .await;
                         self.dispatch_reinforced_tool_terminal_payload(&id, &name, &early_result)
                             .await;
                     }
@@ -5690,11 +5809,14 @@ impl WorkflowExecutor {
 
             let mut started_tools = HashMap::new();
             for (id, name, args, call) in parallel_execution_queue {
-                self.append_tool_started_event(&id, &name, &args);
+                self.append_tool_started_event(&id, &name, &args).await;
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
                 started_tools.insert(id.clone(), name.clone());
 
-                let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
+                let canonical_mcp_tool_name = gtm.resolve_mcp_tool_name(&name).await;
+                let mcp_tool_allowed = canonical_mcp_tool_name
+                    .as_ref()
+                    .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -5706,7 +5828,7 @@ impl WorkflowExecutor {
                     let _permit = semaphore_clone.acquire().await.ok();
                     let execution_started_at = Instant::now();
 
-                    let final_res = if name.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                    let final_res = if canonical_mcp_tool_name.is_some() {
                         if mcp_tool_allowed {
                             gtm_clone.tool_call(&name, enriched_args).await
                         } else {
@@ -5738,7 +5860,8 @@ impl WorkflowExecutor {
                                     tool_call_id,
                                     tool_name,
                                     &cancelled_result,
-                                );
+                                )
+                                .await;
                                 self.dispatch_tool_terminal_payload(
                                     tool_call_id,
                                     tool_name,
@@ -5754,7 +5877,7 @@ impl WorkflowExecutor {
                     break;
                 };
                 started_tools.remove(&id);
-                self.append_tool_terminal_event(&id, &name, &res);
+                self.append_tool_terminal_event(&id, &name, &res).await;
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&res);
                 let reinforced = self
@@ -5776,19 +5899,23 @@ impl WorkflowExecutor {
         // Phase B: Sequential Batch (State-sensitive tools like todo_*)
         let mut sequential_execution_queue = sequential_execution_queue.into_iter();
         while let Some((id, name, args, call)) = sequential_execution_queue.next() {
-            self.append_tool_started_event(&id, &name, &args);
+            self.append_tool_started_event(&id, &name, &args).await;
             self.dispatch_tool_started_payload(&id, &name, &args).await;
 
             // Inject internal tool_call_id for streaming tools
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
             let execution_started_at = Instant::now();
-            let mcp_tool_allowed = self.is_mcp_tool_allowed(&name);
+            let canonical_mcp_tool_name =
+                self.global_tool_manager.resolve_mcp_tool_name(&name).await;
+            let mcp_tool_allowed = canonical_mcp_tool_name
+                .as_ref()
+                .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
             let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
-                if tool_name_for_call.contains(crate::tools::MCP_TOOL_NAME_SPLIT) {
+                if canonical_mcp_tool_name.is_some() {
                     if mcp_tool_allowed {
                         global_tool_manager
                             .tool_call(&tool_name_for_call, enriched_args)
@@ -5812,7 +5939,8 @@ impl WorkflowExecutor {
                     let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
                         "Tool execution interrupted because the workflow was cancelled".to_string(),
                     ));
-                    self.append_tool_terminal_event(&id, &name, &cancelled_result);
+                    self.append_tool_terminal_event(&id, &name, &cancelled_result)
+                        .await;
                     self.dispatch_tool_terminal_payload(&id, &name, &cancelled_result)
                         .await;
                     return Err(error);
@@ -5821,7 +5949,8 @@ impl WorkflowExecutor {
             };
 
             let duration_ms = Self::execution_duration_ms(execution_started_at);
-            self.append_tool_terminal_event(&id, &name, &final_res);
+            self.append_tool_terminal_event(&id, &name, &final_res)
+                .await;
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
                 .await;
             let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&final_res);
@@ -7148,6 +7277,21 @@ impl WorkflowExecutor {
         }
     }
 
+    async fn resolve_mcp_auto_approve_public_names(&mut self) {
+        let Some(config) = self.mcp_tool_config() else {
+            return;
+        };
+
+        for tool in self.global_tool_manager.get_mcp_tool_specs(None).await {
+            if config.auto_approve.contains(&tool.canonical_name)
+                && config.available.contains(&tool.canonical_name)
+            {
+                self.auto_approve.remove(&tool.canonical_name);
+                self.auto_approve.insert(tool.declaration.name);
+            }
+        }
+    }
+
     fn replace_runtime_tool_config_from_snapshot(
         &mut self,
         config: &crate::db::agent::AgentConfig,
@@ -7199,31 +7343,29 @@ impl WorkflowExecutor {
         let configured_mcp_tools = self.mcp_tools_allowlist();
         let available_mcp_tools = self
             .global_tool_manager
-            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .get_mcp_tool_specs(Some(ToolScope::Workflow))
             .await
-            .unwrap_or_default()
             .into_iter()
             .filter(|tool| {
-                tool.name.contains(MCP_TOOL_NAME_SPLIT)
-                    && Self::is_mcp_tool_allowed_by_config(
-                        configured_mcp_tools.as_ref(),
-                        &tool.name,
-                    )
+                Self::is_mcp_tool_allowed_by_config(
+                    configured_mcp_tools.as_ref(),
+                    &tool.canonical_name,
+                )
             })
             .collect::<Vec<_>>();
         let refreshed_summaries = available_mcp_tools
             .iter()
-            .filter(|tool| !exposed_mcp_tools.contains(&tool.name))
-            .cloned()
-            .map(|mut tool| {
-                tool.input_schema = serde_json::json!({});
-                tool
+            .filter(|tool| !exposed_mcp_tools.contains(&tool.canonical_name))
+            .map(|tool| {
+                let mut declaration = tool.declaration.clone();
+                declaration.input_schema = serde_json::json!({});
+                declaration
             })
             .collect::<Vec<_>>();
         let expected_exposed_names = available_mcp_tools
             .iter()
-            .filter(|tool| exposed_mcp_tools.contains(&tool.name))
-            .map(|tool| tool.name.clone())
+            .filter(|tool| exposed_mcp_tools.contains(&tool.canonical_name))
+            .map(|tool| tool.declaration.name.clone())
             .collect::<Vec<_>>();
         let expected_folded_names = refreshed_summaries
             .iter()
@@ -7232,12 +7374,10 @@ impl WorkflowExecutor {
 
         let registered_mcp_names = self
             .tool_manager
-            .get_tool_calling_spec(None, None)
+            .get_mcp_tool_specs(None)
             .await
-            .unwrap_or_default()
             .into_iter()
-            .filter(|tool| tool.name.contains(MCP_TOOL_NAME_SPLIT))
-            .map(|tool| tool.name)
+            .map(|tool| tool.declaration.name)
             .collect::<Vec<_>>();
         let had_loader = self.tool_manager.has_tool(TOOL_MCP_TOOL_LOAD).await;
         let had_summary_names = self
@@ -7729,6 +7869,7 @@ impl WorkflowExecutor {
             );
             self.agent_config.mcp_tool_exposure = serde_json::to_string(&mcp_tools).ok();
             self.rebuild_auto_approve_from_agent_config();
+            self.resolve_mcp_auto_approve_public_names().await;
             self.refresh_workflow_mcp_runtime_capabilities(true).await?;
             let tools = self.get_auto_approved_tools();
             self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
@@ -8636,6 +8777,49 @@ mod recovery_tests {
             Some(false),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn new_executor_includes_configured_mcp_auto_approvals() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "initial-mcp-auto-approval";
+        let mcp_tool = "server__MCP__read_document";
+        let mut agent = test_agent("initial-mcp-auto-approval-agent");
+        agent.mcp_tool_exposure = Some(
+            serde_json::json!({
+                "available": [mcp_tool],
+                "autoApprove": [mcp_tool],
+                "autoExpand": [mcp_tool],
+            })
+            .to_string(),
+        );
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![temp_dir.path().to_path_buf()],
+            temp_dir.path().join("app-data"),
+            Some("FinalReviewer".to_string()),
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(31).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+
+        assert!(executor.auto_approve.contains(mcp_tool));
     }
 
     #[tokio::test]

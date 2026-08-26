@@ -26,7 +26,8 @@ const normalizeToolName = toolName =>
 
 export const isWorkflowTodoTool = toolName => TODO_TOOL_NAMES.has(normalizeToolName(toolName))
 
-export const isWorkflowMcpTool = toolName => {
+export const isWorkflowMcpTool = (toolName, category = null) => {
+  if (String(category || '').toUpperCase() === 'MCP') return true
   const normalized = normalizeToolName(toolName)
   return (
     normalized === WORKFLOW_MCP_LOADER_TOOL_NAME ||
