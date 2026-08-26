@@ -8,21 +8,15 @@
         </span>
       </el-tooltip>
     </div>
-    <Sortable
-      v-if="groupedPrimaryAgents.length > 0"
-      class="list agent-group-list"
-      item-key="id"
-      :list="groupedPrimaryAgents"
-      :options="{
+    <Sortable v-if="groupedPrimaryAgents.length > 0" class="list agent-group-list" item-key="id"
+      :list="groupedPrimaryAgents" :options="{
         animation: 150,
         ghostClass: 'ghost',
         dragClass: 'drag',
         draggable: '.agent-group',
         forceFallback: true,
         bubbleScroll: true
-      }"
-      @update="onPrimarySortUpdate"
-      @end="onPrimaryDragEnd">
+      }" @update="onPrimarySortUpdate" @end="onPrimaryDragEnd">
       <template #item="{ element }">
         <div class="agent-group" :key="element.id">
           <div class="item draggable">
@@ -32,43 +26,24 @@
             </div>
 
             <div class="value">
-              <el-tooltip
-                :content="$t('settings.agent.' + (element.disabled ? 'enable' : 'disable'))"
-                placement="top"
-                :hide-after="0"
-                :enterable="false"
-                transition="none">
-                <el-switch
-                  :model-value="!element.disabled"
-                  @update:model-value="toggleAgentStatus(element)" />
+              <el-tooltip :content="$t('settings.agent.' + (element.disabled ? 'enable' : 'disable'))" placement="top"
+                :hide-after="0" :enterable="false" transition="none">
+                <el-switch :model-value="!element.disabled" @update:model-value="toggleAgentStatus(element)" />
               </el-tooltip>
-              <el-tooltip
-                :content="$t('settings.agent.edit')"
-                placement="top"
-                :hide-after="0"
-                :enterable="false"
+              <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
                 transition="none">
                 <div class="icon" @click="editAgent(element.id)" @mousedown.stop>
                   <cs name="edit" size="16px" color="secondary" />
                 </div>
               </el-tooltip>
-              <el-tooltip
-                :content="$t('settings.agent.copy')"
-                placement="top"
-                :hide-after="0"
-                :enterable="false"
+              <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
                 transition="none">
                 <div class="icon" @click="copyAgent(element.id)" @mousedown.stop>
                   <cs name="copy" size="16px" color="secondary" />
                 </div>
               </el-tooltip>
-              <el-tooltip
-                v-if="!element.isSystem"
-                :content="$t('settings.agent.delete')"
-                placement="top"
-                :hide-after="0"
-                :enterable="false"
-                transition="none">
+              <el-tooltip v-if="!element.isSystem" :content="$t('settings.agent.delete')" placement="top"
+                :hide-after="0" :enterable="false" transition="none">
                 <div class="icon" @click="deleteAgent(element.id)" @mousedown.stop>
                   <cs name="trash" size="16px" color="secondary" />
                 </div>
@@ -76,21 +51,15 @@
             </div>
           </div>
 
-          <Sortable
-            v-if="groupedChildAgents[element.id]?.length"
-            class="agent-child-list"
-            item-key="id"
-            :list="groupedChildAgents[element.id]"
-            :options="{
+          <Sortable v-if="groupedChildAgents[element.id]?.length" class="agent-child-list" item-key="id"
+            :list="groupedChildAgents[element.id]" :options="{
               animation: 150,
               ghostClass: 'ghost',
               dragClass: 'drag',
               draggable: '.agent-child-item',
               forceFallback: true,
               bubbleScroll: true
-            }"
-            @update="event => onChildSortUpdate(element.id, event)"
-            @end="() => onChildDragEnd(element.id)">
+            }" @update="event => onChildSortUpdate(element.id, event)" @end="() => onChildDragEnd(element.id)">
             <template #item="{ element: child }">
               <div class="item draggable item--child agent-child-item" :key="child.id">
                 <div class="label label--child">
@@ -99,43 +68,24 @@
                 </div>
 
                 <div class="value">
-                  <el-tooltip
-                    :content="$t('settings.agent.' + (child.disabled ? 'enable' : 'disable'))"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false"
-                    transition="none">
-                    <el-switch
-                      :model-value="!child.disabled"
-                      @update:model-value="toggleAgentStatus(child)" />
+                  <el-tooltip :content="$t('settings.agent.' + (child.disabled ? 'enable' : 'disable'))" placement="top"
+                    :hide-after="0" :enterable="false" transition="none">
+                    <el-switch :model-value="!child.disabled" @update:model-value="toggleAgentStatus(child)" />
                   </el-tooltip>
-                  <el-tooltip
-                    :content="$t('settings.agent.edit')"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false"
+                  <el-tooltip :content="$t('settings.agent.edit')" placement="top" :hide-after="0" :enterable="false"
                     transition="none">
                     <div class="icon" @click="editAgent(child.id)" @mousedown.stop>
                       <cs name="edit" size="16px" color="secondary" />
                     </div>
                   </el-tooltip>
-                  <el-tooltip
-                    :content="$t('settings.agent.copy')"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false"
+                  <el-tooltip :content="$t('settings.agent.copy')" placement="top" :hide-after="0" :enterable="false"
                     transition="none">
                     <div class="icon" @click="copyAgent(child.id)" @mousedown.stop>
                       <cs name="copy" size="16px" color="secondary" />
                     </div>
                   </el-tooltip>
-                  <el-tooltip
-                    v-if="!child.isSystem"
-                    :content="$t('settings.agent.delete')"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false"
-                    transition="none">
+                  <el-tooltip v-if="!child.isSystem" :content="$t('settings.agent.delete')" placement="top"
+                    :hide-after="0" :enterable="false" transition="none">
                     <div class="icon" @click="deleteAgent(child.id)" @mousedown.stop>
                       <cs name="trash" size="16px" color="secondary" />
                     </div>
@@ -154,15 +104,8 @@
     </div>
   </div>
 
-  <el-dialog
-    v-model="agentDialogVisible"
-    width="640px"
-    class="agent-edit-dialog"
-    :show-close="false"
-    :close-on-click-modal="false"
-    :close-on-press-escape="false"
-    destroy-on-close
-    @closed="onAgentDialogClose">
+  <el-dialog v-model="agentDialogVisible" width="640px" class="agent-edit-dialog" :show-close="false"
+    :close-on-click-modal="false" :close-on-press-escape="false" destroy-on-close @closed="onAgentDialogClose">
     <el-form :model="agentForm" :rules="agentRules" ref="formRef" label-width="100px">
       <el-tabs v-model="activeTab">
         <el-tab-pane :label="$t('settings.agent.basicInfo')" name="basic">
@@ -170,101 +113,50 @@
             <el-input v-model="agentForm.name" :disabled="isSystemIdentityLocked" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.role')" prop="role">
-            <el-select
-              v-model="agentForm.role"
-              style="width: 100%"
-              :disabled="isSystemIdentityLocked">
-              <el-option
-                v-for="option in AGENT_ROLE_OPTIONS"
-                :key="option.value"
-                :label="$t(option.labelKey)"
+            <el-select v-model="agentForm.role" style="width: 100%" :disabled="isSystemIdentityLocked">
+              <el-option v-for="option in AGENT_ROLE_OPTIONS" :key="option.value" :label="$t(option.labelKey)"
                 :value="option.value" />
             </el-select>
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role === AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.parentAgent')"
+          <el-form-item v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.parentAgent')"
             prop="parentAgentId">
-            <el-select
-              v-model="agentForm.parentAgentId"
-              style="width: 100%"
-              filterable
-              @change="agentForm.subAgentRole = ''"
-              :disabled="isSystemIdentityLocked">
-              <el-option
-                v-for="agent in primaryAgentOptions"
-                :key="agent.id"
-                :label="agent.name"
-                :value="agent.id" />
+            <el-select v-model="agentForm.parentAgentId" style="width: 100%" filterable
+              @change="agentForm.subAgentRole = ''" :disabled="isSystemIdentityLocked">
+              <el-option v-for="agent in primaryAgentOptions" :key="agent.id" :label="agent.name" :value="agent.id" />
             </el-select>
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role === AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.subAgentRole')"
+          <el-form-item v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.subAgentRole')"
             prop="subAgentRole">
-            <el-select
-              v-model="agentForm.subAgentRole"
-              style="width: 100%"
-              :disabled="isSystemIdentityLocked">
-              <el-option
-                v-for="option in SUB_AGENT_ROLE_OPTIONS"
-                :key="option.value"
-                :label="$t(option.labelKey)"
-                :disabled="isSubAgentRoleOccupied(option.value)"
-                :value="option.value" />
+            <el-select v-model="agentForm.subAgentRole" style="width: 100%" :disabled="isSystemIdentityLocked">
+              <el-option v-for="option in SUB_AGENT_ROLE_OPTIONS" :key="option.value" :label="$t(option.labelKey)"
+                :disabled="isSubAgentRoleOccupied(option.value)" :value="option.value" />
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
-            <el-input
-              v-model="agentForm.description"
-              type="textarea"
-              :rows="2"
-              :disabled="isSystemIdentityLocked" />
+            <el-input v-model="agentForm.description" type="textarea" :rows="2" :disabled="isSystemIdentityLocked" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.systemPrompt')" prop="systemPrompt">
-            <el-input
-              v-model="agentForm.systemPrompt"
-              type="textarea"
-              :rows="5"
-              :disabled="isSystemPromptsLocked" />
+            <el-input v-model="agentForm.systemPrompt" type="textarea" :rows="5" :disabled="isSystemPromptsLocked" />
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role !== AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.planningPrompt')"
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.planningPrompt')"
             prop="planningPrompt">
-            <el-input
-              v-model="agentForm.planningPrompt"
-              type="textarea"
-              :rows="5"
-              :disabled="isSystemPromptsLocked"
+            <el-input v-model="agentForm.planningPrompt" type="textarea" :rows="5" :disabled="isSystemPromptsLocked"
               :placeholder="$t('settings.agent.planningPromptPlaceholder')" />
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.role !== AGENT_ROLE.CHILD"
-            :label="$t('settings.agent.imageRecognitionPrompt')"
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.imageRecognitionPrompt')"
             prop="imageRecognitionPrompt">
-            <el-input
-              v-model="agentForm.imageRecognitionPrompt"
-              type="textarea"
-              :rows="4"
-              :disabled="isSystemPromptsLocked"
-              :placeholder="$t('settings.agent.imageRecognitionPromptPlaceholder')" />
+            <el-input v-model="agentForm.imageRecognitionPrompt" type="textarea" :rows="4"
+              :disabled="isSystemPromptsLocked" :placeholder="$t('settings.agent.imageRecognitionPromptPlaceholder')" />
           </el-form-item>
           <el-form-item :label="$t('settings.agent.disabled')" prop="disabled">
             <el-switch v-model="agentForm.disabled" />
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane
-          v-if="agentForm.role === AGENT_ROLE.PRIMARY"
-          :label="$t('settings.agent.personality')"
-          name="personality"
-          lazy>
+        <el-tab-pane v-if="agentForm.role === AGENT_ROLE.PRIMARY" :label="$t('settings.agent.personality')"
+          name="personality" lazy>
           <div class="personality-config">
-            <el-radio-group
-              v-model="personalitySelection"
-              class="personality-options"
-              @change="selectPersonality">
+            <el-radio-group v-model="personalitySelection" class="personality-options" @change="selectPersonality">
               <el-radio :value="PERSONALITY_SELECTION.DEFAULT" class="personality-option">
                 <div class="personality-option__content">
                   <div class="personality-option__name">
@@ -275,10 +167,7 @@
                   </div>
                 </div>
               </el-radio>
-              <el-radio
-                v-for="preset in PERSONALITY_PRESETS"
-                :key="preset.value"
-                :value="preset.value"
+              <el-radio v-for="preset in PERSONALITY_PRESETS" :key="preset.value" :value="preset.value"
                 class="personality-option">
                 <div class="personality-option__content">
                   <div class="personality-option__name">{{ $t(preset.labelKey) }}</div>
@@ -296,11 +185,7 @@
                 </div>
               </el-radio>
             </el-radio-group>
-            <el-input
-              :model-value="customPersonality"
-              class="personality-custom-input"
-              type="textarea"
-              :rows="15"
+            <el-input :model-value="customPersonality" class="personality-custom-input" type="textarea" :rows="15"
               :placeholder="$t('settings.agent.personalityCustomPlaceholder')"
               @update:model-value="updateCustomPersonality" />
           </div>
@@ -308,11 +193,8 @@
 
         <el-tab-pane :label="$t('settings.agent.models')" name="models">
           <div class="models-layout" :class="{ 'models-layout--single': modelRoles.length === 1 }">
-            <div
-              class="model-item-compact"
-              :class="{ 'model-item-compact--full': modelRoles.length === 1 }"
-              v-for="role in modelRoles"
-              :key="role.key">
+            <div class="model-item-compact" :class="{ 'model-item-compact--full': modelRoles.length === 1 }"
+              v-for="role in modelRoles" :key="role.key">
               <div class="header">
                 <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
                 <el-radio-group v-model="modelModes[role.key]" size="small">
@@ -327,126 +209,64 @@
               <div class="body">
                 <div class="selectors-row">
                   <template v-if="modelModes[role.key] === 'provider'">
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].id"
-                      size="small"
-                      filterable
-                      @change="onModelIdChange(role.key)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="provider in modelStore.getAvailableProviders"
-                        :key="provider.id"
-                        :label="provider.name"
-                        :value="provider.id" />
+                    <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
+                      @change="onModelIdChange(role.key)" style="flex: 1">
+                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                        :label="provider.name" :value="provider.id" />
                     </el-select>
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].model"
-                      size="small"
-                      filterable
+                    <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
                       :disabled="!agentForm[role.key + 'Model'].id"
-                      @change="value => onProviderModelChange(role.key, value)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="model in getModelList(role.key)"
-                        :key="model.id"
-                        :label="model.name || model.id"
+                      @change="value => onProviderModelChange(role.key, value)" style="flex: 1">
+                      <el-option v-for="model in getModelList(role.key)" :key="model.id" :label="model.name || model.id"
                         :value="model.id" />
                     </el-select>
                   </template>
                   <template v-else>
-                    <el-select
-                      v-model="proxyGroups[role.key]"
-                      size="small"
-                      filterable
-                      @change="onProxyGroupChange(role.key)"
-                      style="flex: 1">
-                      <el-option
-                        v-for="group in proxyGroupStore.list"
-                        :key="group.name"
-                        :label="group.name"
+                    <el-select v-model="proxyGroups[role.key]" size="small" filterable
+                      @change="onProxyGroupChange(role.key)" style="flex: 1">
+                      <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
                         :value="group.name" />
                     </el-select>
-                    <el-select
-                      v-model="proxyAliases[role.key]"
-                      size="small"
-                      filterable
-                      :disabled="!proxyGroups[role.key]"
-                      @change="val => onProxyAliasChange(role.key, val)"
+                    <el-select v-model="proxyAliases[role.key]" size="small" filterable
+                      :disabled="!proxyGroups[role.key]" @change="val => onProxyAliasChange(role.key, val)"
                       style="flex: 1">
-                      <el-option
-                        v-for="alias in getProxyAliases(proxyGroups[role.key])"
-                        :key="alias"
-                        :label="alias"
+                      <el-option v-for="alias in getProxyAliases(proxyGroups[role.key])" :key="alias" :label="alias"
                         :value="alias" />
                     </el-select>
                   </template>
                 </div>
                 <div class="params-row" style="margin-top: 8px; padding: 0 4px">
                   <span class="param-label">{{ $t('settings.agent.temperature') }}</span>
-                  <el-slider
-                    v-model="agentForm[role.key + 'Model'].temperature"
-                    :min="-0.1"
-                    :max="2"
-                    :step="0.1"
-                    size="small"
-                    style="flex: 1; margin-left: 12px" />
-                  <span
-                    class="param-value"
-                    style="font-size: 11px; min-width: 24px; text-align: right"
-                    >{{
-                      (agentForm[role.key + 'Model']?.temperature ?? -0.1) < 0
-                        ? 'Off'
-                        : agentForm[role.key + 'Model']?.temperature?.toFixed(1) || '0.0'
-                    }}</span
-                  >
+                  <el-slider v-model="agentForm[role.key + 'Model'].temperature" :min="-0.1" :max="2" :step="0.1"
+                    size="small" style="flex: 1; margin-left: 12px" />
+                  <span class="param-value" style="font-size: 11px; min-width: 24px; text-align: right">{{
+                    (agentForm[role.key + 'Model']?.temperature ?? -0.1) < 0 ? 'Off' : agentForm[role.key + 'Model'
+                    ]?.temperature?.toFixed(1) || '0.0' }}</span>
                 </div>
                 <div class="params-row compact-params" style="margin-top: 4px">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.contextSize') }}</span>
-                    <el-input-number
-                      v-model="agentForm[role.key + 'Model'].contextSize"
-                      :min="1024"
-                      :max="2000000"
-                      :step="1024"
-                      size="small"
-                      controls-position="right"
-                      style="width: 120px" />
+                    <el-input-number v-model="agentForm[role.key + 'Model'].contextSize" :min="1024" :max="2000000"
+                      :step="1024" size="small" controls-position="right" style="width: 120px" />
                   </div>
                 </div>
                 <div class="params-row compact-params" style="margin-top: 4px">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.maxTokens') }}</span>
-                    <el-input-number
-                      v-model="agentForm[role.key + 'Model'].maxTokens"
-                      :min="0"
-                      :max="128000"
-                      :step="1024"
-                      size="small"
-                      controls-position="right"
-                      style="width: 120px" />
+                    <el-input-number v-model="agentForm[role.key + 'Model'].maxTokens" :min="0" :max="128000"
+                      :step="1024" size="small" controls-position="right" style="width: 120px" />
                   </div>
                 </div>
-                <div
-                  v-if="supportsThinking(role.key)"
-                  class="params-row compact-params"
-                  style="margin-top: 6px">
+                <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: 6px">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.reasoning') }}</span>
-                    <el-switch
-                      v-model="agentForm[role.key + 'Model'].thinkingEnabled"
-                      size="small" />
+                    <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
                   </div>
                   <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
                     <span class="param-label">{{ $t('settings.model.thinkingLevel') }}</span>
-                    <el-select
-                      v-model="agentForm[role.key + 'Model'].thinkingLevel"
-                      size="small"
-                      style="width: 120px">
-                      <el-option
-                        v-for="option in agentThinkingLevelOptions"
-                        :key="option.value"
-                        :label="$t(option.label)"
-                        :value="option.value" />
+                    <el-select v-model="agentForm[role.key + 'Model'].thinkingLevel" size="small" style="width: 120px">
+                      <el-option v-for="option in agentThinkingLevelOptions" :key="option.value"
+                        :label="$t(option.label)" :value="option.value" />
                     </el-select>
                   </div>
                 </div>
@@ -459,29 +279,16 @@
           <el-form-item :label="$t('settings.agent.skillEnabled')" prop="skillEnabled">
             <el-switch v-model="agentForm.skillEnabled" />
           </el-form-item>
-          <el-form-item
-            v-if="agentForm.skillEnabled"
-            :label="$t('settings.agent.selectedSkills')"
-            prop="selectedSkills">
-            <el-input
-              v-if="sortedSystemSkills.length"
-              v-model="skillSearchKeyword"
-              clearable
-              class="skill-search-input"
+          <el-form-item v-if="agentForm.skillEnabled" :label="$t('settings.agent.search')" prop="selectedSkills">
+            <el-input v-if="sortedSystemSkills.length" v-model="skillSearchKeyword" clearable class="skill-search-input"
               :placeholder="$t('workflow.skillsSearchPlaceholder')" />
             <div v-if="filteredSystemSkills.length" class="skill-checklist">
               <el-checkbox-group v-model="agentForm.selectedSkills" class="skill-checklist__group">
-                <label
-                  v-for="skill in filteredSystemSkills"
-                  :key="skill.name"
-                  class="skill-checklist__item">
+                <label v-for="skill in filteredSystemSkills" :key="skill.name" class="skill-checklist__item">
                   <el-checkbox :value="skill.name">
                     <span class="skill-checklist__name">{{ skill.name }}</span>
                   </el-checkbox>
-                  <span
-                    v-if="skill.description"
-                    class="skill-checklist__description"
-                    :title="skill.description">
+                  <span v-if="skill.description" class="skill-checklist__description" :title="skill.description">
                     {{ skill.description }}
                   </span>
                 </label>
@@ -499,46 +306,24 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
-          <el-form-item :label="$t('settings.agent.approvalLevel')" prop="approvalLevel">
+          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.approvalLevel')"
+            prop="approvalLevel" :label-width="150">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
               <el-option :label="$t('settings.agent.approvalLevelSmart')" value="smart" />
-              <el-option
-                :label="$t('settings.agent.approvalLevelFull')"
-                value="full"
-                class="danger-option" />
+              <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools">
-            <el-select
-              v-model="agentForm.availableTools"
-              :placeholder="$t('settings.agent.selectAvailableTools')"
-              multiple
-              filterable
-              collapse-tags
-              :max-collapse-tags="2"
-              collapse-tags-tooltip>
-              <el-option
-                v-for="tool in sortedAvailableTools"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+          <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools" :label-width="150">
+            <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
+              multiple filterable collapse-tags :max-collapse-tags="2" collapse-tags-tooltip>
+              <el-option v-for="tool in sortedAvailableTools" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove">
-            <el-select
-              v-model="agentForm.autoApprove"
-              :placeholder="$t('settings.agent.selectAutoApproveTools')"
-              multiple
-              filterable
-              collapse-tags
-              :max-collapse-tags="2"
-              collapse-tags-tooltip>
-              <el-option
-                v-for="tool in autoApproveOptions"
-                :key="tool.id"
-                :label="tool.name"
-                :value="tool.id" />
+          <el-form-item :label="$t('settings.agent.autoApprove')" prop="autoApprove" :label-width="150">
+            <el-select v-model="agentForm.autoApprove" :placeholder="$t('settings.agent.selectAutoApproveTools')"
+              multiple filterable collapse-tags :max-collapse-tags="2" collapse-tags-tooltip>
+              <el-option v-for="tool in autoApproveOptions" :key="tool.id" :label="tool.name" :value="tool.id" />
             </el-select>
           </el-form-item>
 
@@ -547,39 +332,31 @@
               <h3>{{ $t('settings.agent.mcpToolsTitle') }}</h3>
               <span class="form-tip">{{ $t('settings.agent.mcpToolsHint') }}</span>
             </div>
-            <el-input
-              v-if="mcpToolOptions.length"
-              v-model="mcpSearchKeyword"
-              clearable
-              class="skill-search-input"
+            <el-input v-if="mcpToolOptions.length" v-model="mcpSearchKeyword" clearable class="skill-search-input"
               :placeholder="$t('settings.agent.mcpToolsSearchPlaceholder')" />
             <div v-if="filteredMcpToolOptions.length" class="mcp-tools-list">
               <div v-for="tool in filteredMcpToolOptions" :key="tool.id" class="mcp-tool-item">
                 <div class="mcp-tool-info">
-                  <code class="tool-name">{{ tool.id }}</code>
-                  <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
+                  <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
+                  <span v-if="getMcpToolServerName(tool)" class="tool-server">
+                    {{ getMcpToolServerName(tool) }}
+                  </span>
                 </div>
                 <div class="mcp-tool-switches">
                   <label>
                     <span>{{ $t('settings.agent.mcpToolAvailable') }}</span>
-                    <el-switch
-                      size="small"
-                      :model-value="agentForm.mcpTools.available.includes(tool.id)"
+                    <el-switch size="small" :model-value="agentForm.mcpTools.available.includes(tool.id)"
                       @change="checked => toggleMcpToolConfig(tool.id, 'available', checked)" />
                   </label>
                   <label>
                     <span>{{ $t('settings.agent.mcpToolAutoApprove') }}</span>
-                    <el-switch
-                      size="small"
-                      :model-value="agentForm.mcpTools.autoApprove.includes(tool.id)"
+                    <el-switch size="small" :model-value="agentForm.mcpTools.autoApprove.includes(tool.id)"
                       :disabled="!agentForm.mcpTools.available.includes(tool.id)"
                       @change="checked => toggleMcpToolConfig(tool.id, 'autoApprove', checked)" />
                   </label>
                   <label>
                     <span>{{ $t('settings.agent.mcpToolAutoExpand') }}</span>
-                    <el-switch
-                      size="small"
-                      :model-value="agentForm.mcpTools.autoExpand.includes(tool.id)"
+                    <el-switch size="small" :model-value="agentForm.mcpTools.autoExpand.includes(tool.id)"
                       :disabled="!agentForm.mcpTools.available.includes(tool.id)"
                       @change="checked => toggleMcpToolConfig(tool.id, 'autoExpand', checked)" />
                   </label>
@@ -604,15 +381,8 @@
             </div>
             <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
             <div class="shell-policy-list">
-              <div
-                v-for="(path, index) in agentForm.allowedPaths"
-                :key="index"
-                class="shell-policy-item">
-                <el-input
-                  v-model="agentForm.allowedPaths[index]"
-                  size="small"
-                  readonly
-                  style="flex: 1" />
+              <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
+                <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
                 <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
                   <cs name="trash" size="12px" />
                 </el-button>
@@ -635,83 +405,48 @@
                 <el-button type="info" size="small" @click="importDefaultShellPolicies" plain>
                   {{ $t('settings.agent.shellPolicyImportDefault') }}
                 </el-button>
-                <el-button
-                  v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0"
-                  type="danger"
-                  size="small"
-                  @click="clearShellPolicyRules"
-                  plain>
+                <el-button v-if="agentForm.shellPolicy && agentForm.shellPolicy.length > 0" type="danger" size="small"
+                  @click="clearShellPolicyRules" plain>
                   {{ $t('settings.agent.shellPolicyClear') }}
                 </el-button>
               </div>
             </div>
             <div class="shell-policy-list" ref="shellPolicyListRef">
-              <div
-                v-for="entry in paginatedShellPolicies"
-                :key="entry.index"
-                class="shell-policy-item">
-                <el-input
-                  v-model="entry.rule.pattern"
-                  size="small"
-                  :placeholder="$t('settings.agent.shellPolicyPattern')"
-                  style="flex: 1" />
+              <div v-for="entry in paginatedShellPolicies" :key="entry.index" class="shell-policy-item">
+                <el-input v-model="entry.rule.pattern" size="small"
+                  :placeholder="$t('settings.agent.shellPolicyPattern')" style="flex: 1" />
                 <el-select v-model="entry.rule.decision" size="small" style="width: 130px">
                   <el-option :label="$t('settings.agent.shellDecisionAllow')" value="allow" />
                   <el-option :label="$t('settings.agent.shellDecisionReview')" value="review" />
                   <el-option :label="$t('settings.agent.shellDecisionDeny')" value="deny" />
                 </el-select>
-                <el-button
-                  type="danger"
-                  size="small"
-                  circle
-                  @click="removeShellPolicyRule(entry.index)">
+                <el-button type="danger" size="small" circle @click="removeShellPolicyRule(entry.index)">
                   <cs name="trash" size="12px" />
                 </el-button>
               </div>
             </div>
-            <el-pagination
-              v-if="agentForm.shellPolicy.length > SHELL_POLICY_PAGE_SIZE"
-              v-model:current-page="shellPolicyPage"
-              class="shell-policy-pagination"
-              :page-size="SHELL_POLICY_PAGE_SIZE"
-              :total="agentForm.shellPolicy.length"
-              layout="prev, pager, next, total"
-              small
-              background />
+            <el-pagination v-if="agentForm.shellPolicy.length > SHELL_POLICY_PAGE_SIZE"
+              v-model:current-page="shellPolicyPage" class="shell-policy-pagination" :page-size="SHELL_POLICY_PAGE_SIZE"
+              :total="agentForm.shellPolicy.length" layout="prev, pager, next, total" small background />
           </div>
         </el-tab-pane>
 
-        <el-tab-pane
-          v-if="canConfigureSandbox"
-          :label="$t('settings.agent.sandboxConfig')"
-          name="sandbox"
-          lazy>
+        <el-tab-pane v-if="canConfigureSandbox" :label="$t('settings.agent.sandboxConfig')" name="sandbox" lazy>
           <div class="security-group sandbox-config-group">
             <p class="security-tip">{{ $t('settings.agent.sandboxConfigTip') }}</p>
-            <el-form-item :label="$t('settings.agent.sandboxExecutionMode')">
+            <el-form-item :label="$t('settings.agent.sandboxExecutionMode')" :label-width="150">
               <el-select v-model="agentForm.sandboxExecutionMode" style="width: 100%">
                 <el-option :label="$t('settings.agent.sandboxExecutionModeAuto')" value="auto" />
-                <el-option
-                  :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')"
-                  value="sandbox_only" />
-                <el-option
-                  :label="$t('settings.agent.sandboxExecutionModeHostOnly')"
-                  value="host_only" />
+                <el-option :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')" value="sandbox_only" />
+                <el-option :label="$t('settings.agent.sandboxExecutionModeHostOnly')" value="host_only" />
               </el-select>
             </el-form-item>
-            <el-form-item
-              v-if="agentForm.sandboxExecutionMode !== 'host_only'"
-              :label="$t('settings.agent.sandboxConfig')">
-              <el-select
-                v-model="agentForm.sandboxSchemeId"
-                :loading="sandboxSchemeStore.loading"
-                clearable
+            <el-form-item v-if="agentForm.sandboxExecutionMode !== 'host_only'"
+              :label="$t('settings.agent.sandboxConfig')" :label-width="150">
+              <el-select v-model="agentForm.sandboxSchemeId" :loading="sandboxSchemeStore.loading" clearable
                 style="width: 100%">
-                <el-option
-                  v-for="scheme in sandboxSchemeStore.schemes.filter(scheme => !scheme.disabled)"
-                  :key="scheme.id"
-                  :label="scheme.name"
-                  :value="scheme.id" />
+                <el-option v-for="scheme in sandboxSchemeStore.schemes.filter(scheme => !scheme.disabled)"
+                  :key="scheme.id" :label="scheme.name" :value="scheme.id" />
               </el-select>
             </el-form-item>
           </div>
@@ -726,22 +461,13 @@
     </template>
   </el-dialog>
 
-  <el-dialog
-    v-model="shellPolicyImportDialogVisible"
-    class="shell-policy-import-dialog"
-    :title="$t('settings.agent.shellPolicyImportDefaultTitle')"
-    width="580px"
-    append-to-body>
+  <el-dialog v-model="shellPolicyImportDialogVisible" class="shell-policy-import-dialog"
+    :title="$t('settings.agent.shellPolicyImportDefaultTitle')" width="580px" append-to-body>
     <p class="shell-policy-import-dialog__hint">
       {{ $t('settings.agent.shellPolicyImportDefaultHint') }}
     </p>
-    <el-checkbox-group
-      v-model="selectedDefaultShellPolicyGroups"
-      class="shell-policy-import-dialog__groups">
-      <el-checkbox
-        v-for="group in defaultShellPolicyGroups"
-        :key="group.id"
-        :value="group.id"
+    <el-checkbox-group v-model="selectedDefaultShellPolicyGroups" class="shell-policy-import-dialog__groups">
+      <el-checkbox v-for="group in defaultShellPolicyGroups" :key="group.id" :value="group.id"
         class="shell-policy-import-dialog__group">
         <span class="shell-policy-import-dialog__group-name">
           {{ $t(group.label) }} ({{ group.rules.length }})
@@ -752,9 +478,7 @@
       <el-button @click="shellPolicyImportDialogVisible = false">{{
         $t('common.cancel')
       }}</el-button>
-      <el-button
-        type="primary"
-        :disabled="selectedDefaultShellPolicyGroups.length === 0"
+      <el-button type="primary" :disabled="selectedDefaultShellPolicyGroups.length === 0"
         @click="importSelectedDefaultShellPolicies">
         {{ $t('settings.agent.shellPolicyImportSelected') }}
       </el-button>
@@ -1014,6 +738,7 @@ const modelRoles = computed(() => {
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
 const HIDDEN_AGENT_TOOL_IDS = ['bash']
+const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
   'sub_agent_output',
@@ -1151,6 +876,21 @@ const autoApproveOptions = computed(() => {
     t => agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
   )
 })
+
+const getMcpToolDisplayName = tool => {
+  const id = String(tool?.id || '').trim()
+  const name = String(tool?.name || '').trim()
+  if (name && name !== id) return name
+
+  const separatorIndex = id.indexOf(MCP_TOOL_NAME_SEPARATOR)
+  return separatorIndex >= 0 ? id.slice(separatorIndex + MCP_TOOL_NAME_SEPARATOR.length) : id
+}
+
+const getMcpToolServerName = tool => {
+  const id = String(tool?.id || '').trim()
+  const separatorIndex = id.indexOf(MCP_TOOL_NAME_SEPARATOR)
+  return separatorIndex > 0 ? id.slice(0, separatorIndex) : ''
+}
 
 const mcpToolOptions = computed(() => {
   return availableTools.value
@@ -1627,9 +1367,9 @@ const normalizeAgentFormForSave = form => {
     if (!model) return
     model.thinking = model.thinkingEnabled
       ? {
-          type: 'enabled',
-          budgetTokens: budgetFromThinkingLevel(model.thinkingLevel)
-        }
+        type: 'enabled',
+        budgetTokens: budgetFromThinkingLevel(model.thinkingLevel)
+      }
       : null
     delete model.thinkingEnabled
     delete model.thinkingLevel
@@ -1640,8 +1380,8 @@ const normalizeAgentFormForSave = form => {
     : []
   normalized.autoApprove = Array.isArray(normalized.autoApprove)
     ? [...new Set(normalized.autoApprove)].filter(
-        tool => normalized.availableTools.includes(tool) && tool !== 'bash'
-      )
+      tool => normalized.availableTools.includes(tool) && tool !== 'bash'
+    )
     : []
   normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
     ? sortSkillNamesByName(normalized.selectedSkills)
@@ -2395,7 +2135,7 @@ watch(
     padding: var(--cs-space-xs) var(--cs-space-md);
     white-space: normal;
 
-    & + .personality-option {
+    &+.personality-option {
       border-top: 1px solid var(--cs-border-color-lighter);
     }
 
@@ -2459,7 +2199,7 @@ watch(
     margin-bottom: 8px;
   }
 
-      .skill-checklist {
+  .skill-checklist {
     max-height: 500px;
     overflow-y: auto;
     border: 1px solid var(--cs-border-color);
@@ -2499,89 +2239,89 @@ watch(
       max-height: 100px;
       overflow: hidden;
       line-height: 1.4;
-        }
+    }
+  }
+
+  .mcp-tools-config {
+    margin-top: var(--cs-space-lg);
+
+    &__header {
+      display: flex;
+      flex-direction: column;
+      gap: var(--cs-space-xs);
+      margin-bottom: var(--cs-space-sm);
+
+      h3 {
+        margin: 0;
+        font-size: var(--cs-font-size-md);
+        color: var(--cs-text-color-primary);
       }
+    }
+  }
 
-      .mcp-tools-config {
-        margin-top: var(--cs-space-lg);
+  .mcp-tools-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xs);
+    max-height: 360px;
+    overflow-y: auto;
+    padding: var(--cs-space-xs);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background: var(--cs-bg-color-light);
+  }
 
-        &__header {
-          display: flex;
-          flex-direction: column;
-          gap: var(--cs-space-xs);
-          margin-bottom: var(--cs-space-sm);
+  .mcp-tool-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cs-space-sm);
+    min-width: 0;
+    padding: var(--cs-space-sm);
+    border-radius: var(--cs-border-radius-sm);
+    background: var(--cs-bg-color);
+  }
 
-          h3 {
-            margin: 0;
-            font-size: var(--cs-font-size-md);
-            color: var(--cs-text-color-primary);
-          }
-        }
-      }
+  .mcp-tool-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-2xs);
+    min-width: 0;
 
-      .mcp-tools-list {
-        display: flex;
-        flex-direction: column;
-        gap: var(--cs-space-xs);
-        max-height: 360px;
-        overflow-y: auto;
-        padding: var(--cs-space-xs);
-        border: 1px solid var(--cs-border-color);
-        border-radius: var(--cs-border-radius-md);
-        background: var(--cs-bg-color-light);
-      }
+    .tool-name,
+    .tool-server {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
-      .mcp-tool-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--cs-space-sm);
-        min-width: 0;
-        padding: var(--cs-space-sm);
-        border-radius: var(--cs-border-radius-sm);
-        background: var(--cs-bg-color);
-      }
+    .tool-name {
+      color: var(--cs-text-color-primary);
+    }
 
-      .mcp-tool-info {
-        display: flex;
-        flex-direction: column;
-        gap: var(--cs-space-2xs);
-        min-width: 0;
+    .tool-server {
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-sm);
+    }
+  }
 
-        .tool-name,
-        .tool-desc {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
+  .mcp-tool-switches {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(72px, auto));
+    gap: var(--cs-space-sm);
+    flex-shrink: 0;
 
-        .tool-name {
-          color: var(--cs-text-color-primary);
-        }
+    label {
+      display: flex;
+      align-items: center;
+      gap: var(--cs-space-xs);
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-xs);
+      white-space: nowrap;
+    }
+  }
 
-        .tool-desc {
-          color: var(--cs-text-color-secondary);
-          font-size: var(--cs-font-size-sm);
-        }
-      }
-
-      .mcp-tool-switches {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(72px, auto));
-        gap: var(--cs-space-sm);
-        flex-shrink: 0;
-
-        label {
-          display: flex;
-          align-items: center;
-          gap: var(--cs-space-xs);
-          color: var(--cs-text-color-secondary);
-          font-size: var(--cs-font-size-xs);
-          white-space: nowrap;
-        }
-      }
-
-      .model-item-compact {
+  .model-item-compact {
     padding: 8px;
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-md);
@@ -2641,6 +2381,7 @@ watch(
   }
 
   .danger-option {
+
     .dropdown-icon,
     .dropdown-content {
       color: var(--el-color-danger) !important;

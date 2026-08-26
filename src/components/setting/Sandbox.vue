@@ -4,29 +4,34 @@
       <div class="title">
         <span>{{ $t('settings.sandbox.title') }}</span>
         <el-tooltip :content="$t('settings.sandbox.add')" placement="left" :enterable="false" :hide-after="0">
-          <span class="icon" @click="openCreate"><cs name="add" /></span>
+          <span class="icon" @click="openCreate">
+            <cs name="add" />
+          </span>
         </el-tooltip>
       </div>
       <div v-if="schemeStore.schemes.length" v-loading="schemeStore.loading" class="list">
         <div v-for="scheme in schemeStore.schemes" :key="scheme.id" class="item">
           <div class="label">
-            <div class="scheme-marker"><cs name="setting" size="16px" color="secondary" /></div>
+            <div class="scheme-marker">
+              <cs name="setting" size="16px" color="secondary" />
+            </div>
             <div class="label-text">
               {{ scheme.name }}
               <small>{{ schemeSummary(scheme) }}</small>
             </div>
           </div>
           <div class="value">
-            <el-switch
-              :model-value="!scheme.disabled"
-              :loading="togglingSchemeId === scheme.id"
-              :aria-label="$t('settings.sandbox.enabled')"
-              @change="enabled => toggleSchemeEnabled(scheme, enabled)" />
+            <el-switch :model-value="!scheme.disabled" :loading="togglingSchemeId === scheme.id"
+              :aria-label="$t('settings.sandbox.enabled')" @change="enabled => toggleSchemeEnabled(scheme, enabled)" />
             <el-tooltip :content="$t('settings.sandbox.edit')" placement="top" :enterable="false" :hide-after="0">
-              <span class="icon" @click="openEdit(scheme)"><cs name="edit" size="16px" color="secondary" /></span>
+              <span class="icon" @click="openEdit(scheme)">
+                <cs name="edit" size="16px" color="secondary" />
+              </span>
             </el-tooltip>
             <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
-              <span class="icon" @click="remove(scheme)"><cs name="trash" size="16px" color="secondary" /></span>
+              <span class="icon" @click="remove(scheme)">
+                <cs name="trash" size="16px" color="secondary" />
+              </span>
             </el-tooltip>
           </div>
         </div>
@@ -34,18 +39,16 @@
       <div v-else-if="!schemeStore.loading" class="list">
         <div class="empty-state">
           {{ $t('settings.sandbox.empty') }}
-          <el-button type="primary" size="small" @click="openCreate"><cs name="add" />{{ $t('settings.sandbox.add') }}</el-button>
+          <el-button type="primary" size="small" @click="openCreate">
+            <cs name="add" />{{ $t('settings.sandbox.add') }}
+          </el-button>
         </div>
       </div>
     </div>
 
-    <el-dialog
-      v-model="dialogVisible"
-      :title="editing ? $t('settings.sandbox.edit') : $t('settings.sandbox.add')"
-      width="650px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false">
-      <el-form label-width="140px">
+    <el-dialog v-model="dialogVisible" :title="editing ? $t('settings.sandbox.edit') : $t('settings.sandbox.add')"
+      width="650px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-form label-width="150px">
         <el-form-item :label="$t('settings.sandbox.name')" required>
           <el-input v-model="draft.name" />
         </el-form-item>
@@ -78,42 +81,35 @@
           </div>
 
           <div v-if="activeRuleTab === 'profiles'">
-            <el-table
-              v-if="draft.config.profiles.length"
-              :data="draft.config.profiles"
-              size="small"
-              max-height="320"
+            <el-table v-if="draft.config.profiles.length" :data="draft.config.profiles" size="small" max-height="320"
               class="rule-table">
               <el-table-column prop="name" :label="$t('settings.sandbox.sandboxRuleName')" min-width="120" />
               <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="80" />
               <el-table-column prop="image" :label="$t('settings.sandbox.image')" width="150" show-overflow-tooltip />
-              <el-table-column
-                v-if="hasProfileWorkspaceAccess"
-                :label="$t('settings.sandbox.workspaceAccess')"
+              <el-table-column v-if="hasProfileWorkspaceAccess" :label="$t('settings.sandbox.workspaceAccess')"
                 width="150">
                 <template #default="{ row }">
                   {{ workspaceAccessLabel(row.workspaceAccess) }}
                 </template>
               </el-table-column>
-              <el-table-column
-                :label="$t('settings.sandbox.network')"
-                width="120">
+              <el-table-column :label="$t('settings.sandbox.network')" width="120">
                 <template #default="{ row }">
                   {{ networkLabel(row.network?.mode) }}
                 </template>
               </el-table-column>
-              <el-table-column
-                :label="$t('settings.sandbox.management')"
-                width="100"
-                align="right"
-                fixed="right">
+              <el-table-column :label="$t('settings.sandbox.management')" width="100" align="right" fixed="right">
                 <template #default="{ row }">
                   <div class="rule-table__actions">
-                    <el-tooltip :content="$t('settings.sandbox.editSandboxRule')" placement="top" :enterable="false" :hide-after="0">
-                      <span class="icon" @click="openProfileEditor(row)"><cs name="edit" size="16px" color="secondary" /></span>
+                    <el-tooltip :content="$t('settings.sandbox.editSandboxRule')" placement="top" :enterable="false"
+                      :hide-after="0">
+                      <span class="icon" @click="openProfileEditor(row)">
+                        <cs name="edit" size="16px" color="secondary" />
+                      </span>
                     </el-tooltip>
                     <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
-                      <span class="icon" @click="removeProfile(row)"><cs name="trash" size="16px" color="secondary" /></span>
+                      <span class="icon" @click="removeProfile(row)">
+                        <cs name="trash" size="16px" color="secondary" />
+                      </span>
                     </el-tooltip>
                   </div>
                 </template>
@@ -123,11 +119,7 @@
           </div>
 
           <div v-else>
-            <el-table
-              v-if="draft.config.hostRules.length"
-              :data="draft.config.hostRules"
-              size="small"
-              max-height="320"
+            <el-table v-if="draft.config.hostRules.length" :data="draft.config.hostRules" size="small" max-height="320"
               class="rule-table">
               <el-table-column prop="name" :label="$t('settings.sandbox.ruleName')" min-width="160" />
               <el-table-column prop="priority" :label="$t('settings.sandbox.priority')" width="100" />
@@ -136,18 +128,19 @@
                   {{ (row.commandPatterns || []).join(', ') }}
                 </template>
               </el-table-column>
-              <el-table-column
-                :label="$t('settings.sandbox.management')"
-                width="112"
-                align="right"
-                fixed="right">
+              <el-table-column :label="$t('settings.sandbox.management')" width="112" align="right" fixed="right">
                 <template #default="{ row }">
                   <div class="rule-table__actions">
-                    <el-tooltip :content="$t('settings.sandbox.editHostRule')" placement="top" :enterable="false" :hide-after="0">
-                      <span class="icon" @click="openHostRuleEditor(row)"><cs name="edit" size="16px" color="secondary" /></span>
+                    <el-tooltip :content="$t('settings.sandbox.editHostRule')" placement="top" :enterable="false"
+                      :hide-after="0">
+                      <span class="icon" @click="openHostRuleEditor(row)">
+                        <cs name="edit" size="16px" color="secondary" />
+                      </span>
                     </el-tooltip>
                     <el-tooltip :content="$t('common.delete')" placement="top" :enterable="false" :hide-after="0">
-                      <span class="icon" @click="removeHostRule(row)"><cs name="trash" size="16px" color="secondary" /></span>
+                      <span class="icon" @click="removeHostRule(row)">
+                        <cs name="trash" size="16px" color="secondary" />
+                      </span>
                     </el-tooltip>
                   </div>
                 </template>
@@ -169,14 +162,9 @@
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="profileDialogVisible"
-      width="640px"
+    <el-dialog v-model="profileDialogVisible" width="640px"
       :title="profileEditing ? $t('settings.sandbox.editSandboxRule') : $t('settings.sandbox.addSandboxRule')"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-      destroy-on-close>
+      :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false" destroy-on-close>
       <el-form label-width="180px">
         <el-form-item :label="$t('settings.sandbox.sandboxRuleName')" required>
           <el-input v-model="profileDraft.name" />
@@ -192,32 +180,30 @@
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.image')" required>
-          <el-select v-model="profileDraft.image" style="width: 100%" :loading="runtimeLoading" @change="syncProfileImage">
+          <el-select v-model="profileDraft.image" style="width: 100%" :loading="runtimeLoading"
+            @change="syncProfileImage">
             <el-option v-for="image in availableImages" :key="image" :label="image" :value="image" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.instanceName')">
           <div class="instance-name-field">
-            <el-select
-              v-model="profileDraft.instanceName"
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              style="width: 100%"
-              :loading="runtimeLoading">
+            <el-select v-model="profileDraft.instanceName" filterable allow-create default-first-option clearable
+              style="width: 100%" :loading="runtimeLoading">
               <el-option v-for="instance in availableInstances" :key="instance" :label="instance" :value="instance" />
             </el-select>
             <small>{{ $t('settings.sandbox.instanceNameTip') }}</small>
           </div>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPresets')">
-          <el-select v-model="profileDraft.commandPresets" multiple filterable style="width: 100%" @change="applyProfileCommandPresets">
-            <el-option v-for="preset in Object.keys(COMMAND_PRESETS)" :key="preset" :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
+          <el-select v-model="profileDraft.commandPresets" multiple filterable style="width: 100%"
+            @change="applyProfileCommandPresets">
+            <el-option v-for="preset in Object.keys(COMMAND_PRESETS)" :key="preset"
+              :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPatterns')">
-          <el-select v-model="profileDraft.commandPatterns" multiple filterable allow-create default-first-option style="width: 100%" />
+          <el-select v-model="profileDraft.commandPatterns" multiple filterable allow-create default-first-option
+            style="width: 100%" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.network')">
           <el-select v-model="profileDraft.network.mode" style="width: 100%">
@@ -227,8 +213,10 @@
             <el-option value="allowlist" :label="$t('settings.sandbox.networkAllowlist')" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="profileDraft.network.mode === 'allowlist'" :label="$t('settings.sandbox.networkAllowlistHosts')">
-          <el-select v-model="profileDraft.network.allowlist" multiple filterable allow-create default-first-option style="width: 100%" />
+        <el-form-item v-if="profileDraft.network.mode === 'allowlist'"
+          :label="$t('settings.sandbox.networkAllowlistHosts')">
+          <el-select v-model="profileDraft.network.allowlist" multiple filterable allow-create default-first-option
+            style="width: 100%" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.workspaceAccess')">
           <el-select v-model="profileDraft.workspaceAccess" style="width: 100%">
@@ -237,9 +225,12 @@
           </el-select>
         </el-form-item>
         <div class="profile-resources">
-          <el-form-item :label="$t('settings.sandbox.cpus')"><el-input-number v-model="profileDraft.resources.cpus" :min="1" :max="16" /></el-form-item>
-          <el-form-item :label="$t('settings.sandbox.memoryMb')"><el-input-number v-model="profileDraft.resources.memoryMb" :min="64" :step="64" /></el-form-item>
-          <el-form-item :label="$t('settings.sandbox.timeoutMs')"><el-input-number v-model="profileDraft.resources.timeoutMs" :min="1000" :step="1000" /></el-form-item>
+          <el-form-item :label="$t('settings.sandbox.cpus')"><el-input-number v-model="profileDraft.resources.cpus"
+              :min="1" :max="16" /></el-form-item>
+          <el-form-item :label="$t('settings.sandbox.memoryMb')"><el-input-number
+              v-model="profileDraft.resources.memoryMb" :min="64" :step="64" /></el-form-item>
+          <el-form-item :label="$t('settings.sandbox.timeoutMs')"><el-input-number
+              v-model="profileDraft.resources.timeoutMs" :min="1000" :step="1000" /></el-form-item>
         </div>
         <el-form-item :label="$t('settings.sandbox.enabled')">
           <el-switch v-model="profileDraft.enabled" />
@@ -251,14 +242,9 @@
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="hostRuleDialogVisible"
-      width="640px"
+    <el-dialog v-model="hostRuleDialogVisible" width="640px"
       :title="hostRuleEditing ? $t('settings.sandbox.editHostRule') : $t('settings.sandbox.addHostRule')"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-      destroy-on-close>
+      :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false" destroy-on-close>
       <el-form label-width="180px">
         <el-form-item :label="$t('settings.sandbox.ruleName')" required>
           <el-input v-model="hostRuleDraft.name" />
@@ -267,12 +253,15 @@
           <el-input-number v-model="hostRuleDraft.priority" :min="-1000" :max="1000" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPresets')">
-          <el-select v-model="hostRuleDraft.commandPresets" multiple filterable style="width: 100%" @change="applyHostRuleCommandPresets">
-            <el-option v-for="preset in HOST_COMMAND_PRESETS" :key="preset" :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
+          <el-select v-model="hostRuleDraft.commandPresets" multiple filterable style="width: 100%"
+            @change="applyHostRuleCommandPresets">
+            <el-option v-for="preset in HOST_COMMAND_PRESETS" :key="preset"
+              :label="$t(`settings.sandbox.preset${preset}`)" :value="preset" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.commandPatterns')">
-          <el-select v-model="hostRuleDraft.commandPatterns" multiple filterable allow-create default-first-option style="width: 100%" />
+          <el-select v-model="hostRuleDraft.commandPatterns" multiple filterable allow-create default-first-option
+            style="width: 100%" />
         </el-form-item>
         <el-form-item :label="$t('settings.sandbox.enabled')">
           <el-switch v-model="hostRuleDraft.enabled" />
@@ -356,7 +345,7 @@ const COMMAND_PRESETS = {
   elixir: ['^elixir(?:\\s|$)', '^iex(?:\\s|$)', '^mix(?:\\s|$)'],
   erlang: ['^erl(?:\\s|$)', '^erlc(?:\\s|$)', '^rebar3(?:\\s|$)'],
   git: ['^git(?:\\s|$)'],
-  go: ['^go(?:\\s|$)','^gofmt(?:\\s|$)','^godoc(?:\\s|$)', '^gopls(?:\\s|$)', '^dlv(?:\\s|$)'],
+  go: ['^go(?:\\s|$)', '^gofmt(?:\\s|$)', '^godoc(?:\\s|$)', '^gopls(?:\\s|$)', '^dlv(?:\\s|$)'],
   java: ['^java(?:\\s|$)', '^javac(?:\\s|$)', '^mvn(?:\\s|$)', '^mvnw(?:\\s|$)', '^gradle(?:\\s|$)', '^gradlew(?:\\s|$)'],
   kotlin: ['^kotlin(?:\\s|$)', '^kotlinc(?:\\s|$)'],
   lua: ['^lua(?:\\s|$)', '^luajit(?:\\s|$)', '^luarocks(?:\\s|$)'],
@@ -703,6 +692,7 @@ schemeStore.fetchSchemes()
   margin: 0 auto;
 
   .card {
+
     .title,
     .item,
     .label,
@@ -731,44 +721,174 @@ schemeStore.fetchSchemes()
       border-bottom: 1px solid var(--cs-border-color);
     }
 
-    .label { min-width: 0; gap: var(--cs-space-sm); }
-    .label-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .label {
+      min-width: 0;
+      gap: var(--cs-space-sm);
+    }
+
+    .label-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .label-text small,
-    .profile-list__row small { display: block; color: var(--cs-text-color-secondary); font-size: var(--cs-font-size-sm); }
-    .value { flex-shrink: 0; gap: var(--cs-space-sm); }
-    .scheme-marker { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-border-radius); background: var(--cs-bg-color-light); }
-    .icon { cursor: pointer; }
-    .empty-state { display: flex; align-items: center; justify-content: space-between; gap: var(--cs-space); padding: var(--cs-space-lg) var(--cs-space); color: var(--cs-text-color-secondary); }
+    .profile-list__row small {
+      display: block;
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-sm);
+    }
+
+    .value {
+      flex-shrink: 0;
+      gap: var(--cs-space-sm);
+    }
+
+    .scheme-marker {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: var(--cs-border-radius);
+      background: var(--cs-bg-color-light);
+    }
+
+    .icon {
+      cursor: pointer;
+    }
+
+    .empty-state {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--cs-space);
+      padding: var(--cs-space-lg) var(--cs-space);
+      color: var(--cs-text-color-secondary);
+    }
   }
 
-  .editor-section { margin-top: var(--cs-space-lg); }
-  .editor-section--rules { min-width: 0; }
-  .rule-tabs__header { display: flex; align-items: center; gap: var(--cs-space); margin-bottom: 5px; }
-  .rule-tabs { flex: 1; min-width: 0; }
-  .rule-tabs :deep(.el-tabs__header) { margin: 0; }
-  .rule-tabs :deep(.el-tabs__content) { display: none; }
-  .sandbox-dialog__footer { display: flex; align-items: center; justify-content: space-between; gap: var(--cs-space); }
-  .sandbox-dialog__actions { display: flex; gap: var(--cs-space-sm); flex-shrink: 0; }
-  .sandbox-dialog__actions :deep(.el-button + .el-button) { margin-left: 0; }
-  .instance-name-field { width: 100%; }
-  .instance-name-field small { display: block; margin-top: var(--cs-space-xs); color: var(--cs-text-color-secondary); line-height: 1.4; }
-  .editor-card { margin-bottom: var(--cs-space-sm); }
-  .editor-card__actions { display: flex; justify-content: flex-end; }
-  .health-summary { color: var(--cs-text-color-secondary); margin-left: auto; }
+  .editor-section {
+    margin-top: var(--cs-space-lg);
+  }
 
-  .rule-table { width: 100%; }
-  .rule-table__actions { display: flex; justify-content: flex-end; gap: var(--cs-space-xs); }
-  .rule-table__actions .icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--cs-border-radius); }
-  .rule-table__actions .icon:hover { background: var(--cs-bg-color-dark); }
-  .profile-list__empty { padding: var(--cs-space); color: var(--cs-text-color-secondary); border: 1px dashed var(--cs-border-color); border-radius: var(--cs-border-radius); }
+  .editor-section--rules {
+    min-width: 0;
+  }
 
-  .profile-resources { display: grid; grid-template-columns: 1fr; gap: var(--cs-space-sm); }
-  .profile-resources :deep(.el-form-item) { margin-bottom: 0; }
+  .rule-tabs__header {
+    display: flex;
+    align-items: center;
+    gap: var(--cs-space);
+    margin-bottom: 5px;
+  }
+
+  .rule-tabs {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .rule-tabs :deep(.el-tabs__header) {
+    margin: 0;
+  }
+
+  .rule-tabs :deep(.el-tabs__content) {
+    display: none;
+  }
+
+  .sandbox-dialog__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cs-space);
+  }
+
+  .sandbox-dialog__actions {
+    display: flex;
+    gap: var(--cs-space-sm);
+    flex-shrink: 0;
+  }
+
+  .sandbox-dialog__actions :deep(.el-button + .el-button) {
+    margin-left: 0;
+  }
+
+  .instance-name-field {
+    width: 100%;
+  }
+
+  .instance-name-field small {
+    display: block;
+    margin-top: var(--cs-space-xs);
+    color: var(--cs-text-color-secondary);
+    line-height: 1.4;
+  }
+
+  .editor-card {
+    margin-bottom: var(--cs-space-sm);
+  }
+
+  .editor-card__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .health-summary {
+    color: var(--cs-text-color-secondary);
+    margin-left: auto;
+  }
+
+  .rule-table {
+    width: 100%;
+  }
+
+  .rule-table__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--cs-space-xs);
+  }
+
+  .rule-table__actions .icon {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--cs-border-radius);
+  }
+
+  .rule-table__actions .icon:hover {
+    background: var(--cs-bg-color-dark);
+  }
+
+  .profile-list__empty {
+    padding: var(--cs-space);
+    color: var(--cs-text-color-secondary);
+    border: 1px dashed var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+  }
+
+  .profile-resources {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--cs-space-sm);
+  }
+
+  .profile-resources :deep(.el-form-item) {
+    margin-bottom: 0;
+  }
 
   @media (max-width: 680px) {
-    .profile-resources { grid-template-columns: 1fr; }
-    .card .item { align-items: flex-start; padding: var(--cs-space-sm); }
-    .card .value { gap: var(--cs-space-xs); }
+    .profile-resources {
+      grid-template-columns: 1fr;
+    }
+
+    .card .item {
+      align-items: flex-start;
+      padding: var(--cs-space-sm);
+    }
+
+    .card .value {
+      gap: var(--cs-space-xs);
+    }
   }
 }
 </style>
