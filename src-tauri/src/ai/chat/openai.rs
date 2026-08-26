@@ -1081,12 +1081,40 @@ impl OpenAIChat {
     }
 }
 
+/// Builds a prompt cache key for the Responses API.
+///
+/// Priority:
+/// 1. Workflow: `{session_id}_{segment_id}` from `WorkflowUsageAttribution`
+/// 2. Chat: `{conversationId}_{segment}` from `ChatMetadata.extra`
+/// 3. Fallback: `{chat_id}_0`
+pub(crate) fn build_prompt_cache_key(
+    workflow_attribution: Option<&crate::ai::traits::chat::WorkflowUsageAttribution>,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+    chat_id: &str,
+) -> Option<String> {
+    workflow_attribution
+        .map(|attr| format!("{}_{}", attr.workflow_session_id, attr.workflow_segment_id))
+        .or_else(|| {
+            let conv_id = extra
+                .and_then(|extra| extra.get("conversationId"))
+                .and_then(|v| v.as_u64());
+            let segment = extra
+                .and_then(|extra| extra.get("prompt_cache_segment"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            conv_id
+                .map(|id| format!("{}_{}", id, segment))
+                .or_else(|| Some(format!("{}_0", chat_id)))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_inline_reasoning_content, extract_reasoning_from_openai_message,
-        sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
-        InlineThinkStreamState, OpenAIChat,
+        build_prompt_cache_key, extract_inline_reasoning_content,
+        extract_reasoning_from_openai_message, sanitize_reasoning_content,
+        should_emit_reasoning_chunk, EmptyHtmlCommentStreamState, InlineThinkStreamState,
+        OpenAIChat,
     };
     use crate::db::ModelConfig;
     use serde_json::json;
@@ -1326,6 +1354,44 @@ mod tests {
         let (content_2, reasoning_2) = state.consume("nking>hidden</thinking>done");
         assert_eq!(content_2, "done");
         assert_eq!(reasoning_2, "hidden");
+    }
+
+    #[test]
+    fn build_prompt_cache_key_uses_workflow_attribution() {
+        let attr = crate::ai::traits::chat::WorkflowUsageAttribution {
+            workflow_session_id: "session_abc".to_string(),
+            workflow_task_run_id: "run_1".to_string(),
+            workflow_segment_id: 5,
+            root_session_id: "root_abc".to_string(),
+            root_task_run_id: "root_run_1".to_string(),
+            request_kind: "llm".to_string(),
+        };
+        let key = build_prompt_cache_key(Some(&attr), None, "fallback_id");
+        assert_eq!(key, Some("session_abc_5".to_string()));
+    }
+
+    #[test]
+    fn build_prompt_cache_key_uses_conversation_id_with_segment() {
+        let mut extra = serde_json::Map::new();
+        extra.insert("conversationId".to_string(), json!(12345));
+        extra.insert("prompt_cache_segment".to_string(), json!(3));
+        let key = build_prompt_cache_key(None, Some(&extra), "fallback_id");
+        assert_eq!(key, Some("12345_3".to_string()));
+    }
+
+    #[test]
+    fn build_prompt_cache_key_defaults_to_segment_zero() {
+        let mut extra = serde_json::Map::new();
+        extra.insert("conversationId".to_string(), json!(12345));
+        // No prompt_cache_segment → defaults to 0
+        let key = build_prompt_cache_key(None, Some(&extra), "fallback_id");
+        assert_eq!(key, Some("12345_0".to_string()));
+    }
+
+    #[test]
+    fn build_prompt_cache_key_falls_back_to_chat_id() {
+        let key = build_prompt_cache_key(None, None, "fallback_id");
+        assert_eq!(key, Some("fallback_id_0".to_string()));
     }
 }
 
@@ -1608,6 +1674,17 @@ impl AiChatTrait for OpenAIChat {
             openai_responses::RESPONSES_API_ENABLED,
         );
         if use_responses_api {
+            let prompt_cache_key = build_prompt_cache_key(
+                merged_metadata.workflow_usage_attribution.as_ref(),
+                merged_metadata.extra.as_ref(),
+                &chat_id,
+            );
+
+            log::debug!(
+                "use responses api, prompt_cache_key: {:?}",
+                prompt_cache_key
+            );
+
             payload = openai_responses::build_responses_payload(ResponsesRequestContext {
                 model: &final_model,
                 messages: &messages,
@@ -1617,6 +1694,7 @@ impl AiChatTrait for OpenAIChat {
                 params: &params,
                 stream: stream_enabled,
                 enable_reasoning_summary: false,
+                prompt_cache_key: prompt_cache_key.as_deref(),
             });
         }
         let selected_endpoint = if use_responses_api {

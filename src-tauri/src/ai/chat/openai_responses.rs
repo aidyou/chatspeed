@@ -19,7 +19,7 @@ const RESPONSES_ENDPOINT: &str = "/v1/responses";
 
 // Keep disabled because Responses API cache hit rates currently increase request costs.
 // Re-enable only if upstream requires Responses API exclusively or its cache behavior becomes reliable.
-pub(crate) const RESPONSES_API_ENABLED: bool = false;
+pub(crate) const RESPONSES_API_ENABLED: bool = true;
 
 pub(crate) struct ResponsesRequestContext<'a> {
     pub model: &'a str,
@@ -30,6 +30,7 @@ pub(crate) struct ResponsesRequestContext<'a> {
     pub params: &'a Value,
     pub stream: bool,
     pub enable_reasoning_summary: bool,
+    pub prompt_cache_key: Option<&'a str>,
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +154,10 @@ pub(crate) fn build_responses_payload(ctx: ResponsesRequestContext<'_>) -> Value
 
     crate::ai::util::merge_custom_params_value(&mut payload, ctx.model_metadata);
     crate::ai::util::merge_custom_params(&mut payload, &Some(ctx.metadata.clone()));
+
+    if let Some(cache_key) = ctx.prompt_cache_key {
+        payload["prompt_cache_key"] = Value::String(cache_key.to_string());
+    }
 
     if let Some(obj) = payload.as_object_mut() {
         // Keep the payload on the OpenAI Responses surface. Chat Completions-only
@@ -1208,6 +1213,7 @@ mod tests {
             params: &params,
             stream: true,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["model"], "gpt-4.1");
@@ -1247,6 +1253,7 @@ mod tests {
             params: &params,
             stream: false,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["input"][0]["role"], "assistant");
@@ -1290,6 +1297,7 @@ mod tests {
             params: &params,
             stream: false,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["input"][0]["role"], "assistant");
@@ -1360,6 +1368,7 @@ mod tests {
             params: &params,
             stream: false,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["max_output_tokens"], 2048);
@@ -1401,6 +1410,7 @@ mod tests {
             params: &json!({}),
             stream: false,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["reasoning"]["effort"], "medium");
@@ -1423,6 +1433,7 @@ mod tests {
             params: &json!({}),
             stream: false,
             enable_reasoning_summary: true,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["reasoning"]["summary"], "auto");
@@ -1452,13 +1463,89 @@ mod tests {
             params: &json!({}),
             stream: false,
             enable_reasoning_summary: false,
+            prompt_cache_key: None,
         });
 
         assert_eq!(payload["reasoning"]["effort"], "high");
     }
 
     #[test]
-    fn non_stream_success_with_null_error_emits_semantic_chunks_and_finished() {
+    fn build_payload_injects_cache_fields_when_cache_key_is_provided() {
+        let messages = vec![
+            json!({ "role": "system", "content": "You are helpful." }),
+            json!({ "role": "user", "content": "hello" }),
+        ];
+
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            enable_reasoning_summary: false,
+            prompt_cache_key: Some("chat_42_0"),
+        });
+
+        assert_eq!(payload["prompt_cache_key"], "chat_42_0");
+    }
+
+    #[test]
+    fn build_payload_injects_cache_key_with_conversation_id_format() {
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+        // Simulates the chat path: conversationId_segment format
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            enable_reasoning_summary: false,
+            prompt_cache_key: Some("123_0"),
+        });
+
+        assert_eq!(payload["prompt_cache_key"], "123_0");
+    }
+
+    #[test]
+    fn build_payload_injects_cache_key_with_workflow_format() {
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+        // Simulates the workflow path: session_id_segment_id format
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            enable_reasoning_summary: false,
+            prompt_cache_key: Some("session_abc_42_5"),
+        });
+
+        assert_eq!(payload["prompt_cache_key"], "session_abc_42_5");
+    }
+
+    #[test]
+    fn build_payload_omits_cache_fields_when_cache_key_is_none() {
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+
+        let payload = build_responses_payload(ResponsesRequestContext {
+            model: "gpt-4.1",
+            messages: &messages,
+            tools: &None,
+            metadata: &ChatMetadata::default(),
+            model_metadata: &None,
+            params: &json!({}),
+            stream: false,
+            enable_reasoning_summary: false,
+            prompt_cache_key: None,
+        });
+
+        assert!(payload.get("prompt_cache_key").is_none());
         let emitted = Arc::new(StdMutex::new(Vec::<Arc<ChatResponse>>::new()));
         let emitted_for_callback = emitted.clone();
         let callback = move |response: Arc<ChatResponse>| {

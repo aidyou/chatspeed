@@ -1517,6 +1517,12 @@ const dispatchChatCompletion = async (messageId = null) => {
 
       try {
         isPreparingSubmission.value = false
+
+        // Detect if context was just cleared: check the message before the current one
+        const msgList = chatStore.messages
+        const prevMsg = msgList.length > 1 ? msgList[msgList.length - 2] : null
+        const contextJustCleared = prevMsg?.metadata?.contextCleared === true
+
         await invokeWrapper('chat_completion', {
           providerId: currentModel.value.id,
           model: currentModel.value.defaultModel,
@@ -1527,7 +1533,9 @@ const dispatchChatCompletion = async (messageId = null) => {
           metadata: {
             windowLabel: settingStore.windowLabel,
             toolsEnabled: toolsEnabled.value,
-            reasoning: currentModelDetail.value?.reasoning || false
+            reasoning: currentModelDetail.value?.reasoning || false,
+            conversationId: chatStore.currentConversationId,
+            ...(contextJustCleared ? { contextCleared: true } : {}),
           }
         })
       } catch (error) {

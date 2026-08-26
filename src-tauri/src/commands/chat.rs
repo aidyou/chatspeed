@@ -367,6 +367,31 @@ pub async fn chat_completion(
         final_metadata.window_label = Some(window.label().to_string());
     }
 
+    // Prompt cache segment tracking: increment on contextCleared, store in extra
+    // Use conversationId (stable conversation ID from frontend) as the cache key,
+    // falling back to chat_id (per-turn UUID) when conversationId is not available.
+    let cache_id = final_metadata.extra.as_ref()
+        .and_then(|extra| extra.get("conversationId"))
+        .and_then(|v| v.as_u64())
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| chat_id.clone());
+
+    let segment = if final_metadata.extra.as_ref()
+        .and_then(|extra| extra.get("contextCleared"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        // Atomic per-key increment: entry holds the shard lock through the chain
+        *chat_state.context_clear_counters
+            .entry(cache_id.clone())
+            .and_modify(|counter| *counter += 1)
+            .or_insert(1)
+    } else {
+        chat_state.context_clear_counters.get(&cache_id).map(|v| *v).unwrap_or(0)
+    };
+    final_metadata.extra.get_or_insert_with(serde_json::Map::new)
+        .insert("prompt_cache_segment".to_string(), json!(segment));
+
     // Sensitive Data Filtering
     let (sensitive_config, interface_lang): (SensitiveConfig, String) = {
         let store = chat_state.main_store.as_ref();
