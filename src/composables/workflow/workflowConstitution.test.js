@@ -76,6 +76,20 @@ const approvalResolvedHandler = sourceSection(
 assert.match(approvalResolvedHandler, /payload\.tool_name === 'submit_plan'/)
 assert.match(approvalResolvedHandler, /resolvePendingTool\(sessionId, payload\.tool_call_id\)/)
 
+const constitution = readProjectFile('src-tauri/src/workflow/react/CONSTITUTION.md')
+assert.match(
+  constitution,
+  /pending completion-tool observation with the structured reviewer result and its\s+reviewer-scoped `usage_summary`/
+)
+assert.match(
+  constitution,
+  /hydrate RESULT and COST for that card from this structured data/
+)
+assert.match(
+  constitution,
+  /not infer either value from the parent completion summary, its parent-scoped\s+usage summary, or transcript text\./
+)
+
 const messageList = readProjectFile('src/components/workflow/WorkflowMessageList.vue')
 const workflowMessageStyles = readProjectFile('src/styles/workflow/messages.scss')
 const themeVariables = readProjectFile('src/style/element/css-vars.css')

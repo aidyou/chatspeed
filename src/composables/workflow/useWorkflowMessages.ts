@@ -11,6 +11,7 @@ import {
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
+  resolveFinalReviewSubAgentCompletion,
   selectVisibleWorkflowMessageWindow
 } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
@@ -674,7 +675,7 @@ export function useWorkflowMessages(source = null) {
       }
     }
 
-    const buildSubAgentCard = message => {
+    const buildSubAgentCard = (message, subAgentCompletions) => {
       const meta = message?.metadata || {}
       const observationData = meta.data || {}
       const toolName = String(meta.tool_name || '').toLowerCase()
@@ -710,7 +711,10 @@ export function useWorkflowMessages(source = null) {
           summary?.toolCalls
         )
       }
-      const completion = payload.taskId ? subAgentCompletions.get(payload.taskId) : null
+      const completion = resolveFinalReviewSubAgentCompletion(
+        message,
+        payload.taskId ? subAgentCompletions.get(payload.taskId) : null
+      )
       const completionData = completion?.data || {}
       const completionResult = completion?.result || completionData.result || {}
       const completionStatus =
@@ -1033,7 +1037,7 @@ export function useWorkflowMessages(source = null) {
           windowAnchorId: getWorkflowMessageWindowAnchorId(message),
           toolDisplay,
           explorationBatch: buildExplorationBatch(message),
-          subAgentCard: buildSubAgentCard(message),
+          subAgentCard: buildSubAgentCard(message, subAgentCompletions),
           askUserResponse: resolveAskUserResponse(
             message,
             askUserResponsesByToolCallId.value,

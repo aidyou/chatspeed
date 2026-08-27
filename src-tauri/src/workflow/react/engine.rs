@@ -1345,6 +1345,67 @@ impl WorkflowExecutor {
         Ok(())
     }
 
+    async fn update_pending_final_review_card_metadata(
+        &mut self,
+        sub_agent_id: &str,
+        status: &str,
+        result: &serde_json::Value,
+    ) -> Result<Option<GatewayPayload>, WorkflowEngineError> {
+        let Some(message) = self.context.messages.iter_mut().rev().find(|message| {
+            let Some(metadata) = message.metadata.as_ref() else {
+                return false;
+            };
+            metadata.get("tool_name").and_then(|value| value.as_str())
+                == Some(crate::tools::TOOL_COMPLETE_WORKFLOW)
+                && metadata
+                    .get("review_display_state")
+                    .and_then(|value| value.as_str())
+                    == Some("final_review_pending")
+                && metadata
+                    .get("sub_agent_id")
+                    .and_then(|value| value.as_str())
+                    == Some(sub_agent_id)
+        }) else {
+            return Ok(None);
+        };
+        let Some(metadata) = message.metadata.as_mut() else {
+            return Ok(None);
+        };
+
+        metadata["review_display_state"] = serde_json::json!("final_review_completed");
+        metadata["sub_agent_status"] = serde_json::json!(status);
+        metadata["review_result"] = result.clone();
+        if let Some(usage_summary) = result.get("usage_summary") {
+            metadata["review_usage_summary"] = usage_summary.clone();
+        }
+
+        let message_id = message.id.ok_or_else(|| {
+            WorkflowEngineError::General(
+                "Final review card is missing a durable message id".to_string(),
+            )
+        })?;
+        let metadata = metadata.clone();
+        let payload = GatewayPayload::Message {
+            message_id: Some(message_id.to_string()),
+            role: message.role.clone(),
+            content: message.message.clone(),
+            reasoning: message.reasoning.clone(),
+            step_type: message
+                .step_type
+                .as_deref()
+                .and_then(|value| serde_json::from_value(serde_json::json!(value)).ok()),
+            step_index: message.step_index,
+            is_error: message.is_error,
+            error_type: message.error_type.clone(),
+            metadata: Some(metadata.clone()),
+        };
+        self.context
+            .update_message_metadata(message_id, metadata)
+            .await?;
+
+        Ok(Some(payload))
+    }
+
     async fn prepare_completed_resume_internal(&mut self) -> Result<(), WorkflowEngineError> {
         self.refresh_runtime_config_from_snapshot().await?;
         self.rebuild_foundation_tools_for_runtime_update().await?;
@@ -6530,6 +6591,16 @@ impl WorkflowExecutor {
             let resolution = self
                 .resolve_sub_agent_completion_for_observation(&sub_agent_id, &result)
                 .unwrap_or_else(|| Self::fallback_sub_agent_resolution(&sub_agent_id, &result));
+            let final_review_card_payload = self
+                .update_pending_final_review_card_metadata(
+                    &sub_agent_id,
+                    &resolution.status,
+                    &result,
+                )
+                .await?;
+            if let Some(payload) = final_review_card_payload {
+                self.dispatch_ui_payload(payload).await?;
+            }
             for completion in &mut self.pending_sub_agent_completions {
                 if completion.sub_agent_id == sub_agent_id {
                     completion.consumed = true;

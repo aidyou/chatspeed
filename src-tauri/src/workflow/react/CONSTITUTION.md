@@ -622,6 +622,13 @@ identifier. Frontend delegated-task rendering must preserve that reviewer
 sub-session visibility even though the originating tool message is not a literal
 `sub_agent_run` row.
 
+When that reviewer reaches a terminal state, the backend must update the same
+pending completion-tool observation with the structured reviewer result and its
+reviewer-scoped `usage_summary` before publishing terminal completion. The
+frontend must hydrate RESULT and COST for that card from this structured data,
+not infer either value from the parent completion summary, its parent-scoped
+usage summary, or transcript text.
+
 ### 10.10 Manual clear-context rendering is projection-only
 
 The frontend may render a visible divider for each manual clear-context marker in the transcript.

@@ -545,6 +545,34 @@ export const reconcileWorkflowTaskWindowState = ({
   }
 }
 
+export const resolveFinalReviewSubAgentCompletion = (message, completion) => {
+  if (completion) return completion
+
+  const metadata = message?.metadata || {}
+  const taskId = metadata.sub_agent_id || metadata.data?.sub_agent_id || ''
+  const reviewDisplayState = String(metadata.review_display_state || '').toLowerCase()
+  if (!taskId || reviewDisplayState !== 'final_review_completed') {
+    return null
+  }
+
+  const result =
+    metadata.review_result && typeof metadata.review_result === 'object'
+      ? metadata.review_result
+      : {
+          status: metadata.sub_agent_status || metadata.execution_status || 'completed',
+          result: metadata.review_verdict || metadata.review_summary || '',
+          usage_summary: metadata.review_usage_summary
+        }
+
+  return {
+    execution_status: result.status || metadata.sub_agent_status || metadata.execution_status || '',
+    result,
+    sub_agent_name: metadata.sub_agent_name || '',
+    sub_agent_task: metadata.sub_agent_task || '',
+    data: {}
+  }
+}
+
 export const collectSubAgentCompletions = (visibleGroups = [], progressValues = []) => {
   const completions = new Map()
 
@@ -902,6 +930,7 @@ export const projectWorkflowMessageList = (
     translate = defaultTranslate
   } = {}
 ) => {
+  const sourceMessages = Array.isArray(messages) ? messages : []
   const isApprovalPending = message =>
     isWorkflowMessagePendingApproval(message, pendingApprovalIds)
   const getToolName = message => getStructuredWorkflowToolName(message)
@@ -1311,7 +1340,7 @@ export const projectWorkflowMessageList = (
       projectPendingToolGroups(
         collapseAssistantCompletionPairs(
           collapseRepeatedFinishTaskErrors(
-            messages.filter(
+            sourceMessages.filter(
               message => !isHiddenSystemObservation(message) || isWorkflowManualClearContextMessage(message)
             )
           )

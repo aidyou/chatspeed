@@ -24,6 +24,7 @@ import {
   projectWorkflowMessageList,
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
+  resolveFinalReviewSubAgentCompletion,
   resolveWorkflowPhaseFromPlanningMode,
   selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups,
@@ -142,6 +143,12 @@ const projectMessageList = (messages, options = {}) =>
     translate: (key, values = {}) => `${key}:${values.count ?? ''}`,
     ...options
   })
+
+assert.deepEqual(
+  projectMessageList({ messages: [] }),
+  [],
+  'a malformed message-list input must not prevent the workflow message list from rendering'
+)
 
 const projectedToolActivity = projectMessageList([
   { id: 'thought-1', role: 'assistant', reasoning: 'Inspect the current code', message: '' },
@@ -268,6 +275,73 @@ assert.equal(
   }),
   false,
   'messages without an assembled sub-agent card must not render as delegated-task cards'
+)
+
+const finalReviewUsageSummary = {
+  version: 1,
+  terminal_status: 'completed',
+  duration_ms: 120,
+  self_usage: {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_tokens: 0,
+    total_tokens: 15,
+    estimated_cost: 0.01,
+    effective_cost_per_million: 666.67,
+    unpriced_tokens: 0
+  },
+  with_sub_agents: {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_tokens: 0,
+    total_tokens: 15,
+    estimated_cost: 0.01,
+    effective_cost_per_million: 666.67,
+    unpriced_tokens: 0
+  },
+  has_sub_agents: false,
+  is_partial: false,
+  model_breakdowns: []
+}
+
+const finalReviewCompletion = resolveFinalReviewSubAgentCompletion(
+  {
+    metadata: {
+      tool_name: 'complete_workflow',
+      sub_agent_id: 'subagent_final_review_1',
+      review_display_state: 'final_review_completed',
+      sub_agent_status: 'completed',
+      review_result: {
+        status: 'completed',
+        result: '{"approved":true,"summary":"Ready"}',
+        usage_summary: finalReviewUsageSummary
+      }
+    }
+  },
+  null
+)
+assert.equal(
+  finalReviewCompletion.result.result,
+  '{"approved":true,"summary":"Ready"}',
+  'the completed final-review card must use its structured reviewer result'
+)
+assert.deepEqual(
+  finalReviewCompletion.result.usage_summary,
+  finalReviewUsageSummary,
+  'the completed final-review card must retain the reviewer usage summary for COST'
+)
+assert.equal(
+  resolveFinalReviewSubAgentCompletion(
+    {
+      metadata: {
+        sub_agent_id: 'subagent_final_review_1',
+        review_display_state: 'final_review_pending'
+      }
+    },
+    null
+  ),
+  null,
+  'a pending final review must not fabricate a terminal result or cost'
 )
 
 assert.equal(
