@@ -361,6 +361,7 @@ pub async fn run() -> crate::error::Result<()> {
             get_workflow_agent_config,
             workflow_begin_new_context_frame,
             get_workflow_snapshot,
+            list_pending_sub_agent_approvals,
             get_workflow_session_key,
             list_workflows,
             search_workspace_files,

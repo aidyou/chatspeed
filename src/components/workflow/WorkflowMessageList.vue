@@ -264,11 +264,11 @@
                   <div
                     v-if="
                       tool.metadata?.tool_call_id &&
-                      workflowStore.getToolStream(tool.metadata.tool_call_id).length > 0
+                      getToolStream(tool.metadata.tool_call_id).length > 0
                     "
                     class="tool-stream-output">
                     <div
-                      v-for="(line, idx) in workflowStore.getToolStream(tool.metadata.tool_call_id)"
+                      v-for="(line, idx) in getToolStream(tool.metadata.tool_call_id)"
                       :key="idx"
                       class="stream-line">
                       {{ line }}
@@ -513,6 +513,18 @@
                       {{ getSubAgentStatusLabel(message) }}
                     </div>
                   </div>
+                  <el-tooltip
+                    v-if="message.subAgentCard.taskId"
+                    :content="$t('workflow.messageList')"
+                    :hide-after="0"
+                    :enterable="false">
+                    <button
+                      type="button"
+                      class="sub-agent-card__open-button"
+                      @click.stop="$emit('open-sub-agent', message.subAgentCard.taskId)">
+                      <cs name="fullscreen-off" />
+                    </button>
+                  </el-tooltip>
                   <div class="sub-agent-card__meta">
                     <div class="sub-agent-card__row">
                       <span class="sub-agent-card__label">Agent</span>
@@ -719,13 +731,11 @@
                 <div
                   v-if="
                     message.metadata?.tool_call_id &&
-                    workflowStore.getToolStream(message.metadata.tool_call_id).length > 0
+                    getToolStream(message.metadata.tool_call_id).length > 0
                   "
                   class="tool-stream-output">
                   <div
-                    v-for="(line, idx) in workflowStore.getToolStream(
-                      message.metadata.tool_call_id
-                    )"
+                    v-for="(line, idx) in getToolStream(message.metadata.tool_call_id)"
                     :key="idx"
                     class="stream-line">
                     {{ line }}
@@ -1173,9 +1183,6 @@ import WorkflowCostAnalysis from './WorkflowCostAnalysis.vue'
 import ApprovalDialog from './ApprovalDialog.vue'
 import FilePreviewDiff from './FilePreviewDiff.vue'
 import MarkdownSimple from './MarkdownSimple.vue'
-import { useWorkflowStore } from '@/stores/workflow'
-
-const workflowStore = useWorkflowStore()
 const { t } = useI18n()
 const OTHER_ASK_USER_VALUE = '__other__'
 const USER_MESSAGE_COLLAPSED_LINE_COUNT = 4
@@ -1294,6 +1301,10 @@ const props = defineProps({
   pendingApprovalIds: {
     type: Array,
     default: () => []
+  },
+  getToolStream: {
+    type: Function,
+    default: () => []
   }
 })
 
@@ -1308,7 +1319,8 @@ const emit = defineEmits([
   'approve-all-pending',
   'reject-tool',
   'submit-ask-user',
-  'remove-queued-message'
+  'remove-queued-message',
+  'open-sub-agent'
 ])
 
 const messagesRef = ref(null)
@@ -2125,7 +2137,7 @@ const shouldShowRunningPlaceholder = message => {
 
   const executionStatus = String(meta.execution_status || '').toLowerCase()
   if (!isToolAwaitingExecution(message) && executionStatus !== 'running') return false
-  if (workflowStore.getToolStream(toolCallId).length > 0) return false
+  if (props.getToolStream(toolCallId).length > 0) return false
   if (props.shouldShowToolRawContent(message)) return false
   return true
 }

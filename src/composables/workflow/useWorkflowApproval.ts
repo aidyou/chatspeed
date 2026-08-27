@@ -13,7 +13,8 @@ export function useWorkflowApproval({
   currentWorkflowId,
   getPendingApprovalEntry,
   clearPendingApprovalEntry,
-  upsertPendingApprovalEntry
+  upsertPendingApprovalEntry,
+  trackToolState = true
 }) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
@@ -22,7 +23,7 @@ export function useWorkflowApproval({
   const activeApprovalId = ref('')
 
   const isApprovalSubmitting = computed(
-    () => (sessionId, toolCallId) => workflowStore.isApprovalSubmitted(sessionId, toolCallId)
+    () => (sessionId, toolCallId) => trackToolState && workflowStore.isApprovalSubmitted(sessionId, toolCallId)
   )
 
   const submitApproval = async ({
@@ -32,13 +33,13 @@ export function useWorkflowApproval({
     rejectionMessage = '',
     sessionId = currentWorkflowId.value
   }) => {
-    if (!toolCallId || !sessionId || workflowStore.isApprovalSubmitted(sessionId, toolCallId)) {
+    if (!toolCallId || !sessionId || (trackToolState && workflowStore.isApprovalSubmitted(sessionId, toolCallId))) {
       return
     }
     approvalLoading.value = true
     activeApprovalId.value = toolCallId
     const pendingEntry = getPendingApprovalEntry?.(sessionId, toolCallId) || null
-    workflowStore.markApprovalSubmitted(sessionId, toolCallId)
+    if (trackToolState) workflowStore.markApprovalSubmitted(sessionId, toolCallId)
 
     try {
       const signal = JSON.stringify({
@@ -54,11 +55,11 @@ export function useWorkflowApproval({
         signal
       })
 
-      if (!approved) {
+      if (!approved && trackToolState) {
         workflowStore.markToolRejected(toolCallId, rejectionMessage)
       }
     } catch (error) {
-      workflowStore.clearApprovalSubmission(sessionId, toolCallId)
+      if (trackToolState) workflowStore.clearApprovalSubmission(sessionId, toolCallId)
       if (pendingEntry) {
         upsertPendingApprovalEntry?.(sessionId, {
           id: pendingEntry.id,
@@ -77,7 +78,7 @@ export function useWorkflowApproval({
             'Session disconnected. Please refresh the page to restore the task.',
           'warning'
         )
-        workflowStore.setRunning(false)
+        if (trackToolState) workflowStore.setRunning(false)
       } else {
         showMessage(String(error), 'error')
       }

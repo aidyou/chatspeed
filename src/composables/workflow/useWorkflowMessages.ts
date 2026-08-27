@@ -33,9 +33,9 @@ import {
  */
 const DEFAULT_VISIBLE_TASK_MESSAGES = 300
 
-export function useWorkflowMessages() {
+export function useWorkflowMessages(source = null) {
   const { t } = useI18n()
-  const workflowStore = useWorkflowStore()
+  const workflowSource = source || useWorkflowStore()
   const loadedTaskMessageCount = ref(DEFAULT_VISIBLE_TASK_MESSAGES)
   const messageWindowAnchorId = ref('')
 
@@ -100,7 +100,7 @@ export function useWorkflowMessages() {
   const askUserResponsesByToolCallId = computed(() => {
     const responses = new Map()
 
-    for (const message of workflowStore.messages || []) {
+    for (const message of workflowSource.messages || []) {
       if (!isHiddenAskUserResponse(message)) continue
       const toolCallId = getMessageToolCallId(message)
       if (toolCallId) responses.set(toolCallId, message.message || '')
@@ -135,13 +135,13 @@ export function useWorkflowMessages() {
 
   const filteredWorkflowMessages = computed(() =>
     dedupeQueuedUserMessageProjection(
-      (workflowStore.messages || []).filter(message => {
+      (workflowSource.messages || []).filter(message => {
         if (isApprovedPlanAnchor(message) || isHiddenAskUserResponse(message)) return false
         if (isHiddenSystemObservation(message) && !isSubAgentCompletionObservation(message)) {
           return false
         }
         const messageWorkflowId = message?.sessionId || message?.session_id
-        return !messageWorkflowId || messageWorkflowId === workflowStore.currentWorkflowId
+        return !messageWorkflowId || messageWorkflowId === workflowSource.currentWorkflowId
       })
     )
   )
@@ -182,7 +182,7 @@ export function useWorkflowMessages() {
 
   const buildEnhancedDisplayId = (message, idx) => {
     const meta = message?.metadata || {}
-    const workflowId = String(workflowStore.currentWorkflowId || 'workflow').trim()
+    const workflowId = String(workflowSource.currentWorkflowId || 'workflow').trim()
     const toolCallId = pickPreferredText(meta.tool_call_id, meta.toolCallId)
     if (toolCallId) return `${workflowId}:tool:${toolCallId}:${message?.role || 'message'}`
 
@@ -237,7 +237,7 @@ export function useWorkflowMessages() {
   }
 
   const buildTaskGroupId = messages => {
-    const workflowId = workflowStore.currentWorkflowId || 'workflow'
+    const workflowId = workflowSource.currentWorkflowId || 'workflow'
     const segmentId = getMessageSegmentId(messages[0])
     if (segmentId !== null && messages.every(message => getMessageSegmentId(message) === segmentId)) {
       return `${workflowId}:segment:${segmentId}`
@@ -343,7 +343,7 @@ export function useWorkflowMessages() {
     )
 
   const reconcileTaskWindow = messages => {
-    const workflowId = workflowStore.currentWorkflowId
+    const workflowId = workflowSource.currentWorkflowId
     if (taskWindowState.value.workflowId !== workflowId) {
       taskGroupCache.clear()
       acceptedTaskCompletionIds.clear()
@@ -364,13 +364,13 @@ export function useWorkflowMessages() {
 
   watch(
     [
-      () => workflowStore.currentWorkflowId,
+      () => workflowSource.currentWorkflowId,
       filteredWorkflowMessages,
-      () => workflowStore.taskCompletionRevision
+      () => workflowSource.taskCompletionRevision
     ],
     ([, messages]) => {
-      const completion = workflowStore.lastTaskCompletion
-      if (completion?.sessionId === workflowStore.currentWorkflowId && completion.toolCallId) {
+      const completion = workflowSource.lastTaskCompletion
+      if (completion?.sessionId === workflowSource.currentWorkflowId && completion.toolCallId) {
         acceptedTaskCompletionIds.add(completion.toolCallId)
       }
       reconcileTaskWindow(messages)
@@ -396,7 +396,7 @@ export function useWorkflowMessages() {
   })
 
   watch(
-    () => workflowStore.currentWorkflowId,
+    () => workflowSource.currentWorkflowId,
     () => {
       loadedTaskMessageCount.value = DEFAULT_VISIBLE_TASK_MESSAGES
       messageWindowAnchorId.value = ''
@@ -417,7 +417,7 @@ export function useWorkflowMessages() {
   )
 
   const hiddenEarlierMessageCount = computed(
-    () => (workflowStore.hiddenEarlierMessageCount || 0) + loadedHiddenEarlierMessageCount.value
+    () => (workflowSource.hiddenEarlierMessageCount || 0) + loadedHiddenEarlierMessageCount.value
   )
 
   const expandLoadedMessageWindow = () => {
@@ -436,7 +436,7 @@ export function useWorkflowMessages() {
   const subAgentCompletionsById = computed(() =>
     collectSubAgentCompletions(
       visibleTaskGroupsState.value.groups,
-      Array.from((workflowStore.subAgentProgress || new Map()).values())
+      Array.from((workflowSource.subAgentProgress || new Map()).values())
     )
   )
 
@@ -453,11 +453,11 @@ export function useWorkflowMessages() {
     const toolHasWaitingMsg = new Set() // tool_call_id that has an 'Awaiting' message
     const toolMessageIds = new Set() // tool_call_id with dedicated tool/user-observe messages
     const rejectedUserMessageIds = new Set()
-    const ledgerStateById = new Map((workflowStore.toolList || []).map(tool => [tool.toolCallId, tool]))
-    const subAgentProgressById = workflowStore.subAgentProgress || new Map()
+    const ledgerStateById = new Map((workflowSource.toolList || []).map(tool => [tool.toolCallId, tool]))
+    const subAgentProgressById = workflowSource.subAgentProgress || new Map()
     const backendPendingToolIds = new Set(
-      (workflowStore.currentWorkflow?.executionContext?.pendingTools ||
-        workflowStore.currentWorkflow?.executionContext?.pending_tools ||
+      (workflowSource.currentWorkflow?.executionContext?.pendingTools ||
+        workflowSource.currentWorkflow?.executionContext?.pending_tools ||
         [])
         .map(tool => String(tool?.toolCallId || tool?.tool_call_id || '').trim())
         .filter(Boolean)
@@ -691,7 +691,7 @@ export function useWorkflowMessages() {
               agent: meta.sub_agent_name || meta.data?.sub_agent_name || ''
             }
       const childWorkflow = payload.taskId
-        ? workflowStore.workflows?.find?.(workflow => workflow?.id === payload.taskId) || null
+        ? workflowSource.workflows?.find?.(workflow => workflow?.id === payload.taskId) || null
         : null
       const childExecutionContext = childWorkflow?.executionContext || {}
       const summary = payload.taskId ? childAgentSummaryById.value.get(payload.taskId) : null
@@ -971,7 +971,7 @@ export function useWorkflowMessages() {
               }
               const { icon, toolType, action, target } = formatToolTitle(name, args)
               const state = toolStates.get(call.id)
-              const ledgerState = workflowStore.toolList?.find(tool => tool.toolCallId === call.id)
+              const ledgerState = workflowSource.toolList?.find(tool => tool.toolCallId === call.id)
               const isRejected =
                 ledgerState?.status === 'rejected' || (!!state?.isFinal && !!state?.isRejected)
               const isRunning = ledgerState?.status === 'approved_running' || !!state?.isRunning
@@ -1084,7 +1084,7 @@ export function useWorkflowMessages() {
           if (name === 'answer_user') return false
           if (
             m.metadata?.execution_status === 'running' &&
-            !workflowStore.getToolStream(m.metadata?.tool_call_id).length
+            !workflowSource.getToolStream(m.metadata?.tool_call_id).length
           ) {
             return true
           }
@@ -1115,7 +1115,7 @@ export function useWorkflowMessages() {
 
     const getCacheGroupId = group =>
       group.id === activeGroupId
-        ? `${workflowStore.currentWorkflowId || 'workflow'}:active-message-window`
+        ? `${workflowSource.currentWorkflowId || 'workflow'}:active-message-window`
         : group.id
     const visibleGroupIds = new Set(groups.map(getCacheGroupId))
     for (const cachedGroupId of taskGroupCache.keys()) {
@@ -1235,7 +1235,7 @@ export function useWorkflowMessages() {
   }
 
   const displayRoots = () => {
-    const workflow = workflowStore.currentWorkflow
+    const workflow = workflowSource.currentWorkflow
     const roots = [
       ...(Array.isArray(workflow?.allowedPaths) ? workflow.allowedPaths : []),
       ...(Array.isArray(workflow?.agentConfig?.allowedPaths) ? workflow.agentConfig.allowedPaths : [])
@@ -1496,7 +1496,7 @@ export function useWorkflowMessages() {
     const func = toolCall.function || toolCall
     const toolCallId = meta.tool_call_id || toolCall.id || func.id
     const executionStatus = meta.execution_status || ''
-    const hasStreamOutput = toolCallId ? workflowStore.getToolStream(toolCallId).length > 0 : false
+    const hasStreamOutput = toolCallId ? workflowSource.getToolStream(toolCallId).length > 0 : false
     const name = func.name || toolCall.name || meta.tool_name || ''
     const rawArgs = func.arguments || func.input || {}
 
@@ -1513,7 +1513,7 @@ export function useWorkflowMessages() {
     }
 
     const ledgerState = toolCallId
-      ? (workflowStore.toolList || []).find(tool => tool.toolCallId === toolCallId)
+      ? (workflowSource.toolList || []).find(tool => tool.toolCallId === toolCallId)
       : null
     if ((!args || Object.keys(args).length === 0) && ledgerState?.arguments) {
       args = ledgerState.arguments
@@ -1647,7 +1647,7 @@ export function useWorkflowMessages() {
     if (meta.hide_approval_details && meta.execution_status === 'running') return false
     if (
       (message.toolDisplay?.hasStreamOutput ||
-        workflowStore.getToolStream(meta.tool_call_id).length > 0) &&
+        workflowSource.getToolStream(meta.tool_call_id).length > 0) &&
       message.toolDisplay?.displayType === 'text'
     ) {
       return false

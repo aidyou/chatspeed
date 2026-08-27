@@ -157,6 +157,38 @@ test('empty new workflows require an authorized directory before accepting input
   )
 })
 
+test('child session panes preserve a confirm received while snapshot hydration is in flight', async () => {
+  const [workflowView, messageList, sessionPane, sessionMessages, workflowCore, engine] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
+    readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+  ])
+
+  assert.match(messageList, /<cs name="fullscreen-off"\s*\/>/)
+  assert.match(messageList, /@click\.stop="\$emit\('open-sub-agent', message\.subAgentCard\.taskId\)"/)
+  assert.match(workflowView, /v-if="activeSubAgentSessionId && activeSubAgentParentSessionId === currentWorkflowId"/)
+  assert.match(workflowView, /const openSubAgentMessagePane = sessionId => \{[\s\S]*?activeSubAgentParentSessionId\.value = parentSessionId/)
+  assert.match(workflowView, /watch\([\s\S]*?\(\) => workflowStore\.currentWorkflowId,[\s\S]*?currentSessionId !== previousSessionId[\s\S]*?closeSubAgentMessagePane\(\)/)
+  assert.match(workflowView, /await selectWorkflow\(navigationSessionId\)[\s\S]*?if \(entry\?\.subAgentId\) openSubAgentMessagePane\(entry\.subAgentId\)/)
+  assert.match(workflowView, /\.workflow-chat-pane \{[\s\S]*?position: relative;/)
+  assert.match(workflowView, /\.sub-agent-message-overlay \{[\s\S]*?position: absolute;[\s\S]*?inset: 0;/)
+  assert.match(sessionPane, /<cs name="fullscreen"\s*\/>/)
+  assert.doesNotMatch(sessionPane, /WorkflowInputArea/)
+  assert.match(sessionMessages, /hydrateWorkflowSession\(/, 'child hydration must install its event buffer before listener registration')
+  assert.match(sessionMessages, /registerListener: handleEvent => listen\(`workflow:\/\/event\/\$\{targetSessionId\}`/, 'child hydration must listen to its own channel')
+  assert.match(sessionMessages, /fetchSnapshot: \(\) => invokeWrapper\('get_workflow_snapshot', \{ sessionId: targetSessionId \}\)/, 'child hydration must use the canonical snapshot')
+  assert.match(sessionMessages, /applyEvent,[\s\S]*?isCurrent: \(\) => revision === loadRevision\.value && targetSessionId === sessionId\.value,[\s\S]*?onListenerRegistered: stop =>/, 'the listener must be retained from registration through snapshot replay for the active child session')
+  assert.match(sessionPane, /onApproveAction\(toolCallId, props\.sessionId\)/, 'child approvals must still target the child session')
+  assert.match(sessionMessages, /workflow:\/\/event\/\$\{targetSessionId\}/, 'child pane must listen to its own channel')
+  assert.doesNotMatch(sessionMessages, /selectWorkflow\(/, 'child pane must not replace the root selection')
+  assert.match(workflowCore, /targetSessionId: payload\.sub_agent_id,[\s\S]*?navigationSessionId: payload\.parent_session_id/)
+  assert.match(engine, /GatewayPayload::SubAgentApprovalRequested/)
+  assert.match(engine, /GatewayPayload::SubAgentApprovalResolved/)
+})
+
 test('MCP tool calls show their arguments and format only valid JSON results', async () => {
   const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
 

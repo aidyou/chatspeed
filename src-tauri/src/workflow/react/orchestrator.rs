@@ -9,6 +9,7 @@ use crate::workflow::react::engine::ReActExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::gateway::Gateway;
+use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata_with_visibility, RuntimeObservationLlmVisibility,
     RuntimeObservationType, RuntimeObservationUiVisibility,
@@ -869,11 +870,25 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             signal_tx,
         );
 
-        let policy = if subagent_type == "Planning" {
+        let mut policy = if subagent_type == "Planning" {
             crate::workflow::react::policy::ExecutionPolicy::planning()
         } else {
             crate::workflow::react::policy::ExecutionPolicy::standard()
         };
+        policy.approval_level = agent_config
+            .approval_level
+            .as_deref()
+            .and_then(|level| level.parse::<ApprovalLevel>().ok())
+            .unwrap_or_else(|| {
+                if let Some(level) = agent_config.approval_level.as_deref() {
+                    log::warn!(
+                        "[Workflow][session={}] Invalid sub-agent approval level '{}'; using default",
+                        session_id,
+                        level
+                    );
+                }
+                ApprovalLevel::Default
+            });
         let auto_compress_enabled = false;
 
         if subagent_type == "Planning" {

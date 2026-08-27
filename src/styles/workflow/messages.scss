@@ -667,8 +667,28 @@
 
             &__header {
               display: flex;
-              flex-direction: column;
+              flex-direction: row;
+              align-items: flex-start;
+              justify-content: space-between;
               gap: var(--cs-space-sm);
+            }
+
+            &__open-button {
+              display: inline-flex;
+              flex-shrink: 0;
+              align-items: center;
+              justify-content: center;
+              border: 0;
+              border-radius: var(--cs-border-radius-sm);
+              padding: var(--cs-space-xs);
+              color: var(--cs-text-color-secondary);
+              background: transparent;
+              cursor: pointer;
+
+              &:hover {
+                color: var(--cs-text-color-primary);
+                background: var(--cs-hover-bg-color);
+              }
             }
 
             &__title-wrap {

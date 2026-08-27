@@ -615,7 +615,9 @@ export function useWorkflowCore({
         const workflow = workflows.value.find((item) => item.id === sessionId)
         const workflowTitle = workflow?.title || workflow?.userQuery || t('workflow.untitled')
         const approvalId = payload.id || 'awaiting_approval'
-        const key = `${sessionId}:${approvalId}`
+        const targetSessionId = payload.targetSessionId || sessionId
+        const navigationSessionId = payload.navigationSessionId || sessionId
+        const key = `${targetSessionId}:${approvalId}`
         const toolName = String(payload.toolName || payload.tool_name || '').trim().toLowerCase()
 
         pendingApprovalEntries.value = {
@@ -623,7 +625,10 @@ export function useWorkflowCore({
             [key]: {
                 key,
                 id: approvalId,
-                sessionId,
+                sessionId: navigationSessionId,
+                targetSessionId,
+                navigationSessionId,
+                subAgentId: payload.subAgentId || null,
                 kind: payload.kind || 'approval',
                 workflowTitle,
                 action: payload.action || toolName || t('workflow.awaitingApproval'),
@@ -777,9 +782,9 @@ export function useWorkflowCore({
         })
     }
 
-    const clearPendingApprovalEntry = (sessionId, approvalId) => {
+    const clearPendingApprovalEntry = (sessionId, approvalId, targetSessionId = sessionId) => {
         if (!sessionId || !approvalId) return
-        const key = `${sessionId}:${approvalId}`
+        const key = `${targetSessionId}:${approvalId}`
         if (!pendingApprovalEntries.value[key]) return
         const nextEntries = { ...pendingApprovalEntries.value }
         delete nextEntries[key]
@@ -899,6 +904,30 @@ export function useWorkflowCore({
                     if (isWorkflowBeingDeleted(sessionId)) return
                     const payload = event.payload
                     if (!payload?.type) return
+
+                    if (payload.type === 'sub_agent_approval_requested') {
+                        const existed = !!pendingApprovalEntries.value[
+                            `${payload.sub_agent_id}:${payload.tool_call_id}`
+                        ]
+                        upsertPendingApprovalEntry(payload.parent_session_id, {
+                            id: payload.tool_call_id,
+                            action: payload.tool_name,
+                            targetSessionId: payload.sub_agent_id,
+                            navigationSessionId: payload.parent_session_id,
+                            subAgentId: payload.sub_agent_id
+                        })
+                        if (!existed) playApprovalNotificationSound()
+                        return
+                    }
+
+                    if (payload.type === 'sub_agent_approval_resolved') {
+                        clearPendingApprovalEntry(
+                            payload.parent_session_id,
+                            payload.tool_call_id,
+                            payload.sub_agent_id
+                        )
+                        return
+                    }
 
                     if (payload.type === 'confirm') {
                         workflowStore.upsertPendingTool(
@@ -1261,6 +1290,24 @@ export function useWorkflowCore({
                         payload.current_context_tokens ?? payload.total_tokens,
                         payload.max_context_tokens
                     )
+                } else if (payload.type === 'sub_agent_approval_requested') {
+                    const existed = !!pendingApprovalEntries.value[
+                        `${payload.sub_agent_id}:${payload.tool_call_id}`
+                    ]
+                    upsertPendingApprovalEntry(payload.parent_session_id, {
+                        id: payload.tool_call_id,
+                        action: payload.tool_name,
+                        targetSessionId: payload.sub_agent_id,
+                        navigationSessionId: payload.parent_session_id,
+                        subAgentId: payload.sub_agent_id
+                    })
+                    if (!existed) playApprovalNotificationSound()
+                } else if (payload.type === 'sub_agent_approval_resolved') {
+                    clearPendingApprovalEntry(
+                        payload.parent_session_id,
+                        payload.tool_call_id,
+                        payload.sub_agent_id
+                    )
                 } else if (payload.type === 'sub_agent_progress') {
                     const status = String(payload.status || payload.workflow_state || '').toLowerCase()
                     const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
@@ -1294,6 +1341,28 @@ export function useWorkflowCore({
         unlistenWorkflowEvents.value = unlisten
         await syncBackgroundStateListeners()
         return true
+    }
+
+    const reconcilePendingSubAgentApprovals = async () => {
+        try {
+            const entries = await invokeWrapper('list_pending_sub_agent_approvals')
+            for (const entry of entries || []) {
+                const parentSessionId = String(entry?.parent_session_id || '').trim()
+                const subAgentId = String(entry?.sub_agent_id || '').trim()
+                const toolCallId = String(entry?.tool_call_id || '').trim()
+                if (!parentSessionId || !subAgentId || !toolCallId) continue
+                if (!workflows.value.some(workflow => workflow?.id === parentSessionId)) continue
+                upsertPendingApprovalEntry(parentSessionId, {
+                    id: toolCallId,
+                    action: entry.tool_name,
+                    targetSessionId: subAgentId,
+                    navigationSessionId: parentSessionId,
+                    subAgentId
+                })
+            }
+        } catch (error) {
+            console.warn('[Workflow] Failed to restore pending sub-agent approvals:', error)
+        }
     }
 
     /**
@@ -1372,6 +1441,7 @@ export function useWorkflowCore({
             if (!(await setupWorkflowEvents(id))) {
                 return
             }
+            await reconcilePendingSubAgentApprovals()
             if (workflowStore.currentWorkflowId !== id || currentSessionId.value !== id) {
                 return
             }

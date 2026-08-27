@@ -2897,6 +2897,50 @@ pub async fn workflow_begin_new_context_frame(
 }
 
 #[tauri::command]
+pub async fn list_pending_sub_agent_approvals(
+    state: State<'_, Arc<MainStore>>,
+) -> Result<Vec<Value>, String> {
+    let store = state.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
+        let mut entries = Vec::new();
+        for child in store
+            .list_child_workflows()
+            .map_err(|error| error.to_string())?
+        {
+            let Some(parent_session_id) = child.parent_session_id else {
+                continue;
+            };
+            let Some(child_session_id) = child.id.as_deref() else {
+                continue;
+            };
+            let Some(context) = store
+                .get_execution_context(child_session_id)
+                .map_err(|error| error.to_string())?
+            else {
+                continue;
+            };
+            for pending in context.pending_tools {
+                if pending.tool_call_id.trim().is_empty() {
+                    continue;
+                }
+                entries.push(json!({
+                    "parent_session_id": parent_session_id,
+                    "sub_agent_id": child_session_id,
+                    "tool_call_id": pending.tool_call_id,
+                    "tool_name": pending.tool_name,
+                    "arguments": pending.arguments,
+                    "details": pending.details,
+                    "display_type": pending.display_type,
+                }));
+            }
+        }
+        Ok(entries)
+    })
+    .await
+    .map_err(|error| format!("Failed to join pending sub-agent approval query: {error}"))?
+}
+
+#[tauri::command]
 pub async fn get_workflow_snapshot(
     state: State<'_, Arc<MainStore>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,

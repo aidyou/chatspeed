@@ -81,6 +81,30 @@ pub enum GatewayPayload {
         #[serde(skip_serializing_if = "Option::is_none")]
         rejection_message: Option<String>,
     },
+    SubAgentApprovalRequested {
+        parent_session_id: String,
+        sub_agent_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        arguments: serde_json::Value,
+        details: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_type: Option<String>,
+    },
+    SubAgentApprovalResolved {
+        parent_session_id: String,
+        sub_agent_id: String,
+        tool_call_id: String,
+        tool_name: String,
+        approved: bool,
+        approve_all: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        execution_status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rejection_message: Option<String>,
+    },
     QueuedUserMessageRemoved {
         queued_user_message_id: String,
     },

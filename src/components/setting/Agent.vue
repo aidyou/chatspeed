@@ -306,7 +306,7 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.agent.toolsLabel')" name="tools">
-          <el-form-item v-if="agentForm.role !== AGENT_ROLE.CHILD" :label="$t('settings.agent.approvalLevel')"
+          <el-form-item :label="$t('settings.agent.approvalLevel')"
             prop="approvalLevel" :label-width="150">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />

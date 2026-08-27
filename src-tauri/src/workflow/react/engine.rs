@@ -1612,6 +1612,60 @@ impl WorkflowExecutor {
         &self,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
+        let parent_payload = {
+            let parent_session_id = self
+                .context
+                .main_store
+                .get_workflow_snapshot(&self.session_id)
+                .ok()
+                .and_then(|snapshot| snapshot.workflow.parent_session_id);
+
+            parent_session_id.and_then(|parent_session_id| match &payload {
+                GatewayPayload::Confirm {
+                    id,
+                    tool_name,
+                    arguments,
+                    details,
+                    display_type,
+                    ..
+                } => Some((
+                    parent_session_id.clone(),
+                    GatewayPayload::SubAgentApprovalRequested {
+                        parent_session_id,
+                        sub_agent_id: self.session_id.clone(),
+                        tool_call_id: id.clone(),
+                        tool_name: tool_name.clone(),
+                        arguments: arguments.clone(),
+                        details: details.clone(),
+                        display_type: display_type.clone(),
+                    },
+                )),
+                GatewayPayload::ApprovalResolved {
+                    tool_call_id,
+                    tool_name,
+                    approved,
+                    approve_all,
+                    approval_status,
+                    execution_status,
+                    rejection_message,
+                } => Some((
+                    parent_session_id.clone(),
+                    GatewayPayload::SubAgentApprovalResolved {
+                        parent_session_id,
+                        sub_agent_id: self.session_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: tool_name.clone(),
+                        approved: *approved,
+                        approve_all: *approve_all,
+                        approval_status: approval_status.clone(),
+                        execution_status: execution_status.clone(),
+                        rejection_message: rejection_message.clone(),
+                    },
+                )),
+                _ => None,
+            })
+        };
+
         if let Some(ref dispatcher) = self.dispatcher {
             if let Err(e) = dispatcher
                 .dispatch_ui(self.session_id.clone(), payload.clone())
@@ -1624,10 +1678,37 @@ impl WorkflowExecutor {
                 );
                 self.gateway.send(&self.session_id, payload).await?;
             }
-            Ok(())
         } else {
-            self.gateway.send(&self.session_id, payload).await
+            self.gateway.send(&self.session_id, payload).await?;
         }
+
+        if let Some((parent_session_id, payload)) = parent_payload {
+            let bridge_result = if let Some(ref dispatcher) = self.dispatcher {
+                dispatcher
+                    .dispatch_ui(parent_session_id.clone(), payload.clone())
+                    .await
+            } else {
+                self.gateway.send(&parent_session_id, payload.clone()).await
+            };
+            if let Err(error) = bridge_result {
+                log::warn!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_approval_bridge] Dispatch failed: {}",
+                    self.session_id,
+                    parent_session_id,
+                    error
+                );
+                if let Err(fallback_error) = self.gateway.send(&parent_session_id, payload).await {
+                    log::warn!(
+                        "[Workflow][session={}][parent={}][phase=sub_agent_approval_bridge] Gateway fallback failed: {}",
+                        self.session_id,
+                        parent_session_id,
+                        fallback_error
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn dispatch_sub_agent_progress(&self) {

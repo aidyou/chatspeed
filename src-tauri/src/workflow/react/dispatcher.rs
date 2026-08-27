@@ -31,6 +31,8 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
         GatewayPayload::State { .. } => "state",
         GatewayPayload::Confirm { .. } => "confirm",
         GatewayPayload::ApprovalResolved { .. } => "approval_resolved",
+        GatewayPayload::SubAgentApprovalRequested { .. } => "sub_agent_approval_requested",
+        GatewayPayload::SubAgentApprovalResolved { .. } => "sub_agent_approval_resolved",
         GatewayPayload::QueuedUserMessageRemoved { .. } => "queued_user_message_removed",
         GatewayPayload::ToolStarted { .. } => "tool_started",
         GatewayPayload::ToolCompleted { .. } => "tool_completed",

@@ -57,7 +57,7 @@
               <el-dropdown-item
                 v-for="item in globalPendingApprovalList"
                 :key="item.key"
-                :command="item.sessionId">
+                :command="item">
                 <div class="approval-menu-item">
                   <div class="approval-menu-title">
                     <cs name="approval" size="var(--cs-font-size-md)" />
@@ -189,48 +189,29 @@
             @mousedown="onCodeEditorResizeStart" />
 
           <div class="workflow-chat-pane">
-            <el-main class="message-list-container">
-              <WorkflowMessageList
-                :key="currentWorkflowId || 'workflow-empty'"
-                ref="messageListRef"
-                :messages="enhancedMessages"
-                :is-loading="workflowStore.isLoadingMessages"
-                :hidden-earlier-message-count="hiddenEarlierMessageCount"
-                :is-running="isRunning"
-                :queued-messages="workflowStore.messageQueue"
-                :is-chatting="isChatting"
-                :chat-state="chatState"
-                :is-compressing="isCompressing"
-                :compression-message="compressionMessage"
-                :last-assistant-message="lastAssistantMessage"
-                :approval-loading="approvalLoading"
-                :active-approval-id="activeApprovalId"
-                :is-batch-approval-submitting="isBatchApprovalSubmitting"
-                :ask-user-submitting="askUserSubmitting"
-                :is-message-expanded="isMessageExpanded"
-                :is-reasoning-expanded="isReasoningExpanded"
-                :remove-system-reminder="removeSystemReminder"
-                :get-diff-markdown="getDiffMarkdown"
-                :parse-choice-content="parseChoiceContent"
-                :get-parsed-message="getParsedMessage"
-                :should-show-tool-raw-content="shouldShowToolRawContent"
-                :pending-count="currentInlinePendingApprovalIds.length"
-                :pending-approvals="workflowStore.currentInlinePendingApprovals"
-                :pending-approval-ids="currentInlinePendingApprovalIds"
-                :current-workflow-id="currentWorkflowId"
-                :wait-reason="waitReason"
-                :is-approval-submitting="isApprovalSubmitting"
-                @message-window-anchor-change="setMessageWindowAnchor"
-                @toggle-expand="toggleMessageExpand"
-                @toggle-reasoning="toggleReasoningExpand"
-                @reveal-earlier-messages="loadEarlierMessagePage"
-                @submit-ask-user="submitAskUserResponse"
-                @approve-tool="onApproveAction"
-                @approve-all-tool="onApproveAllAction"
-                @approve-all-pending="onApproveAllPendingAction"
-                @remove-queued-message="removeQueuedMessage"
-                @reject-tool="onRejectAction" />
-            </el-main>
+            <WorkflowSessionMessagePane
+              ref="messageListRef"
+              :session-id="currentWorkflowId"
+              agent-role="primary"
+              :primary-chat-state="chatState"
+              :primary-is-chatting="isChatting"
+              :primary-is-compressing="isCompressing"
+              :primary-compression-message="compressionMessage"
+              :primary-wait-reason="waitReason"
+              :ask-user-submitting="askUserSubmitting"
+              @open-sub-agent="openSubAgentMessagePane"
+              @submit-ask-user="submitAskUserResponse"
+              @remove-queued-message="removeQueuedMessage" />
+
+            <div
+              v-if="activeSubAgentSessionId && activeSubAgentParentSessionId === currentWorkflowId"
+              class="sub-agent-message-overlay">
+              <WorkflowSessionMessagePane
+                :session-id="activeSubAgentSessionId"
+                agent-role="child"
+                @close="closeSubAgentMessagePane"
+                @open-sub-agent="openSubAgentMessagePane" />
+            </div>
 
             <!-- Status Panel (Floating) -->
             <StatusPanel />
@@ -369,7 +350,7 @@ import StatusPanel from '@/components/workflow/StatusPanel.vue'
 import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
 import WorkflowSkillsSelector from '@/components/workflow/WorkflowSkillsSelector.vue'
 import WorkflowSidebar from '@/components/workflow/WorkflowSidebar.vue'
-import WorkflowMessageList from '@/components/workflow/WorkflowMessageList.vue'
+import WorkflowSessionMessagePane from '@/components/workflow/WorkflowSessionMessagePane.vue'
 import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
 import TerminalPanel from '@/components/workflow/TerminalPanel.vue'
 import WorkflowCodeEditor from '@/components/workflow/WorkflowCodeEditor.vue'
@@ -426,6 +407,8 @@ const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
+const activeSubAgentSessionId = ref('')
+const activeSubAgentParentSessionId = ref('')
 const lastHistoryWorkflowId = ref(null)
 let workflowSelectionIntentRevision = 0
 const todayCostAmount = ref(0)
@@ -2105,7 +2088,7 @@ const globalPendingApprovalList = computed(() => {
   const seen = new Set()
 
   for (const entry of merged) {
-    const key = `${entry?.sessionId || ''}:${entry?.id || ''}`
+    const key = entry?.key || `${entry?.targetSessionId || entry?.sessionId || ''}:${entry?.id || ''}`
     if (!entry || seen.has(key)) continue
     seen.add(key)
     deduped.push(entry)
@@ -2318,12 +2301,37 @@ const toggleWorkflowCompletionMute = async () => {
   await settingStore.setSetting('workflowCompletionMuted', !workflowCompletionMuted.value)
 }
 
-const handleApprovalCommand = async sessionId => {
-  if (!sessionId) return
-  workflowSelectionIntentRevision += 1
+const handleApprovalCommand = async entry => {
+  const navigationSessionId = entry?.navigationSessionId || entry?.sessionId || entry
+  if (!navigationSessionId) return
+  const selectionRevision = ++workflowSelectionIntentRevision
   sidebarRootFilterResetToken.value += 1
-  await selectWorkflow(sessionId)
+  await selectWorkflow(navigationSessionId)
+  if (selectionRevision !== workflowSelectionIntentRevision) return
+  if (entry?.subAgentId) openSubAgentMessagePane(entry.subAgentId)
 }
+
+const openSubAgentMessagePane = sessionId => {
+  const childSessionId = String(sessionId || '').trim()
+  const parentSessionId = String(workflowStore.currentWorkflowId || '').trim()
+  if (!childSessionId || !parentSessionId) return
+  activeSubAgentSessionId.value = childSessionId
+  activeSubAgentParentSessionId.value = parentSessionId
+}
+
+const closeSubAgentMessagePane = () => {
+  activeSubAgentSessionId.value = ''
+  activeSubAgentParentSessionId.value = ''
+}
+
+watch(
+  () => workflowStore.currentWorkflowId,
+  (currentSessionId, previousSessionId) => {
+    if (previousSessionId && currentSessionId !== previousSessionId) {
+      closeSubAgentMessagePane()
+    }
+  }
+)
 
 const getPendingApprovalTitle = item => {
   if (item?.kind === 'ask_user') {
@@ -2648,6 +2656,16 @@ onBeforeUnmount(() => {
 .message-list-container {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.sub-agent-message-overlay {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  background: var(--cs-bg-color);
 }
 
 .workflow-titlebar-left-actions {
