@@ -64,6 +64,8 @@ fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
             GatewayPayload::State { .. }
                 | GatewayPayload::Confirm { .. }
                 | GatewayPayload::ApprovalResolved { .. }
+                | GatewayPayload::SubAgentApprovalRequested { .. }
+                | GatewayPayload::SubAgentApprovalResolved { .. }
                 | GatewayPayload::ToolCompleted { .. }
                 | GatewayPayload::ToolFailed { .. }
                 | GatewayPayload::TaskCompleted { .. }
@@ -638,6 +640,47 @@ mod tests {
 
         fn delivery_guarantee(&self) -> SinkDeliveryGuarantee {
             self.delivery_guarantee
+        }
+    }
+
+    #[test]
+    fn approval_events_require_reliable_delivery() {
+        for payload in [
+            GatewayPayload::Confirm {
+                id: "call_confirm_123".to_string(),
+                action: "bash".to_string(),
+                tool_name: "bash".to_string(),
+                arguments: serde_json::json!({"command": "pwd"}),
+                details: serde_json::json!({"command": "pwd"}),
+                display_type: None,
+            },
+            GatewayPayload::SubAgentApprovalRequested {
+                parent_session_id: "parent-session".to_string(),
+                sub_agent_id: "child-session".to_string(),
+                tool_call_id: "call_child_approval_123".to_string(),
+                tool_name: "bash".to_string(),
+                arguments: serde_json::json!({"command": "pwd"}),
+                details: serde_json::json!({"command": "pwd"}),
+                display_type: None,
+            },
+            GatewayPayload::SubAgentApprovalResolved {
+                parent_session_id: "parent-session".to_string(),
+                sub_agent_id: "child-session".to_string(),
+                tool_call_id: "call_child_approval_123".to_string(),
+                tool_name: "bash".to_string(),
+                approved: true,
+                approve_all: false,
+                approval_status: Some("approved".to_string()),
+                execution_status: Some("approval_submitted".to_string()),
+                rejection_message: None,
+            },
+        ] {
+            assert!(dispatch_event_requires_reliable_delivery(
+                &DispatchEvent::Ui {
+                    session_id: "test-session".to_string(),
+                    payload,
+                }
+            ));
         }
     }
 

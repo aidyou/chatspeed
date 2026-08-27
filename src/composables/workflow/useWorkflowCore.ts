@@ -638,7 +638,11 @@ export function useWorkflowCore({
         }
     }
 
-    const clearPendingApprovalEntries = (sessionId: string, kind = null) => {
+    const clearPendingApprovalEntries = (
+        sessionId: string,
+        kind = null,
+        preserveSubAgentEntries = false
+    ) => {
         if (!sessionId) {
             pendingApprovalEntries.value = {}
             return
@@ -652,6 +656,9 @@ export function useWorkflowCore({
                 continue
             }
             if (kind && nextEntries[key]?.kind !== kind) {
+                continue
+            }
+            if (preserveSubAgentEntries && nextEntries[key]?.subAgentId) {
                 continue
             }
             if (key.startsWith(`${sessionId}:`)) {
@@ -1002,7 +1009,7 @@ export function useWorkflowCore({
 
                     if (!isApprovalWaiting) {
                         workflowStore.clearPendingTools(sessionId)
-                        clearPendingApprovalEntries(sessionId, 'approval')
+                        clearPendingApprovalEntries(sessionId, 'approval', true)
                     }
                     if (TERMINAL_STATUSES.includes(statusLower)) {
                         workflowStore.loadWorkflows().catch((error) => {
@@ -1061,7 +1068,7 @@ export function useWorkflowCore({
                 continue
             }
 
-            clearPendingApprovalEntries(workflow.id, 'approval')
+            clearPendingApprovalEntries(workflow.id, 'approval', true)
         }
     }
 
@@ -1143,7 +1150,7 @@ export function useWorkflowCore({
                         reconcileApprovalEntriesFromExecutionContext(sessionId, workflowStore.currentWorkflow)
                     } else {
                         workflowStore.clearPendingTools(sessionId)
-                        clearPendingApprovalEntries(sessionId)
+                        clearPendingApprovalEntries(sessionId, null, true)
                         flushDeferredQueuedMessages().catch((error) => {
                             console.warn('Failed to flush deferred queue after state update:', error)
                         })
@@ -1489,7 +1496,7 @@ export function useWorkflowCore({
             const status = workflowStore.currentWorkflow?.status?.toLowerCase()
             const pendingApprovalRequest = workflowStore.pendingApprovalRequest
 
-            clearPendingApprovalEntries(id)
+            clearPendingApprovalEntries(id, null, true)
             workflowStore.clearApprovalSubmissionsForSession(id)
 
             if (status === WORKFLOW_STATUSES.AWAITING_APPROVAL) {
@@ -1536,7 +1543,7 @@ export function useWorkflowCore({
                     })
                 }
             } else if (status !== WORKFLOW_STATUSES.AWAITING_APPROVAL) {
-                clearPendingApprovalEntries(id)
+                clearPendingApprovalEntries(id, null, true)
             }
 
             // Initialize settings from workflow's agentConfig or fallback to agent defaults

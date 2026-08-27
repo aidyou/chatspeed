@@ -229,6 +229,22 @@ assert.match(
   /const currentEntries = workflowStore\.currentInlinePendingApprovals/
 )
 assert.match(
+  workflowCore,
+  /clearPendingApprovalEntries\(sessionId, null, true\)/,
+  'active parent state changes must preserve child approval reminders until a child resolution or terminal event'
+)
+assert.match(
+  workflowCore,
+  /clearPendingApprovalEntries\(sessionId, 'approval', true\)/,
+  'background parent state reconciliation must preserve child approval reminders'
+)
+assert.match(
+  workflowCore,
+  /clearPendingApprovalEntries\(workflow\.id, 'approval', true\)/,
+  'background workflow refresh must preserve child approval reminders'
+)
+assert.match(globalApprovalProjection, /entry\.sessionId !== activeSessionId \|\| entry\?\.subAgentId/)
+assert.match(
   globalApprovalProjection,
   /const merged = \[\.\.\.currentEntries, \.\.\.currentAskUserEntry, \.\.\.backgroundEntries\]/
 )

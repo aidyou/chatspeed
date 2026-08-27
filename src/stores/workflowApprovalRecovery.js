@@ -1,5 +1,20 @@
 const DEFAULT_APPROVAL_WAIT_REASON = 'approval';
 const DEFAULT_PENDING_SUMMARY = 'Awaiting approval';
+const TERMINAL_TOOL_EXECUTION_STATUSES = new Set([
+  'completed',
+  'failed',
+  'interrupted',
+  'rejected'
+]);
+const TOOL_EXECUTION_STATUS_RANKS = {
+  pending_approval: 1,
+  approval_submitted: 2,
+  running: 3,
+  completed: 4,
+  failed: 4,
+  interrupted: 4,
+  rejected: 4
+};
 
 const normalizeObject = (value) => {
   return value && typeof value === 'object' ? value : {};
@@ -178,6 +193,108 @@ const hasToolApprovalStateMessage = (messages = [], toolCallId) => {
     const meta = normalizeObject(message?.metadata);
     if (String(meta.tool_call_id || '').trim() !== normalizedToolCallId) return false;
     return getToolApprovalState(message, meta) !== null;
+  });
+};
+
+const getToolCallId = (message) =>
+  String(normalizeObject(message?.metadata).tool_call_id || '').trim();
+
+const getToolExecutionStatus = (message) =>
+  String(normalizeObject(message?.metadata).execution_status || '').trim().toLowerCase();
+
+const getToolMessageStateRank = (message) => {
+  const meta = normalizeObject(message?.metadata);
+  const executionStatus = getToolExecutionStatus(message);
+  if (TOOL_EXECUTION_STATUS_RANKS[executionStatus]) {
+    return TOOL_EXECUTION_STATUS_RANKS[executionStatus];
+  }
+  return getToolApprovalState(message, meta) === 'pending' ? 1 : 0;
+};
+
+const isTerminalToolMessage = (message) => {
+  const executionStatus = getToolExecutionStatus(message);
+  return (
+    TERMINAL_TOOL_EXECUTION_STATUSES.has(executionStatus) ||
+    (message?.role === 'tool' &&
+      getToolApprovalState(message, normalizeObject(message?.metadata)) === 'resolved' &&
+      !executionStatus)
+  );
+};
+
+const isPersistedToolMessage = (message) => /^\d+$/.test(String(message?.id ?? '').trim());
+
+/**
+ * Reduce one tool lifecycle to its latest structured message by `tool_call_id`.
+ *
+ * Pending approval placeholders are transient view-model adapters. Once a
+ * structured pending, running, or terminal message arrives, it replaces the
+ * placeholder rather than becoming another transcript row. Terminal records
+ * remain authoritative even if delayed lifecycle events arrive afterwards.
+ */
+export const reconcileWorkflowToolMessages = (messages = [], incomingMessage = null) => {
+  const input = Array.isArray(messages) ? messages : [];
+  if (!incomingMessage) return input;
+
+  const toolCallId = getToolCallId(incomingMessage);
+  if (incomingMessage?.role !== 'tool' || !toolCallId) return [...input, incomingMessage];
+
+  const matchingIndexes = [];
+  let latestMessage = null;
+  let latestRank = -1;
+
+  input.forEach((message, index) => {
+    if (message?.role !== 'tool' || getToolCallId(message) !== toolCallId) return;
+    matchingIndexes.push(index);
+    const rank = getToolMessageStateRank(message);
+    if (!latestMessage || rank >= latestRank) {
+      latestMessage = message;
+      latestRank = rank;
+    }
+  });
+
+  if (matchingIndexes.length === 0) return [...input, incomingMessage];
+
+  const incomingRank = getToolMessageStateRank(incomingMessage);
+  const keepLatestMessage =
+    (isTerminalToolMessage(latestMessage) && !isTerminalToolMessage(incomingMessage)) ||
+    latestRank > incomingRank ||
+    (latestRank === incomingRank &&
+      isPersistedToolMessage(latestMessage) &&
+      !isPersistedToolMessage(incomingMessage));
+  const replacement = keepLatestMessage ? latestMessage : incomingMessage;
+  const matchingIndexSet = new Set(matchingIndexes);
+  const firstMatchingIndex = matchingIndexes[0];
+
+  return input.flatMap((message, index) => {
+    if (!matchingIndexSet.has(index)) return [message];
+    return index === firstMatchingIndex ? [replacement] : [];
+  });
+};
+
+export const patchWorkflowToolMessageLifecycle = (messages = [], toolCallId, patch = {}) => {
+  const normalizedToolCallId = String(toolCallId || '').trim();
+  if (!normalizedToolCallId) return Array.isArray(messages) ? messages : [];
+
+  const { clearMessage = false, ...metadataPatch } = patch;
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    if (message?.role !== 'tool' || getToolCallId(message) !== normalizedToolCallId) return message;
+
+    const metadata = normalizeObject(message?.metadata);
+    if (
+      isTerminalToolMessage(message) &&
+      !TERMINAL_TOOL_EXECUTION_STATUSES.has(metadataPatch.execution_status)
+    ) {
+      return message;
+    }
+
+    return {
+      ...message,
+      message: clearMessage ? '' : message.message,
+      metadata: {
+        ...metadata,
+        ...metadataPatch
+      }
+    };
   });
 };
 

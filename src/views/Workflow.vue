@@ -2047,7 +2047,7 @@ const globalPendingApprovalList = computed(() => {
     entry =>
       existingWorkflowIds.has(entry?.sessionId) &&
       !isWorkflowBeingDeleted(entry?.sessionId) &&
-      entry.sessionId !== activeSessionId &&
+      (entry.sessionId !== activeSessionId || entry?.subAgentId) &&
       ['approval', 'ask_user'].includes(entry?.kind)
   )
   const currentEntries = workflowStore.currentInlinePendingApprovals

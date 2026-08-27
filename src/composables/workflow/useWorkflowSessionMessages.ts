@@ -7,6 +7,8 @@ import {
   appendMissingPendingToolMessages,
   deriveInlinePendingApprovals,
   normalizeExecutionContextForApproval,
+  patchWorkflowToolMessageLifecycle,
+  reconcileWorkflowToolMessages,
   resolveExecutionContextPendingTool,
   upsertExecutionContextPendingTool
 } from '@/stores/workflowApprovalRecovery.js'
@@ -85,6 +87,14 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
   }))
   const pendingApprovalIds = computed(() => pendingApprovals.value.map(entry => entry.id))
 
+  const replaceMessages = incomingMessage => {
+    messages.value = reconcileWorkflowToolMessages(messages.value, incomingMessage)
+  }
+
+  const patchToolLifecycle = (toolCallId, patch) => {
+    messages.value = patchWorkflowToolMessageLifecycle(messages.value, toolCallId, patch)
+  }
+
   const addMessage = payload => {
     const normalized = normalizeSnapshotMessage({
       persistedMessageId: payload.message_id,
@@ -97,7 +107,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
       errorType: payload.error_type,
       metadata: payload.metadata
     }, sessionId.value)
-    messages.value = [...messages.value, normalized]
+    replaceMessages(normalized)
     chatState.value = { content: '', reasoning: '', reasoningStatus: 'idle', blocks: [], retryInfo: null }
   }
 
@@ -115,8 +125,33 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
         executionContext: upsertExecutionContextPendingTool(executionContext.value, normalizeConfirmPendingTool(payload))
       }
       const pendingMessage = buildPendingMessage(sessionId.value, payload)
-      if (pendingMessage) messages.value = [...messages.value, pendingMessage]
-    } else if (payload.type === 'approval_resolved' || payload.type === 'tool_started' || payload.type === 'tool_completed' || payload.type === 'tool_failed') {
+      if (pendingMessage) replaceMessages(pendingMessage)
+    } else if (payload.type === 'approval_resolved') {
+      const toolCallId = payload.tool_call_id
+      workflow.value = {
+        ...(workflow.value || {}),
+        executionContext: resolveExecutionContextPendingTool(executionContext.value, toolCallId)
+      }
+      patchToolLifecycle(toolCallId, {
+        approval_status: payload.approved ? 'approved' : 'rejected',
+        execution_status: payload.execution_status || (payload.approved ? 'approval_submitted' : 'rejected'),
+        rejection_message: payload.rejection_message,
+        hide_approval_details: payload.approved === true,
+        clearMessage: payload.approved === true
+      })
+    } else if (payload.type === 'tool_started') {
+      const toolCallId = payload.tool_call_id
+      workflow.value = {
+        ...(workflow.value || {}),
+        executionContext: resolveExecutionContextPendingTool(executionContext.value, toolCallId)
+      }
+      patchToolLifecycle(toolCallId, {
+        approval_status: 'approved',
+        execution_status: 'running',
+        hide_approval_details: true,
+        clearMessage: true
+      })
+    } else if (payload.type === 'tool_completed' || payload.type === 'tool_failed') {
       const toolCallId = payload.tool_call_id
       workflow.value = {
         ...(workflow.value || {}),
@@ -157,11 +192,15 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
             id: targetSessionId,
             executionContext: context
           }
-          messages.value = appendMissingPendingToolMessages({
+          const hydratedMessages = appendMissingPendingToolMessages({
             messages: (snapshot.messages || []).map(message => normalizeSnapshotMessage(message, targetSessionId)),
             sessionId: targetSessionId,
             executionContext: context
           })
+          messages.value = hydratedMessages.reduce(
+            (projected, message) => reconcileWorkflowToolMessages(projected, message),
+            []
+          )
           hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0
         },
         applyEvent,

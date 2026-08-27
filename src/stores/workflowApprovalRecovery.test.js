@@ -5,6 +5,8 @@ import {
   clearExecutionContextPendingTools,
   deriveInlinePendingApprovals,
   detectApprovalRecoveryDrift,
+  patchWorkflowToolMessageLifecycle,
+  reconcileWorkflowToolMessages,
   resolveExecutionContextPendingTool,
   upsertExecutionContextPendingTool
 } from './workflowApprovalRecovery.js'
@@ -297,6 +299,78 @@ assert.deepEqual(
     pendingToolIds: ['tool_571ae521']
   },
   'drift detection must fire when approval wait has pending tools but no inline approvals'
+)
+
+const childApprovalPlaceholder = {
+  id: null,
+  sessionId: 'child-session',
+  role: 'tool',
+  message: 'Awaiting approval',
+  metadata: {
+    tool_call_id: 'child-tool-call',
+    tool_name: 'write_file',
+    approval_status: 'pending',
+    execution_status: 'pending_approval'
+  }
+}
+const persistedPendingObservation = {
+  id: 63801,
+  sessionId: 'child-session',
+  role: 'tool',
+  message: 'Awaiting approval',
+  metadata: { ...childApprovalPlaceholder.metadata }
+}
+const approvalSubmittedChild = patchWorkflowToolMessageLifecycle(
+  reconcileWorkflowToolMessages([childApprovalPlaceholder], persistedPendingObservation),
+  'child-tool-call',
+  {
+    approval_status: 'approved',
+    execution_status: 'approval_submitted',
+    hide_approval_details: true,
+    clearMessage: true
+  }
+)
+const runningChildApproval = patchWorkflowToolMessageLifecycle(
+  approvalSubmittedChild,
+  'child-tool-call',
+  {
+    approval_status: 'approved',
+    execution_status: 'running',
+    hide_approval_details: true,
+    clearMessage: true
+  }
+)
+const completedChildApproval = reconcileWorkflowToolMessages(runningChildApproval, {
+  id: 63802,
+  sessionId: 'child-session',
+  role: 'tool',
+  message: 'Created src/child-result.ts',
+  metadata: {
+    tool_call_id: 'child-tool-call',
+    tool_name: 'write_file',
+    approval_status: 'approved',
+    execution_status: 'completed'
+  }
+})
+
+assert.equal(approvalSubmittedChild[0]?.metadata?.execution_status, 'approval_submitted')
+assert.equal(runningChildApproval[0]?.metadata?.execution_status, 'running')
+
+assert.equal(
+  completedChildApproval.filter(
+    message => message?.metadata?.tool_call_id === 'child-tool-call'
+  ).length,
+  1,
+  'a child approval placeholder, persisted pending row, running state, and result must converge to one row'
+)
+assert.equal(completedChildApproval[0]?.id, 63802)
+assert.equal(completedChildApproval[0]?.metadata?.execution_status, 'completed')
+assert.equal(completedChildApproval[0]?.message, 'Created src/child-result.ts')
+
+assert.deepEqual(
+  reconcileWorkflowToolMessages(completedChildApproval, childApprovalPlaceholder),
+  completedChildApproval,
+  'a delayed pending child approval must not replace its terminal structured observation'
 )
 
 console.log('workflowApprovalRecovery tests passed')
