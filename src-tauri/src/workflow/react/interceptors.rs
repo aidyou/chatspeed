@@ -1711,21 +1711,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         !Self::completion_reports_have_material_conflict(left, right)
     }
 
-    fn resolve_completion_report(
-        args: &serde_json::Value,
-        text_part: &str,
-        pending_reports: &[PendingCompletionReport],
-        current_segment_id: i32,
-    ) -> Result<ResolvedCompletionReport, &'static str> {
-        Self::resolve_completion_report_at_step(
-            args,
-            text_part,
-            pending_reports,
-            current_segment_id,
-            usize::MAX,
-        )
-    }
-
     fn resolve_completion_report_at_step(
         args: &serde_json::Value,
         text_part: &str,
@@ -3002,6 +2987,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
         Ok(None)
+    }
+
+    #[cfg(test)]
+    fn resolve_completion_report(
+        args: &serde_json::Value,
+        text_part: &str,
+        pending_reports: &[PendingCompletionReport],
+        current_segment_id: i32,
+    ) -> Result<ResolvedCompletionReport, &'static str> {
+        Self::resolve_completion_report_at_step(
+            args,
+            text_part,
+            pending_reports,
+            current_segment_id,
+            usize::MAX,
+        )
     }
 }
 
