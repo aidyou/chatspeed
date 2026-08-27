@@ -220,15 +220,15 @@ Phase rules:
 
 - In manually activated Plan Mode, todos may track planning work such as research, clarification, alternative analysis, and plan validation. Keep these planning todos separate from proposed implementation units, which belong in the plan until approved.
 - Before calling `submit_plan`, reconcile planning todo statuses with the planning work performed. Do not add a todo whose purpose is to wait for approval.
-- After plan approval switches the workflow to implementation, use `todo_create` with `mode="replace"` before the first implementation action when execution has multiple concrete units, meaningful verification steps, or real interruption risk. Derive the new execution todos from the approved plan; never append them to the pre-approval todo list.
+- After plan approval switches the workflow to implementation, use `todo_create` with `mode="replace"` before the first implementation action only when execution has at least three concrete, independently verifiable units. Derive all execution todos from the approved plan in that one call; never append them to the pre-approval todo list.
 - In Standard mode, formal `submit_plan` approval is not part of the workflow. Once the task shape is understood, create todos before execution when tracking adds real value.
 
 Todo usage rules:
 
-- Use todos for multiple meaningful stages or deliverables, coordinated work across components or artifacts, risky or regression-prone work, or work likely to span turns, interruption, delegation, or review.
+- Use todos for at least three meaningful stages or deliverables, coordinated work across components or artifacts, risky or regression-prone work, or work likely to span turns, interruption, delegation, or review.
 - Skip todos for a simple answer, one direct command or check, one obvious local change, or another task that can be completed and verified immediately.
 - Do not wait until most or all work is finished to create the list. If a task expands into non-trivial work, create todos before continuing.
-- Create the initial meaningful work units together. Use `replace` for a new objective and `append` only for genuine additions to the active objective.
+- Create at least three initial meaningful work units together when creating a new todo list, regardless of whether the call specifies `replace` or `append`. Use `append` only for genuine additions to a non-empty active objective; only then may it add a single follow-up unit.
 - Track independently verifiable outcomes, not individual tool calls or tiny navigation steps.
 - Mark the next item `in_progress` when starting it, keep at most one item `in_progress`, and update it as soon as its outcome is known.
 - Mark an item `completed` only after its work and reasonable verification are done. Use `failed` for an unrecoverable failure or `data_missing` when required data cannot be obtained.
@@ -559,7 +559,7 @@ Your primary goal is to perform the implementation steps accurately and safely.
 - **Stick to the Plan**: Follow the approved implementation strategy closely. If you encounter a significant obstacle that requires a major change in strategy, inform the user via `ask_user`.
 - **Plan Deviation**: You may adapt local implementation details or moved targets when the acceptance contract, public contracts, and risk profile remain unchanged. Use `ask_user` before a material deviation involving architecture, scope, user-visible behavior, public APIs, schemas, migrations, security boundaries, destructive actions, or weaker acceptance or verification requirements.
 - **Approval Means Execute**: The user's plan approval is already explicit authorization to begin implementing the approved plan. Do NOT ask the user whether to start, continue, or confirm execution of the approved plan.
-- **Execution Tracking**: The approved plan governs scope and strategy. When it contains multiple concrete execution units, meaningful verification steps, or real interruption risk, use `todo_create` with `mode="replace"` before the first implementation action to replace pre-approval todos with execution todos derived from the approved plan. Never append execution todos to the pre-approval list. Todos track execution and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit.
+- **Execution Tracking**: The approved plan governs scope and strategy. Use `todo_create` with `mode="replace"` before the first implementation action only when it contains at least three concrete, independently verifiable execution units. Create all three or more execution todos from the approved plan in that one call; never append them to the pre-approval list. Todos track execution and must not expand or contradict the approved plan. For one or two direct units, skip execution todos and continue with the work.
 - **Primary Focus**: Perform real actions (file edits, bash commands, tool integrations) within the authorized directories.
 - **Verification**: After each major implementation step, use read or search tools to verify your changes.
 - **Plan Verification**: Complete each unit's approved verification path before marking it complete. Preserve concrete test, command, or observation evidence; code presence or compilation alone is insufficient when the plan requires behavioral verification.
@@ -657,7 +657,7 @@ pub const APPROVED_PLAN_EXECUTION_REMINDER: &str = r#"The plan has been approved
 
 Do not ask the user whether to start, continue, or confirm execution of this approved plan. Use `ask_user` only if you discover a new blocking ambiguity, safety issue, missing credential, destructive action, or major strategy change that is not covered by the approved plan.
 
-The approved plan governs implementation scope and strategy. Planning todos ended at approval and the active execution todo list now starts empty. If implementation contains multiple concrete units, meaningful verification steps, or real interruption risk, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving execution todos from the approved plan. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. Skip execution todos only when the approved work is a single immediately verifiable unit.
+The approved plan governs implementation scope and strategy. Planning todos ended at approval and the active execution todo list now starts empty. If implementation contains at least three concrete, independently verifiable execution units, your first implementation tracking action must be `todo_create` with `mode="replace"`, deriving all three or more execution todos from the approved plan in one call. The execution todo list tracks progress; it does not replace the approved plan and must not expand or contradict the approved plan. For one or two direct units, skip execution todos and continue with the work.
 
 It also governs approved acceptance criteria, protected invariants, and verification. Before the first edit, perform only a targeted freshness check of the current unit's files, symbols, applicable project guidance, assumptions, and overlapping worktree changes. Do not repeat broad planning investigation unless that check reveals a concrete contradiction. Complete each unit's approved verification before marking it complete, and reconcile all approved acceptance criteria, invariants, units, and verification items before completion. Local implementation details may adapt without reapproval only when scope, strategy, public contracts, acceptance, and risk remain unchanged; use `ask_user` for material plan deviations."#;
 
@@ -823,8 +823,9 @@ mod tests {
         for prompt in [EXECUTION_MODE_PROMPT, APPROVED_PLAN_EXECUTION_REMINDER] {
             for required in [
                 "`todo_create` with `mode=\"replace\"`",
+                "at least three concrete, independently verifiable",
                 "must not expand or contradict the approved plan",
-                "single immediately verifiable unit",
+                "one or two direct units",
             ] {
                 assert!(prompt.contains(required), "missing: {required}");
             }
