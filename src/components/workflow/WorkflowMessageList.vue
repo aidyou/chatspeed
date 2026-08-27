@@ -524,10 +524,10 @@
                       <div class="sub-agent-card__title">
                         <cs name="task" size="15px" class="sub-agent-card__icon" />
                         <span>Delegated Task</span>
-                      </div>
-                      <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
-                        <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
-                        {{ getSubAgentStatusLabel(message) }}
+                        <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
+                          <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
+                          {{ getSubAgentStatusLabel(message) }}
+                        </div>
                       </div>
                       <el-tooltip
                         v-if="message.subAgentCard.taskId"

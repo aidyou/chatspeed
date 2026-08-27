@@ -243,7 +243,7 @@ defineExpose({
   padding: var(--cs-space-xxs) var(--cs-space-sm);
   border: 1px solid transparent;
   border-radius: var(--cs-border-radius-lg);
-  font-size: var(--cs-font-size-sm);
+  font-size: var(--cs-font-size-xs);
   font-weight: 400;
   line-height: 1.6;
   white-space: nowrap;

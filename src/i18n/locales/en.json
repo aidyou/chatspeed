@@ -1380,6 +1380,7 @@
     "manualCompressFailed": "Failed to compress context: {error}",
     "manualCompressNoSession": "No task session is available to compress",
     "manualCompressShort": "Compress context",
+    "messageList": "Open sub-agent task",
     "noAgentError": "No agent available. Please create an agent in Settings first.",
     "noAutoApprovedItems": "No auto-approved items",
     "notificationSound": "Sound notifications",

@@ -1380,6 +1380,7 @@
     "manualCompressFailed": "压缩上下文失败：{error}",
     "manualCompressNoSession": "当前没有可压缩的任务会话",
     "manualCompressShort": "压缩上下文",
+    "messageList": "打开子代理任务",
     "noAgentError": "没有可用的代理。请先在设置中创建代理。",
     "noAutoApprovedItems": "没有自动审批的项目",
     "notificationSound": "声音通知",

@@ -1380,6 +1380,7 @@
     "manualCompressFailed": "壓縮上下文失敗：{error}",
     "manualCompressNoSession": "目前沒有可壓縮的任務工作階段",
     "manualCompressShort": "壓縮上下文",
+    "messageList": "開啟子代理任務",
     "noAgentError": "沒有可用的代理。請先在設定中建立代理。",
     "noAutoApprovedItems": "沒有自動審批項目",
     "notificationSound": "聲音通知",
