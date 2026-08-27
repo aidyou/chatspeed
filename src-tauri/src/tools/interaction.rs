@@ -56,13 +56,13 @@ impl ToolDefinition for AskUser {
                                 }
                             },
                             "required": ["title", "options"],
-                            "additionalProperties": false
+                            "additionalProperties": true
                         }
                     }
                 }
                 ,
                 "required": ["items"],
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -336,7 +336,7 @@ impl ToolDefinition for SubmitPlan {
                                         "description": { "type": "string", "minLength": 1 }
                                     },
                                     "required": ["id", "description"],
-                                    "additionalProperties": false
+                                    "additionalProperties": true
                                 }
                             },
                             "invariants": {
@@ -348,7 +348,7 @@ impl ToolDefinition for SubmitPlan {
                                         "description": { "type": "string", "minLength": 1 }
                                     },
                                     "required": ["id", "description"],
-                                    "additionalProperties": false
+                                    "additionalProperties": true
                                 }
                             },
                             "implementation_units": {
@@ -364,7 +364,7 @@ impl ToolDefinition for SubmitPlan {
                                         "files": { "type": "array", "items": { "type": "string" } }
                                     },
                                     "required": ["id", "description", "covers", "depends_on", "files"],
-                                    "additionalProperties": false
+                                    "additionalProperties": true
                                 }
                             },
                             "verification_items": {
@@ -380,7 +380,7 @@ impl ToolDefinition for SubmitPlan {
                                         "expected_evidence": { "type": "string", "minLength": 1 }
                                     },
                                     "required": ["id", "description", "covers", "method", "expected_evidence"],
-                                    "additionalProperties": false
+                                    "additionalProperties": true
                                 }
                             },
                             "unresolved_blockers": {
@@ -390,11 +390,11 @@ impl ToolDefinition for SubmitPlan {
                             }
                         },
                         "required": ["acceptance_criteria", "invariants", "implementation_units", "verification_items", "unresolved_blockers"],
-                        "additionalProperties": false
+                        "additionalProperties": true
                     }
                 },
                 "required": ["plan", "acceptance_contract"],
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -463,7 +463,7 @@ impl ToolDefinition for FinishTask {
                         "description": "The complete user-visible completion report, formatted as readable standard Markdown. Separate distinct topics with blank lines, and use short headings plus bullet or numbered lists for multi-topic reports instead of one long paragraph. Clearly cover what was completed, what was verified, and remaining limitations or notes; write 'None' when nothing remains. Do not wrap the entire report in a code fence or include JSON, HTML, or hidden reasoning. Required unless a valid report is already present in the current assistant response or was explicitly captured by the runtime."
                     }
                 },
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -474,27 +474,15 @@ impl ToolDefinition for FinishTask {
         let object = params
             .as_object()
             .ok_or_else(|| ToolError::InvalidParams("arguments must be an object".into()))?;
-        let report_source = object.get("report_source").and_then(Value::as_str);
         let summary_is_non_empty = object
             .get("summary")
             .and_then(Value::as_str)
             .is_some_and(|summary| !summary.trim().is_empty());
-        let valid_shape = match object.len() {
-            0 => true,
-            1 => {
-                summary_is_non_empty
-                    || (report_source == Some("assistant_message")
-                        && !object.contains_key("summary"))
-            }
-            2 => report_source == Some("tool_argument") && summary_is_non_empty,
-            _ => false,
-        };
-        if !valid_shape {
+        if object.contains_key("summary") && !summary_is_non_empty {
             return Err(ToolError::InvalidParams(
-                "complete_workflow accepts an optional non-empty summary; only historical report_source payloads are additionally supported for compatibility".into(),
+                "complete_workflow summary must be a non-empty string".into(),
             ));
         }
-
         Ok(ToolCallResult::success(
             Some("Task finished".into()),
             Some(json!({ "status": "completed" })),
@@ -541,7 +529,7 @@ impl ToolDefinition for SubmitResult {
                     }
                 },
                 "required": ["result", "summary"],
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -710,12 +698,13 @@ mod tests {
                 "summary description missing: {required_phrase}"
             );
         }
-        assert_eq!(declaration.input_schema["additionalProperties"], false);
+        assert_eq!(declaration.input_schema["additionalProperties"], true);
         assert!(declaration.input_schema.get("required").is_none());
 
         for params in [
             json!({}),
             json!({ "summary": "Completed the requested work and verified it." }),
+            json!({ "summary": "Completed the requested work and verified it.", "ignored": true }),
         ] {
             let result = tool.call(params).await.unwrap();
             assert_eq!(result.content.unwrap(), "Task finished");
@@ -724,15 +713,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finish_task_accepts_legacy_arguments_at_runtime_boundary() {
+    async fn test_finish_task_ignores_undefined_arguments_at_runtime_boundary() {
         let tool = FinishTask;
 
         for params in [
-            json!({ "summary": "Legacy single-argument completion report." }),
+            json!({ "summary": "Completion report with an ignored field." }),
             json!({ "report_source": "assistant_message" }),
             json!({
-                "report_source": "tool_argument",
-                "summary": "Legacy multi-argument completion report."
+                "report_source": "unknown",
+                "summary": "Completion report with an ignored legacy field."
             }),
         ] {
             assert!(tool.call(params).await.is_ok());
@@ -740,20 +729,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_finish_task_rejects_invalid_legacy_argument_shapes() {
+    async fn test_finish_task_rejects_invalid_summary_values() {
         let tool = FinishTask;
 
         for params in [
             json!({ "summary": "" }),
             json!({ "summary": "   " }),
             json!({ "summary": 42 }),
-            json!({ "report_source": "assistant_message", "summary": "duplicate" }),
-            json!({ "report_source": "tool_argument" }),
-            json!({ "report_source": "unknown", "summary": "report" }),
-            json!({ "unexpected": "value" }),
         ] {
             assert!(tool.call(params).await.is_err());
         }
+
+        assert!(tool.call(json!({ "unexpected": "value" })).await.is_ok());
     }
 
     // Test that all tools return ToolCallResult with expected structure

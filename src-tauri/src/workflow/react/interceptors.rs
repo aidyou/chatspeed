@@ -1717,29 +1717,28 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         pending_reports: &[PendingCompletionReport],
         current_segment_id: i32,
     ) -> Result<ResolvedCompletionReport, &'static str> {
+        Self::resolve_completion_report_at_step(
+            args,
+            text_part,
+            pending_reports,
+            current_segment_id,
+            usize::MAX,
+        )
+    }
+
+    fn resolve_completion_report_at_step(
+        args: &serde_json::Value,
+        text_part: &str,
+        pending_reports: &[PendingCompletionReport],
+        current_segment_id: i32,
+        current_step: usize,
+    ) -> Result<ResolvedCompletionReport, &'static str> {
         let object = args
             .as_object()
             .ok_or("complete_workflow arguments must be an object")?;
-        if object
-            .keys()
-            .any(|key| !matches!(key.as_str(), "report_source" | "summary"))
-        {
-            return Err("complete_workflow contains unsupported arguments");
-        }
-        let report_source = object.get("report_source").and_then(Value::as_str);
         let summary = object.get("summary").and_then(Value::as_str);
         if object.contains_key("summary") && summary.is_none() {
             return Err("complete_workflow summary must be a string");
-        }
-        match report_source {
-            Some("assistant_message") if object.contains_key("summary") => {
-                return Err("legacy assistant_message source cannot include summary");
-            }
-            Some("tool_argument") if summary.is_none() => {
-                return Err("legacy tool_argument source requires summary");
-            }
-            Some("assistant_message" | "tool_argument") | None => {}
-            Some(_) => return Err("legacy report_source is invalid"),
         }
 
         let mut candidates = Vec::<ResolvedCompletionReport>::new();
@@ -1813,18 +1812,53 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             0 => Err("no valid completion report is available"),
             1 => Ok(unique.remove(0)),
             _ => {
+                let explicit_summary_index = unique
+                    .iter()
+                    .position(|candidate| candidate.persist_as_message);
+                let visible_report_index =
+                    unique.iter().position(|candidate| candidate.recency.0 == 1);
+                let fresh_pending_index = pending_reports
+                    .iter()
+                    .filter(|pending| {
+                        pending.segment_id == current_segment_id
+                            && pending.created_at_step.saturating_add(1) >= current_step
+                    })
+                    .filter_map(|pending| {
+                        let normalized = Self::normalized_finish_task_summary(&pending.content);
+                        unique.iter().position(|candidate| {
+                            candidate.recency.0 == 0
+                                && candidate.source_message_id == pending.source_message_id
+                                && candidate.content == normalized
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                // A terminal todo update captures the preceding assistant report so the next
+                // turn can commit it with `{}`. Models sometimes repeat that report as `summary`.
+                // Keep the fresh captured draft unless the retry makes a materially conflicting
+                // claim; the caller did no intervening work that could make the draft stale.
+                if unique.len() == 2
+                    && visible_report_index.is_none()
+                    && fresh_pending_index.len() == 1
+                {
+                    if let Some(summary_index) = explicit_summary_index {
+                        let pending_index = fresh_pending_index[0];
+                        let reports_conflict = Self::completion_reports_have_material_conflict(
+                            &unique[pending_index].content,
+                            &unique[summary_index].content,
+                        );
+                        if !reports_conflict {
+                            return Ok(unique.swap_remove(pending_index));
+                        }
+                    }
+                }
+
                 let mut latest_index = unique
                     .iter()
                     .enumerate()
                     .max_by_key(|(_, candidate)| candidate.recency)
                     .map(|(index, _)| index)
                     .ok_or("no valid completion report is available")?;
-                let explicit_summary_index = unique
-                    .iter()
-                    .position(|candidate| candidate.persist_as_message);
-                let visible_report_index =
-                    unique.iter().position(|candidate| candidate.recency.0 == 1);
-
                 // A visible assistant report and the explicit summary from the same response are
                 // alternate representations of one completion attempt. They may differ in detail
                 // or add aggregate context without being contradictory. When they are clearly about
@@ -2417,11 +2451,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        let mut completion_report = match Self::resolve_completion_report(
+        let mut completion_report = match Self::resolve_completion_report_at_step(
             args,
             text_part,
             &self.pending_completion_reports,
             self.context.current_segment_id,
+            self.current_step,
         ) {
             Ok(report) => report,
             Err(reason) => {
@@ -3093,13 +3128,13 @@ mod tests {
     }
 
     #[test]
-    fn invalid_completion_arguments_use_the_actual_pending_state() {
+    fn completion_report_rejection_reminder_uses_the_actual_pending_state() {
         let with_pending = WorkflowExecutor::completion_report_rejection_reminder(
-            "complete_workflow contains unsupported arguments",
+            "complete_workflow summary must be a string",
             true,
         );
         let without_pending = WorkflowExecutor::completion_report_rejection_reminder(
-            "complete_workflow contains unsupported arguments",
+            "complete_workflow summary must be a string",
             false,
         );
 
@@ -3195,6 +3230,42 @@ mod tests {
         assert_eq!(resolved.content, latest_report);
         assert_eq!(resolved.source_message_id, None);
         assert!(resolved.persist_as_message);
+    }
+
+    #[test]
+    fn fresh_pending_completion_draft_wins_over_a_nonconflicting_retry_summary() {
+        let pending_report = "Final verification passed for the shell output reduction update.\nThe reducer, shell output, and observation changes are complete; unrelated workspace changes remain untouched.";
+        let retry_summary = "Completed the shell output reduction update.\nVerified the focused reducer and observation tests passed, and confirmed unrelated workspace changes remain untouched.\nRemaining: none.";
+        let pending = vec![report_at(pending_report, 44, 3, 17)];
+
+        let resolved = WorkflowExecutor::resolve_completion_report_at_step(
+            &json!({ "summary": retry_summary }),
+            "",
+            &pending,
+            3,
+            18,
+        )
+        .expect("a fresh pending draft should absorb a nonconflicting retry summary");
+
+        assert_eq!(resolved.content, pending_report);
+        assert_eq!(resolved.source_message_id, Some(44));
+        assert!(!resolved.persist_as_message);
+    }
+
+    #[test]
+    fn fresh_pending_completion_draft_rejects_a_conflicting_retry_summary() {
+        let pending_report = "Completed the workflow update.\nThe focused completion tests passed and no known limitations remain.";
+        let retry_summary = "Completed the workflow update.\nThe focused completion tests failed and no known limitations remain.";
+        let pending = vec![report_at(pending_report, 45, 3, 17)];
+
+        assert!(WorkflowExecutor::resolve_completion_report_at_step(
+            &json!({ "summary": retry_summary }),
+            "",
+            &pending,
+            3,
+            18,
+        )
+        .is_err());
     }
 
     #[test]
@@ -3494,54 +3565,75 @@ mod tests {
     }
 
     #[test]
-    fn completion_report_resolution_accepts_optional_summary_and_legacy_payload() {
-        let legacy_report =
-            "Implemented the legacy workflow change.\nVerified the focused tests passed.";
+    fn completion_report_resolution_ignores_undefined_arguments_with_a_summary() {
+        let report = "Implemented the legacy workflow change.\nVerified the focused tests passed.";
 
         for args in [
-            json!({ "summary": legacy_report }),
-            json!({ "report_source": "tool_argument", "summary": legacy_report }),
+            json!({ "summary": report }),
+            json!({ "summary": report, "report_source": "tool_argument", "ignored": true }),
         ] {
             let resolved = WorkflowExecutor::resolve_completion_report(&args, "", &[], 1).unwrap();
-            assert_eq!(resolved.content, legacy_report);
+            assert_eq!(resolved.content, report);
         }
     }
 
     #[test]
-    fn completion_report_resolution_accepts_legacy_assistant_source_with_pending_report() {
+    fn completion_report_resolution_ignores_undefined_arguments_with_a_pending_report() {
         let full_report =
             "Implemented the requested workflow fix.\nVerified the focused tests passed.";
         let pending = vec![report(full_report, 48, 3)];
 
         let resolved = WorkflowExecutor::resolve_completion_report(
-            &json!({ "report_source": "assistant_message" }),
+            &json!({ "report_source": "assistant_message", "summarizeagle": "false" }),
             "",
             &pending,
             3,
         )
-        .expect("legacy source marker should use the structured pending draft");
+        .expect("undefined arguments should not block the structured pending draft");
 
         assert_eq!(resolved.content, full_report);
         assert_eq!(resolved.source_message_id, Some(48));
     }
 
     #[test]
-    fn completion_report_resolution_rejects_invalid_legacy_argument_combinations() {
+    fn completion_report_resolution_rejects_invalid_summary_values() {
         let full_report =
             "Implemented the requested workflow fix.\nVerified the focused tests passed.";
 
-        for args in [
-            json!({ "summary": 42 }),
-            json!({ "report_source": "assistant_message", "summary": full_report }),
-            json!({ "report_source": "tool_argument" }),
-            json!({ "report_source": "unknown", "summary": full_report }),
-            json!({ "unexpected": full_report }),
-        ] {
+        for args in [json!({ "summary": 42 }), json!({ "summary": "   " })] {
             assert!(
                 WorkflowExecutor::resolve_completion_report(&args, full_report, &[], 3).is_err(),
-                "legacy payload should be rejected: {args}"
+                "invalid summary should be rejected: {args}"
             );
         }
+    }
+
+    #[test]
+    fn completion_report_resolution_ignores_unknown_arguments() {
+        let report = "Completed the requested workflow fix.\nVerified the focused tests passed.";
+        let pending = vec![report_at(report, 49, 3, 7)];
+
+        let resolved = WorkflowExecutor::resolve_completion_report_at_step(
+            &json!({ "summarizeagle": "false" }),
+            "",
+            &pending,
+            3,
+            8,
+        )
+        .expect("unknown fields must not block a valid pending completion draft");
+        assert_eq!(resolved.content, report);
+        assert_eq!(resolved.source_message_id, Some(49));
+
+        let explicit_summary =
+            "Completed the requested workflow fix.\nVerified the focused tests passed.";
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({ "summary": explicit_summary, "ignored": true }),
+            "",
+            &[],
+            3,
+        )
+        .expect("unknown fields must not block a valid explicit completion report");
+        assert_eq!(resolved.content, explicit_summary);
     }
 
     #[test]

@@ -935,7 +935,7 @@ impl ToolDefinition for PlanReadNote {
                     "offset": { "type": "integer", "default": 0, "minimum": 0 },
                     "limit": { "type": "integer", "default": 800, "minimum": 1 }
                 },
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -993,7 +993,7 @@ impl ToolDefinition for PlanWriteNote {
                     "content": { "type": "string", "description": "Complete file content to store in the planning note" }
                 },
                 "required": ["content"],
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
@@ -1068,7 +1068,7 @@ impl ToolDefinition for PlanEditNote {
                     "replace_all": { "type": "boolean", "default": false }
                 },
                 "required": ["old_string", "new_string"],
-                "additionalProperties": false
+                "additionalProperties": true
             }),
             output_schema: None,
             disabled: false,
