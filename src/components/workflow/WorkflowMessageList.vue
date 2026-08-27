@@ -8,16 +8,26 @@
       <el-skeleton animated>
         <template #template>
           <div class="message-skeleton__message message-skeleton__message--assistant">
-            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--wide" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--wide" />
             <el-skeleton-item variant="text" class="message-skeleton__line" />
-            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--short" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--short" />
           </div>
           <div class="message-skeleton__message message-skeleton__message--user">
-            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--medium" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--medium" />
           </div>
           <div class="message-skeleton__message message-skeleton__message--assistant">
-            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--medium" />
-            <el-skeleton-item variant="text" class="message-skeleton__line message-skeleton__line--short" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--medium" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--short" />
           </div>
         </template>
       </el-skeleton>
@@ -25,1134 +35,1158 @@
 
     <template v-else>
       <a
-      v-if="hasHiddenEarlierMessages"
-      class="history-window-indicator"
-      @click="revealEarlierMessages">
-      <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
-      <span>{{ t('workflow.earlierMessages') }}</span>
-    </a>
-    <div
-      v-for="(message, index) in visibleMessages"
-      :key="message.displayId"
-      class="message"
-      :data-message-id="message.windowAnchorId || message.displayId || message.id || null"
-      :data-window-anchor-id="message.windowAnchorId || null"
-      :data-child-task-id="getMessageSubAgentId(message)"
-      :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
-      <div class="avatar" v-if="message.role === 'user'">
-        <cs name="talk" class="user-icon" />
-      </div>
-      <div class="content-container">
-        <div class="content" v-if="message.role === 'user'">
-          <div
-            v-if="message.metadata?.attachments?.length > 0"
-            class="workflow-message-attachments">
-            <div
-              v-for="(attachment, attachmentIndex) in message.metadata.attachments"
-              :key="`${message.displayId || message.id || attachmentIndex}_attachment_${attachmentIndex}`"
-              class="workflow-message-attachment-item">
-              <el-image
-                v-if="attachment.type === 'image'"
-                :src="attachment.url"
-                :preview-src-list="[attachment.url]"
-                :initial-index="0"
-                fit="cover"
-                class="workflow-message-attachment-image"
-                preview-teleported />
-            </div>
-          </div>
-          <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
-            <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
-            <div
-              v-for="(item, itemIndex) in getAskUserResponseItems(message)"
-              :key="`${item.title}-${itemIndex}`"
-              class="ask-user-response-item">
-              <div class="ask-user-response-question">{{ item.title }}</div>
-              <div class="ask-user-response-answer">
-                <span class="answer-label">{{ $t('workflow.askUser.answerLabel') }}</span>
-                <span>{{ formatAskUserAnswer(item) }}</span>
-              </div>
-              <pre
-                v-if="item.source === 'custom' && item.choice"
-                class="ask-user-response-custom"
-                >{{ item.choice }}</pre
-              >
-            </div>
-          </div>
-          <div
-            v-else
-            class="user-message-wrap"
-            :class="{
-              'is-expandable': isExpandableUserMessage(message),
-              'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message)
-            }"
-            @click="
-              isExpandableUserMessage(message) &&
-              $emit('toggle-expand', getUserMessageExpandId(message))
-            ">
-            <pre
-              :data-user-expand-id="getUserMessageExpandId(message)"
-              :style="getUserMessageCollapsedStyle(message)"
-              class="simple-text"
-              :class="{
-                'is-collapsed': !isUserMessageExpanded(message),
-                'is-expandable': isExpandableUserMessage(message)
-              }"
-              >{{ getVisibleUserContent(message) }}</pre
-            >
-            <button
-              v-if="isExpandableUserMessage(message)"
-              type="button"
-              class="user-message-toggle"
-              :aria-label="isUserMessageExpanded(message) ? 'Collapse message' : 'Expand message'"
-              @click.stop="$emit('toggle-expand', getUserMessageExpandId(message))">
-              <cs
-                name="double-arrow-down"
-                size="14px"
-                class="user-message-toggle__icon"
-                :class="{ expanded: isUserMessageExpanded(message) }" />
-            </button>
-          </div>
+        v-if="hasHiddenEarlierMessages"
+        class="history-window-indicator"
+        @click="revealEarlierMessages">
+        <cs name="double-arrow-down" class="cs-rotate" size="var(--cs-font-size-xs)" />
+        <span>{{ t('workflow.earlierMessages') }}</span>
+      </a>
+      <div
+        v-for="(message, index) in visibleMessages"
+        :key="message.displayId"
+        class="message"
+        :data-message-id="message.windowAnchorId || message.displayId || message.id || null"
+        :data-window-anchor-id="message.windowAnchorId || null"
+        :data-child-task-id="getMessageSubAgentId(message)"
+        :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
+        <div class="avatar" v-if="message.role === 'user'">
+          <cs name="talk" class="user-icon" />
         </div>
-        <div v-else class="ai-content chat">
-          <div
-            v-if="isCollapsedToolGroupMessage(message)"
-            class="cli-tool-call tool-group"
-            :class="{
-              'tool-group--running':
-                isCollapsedToolGroupRunning(message) || isStreamingThoughtMergedIntoToolGroup(message)
-            }">
+        <div class="content-container">
+          <div class="content" v-if="message.role === 'user'">
             <div
-              class="tool-line title-wrap expandable tool-group__summary"
-              :class="{ expanded: isMessageExpanded(message) }"
-              @click="$emit('toggle-expand', message.displayId)">
-              <cs :name="message.groupDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-              <span
-                v-if="getCollapsedToolGroupThoughtSummary(message)"
-                class="tool-group__thought-count">
-                {{ getCollapsedToolGroupThoughtSummary(message) }}
-              </span>
-              <span v-if="message.groupDisplay.errorSummary" class="tool-group__error-count">
-                {{ message.groupDisplay.errorSummary }}
-              </span>
-              <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
+              v-if="message.metadata?.attachments?.length > 0"
+              class="workflow-message-attachments">
+              <div
+                v-for="(attachment, attachmentIndex) in message.metadata.attachments"
+                :key="`${message.displayId || message.id || attachmentIndex}_attachment_${attachmentIndex}`"
+                class="workflow-message-attachment-item">
+                <el-image
+                  v-if="attachment.type === 'image'"
+                  :src="attachment.url"
+                  :preview-src-list="[attachment.url]"
+                  :initial-index="0"
+                  fit="cover"
+                  class="workflow-message-attachment-image"
+                  preview-teleported />
+              </div>
+            </div>
+            <div v-if="getAskUserResponseItems(message).length > 0" class="ask-user-response-card">
+              <div class="ask-user-response-title">{{ $t('workflow.askUser.responseTitle') }}</div>
+              <div
+                v-for="(item, itemIndex) in getAskUserResponseItems(message)"
+                :key="`${item.title}-${itemIndex}`"
+                class="ask-user-response-item">
+                <div class="ask-user-response-question">{{ item.title }}</div>
+                <div class="ask-user-response-answer">
+                  <span class="answer-label">{{ $t('workflow.askUser.answerLabel') }}</span>
+                  <span>{{ formatAskUserAnswer(item) }}</span>
+                </div>
+                <pre
+                  v-if="item.source === 'custom' && item.choice"
+                  class="ask-user-response-custom"
+                  >{{ item.choice }}</pre>
+              </div>
+            </div>
+            <div
+              v-else
+              class="user-message-wrap"
+              :class="{
+                'is-expandable': isExpandableUserMessage(message),
+                'is-collapsed': isExpandableUserMessage(message) && !isUserMessageExpanded(message)
+              }"
+              @click="
+                isExpandableUserMessage(message) &&
+                $emit('toggle-expand', getUserMessageExpandId(message))
+              ">
+              <pre
+                :data-user-expand-id="getUserMessageExpandId(message)"
+                :style="getUserMessageCollapsedStyle(message)"
+                class="simple-text"
+                :class="{
+                  'is-collapsed': !isUserMessageExpanded(message),
+                  'is-expandable': isExpandableUserMessage(message)
+                }"
+                >{{ getVisibleUserContent(message) }}</pre>
               <button
+                v-if="isExpandableUserMessage(message)"
                 type="button"
-                class="tool-group__expand-button"
-                :aria-label="$t('workflow.toolGroups.expand')"
-                @click.stop="$emit('toggle-expand', message.displayId)">
-                <cs name="caret-down" size="14px" />
+                class="user-message-toggle"
+                :aria-label="isUserMessageExpanded(message) ? 'Collapse message' : 'Expand message'"
+                @click.stop="$emit('toggle-expand', getUserMessageExpandId(message))">
+                <cs
+                  name="double-arrow-down"
+                  size="14px"
+                  class="user-message-toggle__icon"
+                  :class="{ expanded: isUserMessageExpanded(message) }" />
               </button>
             </div>
-            <div v-if="isMessageExpanded(message)" class="collapsed-tool-group__body">
+          </div>
+          <div v-else class="ai-content chat">
+            <div
+              v-if="isCollapsedToolGroupMessage(message)"
+              class="cli-tool-call tool-group"
+              :class="{
+                'tool-group--running':
+                  isCollapsedToolGroupRunning(message) ||
+                  isStreamingThoughtMergedIntoToolGroup(message)
+              }">
               <div
-                v-for="(thought, thoughtIndex) in message.groupedThoughts || []"
-                :key="`${message.displayId}_grouped_thought_${thoughtIndex}`"
-                class="reasoning-container collapsed-tool-group__thought"
-                :style="{ order: thought.renderOrder ?? thoughtIndex }">
-                <div class="reasoning-header" @click="toggleReasoningForMessage(thought)">
-                  <cs name="reasoning" size="14px" class="reasoning-icon" />
-                  <span class="reasoning-text">
-                    {{
-                      isReasoningExpandedForMessage(thought)
-                        ? $t('workflow.thinkingExpanded') || 'Thinking Process'
-                        : $t('workflow.thoughtCompleted') || 'Thought Complete'
-                    }}
-                  </span>
-                  <span class="reasoning-toggle">
-                    {{ isReasoningExpandedForMessage(thought) ? '▲' : '▼' }}
-                  </span>
-                </div>
-                <div v-if="isReasoningExpandedForMessage(thought)" class="reasoning-content">
-                  {{ thought.reasoning || thought.message }}
-                </div>
+                class="tool-line title-wrap expandable tool-group__summary"
+                :class="{ expanded: isMessageExpanded(message) }"
+                @click="$emit('toggle-expand', message.displayId)">
+                <cs
+                  :name="message.groupDisplay.icon || 'tool'"
+                  size="15px"
+                  class="tool-type-icon" />
+                <span
+                  v-if="getCollapsedToolGroupThoughtSummary(message)"
+                  class="tool-group__thought-count">
+                  {{ getCollapsedToolGroupThoughtSummary(message) }}
+                </span>
+                <span v-if="message.groupDisplay.errorSummary" class="tool-group__error-count">
+                  {{ message.groupDisplay.errorSummary }}
+                </span>
+                <span class="tool-group__summary-text">{{ message.groupDisplay.summary }}</span>
+                <button
+                  type="button"
+                  class="tool-group__expand-button"
+                  :aria-label="$t('workflow.toolGroups.expand')"
+                  @click.stop="$emit('toggle-expand', message.displayId)">
+                  <cs name="caret-down" size="14px" />
+                </button>
               </div>
-              <div
-                v-if="isStreamingThoughtMergedIntoToolGroup(message)"
-                class="reasoning-container collapsed-tool-group__thought"
-                :style="{ order: getStreamingThoughtGroupOrder(message) }">
+              <div v-if="isMessageExpanded(message)" class="collapsed-tool-group__body">
                 <div
-                  class="reasoning-header"
-                  @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
-                  <cs
-                    name="reasoning"
-                    size="14px"
-                    class="reasoning-icon"
-                    :class="{
-                      rotating:
-                        !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
-                    }" />
-                  <span class="reasoning-text">
-                    {{
-                      isReasoningExpanded(STREAMING_REASONING_ID)
-                        ? $t('workflow.thinkingExpanded') || 'Thinking Process'
-                        : hasStreamingThoughtCompleted
-                          ? $t('workflow.thoughtCompleted') || 'Thought Complete'
-                          : $t('workflow.thinking') || 'Thinking...'
-                    }}
-                  </span>
-                  <span class="reasoning-toggle">
-                    {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
-                  </span>
+                  v-for="(thought, thoughtIndex) in message.groupedThoughts || []"
+                  :key="`${message.displayId}_grouped_thought_${thoughtIndex}`"
+                  class="reasoning-container collapsed-tool-group__thought"
+                  :style="{ order: thought.renderOrder ?? thoughtIndex }">
+                  <div class="reasoning-header" @click="toggleReasoningForMessage(thought)">
+                    <cs name="reasoning" size="14px" class="reasoning-icon" />
+                    <span class="reasoning-text">
+                      {{
+                        isReasoningExpandedForMessage(thought)
+                          ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                          : $t('workflow.thoughtCompleted') || 'Thought Complete'
+                      }}
+                    </span>
+                    <span class="reasoning-toggle">
+                      {{ isReasoningExpandedForMessage(thought) ? '▲' : '▼' }}
+                    </span>
+                  </div>
+                  <div v-if="isReasoningExpandedForMessage(thought)" class="reasoning-content">
+                    {{ thought.reasoning || thought.message }}
+                  </div>
                 </div>
-                <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
-                  {{ chatState.reasoning }}
+                <div
+                  v-if="isStreamingThoughtMergedIntoToolGroup(message)"
+                  class="reasoning-container collapsed-tool-group__thought"
+                  :style="{ order: getStreamingThoughtGroupOrder(message) }">
+                  <div
+                    class="reasoning-header"
+                    @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
+                    <cs
+                      name="reasoning"
+                      size="14px"
+                      class="reasoning-icon"
+                      :class="{
+                        rotating:
+                          !hasStreamingThoughtCompleted &&
+                          !isReasoningExpanded(STREAMING_REASONING_ID)
+                      }" />
+                    <span class="reasoning-text">
+                      {{
+                        isReasoningExpanded(STREAMING_REASONING_ID)
+                          ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                          : hasStreamingThoughtCompleted
+                            ? $t('workflow.thoughtCompleted') || 'Thought Complete'
+                            : $t('workflow.thinking') || 'Thinking...'
+                      }}
+                    </span>
+                    <span class="reasoning-toggle">
+                      {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
+                    </span>
+                  </div>
+                  <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
+                    {{ chatState.reasoning }}
+                  </div>
+                </div>
+                <div
+                  v-for="(tool, toolIndex) in message.groupedTools"
+                  :key="`${message.displayId}_grouped_tool_${toolIndex}`"
+                  class="cli-tool-call collapsed-tool-group__item"
+                  :class="[
+                    tool.toolDisplay?.toolType || 'tool-system',
+                    getToolRenderStatusClass(tool)
+                  ]"
+                  :style="{ order: tool.renderOrder ?? toolIndex }">
+                  <div
+                    class="tool-line title-wrap expandable"
+                    :class="{
+                      'tool-rejected': tool.isRejected,
+                      'title-wrap--bash': isBashToolCall(tool)
+                    }"
+                    @click="$emit('toggle-expand', tool.displayId)">
+                    <cs
+                      :name="tool.toolDisplay?.icon || 'tool'"
+                      size="15px"
+                      class="tool-type-icon" />
+                    <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(tool) }">{{
+                      tool.toolDisplay?.action
+                    }}</span>
+                    <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
+                      getToolTitleTarget(tool)
+                    }}</span>
+                    <span
+                      v-if="isBashToolCall(tool) && getShellExecutionRouteLabel(tool)"
+                      class="shell-execution-route-badge">
+                      {{ getShellExecutionRouteLabel(tool) }}
+                    </span>
+                    <span
+                      v-if="getToolExecutionDurationLabel(tool)"
+                      class="shell-execution-route-badge">
+                      {{ getToolExecutionDurationLabel(tool) }}
+                    </span>
+                    <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
+                  </div>
+                  <div
+                    v-if="!isToolMessageExpanded(tool)"
+                    class="tool-line summary expandable"
+                    @click="$emit('toggle-expand', tool.displayId)">
+                    <span class="corner-icon">⎿</span>
+                    <span class="summary-text">{{ getToolSummaryText(tool) }}</span>
+                    <span class="expand-hint">(click to expand)</span>
+                  </div>
+                  <div
+                    v-if="isToolMessageExpanded(tool)"
+                    class="tool-detail tool-detail--expanded"
+                    :class="getToolDetailClass(tool)">
+                    <div v-if="isBashToolCall(tool)" class="bash-command-frame">
+                      <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
+                      <pre class="bash-command" aria-label="Bash command"><code
+                      class="hljs"
+                      v-html="getHighlightedBashCommand(tool)"></code></pre>
+                    </div>
+                    <div
+                      v-if="isMcpToolMessage(tool) && getFormattedMcpToolArguments(tool)"
+                      class="mcp-tool-arguments">
+                      <div class="mcp-tool-arguments__label">
+                        {{ $t('workflow.taskLedger.arguments') }}
+                      </div>
+                      <pre class="raw-content">{{ getFormattedMcpToolArguments(tool) }}</pre>
+                    </div>
+                    <div
+                      v-if="
+                        tool.metadata?.tool_call_id &&
+                        getToolStream(tool.metadata.tool_call_id).length > 0
+                      "
+                      class="tool-stream-output">
+                      <div
+                        v-for="(line, idx) in getToolStream(tool.metadata.tool_call_id)"
+                        :key="idx"
+                        class="stream-line">
+                        {{ line }}
+                      </div>
+                    </div>
+                    <div
+                      v-else-if="shouldShowRunningPlaceholder(tool)"
+                      class="tool-running-placeholder">
+                      <cs
+                        name="loading"
+                        size="14px"
+                        class="tool-running-placeholder__icon cs-spin" />
+                      <span class="tool-running-placeholder__text">
+                        {{ getRunningPlaceholderText(tool) }}
+                      </span>
+                    </div>
+                    <div
+                      v-else-if="
+                        shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'
+                      "
+                      class="tool-diff-view">
+                      <FilePreviewDiff
+                        :file-path="getDiffFilePath(tool)"
+                        :old-content="getDiffOldContent(tool)"
+                        :new-content="getDiffNewContent(tool)"
+                        :context-data="getDiffContextData(tool)" />
+                    </div>
+                    <div
+                      v-else-if="
+                        shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'choice'
+                      "
+                      class="choice-container">
+                      <div
+                        v-for="group in getChoiceGroups(tool)"
+                        :key="group.title"
+                        class="choice-group">
+                        <div class="choice-question">
+                          {{ group.title }}
+                        </div>
+                        <div class="choice-options vertical numbered choice-options--readonly">
+                          <div
+                            v-for="(opt, optIndex) in group.options"
+                            :key="`${group.title}-${opt}`"
+                            class="choice-option-label">
+                            {{ optIndex + 1 }}. {{ opt }}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <MarkdownSimple
+                      v-else-if="
+                        shouldShowToolRawContent(tool) &&
+                        tool.toolDisplay?.displayType === 'markdown' &&
+                        !isMcpToolMessage(tool)
+                      "
+                      :content="removeSystemReminder(tool.message)" />
+                    <pre
+                      v-else-if="
+                        shouldShowToolRawContent(tool) && !isDuplicateBashCommandContent(tool)
+                      "
+                      class="raw-content"
+                      >{{ getMcpToolContentForDisplay(tool) }}</pre>
+                  </div>
                 </div>
               </div>
+            </div>
+            <div v-else-if="isExplorationBatchMessage(message)" class="exploration-card">
               <div
-                v-for="(tool, toolIndex) in message.groupedTools"
-                :key="`${message.displayId}_grouped_tool_${toolIndex}`"
-                class="cli-tool-call collapsed-tool-group__item"
-                :class="[
-                  tool.toolDisplay?.toolType || 'tool-system',
-                  getToolRenderStatusClass(tool)
-                ]"
-                :style="{ order: tool.renderOrder ?? toolIndex }">
+                class="exploration-card__header"
+                @click="$emit('toggle-expand', message.displayId)">
+                <div class="exploration-card__title-wrap">
+                  <div class="exploration-card__title">
+                    <cs name="search" size="15px" class="exploration-card__icon" />
+                    <span>{{ $t('workflow.exploration.title') }}</span>
+                  </div>
+                  <div class="exploration-card__meta">
+                    <span>{{ getExplorationBatchSummary(message) }}</span>
+                  </div>
+                </div>
+                <span v-if="!isMessageExpanded(message)" class="exploration-card__preview">
+                  {{ getExplorationBatchPreview(message) }}
+                </span>
+                <cs
+                  name="double-arrow-down"
+                  size="14px"
+                  class="exploration-card__chevron"
+                  :class="{ expanded: isMessageExpanded(message) }" />
+              </div>
+
+              <div v-if="isMessageExpanded(message)" class="exploration-card__body">
+                <div
+                  v-for="(group, groupIndex) in message.explorationBatch.groups"
+                  :key="`${message.displayId}_group_${groupIndex}`"
+                  class="exploration-card__step-card">
+                  <template v-if="group.thought">
+                    <div class="reasoning-container exploration-card__reasoning">
+                      <div
+                        class="reasoning-header"
+                        @click="
+                          $emit(
+                            'toggle-reasoning',
+                            getExplorationGroupReasoningId(message, groupIndex)
+                          )
+                        ">
+                        <cs name="reasoning" size="14px" class="reasoning-icon" />
+                        <span class="reasoning-text">
+                          {{
+                            isExplorationGroupReasoningExpanded(message, groupIndex)
+                              ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                              : $t('workflow.thoughtCompleted') || 'Thought Complete'
+                          }}
+                        </span>
+                        <span class="reasoning-toggle">
+                          {{ isExplorationGroupReasoningExpanded(message, groupIndex) ? '▲' : '▼' }}
+                        </span>
+                      </div>
+                      <div
+                        v-if="isExplorationGroupReasoningExpanded(message, groupIndex)"
+                        class="reasoning-content">
+                        {{ sanitizeReasoningContent(group.thought) }}
+                      </div>
+                    </div>
+                  </template>
+
+                  <div
+                    v-for="(tool, toolIndex) in group.tools"
+                    :key="`${message.displayId}_group_${groupIndex}_tool_${toolIndex}`"
+                    class="cli-tool-call exploration-card__tool"
+                    :class="[tool.toolType || 'tool-system']">
+                    <div
+                      class="tool-line title-wrap expandable"
+                      :class="{ 'title-wrap--bash': isBashToolCall(tool) }"
+                      @click="
+                        $emit(
+                          'toggle-expand',
+                          getExplorationToolExpandId(message, groupIndex, toolIndex)
+                        )
+                      ">
+                      <cs :name="tool.icon || 'tool'" size="14px" class="tool-type-icon" />
+                      <span
+                        class="tool-name"
+                        :class="{ 'tool-name--bash': isBashToolCall(tool) }"
+                        >{{ tool.action }}</span
+                      >
+                      <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
+                        getToolTitleTarget(tool)
+                      }}</span>
+                    </div>
+                    <div
+                      v-if="
+                        tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)
+                      "
+                      class="tool-line summary expandable"
+                      @click="
+                        $emit(
+                          'toggle-expand',
+                          getExplorationToolExpandId(message, groupIndex, toolIndex)
+                        )
+                      ">
+                      <span class="corner-icon">⎿</span>
+                      <span class="summary-text">{{ tool.summary }}</span>
+                      <span class="expand-hint">(click to expand)</span>
+                    </div>
+                    <div
+                      v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
+                      class="tool-detail tool-detail--expanded"
+                      :class="getToolDetailClass(tool)">
+                      <div v-if="isBashToolCall(tool)" class="bash-command-frame">
+                        <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
+                        <pre class="bash-command" aria-label="Bash command"><code
+                        class="hljs"
+                        v-html="getHighlightedBashCommand(tool)"></code></pre>
+                      </div>
+                      <MarkdownSimple
+                        v-if="
+                          shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
+                        "
+                        :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
+                      <MarkdownSimple
+                        v-else-if="
+                          shouldShowExplorationToolRawContent(tool) &&
+                          tool.displayType === 'markdown' &&
+                          !isMcpToolMessage(tool)
+                        "
+                        :content="removeSystemReminder(tool.message)" />
+                      <pre
+                        v-else-if="
+                          shouldShowExplorationToolRawContent(tool) &&
+                          !isDuplicateBashCommandContent(tool)
+                        "
+                        class="raw-content"
+                        >{{ getMcpToolContentForDisplay(tool) }}</pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- CLI Style Tool Call (Results) -->
+            <div
+              v-else-if="message.role === 'tool'"
+              class="cli-tool-call"
+              :class="[
+                message.toolDisplay.toolType || 'tool-system',
+                getToolRenderStatusClass(message)
+              ]">
+              <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
+                <div
+                  class="tool-line title-wrap expandable tool-group__summary"
+                  :class="{ expanded: isSubAgentCardExpanded(message) }"
+                  @click="$emit('toggle-expand', getSubAgentCardExpandId(message))">
+                  <cs name="skill-relation-chart" size="15px" class="tool-type-icon" />
+                  <span
+                    class="sub-agent-card__toggle-status"
+                    :class="getSubAgentStatusBadgeClass(message)">
+                    <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
+                    {{ getSubAgentStatusLabel(message) }}
+                  </span>
+                  <span class="tool-group__summary-text">{{ message.subAgentCard.agent }}</span>
+                  <button
+                    type="button"
+                    class="tool-group__expand-button"
+                    :aria-label="$t('workflow.toolGroups.expand')"
+                    @click.stop="$emit('toggle-expand', getSubAgentCardExpandId(message))">
+                    <cs name="caret-down" size="14px" />
+                  </button>
+                </div>
+
+                <div
+                  v-if="isSubAgentCardExpanded(message)"
+                  class="sub-agent-card"
+                  :class="{
+                    'is-expanded': isSubAgentCardExpanded(message),
+                    'is-collapsed': !isSubAgentCardExpanded(message)
+                  }">
+                  <div class="sub-agent-card__header">
+                    <div class="sub-agent-card__title-wrap">
+                      <div class="sub-agent-card__title">
+                        <cs name="task" size="15px" class="sub-agent-card__icon" />
+                        <span>Delegated Task</span>
+                      </div>
+                      <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
+                        <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
+                        {{ getSubAgentStatusLabel(message) }}
+                      </div>
+                      <el-tooltip
+                        v-if="message.subAgentCard.taskId"
+                        :content="$t('workflow.messageList')"
+                        :hide-after="0"
+                        :enterable="false">
+                        <button
+                          type="button"
+                          class="sub-agent-card__open-button"
+                          @click.stop="$emit('open-sub-agent', message.subAgentCard.taskId)">
+                          <cs name="fullscreen-off" />
+                        </button>
+                      </el-tooltip>
+                    </div>
+                    <div class="sub-agent-card__meta">
+                      <div class="sub-agent-card__row">
+                        <span class="sub-agent-card__label">Agent</span>
+                        <span class="sub-agent-card__value">{{ message.subAgentCard.agent }}</span>
+                      </div>
+                      <div class="sub-agent-card__row">
+                        <span class="sub-agent-card__label">Mode</span>
+                        <span class="sub-agent-card__value mode">{{
+                          message.subAgentCard.mode
+                        }}</span>
+                      </div>
+                      <div class="sub-agent-card__row">
+                        <span class="sub-agent-card__label">Tools</span>
+                        <span class="sub-agent-card__value">{{
+                          getSubAgentLiveTools(message)
+                        }}</span>
+                      </div>
+                      <div class="sub-agent-card__row">
+                        <span class="sub-agent-card__label">Context</span>
+                        <span class="sub-agent-card__value">{{
+                          getSubAgentLiveContext(message)
+                        }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    class="sub-agent-card__task"
+                    :class="{ expanded: isSubAgentTaskExpanded(message) }">
+                    <div
+                      class="sub-agent-card__task-toggle"
+                      @click="$emit('toggle-expand', getSubAgentTaskExpandId(message))">
+                      <div class="sub-agent-card__task-heading">
+                        <span class="sub-agent-card__label">Task</span>
+                        <span
+                          v-if="!isSubAgentTaskExpanded(message)"
+                          class="sub-agent-card__task-preview"
+                          >{{ getSubAgentTaskPreview(message) }}</span
+                        >
+                      </div>
+                      <div class="sub-agent-card__section-actions">
+                        <button
+                          type="button"
+                          class="sub-agent-card__copy-button"
+                          :title="$t('common.copy')"
+                          :aria-label="$t('common.copy')"
+                          @click.stop="copySubAgentTask(message)">
+                          <cs name="copy" />
+                        </button>
+                        <cs
+                          name="double-arrow-down"
+                          size="14px"
+                          class="sub-agent-card__task-chevron"
+                          :class="{ expanded: isSubAgentTaskExpanded(message) }" />
+                      </div>
+                    </div>
+                    <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
+                      <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="message.subAgentCard.hasResult"
+                    class="sub-agent-card__result"
+                    :class="{ expanded: isSubAgentResultExpanded(message) }">
+                    <div
+                      class="sub-agent-card__result-toggle"
+                      @click="$emit('toggle-expand', getSubAgentResultExpandId(message))">
+                      <div class="sub-agent-card__result-heading">
+                        <span class="sub-agent-card__label">Result</span>
+                        <span
+                          v-if="!isSubAgentResultExpanded(message)"
+                          class="sub-agent-card__result-preview"
+                          >{{ getSubAgentResultPreview(message) }}</span
+                        >
+                      </div>
+                      <div class="sub-agent-card__section-actions">
+                        <button
+                          type="button"
+                          class="sub-agent-card__copy-button"
+                          :title="$t('common.copy')"
+                          :aria-label="$t('common.copy')"
+                          @click.stop="copySubAgentResult(message)">
+                          <cs name="copy" />
+                        </button>
+                        <cs
+                          name="double-arrow-down"
+                          size="14px"
+                          class="sub-agent-card__result-chevron"
+                          :class="{ expanded: isSubAgentResultExpanded(message) }" />
+                      </div>
+                    </div>
+                    <div
+                      v-if="isSubAgentResultExpanded(message)"
+                      class="sub-agent-card__result-body">
+                      <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="getSubAgentUsageSummary(message)"
+                    class="sub-agent-card__cost"
+                    :class="{ expanded: isSubAgentCostExpanded(message) }">
+                    <div
+                      class="sub-agent-card__cost-toggle"
+                      @click="$emit('toggle-expand', getSubAgentCostExpandId(message))">
+                      <div class="sub-agent-card__cost-heading">
+                        <span class="sub-agent-card__label">Cost</span>
+                      </div>
+                      <div class="sub-agent-card__section-actions">
+                        <cs
+                          name="double-arrow-down"
+                          size="14px"
+                          class="sub-agent-card__cost-chevron"
+                          :class="{ expanded: isSubAgentCostExpanded(message) }" />
+                      </div>
+                    </div>
+                    <WorkflowCostAnalysis
+                      v-if="isSubAgentCostExpanded(message)"
+                      :summary="getSubAgentUsageSummary(message)" />
+                  </div>
+                </div>
+              </template>
+
+              <!-- complete_workflow special display -->
+              <template v-else-if="isFinishTaskMessage(message)">
+                <button
+                  v-if="getFinishTaskUsageSummary(message)"
+                  type="button"
+                  class="tool-line finish-task-display finish-task-display--expandable"
+                  @click="$emit('toggle-expand', getFinishTaskCostExpandId(message))">
+                  <cs
+                    :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
+                    size="14px"
+                    class="tool-type-icon finish-icon" />
+                  <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
+                  <cs name="arrow-right" size="14px" class="finish-task-cost-arrow" />
+                </button>
+                <div v-else class="tool-line finish-task-display">
+                  <cs
+                    :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
+                    size="14px"
+                    class="tool-type-icon finish-icon" />
+                  <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
+                </div>
+                <WorkflowCostAnalysis
+                  v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
+                  class="finish-task-cost-card"
+                  :summary="getFinishTaskUsageSummary(message)" />
+              </template>
+
+              <!-- Normal tool call display -->
+              <template v-else>
                 <div
                   class="tool-line title-wrap expandable"
                   :class="{
-                    'tool-rejected': tool.isRejected,
-                    'title-wrap--bash': isBashToolCall(tool)
+                    'tool-rejected': message.isRejected,
+                    'title-wrap--bash': isBashToolCall(message)
                   }"
-                  @click="$emit('toggle-expand', tool.displayId)">
+                  @click="$emit('toggle-expand', message.displayId)">
                   <cs
-                    :name="tool.toolDisplay?.icon || 'tool'"
+                    :name="message.toolDisplay.icon || 'tool'"
                     size="15px"
                     class="tool-type-icon" />
-                  <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(tool) }">{{
-                    tool.toolDisplay?.action
+                  <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(message) }">{{
+                    message.toolDisplay.action
                   }}</span>
-                  <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
-                    getToolTitleTarget(tool)
+                  <span v-if="getToolTitleTarget(message)" class="tool-target">{{
+                    getToolTitleTarget(message)
                   }}</span>
                   <span
-                    v-if="isBashToolCall(tool) && getShellExecutionRouteLabel(tool)"
+                    v-if="isBashToolCall(message) && getShellExecutionRouteLabel(message)"
                     class="shell-execution-route-badge">
-                    {{ getShellExecutionRouteLabel(tool) }}
+                    {{ getShellExecutionRouteLabel(message) }}
                   </span>
                   <span
-                    v-if="getToolExecutionDurationLabel(tool)"
+                    v-if="getToolExecutionDurationLabel(message)"
                     class="shell-execution-route-badge">
-                    {{ getToolExecutionDurationLabel(tool) }}
+                    {{ getToolExecutionDurationLabel(message) }}
                   </span>
-                  <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
+                  <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
                 </div>
+                <!-- Hide summary when expanded -->
                 <div
-                  v-if="!isToolMessageExpanded(tool)"
                   class="tool-line summary expandable"
-                  @click="$emit('toggle-expand', tool.displayId)">
+                  v-if="!isToolMessageExpanded(message)"
+                  @click="$emit('toggle-expand', message.displayId)">
                   <span class="corner-icon">⎿</span>
-                  <span class="summary-text">{{ getToolSummaryText(tool) }}</span>
+                  <span class="summary-text">{{ getToolSummaryText(message) }}</span>
                   <span class="expand-hint">(click to expand)</span>
                 </div>
                 <div
-                  v-if="isToolMessageExpanded(tool)"
+                  v-if="isToolMessageExpanded(message)"
                   class="tool-detail tool-detail--expanded"
-                  :class="getToolDetailClass(tool)">
-                  <div v-if="isBashToolCall(tool)" class="bash-command-frame">
+                  :class="getToolDetailClass(message)">
+                  <div
+                    v-if="isBashToolCall(message) && !isApprovalPending(message)"
+                    class="bash-command-frame">
                     <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
                     <pre class="bash-command" aria-label="Bash command"><code
-                      class="hljs"
-                      v-html="getHighlightedBashCommand(tool)"></code></pre>
+                    class="hljs"
+                    v-html="getHighlightedBashCommand(message)"></code></pre>
                   </div>
                   <div
-                    v-if="isMcpToolMessage(tool) && getFormattedMcpToolArguments(tool)"
+                    v-if="isMcpToolMessage(message) && getFormattedMcpToolArguments(message)"
                     class="mcp-tool-arguments">
-                    <div class="mcp-tool-arguments__label">{{ $t('workflow.taskLedger.arguments') }}</div>
-                    <pre class="raw-content">{{ getFormattedMcpToolArguments(tool) }}</pre>
+                    <div class="mcp-tool-arguments__label">
+                      {{ $t('workflow.taskLedger.arguments') }}
+                    </div>
+                    <pre class="raw-content">{{ getFormattedMcpToolArguments(message) }}</pre>
                   </div>
+                  <!-- Tool Stream Output (for bash commands) -->
                   <div
                     v-if="
-                      tool.metadata?.tool_call_id &&
-                      getToolStream(tool.metadata.tool_call_id).length > 0
+                      message.metadata?.tool_call_id &&
+                      getToolStream(message.metadata.tool_call_id).length > 0
                     "
                     class="tool-stream-output">
                     <div
-                      v-for="(line, idx) in getToolStream(tool.metadata.tool_call_id)"
+                      v-for="(line, idx) in getToolStream(message.metadata.tool_call_id)"
                       :key="idx"
                       class="stream-line">
                       {{ line }}
                     </div>
                   </div>
                   <div
-                    v-else-if="shouldShowRunningPlaceholder(tool)"
+                    v-else-if="shouldShowRunningPlaceholder(message)"
                     class="tool-running-placeholder">
                     <cs name="loading" size="14px" class="tool-running-placeholder__icon cs-spin" />
                     <span class="tool-running-placeholder__text">
-                      {{ getRunningPlaceholderText(tool) }}
+                      {{ getRunningPlaceholderText(message) }}
                     </span>
                   </div>
+                  <!-- Final Result -->
                   <div
-                    v-else-if="shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'diff'"
+                    v-if="
+                      !isApprovalPending(message) &&
+                      shouldShowToolRawContent(message) &&
+                      message.toolDisplay.displayType === 'diff'
+                    "
                     class="tool-diff-view">
                     <FilePreviewDiff
-                      :file-path="getDiffFilePath(tool)"
-                      :old-content="getDiffOldContent(tool)"
-                      :new-content="getDiffNewContent(tool)"
-                      :context-data="getDiffContextData(tool)" />
+                      :file-path="getDiffFilePath(message)"
+                      :old-content="getDiffOldContent(message)"
+                      :new-content="getDiffNewContent(message)"
+                      :context-data="getDiffContextData(message)" />
                   </div>
                   <div
                     v-else-if="
-                      shouldShowToolRawContent(tool) && tool.toolDisplay?.displayType === 'choice'
+                      !isApprovalPending(message) &&
+                      shouldShowToolRawContent(message) &&
+                      message.toolDisplay.displayType === 'choice'
                     "
                     class="choice-container">
-                    <div
-                      v-for="group in getChoiceGroups(tool)"
-                      :key="group.title"
-                      class="choice-group">
-                      <div class="choice-question">
-                        {{ group.title }}
-                      </div>
-                      <div class="choice-options vertical numbered choice-options--readonly">
-                        <div
-                          v-for="(opt, optIndex) in group.options"
-                          :key="`${group.title}-${opt}`"
-                          class="choice-option-label">
-                          {{ optIndex + 1 }}. {{ opt }}
+                    <template v-if="getAskUserResponseItems(message).length > 0">
+                      <div
+                        v-for="group in getChoiceGroups(message)"
+                        :key="group.title"
+                        class="choice-group choice-group--answered">
+                        <div class="choice-question">{{ group.title }}</div>
+                        <div class="choice-options vertical numbered choice-options--readonly">
+                          <div
+                            v-for="(opt, optIndex) in group.options"
+                            :key="`${group.title}-${opt}`"
+                            class="choice-option-label"
+                            :class="{
+                              'is-selected': isAskUserOptionSelected(
+                                group,
+                                getAskUserResponseForGroup(message, group.title),
+                                optIndex
+                              )
+                            }">
+                            <cs
+                              :name="
+                                isAskUserOptionSelected(
+                                  group,
+                                  getAskUserResponseForGroup(message, group.title),
+                                  optIndex
+                                )
+                                  ? 'check-circle'
+                                  : 'uncheck'
+                              " />
+                            {{ optIndex + 1 }}. {{ opt }}
+                          </div>
+                          <div
+                            class="choice-option-label choice-option-label--other"
+                            :class="{
+                              'is-selected': isAskUserAnswerOther(
+                                group,
+                                getAskUserResponseForGroup(message, group.title)
+                              )
+                            }">
+                            <cs
+                              :name="
+                                isAskUserAnswerOther(
+                                  group,
+                                  getAskUserResponseForGroup(message, group.title)
+                                )
+                                  ? 'check-circle'
+                                  : 'uncheck'
+                              " />
+                            {{ group.options.length + 1 }}. {{ $t('workflow.askUser.otherLabel') }}
+                          </div>
                         </div>
+                        <pre
+                          v-if="
+                            getAskUserAnswerSupplement(
+                              group,
+                              getAskUserResponseForGroup(message, group.title)
+                            )
+                          "
+                          class="choice-selected-answer"
+                          v-text="
+                            getAskUserAnswerSupplement(
+                              group,
+                              getAskUserResponseForGroup(message, group.title)
+                            )
+                          "></pre>
                       </div>
-                    </div>
+                    </template>
+                    <template v-else>
+                      <div
+                        v-for="group in getChoiceGroups(message)"
+                        :key="group.title"
+                        class="choice-group">
+                        <div class="choice-question">
+                          {{ group.title }}
+                        </div>
+                        <el-radio-group
+                          :model-value="getAskUserSelection(message, group.title)"
+                          class="choice-options vertical numbered"
+                          @update:model-value="
+                            value => setAskUserSelection(message, group.title, value)
+                          ">
+                          <el-radio
+                            v-for="(opt, optIndex) in group.options"
+                            :key="`${group.title}-${opt}`"
+                            :value="opt"
+                            :disabled="!canAnswerAskUser(message) || askUserSubmitting">
+                            <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
+                          </el-radio>
+                          <el-radio
+                            :value="OTHER_ASK_USER_VALUE"
+                            :disabled="!canAnswerAskUser(message) || askUserSubmitting">
+                            <span class="choice-option-label">
+                              {{ group.options.length + 1 }}.
+                              {{ $t('workflow.askUser.otherLabel') }}
+                            </span>
+                          </el-radio>
+                          <div class="choice-supplement-row">
+                            <el-input
+                              :model-value="getAskUserSupplement(message, group.title)"
+                              class="choice-supplement-input"
+                              type="textarea"
+                              :autosize="{ minRows: 1, maxRows: 6 }"
+                              :placeholder="$t('workflow.askUser.supplementPlaceholder')"
+                              :disabled="!canAnswerAskUser(message) || askUserSubmitting"
+                              @focus="selectAskUserOtherIfUnset(message, group.title)"
+                              @update:model-value="
+                                value => setAskUserSupplement(message, group.title, value)
+                              " />
+                          </div>
+                        </el-radio-group>
+                      </div>
+                      <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
+                        <el-button
+                          size="small"
+                          type="primary"
+                          :loading="askUserSubmitting"
+                          @click="submitAskUserResponse(message)">
+                          {{ $t('workflow.askUser.submit') }}
+                        </el-button>
+                      </div>
+                    </template>
                   </div>
                   <MarkdownSimple
                     v-else-if="
-                      shouldShowToolRawContent(tool) &&
-                      tool.toolDisplay?.displayType === 'markdown' &&
-                      !isMcpToolMessage(tool)
+                      !isApprovalPending(message) &&
+                      shouldShowToolRawContent(message) &&
+                      message.toolDisplay.displayType === 'markdown' &&
+                      !isMcpToolMessage(message)
                     "
-                    :content="removeSystemReminder(tool.message)" />
+                    :content="removeSystemReminder(message.message)" />
                   <pre
                     v-else-if="
-                      shouldShowToolRawContent(tool) && !isDuplicateBashCommandContent(tool)
+                      !isApprovalPending(message) &&
+                      shouldShowToolRawContent(message) &&
+                      !isDuplicateBashCommandContent(message)
                     "
                     class="raw-content"
-                    >{{ getMcpToolContentForDisplay(tool) }}</pre
-                  >
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-else-if="isExplorationBatchMessage(message)" class="exploration-card">
-            <div
-              class="exploration-card__header"
-              @click="$emit('toggle-expand', message.displayId)">
-              <div class="exploration-card__title-wrap">
-                <div class="exploration-card__title">
-                  <cs name="search" size="15px" class="exploration-card__icon" />
-                  <span>{{ $t('workflow.exploration.title') }}</span>
-                </div>
-                <div class="exploration-card__meta">
-                  <span>{{ getExplorationBatchSummary(message) }}</span>
-                </div>
-              </div>
-              <span v-if="!isMessageExpanded(message)" class="exploration-card__preview">
-                {{ getExplorationBatchPreview(message) }}
-              </span>
-              <cs
-                name="double-arrow-down"
-                size="14px"
-                class="exploration-card__chevron"
-                :class="{ expanded: isMessageExpanded(message) }" />
-            </div>
-
-            <div v-if="isMessageExpanded(message)" class="exploration-card__body">
-              <div
-                v-for="(group, groupIndex) in message.explorationBatch.groups"
-                :key="`${message.displayId}_group_${groupIndex}`"
-                class="exploration-card__step-card">
-                <template v-if="group.thought">
-                  <div class="reasoning-container exploration-card__reasoning">
-                    <div
-                      class="reasoning-header"
-                      @click="
-                        $emit(
-                          'toggle-reasoning',
-                          getExplorationGroupReasoningId(message, groupIndex)
-                        )
-                      ">
-                      <cs name="reasoning" size="14px" class="reasoning-icon" />
-                      <span class="reasoning-text">
-                        {{
-                          isExplorationGroupReasoningExpanded(message, groupIndex)
-                            ? $t('workflow.thinkingExpanded') || 'Thinking Process'
-                            : $t('workflow.thoughtCompleted') || 'Thought Complete'
-                        }}
-                      </span>
-                      <span class="reasoning-toggle">
-                        {{ isExplorationGroupReasoningExpanded(message, groupIndex) ? '▲' : '▼' }}
-                      </span>
-                    </div>
-                    <div
-                      v-if="isExplorationGroupReasoningExpanded(message, groupIndex)"
-                      class="reasoning-content">
-                      {{ sanitizeReasoningContent(group.thought) }}
-                    </div>
-                  </div>
-                </template>
-
-                <div
-                  v-for="(tool, toolIndex) in group.tools"
-                  :key="`${message.displayId}_group_${groupIndex}_tool_${toolIndex}`"
-                  class="cli-tool-call exploration-card__tool"
-                  :class="[tool.toolType || 'tool-system']">
-                  <div
-                    class="tool-line title-wrap expandable"
-                    :class="{ 'title-wrap--bash': isBashToolCall(tool) }"
-                    @click="
-                      $emit(
-                        'toggle-expand',
-                        getExplorationToolExpandId(message, groupIndex, toolIndex)
-                      )
-                    ">
-                    <cs
-                      :name="tool.icon || 'tool'"
-                      size="14px"
-                      class="tool-type-icon" />
-                    <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(tool) }">{{
-                      tool.action
-                    }}</span>
-                    <span v-if="getToolTitleTarget(tool)" class="tool-target">{{
-                      getToolTitleTarget(tool)
-                    }}</span>
-                  </div>
-                  <div
-                    v-if="
-                      tool.summary && !isExplorationToolExpanded(message, groupIndex, toolIndex)
+                    >{{ getMcpToolContentForDisplay(message) }}</pre>
+                  <ApprovalDialog
+                    v-if="shouldShowApprovalDialog(message)"
+                    inline
+                    :tool-name="getMessageToolName(message)"
+                    :details="getApprovalDetailsPayload(message)"
+                    :display-type="
+                      message.metadata?.display_type || message.toolDisplay.displayType
                     "
-                    class="tool-line summary expandable"
-                    @click="
-                      $emit(
-                        'toggle-expand',
-                        getExplorationToolExpandId(message, groupIndex, toolIndex)
-                      )
-                    ">
-                    <span class="corner-icon">⎿</span>
-                    <span class="summary-text">{{ tool.summary }}</span>
-                    <span class="expand-hint">(click to expand)</span>
-                  </div>
-                  <div
-                    v-if="isExplorationToolExpanded(message, groupIndex, toolIndex)"
-                    class="tool-detail tool-detail--expanded"
-                    :class="getToolDetailClass(tool)">
-                    <div v-if="isBashToolCall(tool)" class="bash-command-frame">
-                      <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
-                      <pre class="bash-command" aria-label="Bash command"><code
-                        class="hljs"
-                        v-html="getHighlightedBashCommand(tool)"></code></pre>
-                    </div>
-                    <MarkdownSimple
-                      v-if="
-                        shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
-                      "
-                      :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
-                    <MarkdownSimple
-                      v-else-if="
-                        shouldShowExplorationToolRawContent(tool) &&
-                        tool.displayType === 'markdown' &&
-                        !isMcpToolMessage(tool)
-                      "
-                      :content="removeSystemReminder(tool.message)" />
-                    <pre
-                      v-else-if="
-                        shouldShowExplorationToolRawContent(tool) &&
-                        !isDuplicateBashCommandContent(tool)
-                      "
-                      class="raw-content"
-                      >{{ getMcpToolContentForDisplay(tool) }}</pre
-                    >
-                  </div>
+                    :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
+                    :loading="
+                      props.isBatchApprovalSubmitting ||
+                      (approvalLoading && activeApprovalId === message.metadata?.tool_call_id)
+                    "
+                    :pending-count="inlineBulkApprovalCount"
+                    @update:rejection-message="
+                      value => setApprovalDraft(message.metadata?.tool_call_id, value)
+                    "
+                    @approve="onApproveTool(message.metadata?.tool_call_id)"
+                    @approve-all="onApproveAllTool(message.metadata?.tool_call_id)"
+                    @approve-all-pending="onApproveAllPending(message.metadata?.tool_call_id)"
+                    @reject="onRejectTool(message.metadata?.tool_call_id)" />
                 </div>
-              </div>
+              </template>
             </div>
-          </div>
 
-          <!-- CLI Style Tool Call (Results) -->
-          <div
-            v-else-if="message.role === 'tool'"
-            class="cli-tool-call"
-            :class="[
-              message.toolDisplay.toolType || 'tool-system',
-              getToolRenderStatusClass(message)
-            ]">
-            <template v-if="isSubAgentRunMessage(message) && message.subAgentCard">
-              <div
-                class="tool-line title-wrap expandable tool-group__summary"
-                :class="{ expanded: isSubAgentCardExpanded(message) }"
-                @click="$emit('toggle-expand', getSubAgentCardExpandId(message))">
-                <cs name="skill-relation-chart" size="15px" class="tool-type-icon" />
-                <span
-                  class="sub-agent-card__toggle-status"
-                  :class="getSubAgentStatusBadgeClass(message)">
-                  <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
-                  {{ getSubAgentStatusLabel(message) }}
-                </span>
-                <span class="tool-group__summary-text">{{ message.subAgentCard.agent }}</span>
-                <button
-                  type="button"
-                  class="tool-group__expand-button"
-                  :aria-label="$t('workflow.toolGroups.expand')"
-                  @click.stop="$emit('toggle-expand', getSubAgentCardExpandId(message))">
-                  <cs name="caret-down" size="14px" />
-                </button>
-              </div>
-
-              <div
-                v-if="isSubAgentCardExpanded(message)"
-                class="sub-agent-card"
-                :class="{
-                  'is-expanded': isSubAgentCardExpanded(message),
-                  'is-collapsed': !isSubAgentCardExpanded(message)
-                }">
-                <div class="sub-agent-card__header">
-                  <div class="sub-agent-card__title-wrap">
-                    <div class="sub-agent-card__title">
-                      <cs name="task" size="15px" class="sub-agent-card__icon" />
-                      <span>Delegated Task</span>
-                    </div>
-                    <div class="sub-agent-card__status" :class="subAgentStatusClass(message)">
-                      <cs name="loading" class="cs-spin" v-if="subagentIsRunning(message)" />
-                      {{ getSubAgentStatusLabel(message) }}
-                    </div>
-                  </div>
-                  <el-tooltip
-                    v-if="message.subAgentCard.taskId"
-                    :content="$t('workflow.messageList')"
-                    :hide-after="0"
-                    :enterable="false">
-                    <button
-                      type="button"
-                      class="sub-agent-card__open-button"
-                      @click.stop="$emit('open-sub-agent', message.subAgentCard.taskId)">
-                      <cs name="fullscreen-off" />
-                    </button>
-                  </el-tooltip>
-                  <div class="sub-agent-card__meta">
-                    <div class="sub-agent-card__row">
-                      <span class="sub-agent-card__label">Agent</span>
-                      <span class="sub-agent-card__value">{{ message.subAgentCard.agent }}</span>
-                    </div>
-                    <div class="sub-agent-card__row">
-                      <span class="sub-agent-card__label">Mode</span>
-                      <span class="sub-agent-card__value mode">{{
-                        message.subAgentCard.mode
-                      }}</span>
-                    </div>
-                    <div class="sub-agent-card__row">
-                      <span class="sub-agent-card__label">Tools</span>
-                      <span class="sub-agent-card__value">{{ getSubAgentLiveTools(message) }}</span>
-                    </div>
-                    <div class="sub-agent-card__row">
-                      <span class="sub-agent-card__label">Context</span>
-                      <span class="sub-agent-card__value">{{
-                        getSubAgentLiveContext(message)
-                      }}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  class="sub-agent-card__task"
-                  :class="{ expanded: isSubAgentTaskExpanded(message) }">
-                  <div
-                    class="sub-agent-card__task-toggle"
-                    @click="$emit('toggle-expand', getSubAgentTaskExpandId(message))">
-                    <div class="sub-agent-card__task-heading">
-                      <span class="sub-agent-card__label">Task</span>
-                      <span
-                        v-if="!isSubAgentTaskExpanded(message)"
-                        class="sub-agent-card__task-preview"
-                        >{{ getSubAgentTaskPreview(message) }}</span
-                      >
-                    </div>
-                    <div class="sub-agent-card__section-actions">
-                      <button
-                        type="button"
-                        class="sub-agent-card__copy-button"
-                        :title="$t('common.copy')"
-                        :aria-label="$t('common.copy')"
-                        @click.stop="copySubAgentTask(message)">
-                        <cs name="copy" />
-                      </button>
-                      <cs
-                        name="double-arrow-down"
-                        size="14px"
-                        class="sub-agent-card__task-chevron"
-                        :class="{ expanded: isSubAgentTaskExpanded(message) }" />
-                    </div>
-                  </div>
-                  <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
-                    <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
-                  </div>
-                </div>
-
-                <div
-                  v-if="message.subAgentCard.hasResult"
-                  class="sub-agent-card__result"
-                  :class="{ expanded: isSubAgentResultExpanded(message) }">
-                  <div
-                    class="sub-agent-card__result-toggle"
-                    @click="$emit('toggle-expand', getSubAgentResultExpandId(message))">
-                    <div class="sub-agent-card__result-heading">
-                      <span class="sub-agent-card__label">Result</span>
-                      <span
-                        v-if="!isSubAgentResultExpanded(message)"
-                        class="sub-agent-card__result-preview"
-                        >{{ getSubAgentResultPreview(message) }}</span
-                      >
-                    </div>
-                    <div class="sub-agent-card__section-actions">
-                      <button
-                        type="button"
-                        class="sub-agent-card__copy-button"
-                        :title="$t('common.copy')"
-                        :aria-label="$t('common.copy')"
-                        @click.stop="copySubAgentResult(message)">
-                        <cs name="copy" />
-                      </button>
-                      <cs
-                        name="double-arrow-down"
-                        size="14px"
-                        class="sub-agent-card__result-chevron"
-                        :class="{ expanded: isSubAgentResultExpanded(message) }" />
-                    </div>
-                  </div>
-                  <div v-if="isSubAgentResultExpanded(message)" class="sub-agent-card__result-body">
-                    <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
-                  </div>
-                </div>
-
-                <div
-                  v-if="getSubAgentUsageSummary(message)"
-                  class="sub-agent-card__cost"
-                  :class="{ expanded: isSubAgentCostExpanded(message) }">
-                  <div
-                    class="sub-agent-card__cost-toggle"
-                    @click="$emit('toggle-expand', getSubAgentCostExpandId(message))">
-                    <div class="sub-agent-card__cost-heading">
-                      <span class="sub-agent-card__label">Cost</span>
-                    </div>
-                    <div class="sub-agent-card__section-actions">
-                      <cs
-                        name="double-arrow-down"
-                        size="14px"
-                        class="sub-agent-card__cost-chevron"
-                        :class="{ expanded: isSubAgentCostExpanded(message) }" />
-                    </div>
-                  </div>
-                  <WorkflowCostAnalysis
-                    v-if="isSubAgentCostExpanded(message)"
-                    :summary="getSubAgentUsageSummary(message)" />
-                </div>
-              </div>
-            </template>
-
-            <!-- complete_workflow special display -->
-            <template v-else-if="isFinishTaskMessage(message)">
-              <button
-                v-if="getFinishTaskUsageSummary(message)"
-                type="button"
-                class="tool-line finish-task-display finish-task-display--expandable"
-                @click="$emit('toggle-expand', getFinishTaskCostExpandId(message))">
-                <cs
-                  :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
-                  size="14px"
-                  class="tool-type-icon finish-icon" />
-                <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
-                <cs name="arrow-right" size="14px" class="finish-task-cost-arrow" />
-              </button>
-              <div v-else class="tool-line finish-task-display">
-                <cs
-                  :name="message.toolDisplay.isError ? 'check-x' : 'check-circle'"
-                  size="14px"
-                  class="tool-type-icon finish-icon" />
-                <span class="finish-text">{{ getFinishTaskLabel(message) }}</span>
-              </div>
-              <WorkflowCostAnalysis
-                v-if="getFinishTaskUsageSummary(message) && isFinishTaskCostExpanded(message)"
-                class="finish-task-cost-card"
-                :summary="getFinishTaskUsageSummary(message)" />
-            </template>
-
-            <!-- Normal tool call display -->
-            <template v-else>
-              <div
-                class="tool-line title-wrap expandable"
-                :class="{
-                  'tool-rejected': message.isRejected,
-                  'title-wrap--bash': isBashToolCall(message)
-                }"
-                @click="$emit('toggle-expand', message.displayId)">
-                <cs :name="message.toolDisplay.icon || 'tool'" size="15px" class="tool-type-icon" />
-                <span class="tool-name" :class="{ 'tool-name--bash': isBashToolCall(message) }">{{
-                  message.toolDisplay.action
+            <!-- Regular Assistant Content -->
+            <div v-else>
+              <div v-if="isManualClearContextMessage(message)" class="manual-clear-context-divider">
+                <span class="manual-clear-context-divider__line"></span>
+                <span class="manual-clear-context-divider__label">{{
+                  $t('workflow.clearContextDivider')
                 }}</span>
-                <span v-if="getToolTitleTarget(message)" class="tool-target">{{
-                  getToolTitleTarget(message)
-                }}</span>
-                <span
-                  v-if="isBashToolCall(message) && getShellExecutionRouteLabel(message)"
-                  class="shell-execution-route-badge">
-                  {{ getShellExecutionRouteLabel(message) }}
-                </span>
-                <span
-                  v-if="getToolExecutionDurationLabel(message)"
-                  class="shell-execution-route-badge">
-                  {{ getToolExecutionDurationLabel(message) }}
-                </span>
-                <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
+                <span class="manual-clear-context-divider__line"></span>
               </div>
-              <!-- Hide summary when expanded -->
-              <div
-                class="tool-line summary expandable"
-                v-if="!isToolMessageExpanded(message)"
-                @click="$emit('toggle-expand', message.displayId)">
-                <span class="corner-icon">⎿</span>
-                <span class="summary-text">{{ getToolSummaryText(message) }}</span>
-                <span class="expand-hint">(click to expand)</span>
+              <div v-else-if="isContextSnapshotMessage(message)" class="context-snapshot-card">
+                <div
+                  class="context-snapshot-card__header"
+                  @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
+                  <cs name="archive" size="14px" class="context-snapshot-card__icon" />
+                  <span class="context-snapshot-card__title">{{
+                    getContextSnapshotTitle(message)
+                  }}</span>
+                  <span
+                    v-if="!isContextSnapshotExpanded(message)"
+                    class="context-snapshot-card__preview">
+                    {{ getContextSnapshotPreview(message) }}
+                  </span>
+                  <cs
+                    name="double-arrow-down"
+                    size="14px"
+                    class="context-snapshot-card__chevron"
+                    :class="{ expanded: isContextSnapshotExpanded(message) }" />
+                </div>
+                <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
+                  <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
+                </div>
               </div>
+
+              <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
               <div
-                v-if="isToolMessageExpanded(message)"
-                class="tool-detail tool-detail--expanded"
-                :class="getToolDetailClass(message)">
-                <div
-                  v-if="isBashToolCall(message) && !isApprovalPending(message)"
-                  class="bash-command-frame">
-                  <span class="bash-command-frame__prompt" aria-hidden="true">$</span>
-                  <pre class="bash-command" aria-label="Bash command"><code
-                    class="hljs"
-                    v-html="getHighlightedBashCommand(message)"></code></pre>
-                </div>
-                <div
-                  v-if="isMcpToolMessage(message) && getFormattedMcpToolArguments(message)"
-                  class="mcp-tool-arguments">
-                  <div class="mcp-tool-arguments__label">{{ $t('workflow.taskLedger.arguments') }}</div>
-                  <pre class="raw-content">{{ getFormattedMcpToolArguments(message) }}</pre>
-                </div>
-                <!-- Tool Stream Output (for bash commands) -->
-                <div
-                  v-if="
-                    message.metadata?.tool_call_id &&
-                    getToolStream(message.metadata.tool_call_id).length > 0
-                  "
-                  class="tool-stream-output">
-                  <div
-                    v-for="(line, idx) in getToolStream(message.metadata.tool_call_id)"
-                    :key="idx"
-                    class="stream-line">
-                    {{ line }}
-                  </div>
-                </div>
-                <div
-                  v-else-if="shouldShowRunningPlaceholder(message)"
-                  class="tool-running-placeholder">
-                  <cs name="loading" size="14px" class="tool-running-placeholder__icon cs-spin" />
-                  <span class="tool-running-placeholder__text">
-                    {{ getRunningPlaceholderText(message) }}
+                v-else-if="message.reasoning || message.stepType === 'Think'"
+                class="reasoning-container">
+                <div class="reasoning-header" @click="toggleReasoningForMessage(message)">
+                  <cs
+                    name="reasoning"
+                    size="14px"
+                    class="reasoning-icon"
+                    :class="{
+                      rotating:
+                        isRunning &&
+                        !hasThoughtCompleted(message) &&
+                        !isReasoningExpandedForMessage(message) &&
+                        message === lastAssistantMessage
+                    }" />
+                  <span class="reasoning-text">
+                    <template v-if="isReasoningExpandedForMessage(message)">
+                      {{ $t('workflow.thinkingExpanded') || 'Thinking Process' }}
+                    </template>
+                    <template
+                      v-else-if="
+                        isRunning &&
+                        !hasThoughtCompleted(message) &&
+                        message === lastAssistantMessage
+                      ">
+                      {{ $t('workflow.thinking') || 'Thinking...' }}
+                    </template>
+                    <template v-else>
+                      {{ $t('workflow.thoughtCompleted') || 'Thought Complete' }}
+                    </template>
+                  </span>
+                  <span class="reasoning-toggle">
+                    {{ isReasoningExpandedForMessage(message) ? '▲' : '▼' }}
                   </span>
                 </div>
-                <!-- Final Result -->
-                <div
-                  v-if="
-                    !isApprovalPending(message) &&
-                    shouldShowToolRawContent(message) &&
-                    message.toolDisplay.displayType === 'diff'
-                  "
-                  class="tool-diff-view">
-                  <FilePreviewDiff
-                    :file-path="getDiffFilePath(message)"
-                    :old-content="getDiffOldContent(message)"
-                    :new-content="getDiffNewContent(message)"
-                    :context-data="getDiffContextData(message)" />
+                <div v-if="isReasoningExpandedForMessage(message)" class="reasoning-content">
+                  {{ message.reasoning || message.message }}
                 </div>
-                <div
-                  v-else-if="
-                    !isApprovalPending(message) &&
-                    shouldShowToolRawContent(message) &&
-                    message.toolDisplay.displayType === 'choice'
-                  "
-                  class="choice-container">
-                  <template v-if="getAskUserResponseItems(message).length > 0">
-                    <div
-                      v-for="group in getChoiceGroups(message)"
-                      :key="group.title"
-                      class="choice-group choice-group--answered">
-                      <div class="choice-question">{{ group.title }}</div>
-                      <div class="choice-options vertical numbered choice-options--readonly">
-                        <div
-                          v-for="(opt, optIndex) in group.options"
-                          :key="`${group.title}-${opt}`"
-                          class="choice-option-label"
-                          :class="{
-                            'is-selected': isAskUserOptionSelected(
-                              group,
-                              getAskUserResponseForGroup(message, group.title),
-                              optIndex
-                            )
-                          }">
-                            <cs :name="isAskUserOptionSelected(
-                              group,
-                              getAskUserResponseForGroup(message, group.title),
-                              optIndex
-                            )?'check-circle':'uncheck'" />
-                          {{ optIndex + 1 }}. {{ opt }}
-                        </div>
-                        <div
-                          class="choice-option-label choice-option-label--other"
-                          :class="{
-                            'is-selected': isAskUserAnswerOther(
-                              group,
-                              getAskUserResponseForGroup(message, group.title)
-                            )
-                          }">
-                            <cs :name="isAskUserAnswerOther(
-                              group,
-                              getAskUserResponseForGroup(message, group.title)
-                            )?'check-circle':'uncheck'" />
-                          {{ group.options.length + 1 }}. {{ $t('workflow.askUser.otherLabel') }}
-                        </div>
-                      </div>
-                      <pre
-                        v-if="
-                          getAskUserAnswerSupplement(
-                            group,
-                            getAskUserResponseForGroup(message, group.title)
-                          )
-                        "
-                        class="choice-selected-answer"
-                        v-text="
-                          getAskUserAnswerSupplement(
-                            group,
-                            getAskUserResponseForGroup(message, group.title)
-                          )
-                        "
-                      ></pre>
-                    </div>
-                  </template>
-                  <template v-else>
-                    <div
-                      v-for="group in getChoiceGroups(message)"
-                      :key="group.title"
-                      class="choice-group">
-                      <div class="choice-question">
-                        {{ group.title }}
-                      </div>
-                      <el-radio-group
-                        :model-value="getAskUserSelection(message, group.title)"
-                        class="choice-options vertical numbered"
-                        @update:model-value="
-                          value => setAskUserSelection(message, group.title, value)
-                        ">
-                        <el-radio
-                          v-for="(opt, optIndex) in group.options"
-                          :key="`${group.title}-${opt}`"
-                          :value="opt"
-                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
-                          <span class="choice-option-label">{{ optIndex + 1 }}. {{ opt }}</span>
-                        </el-radio>
-                        <el-radio
-                          :value="OTHER_ASK_USER_VALUE"
-                          :disabled="!canAnswerAskUser(message) || askUserSubmitting">
-                          <span class="choice-option-label">
-                            {{ group.options.length + 1 }}. {{ $t('workflow.askUser.otherLabel') }}
-                          </span>
-                        </el-radio>
-                        <div class="choice-supplement-row">
-                          <el-input
-                            :model-value="getAskUserSupplement(message, group.title)"
-                            class="choice-supplement-input"
-                            type="textarea"
-                            :autosize="{ minRows: 1, maxRows: 6 }"
-                            :placeholder="$t('workflow.askUser.supplementPlaceholder')"
-                            :disabled="!canAnswerAskUser(message) || askUserSubmitting"
-                            @focus="selectAskUserOtherIfUnset(message, group.title)"
-                            @update:model-value="
-                              value => setAskUserSupplement(message, group.title, value)
-                            " />
-                        </div>
-                      </el-radio-group>
-                    </div>
-                    <div v-if="canAnswerAskUser(message)" class="choice-submit-row">
-                      <el-button
-                        size="small"
-                        type="primary"
-                        :loading="askUserSubmitting"
-                        @click="submitAskUserResponse(message)">
-                        {{ $t('workflow.askUser.submit') }}
-                      </el-button>
-                    </div>
-                  </template>
-                </div>
-                <MarkdownSimple
-                  v-else-if="
-                    !isApprovalPending(message) &&
-                    shouldShowToolRawContent(message) &&
-                    message.toolDisplay.displayType === 'markdown' &&
-                    !isMcpToolMessage(message)
-                  "
-                  :content="removeSystemReminder(message.message)" />
-                <pre
-                  v-else-if="
-                    !isApprovalPending(message) &&
-                    shouldShowToolRawContent(message) &&
-                    !isDuplicateBashCommandContent(message)
-                  "
-                  class="raw-content"
-                  >{{ getMcpToolContentForDisplay(message) }}</pre
-                >
-                <ApprovalDialog
-                  v-if="shouldShowApprovalDialog(message)"
-                  inline
-                  :tool-name="getMessageToolName(message)"
-                  :details="getApprovalDetailsPayload(message)"
-                  :display-type="message.metadata?.display_type || message.toolDisplay.displayType"
-                  :rejection-message="getApprovalDraft(message.metadata?.tool_call_id)"
-                  :loading="
-                    props.isBatchApprovalSubmitting ||
-                    (approvalLoading && activeApprovalId === message.metadata?.tool_call_id)
-                  "
-                  :pending-count="inlineBulkApprovalCount"
-                  @update:rejection-message="
-                    value => setApprovalDraft(message.metadata?.tool_call_id, value)
-                  "
-                  @approve="onApproveTool(message.metadata?.tool_call_id)"
-                  @approve-all="onApproveAllTool(message.metadata?.tool_call_id)"
-                  @approve-all-pending="onApproveAllPending(message.metadata?.tool_call_id)"
-                  @reject="onRejectTool(message.metadata?.tool_call_id)" />
               </div>
-            </template>
+              <el-alert
+                v-if="!isContextSnapshotMessage(message) && shouldShowErrorAlert(message)"
+                type="error"
+                :closable="false"
+                show-icon
+                class="workflow-error-alert">
+                <template #title>{{ getErrorAlertTitle(message) }}</template>
+                <div class="workflow-error-alert__body">
+                  <MarkdownSimple :content="getErrorAlertContent(message)" />
+                </div>
+              </el-alert>
+              <MarkdownSimple
+                v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
+                :content="getParsedMessage(message).content" />
+
+              <!-- Tool Call Indicators SECOND (Only pending ones) -->
+              <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
+                <div
+                  v-for="call in message.pendingToolCalls"
+                  :key="call.id"
+                  class="cli-tool-call pending"
+                  :class="[
+                    call.toolType || 'tool-system',
+                    call.isRejected ? 'status-error' : 'status-running'
+                  ]">
+                  <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
+                    <cs :name="call.icon || 'tool'" size="14px" class="tool-type-icon" />
+                    <span class="tool-name">{{ call.action }}</span>
+                    <span class="tool-target">{{ call.target }}</span>
+                  </div>
+                  <div class="tool-line summary">
+                    <span class="corner-icon">⎿</span>
+                    <span class="summary-text">{{ call.summary }}</span>
+                  </div>
+                  <div
+                    v-if="call.toolName === 'complete_workflow' && call.completionSummary"
+                    class="finish-task-summary markdown-body">
+                    <MarkdownSimple :content="call.completionSummary" />
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
+        </div>
+      </div>
 
-          <!-- Regular Assistant Content -->
-          <div v-else>
-            <div v-if="isManualClearContextMessage(message)" class="manual-clear-context-divider">
-              <span class="manual-clear-context-divider__line"></span>
-              <span class="manual-clear-context-divider__label">{{
-                $t('workflow.clearContextDivider')
-              }}</span>
-              <span class="manual-clear-context-divider__line"></span>
-            </div>
-            <div v-else-if="isContextSnapshotMessage(message)" class="context-snapshot-card">
+      <!-- Streaming Chat State -->
+      <div v-if="shouldShowStandaloneStreamingChat" class="message assistant chatting">
+        <div class="content-container">
+          <div class="ai-content chat">
+            <div v-if="chatState.reasoning" class="reasoning-container">
               <div
-                class="context-snapshot-card__header"
-                @click="$emit('toggle-expand', getContextSnapshotExpandId(message))">
-                <cs name="archive" size="14px" class="context-snapshot-card__icon" />
-                <span class="context-snapshot-card__title">{{
-                  getContextSnapshotTitle(message)
-                }}</span>
-                <span
-                  v-if="!isContextSnapshotExpanded(message)"
-                  class="context-snapshot-card__preview">
-                  {{ getContextSnapshotPreview(message) }}
-                </span>
-                <cs
-                  name="double-arrow-down"
-                  size="14px"
-                  class="context-snapshot-card__chevron"
-                  :class="{ expanded: isContextSnapshotExpanded(message) }" />
-              </div>
-              <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
-                <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
-              </div>
-            </div>
-
-            <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
-            <div
-              v-else-if="message.reasoning || message.stepType === 'Think'"
-              class="reasoning-container">
-              <div class="reasoning-header" @click="toggleReasoningForMessage(message)">
+                class="reasoning-header"
+                @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
                 <cs
                   name="reasoning"
                   size="14px"
                   class="reasoning-icon"
                   :class="{
                     rotating:
-                      isRunning &&
-                      !hasThoughtCompleted(message) &&
-                      !isReasoningExpandedForMessage(message) &&
-                      message === lastAssistantMessage
+                      !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
                   }" />
                 <span class="reasoning-text">
-                  <template v-if="isReasoningExpandedForMessage(message)">
-                    {{ $t('workflow.thinkingExpanded') || 'Thinking Process' }}
-                  </template>
-                  <template
-                    v-else-if="
-                      isRunning && !hasThoughtCompleted(message) && message === lastAssistantMessage
-                    ">
-                    {{ $t('workflow.thinking') || 'Thinking...' }}
-                  </template>
-                  <template v-else>
-                    {{ $t('workflow.thoughtCompleted') || 'Thought Complete' }}
-                  </template>
+                  {{
+                    isReasoningExpanded(STREAMING_REASONING_ID)
+                      ? $t('workflow.thinkingExpanded') || 'Thinking Process'
+                      : hasStreamingThoughtCompleted
+                        ? $t('workflow.thoughtCompleted') || 'Thought Complete'
+                        : $t('workflow.thinking') || 'Thinking...'
+                  }}
                 </span>
                 <span class="reasoning-toggle">
-                  {{ isReasoningExpandedForMessage(message) ? '▲' : '▼' }}
+                  {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
                 </span>
               </div>
-              <div v-if="isReasoningExpandedForMessage(message)" class="reasoning-content">
-                {{ message.reasoning || message.message }}
+              <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
+                {{ chatState.reasoning }}
               </div>
             </div>
-            <el-alert
-              v-if="!isContextSnapshotMessage(message) && shouldShowErrorAlert(message)"
-              type="error"
-              :closable="false"
-              show-icon
-              class="workflow-error-alert">
-              <template #title>{{ getErrorAlertTitle(message) }}</template>
-              <div class="workflow-error-alert__body">
-                <MarkdownSimple :content="getErrorAlertContent(message)" />
-              </div>
-            </el-alert>
-            <MarkdownSimple
-              v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
-              :content="getParsedMessage(message).content" />
-
-            <!-- Tool Call Indicators SECOND (Only pending ones) -->
-            <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
-              <div
-                v-for="call in message.pendingToolCalls"
-                :key="call.id"
-                class="cli-tool-call pending"
-                :class="[
-                  call.toolType || 'tool-system',
-                  call.isRejected ? 'status-error' : 'status-running'
-                ]">
-                <div class="tool-line title-wrap" :class="{ 'tool-rejected': call.isRejected }">
-                  <cs
-                    :name="call.icon || 'tool'"
-                    size="14px"
-                    class="tool-type-icon" />
-                  <span class="tool-name">{{ call.action }}</span>
-                  <span class="tool-target">{{ call.target }}</span>
-                </div>
-                <div class="tool-line summary">
-                  <span class="corner-icon">⎿</span>
-                  <span class="summary-text">{{ call.summary }}</span>
-                </div>
-                <div
-                  v-if="
-                    call.toolName === 'complete_workflow' && call.completionSummary
-                  "
-                  class="finish-task-summary markdown-body">
-                  <MarkdownSimple :content="call.completionSummary" />
-                </div>
-              </div>
+            <!-- Streaming Blocks (Optimized rendering) -->
+            <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
+              <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
+              <MarkdownSimple :content="block.content" />
             </div>
-          </div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Streaming Chat State -->
-    <div v-if="shouldShowStandaloneStreamingChat" class="message assistant chatting">
-      <div class="content-container">
-        <div class="ai-content chat">
-          <div v-if="chatState.reasoning" class="reasoning-container">
+            <!-- Retry Countdown... -->
             <div
-              class="reasoning-header"
-              @click="$emit('toggle-reasoning', STREAMING_REASONING_ID)">
-              <cs
-                name="reasoning"
-                size="14px"
-                class="reasoning-icon"
-                :class="{
-                  rotating:
-                    !hasStreamingThoughtCompleted && !isReasoningExpanded(STREAMING_REASONING_ID)
-                }" />
-              <span class="reasoning-text">
-                {{
-                  isReasoningExpanded(STREAMING_REASONING_ID)
-                    ? $t('workflow.thinkingExpanded') || 'Thinking Process'
-                    : hasStreamingThoughtCompleted
-                      ? $t('workflow.thoughtCompleted') || 'Thought Complete'
-                      : $t('workflow.thinking') || 'Thinking...'
-                }}
-              </span>
-              <span class="reasoning-toggle">
-                {{ isReasoningExpanded(STREAMING_REASONING_ID) ? '▲' : '▼' }}
-              </span>
+              v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0"
+              class="retry-status-alert">
+              <el-alert type="warning" :closable="false" show-icon>
+                <template #title>
+                  {{
+                    $t('workflow.retrying', {
+                      attempt: chatState.retryInfo.attempt,
+                      total: chatState.retryInfo.total,
+                      seconds: chatState.retryInfo.nextRetryIn
+                    })
+                  }}
+                </template>
+              </el-alert>
             </div>
-            <div v-if="isReasoningExpanded(STREAMING_REASONING_ID)" class="reasoning-content">
-              {{ chatState.reasoning }}
-            </div>
-          </div>
-          <!-- Streaming Blocks (Optimized rendering) -->
-          <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
-            <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
-            <MarkdownSimple :content="block.content" />
-          </div>
-
-          <!-- Retry Countdown... -->
-          <div
-            v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0"
-            class="retry-status-alert">
-            <el-alert type="warning" :closable="false" show-icon>
-              <template #title>
-                {{
-                  $t('workflow.retrying', {
-                    attempt: chatState.retryInfo.attempt,
-                    total: chatState.retryInfo.total,
-                    seconds: chatState.retryInfo.nextRetryIn
-                  })
-                }}
-              </template>
-            </el-alert>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Context Compression Status -->
-    <div v-if="isCompressing" class="compression-status">
-      <div class="compression-indicator">
-        <cs name="loading" size="14px" class="rotating" />
-        <span class="compression-text">{{ compressionMessage }}</span>
+      <!-- Context Compression Status -->
+      <div v-if="isCompressing" class="compression-status">
+        <div class="compression-indicator">
+          <cs name="loading" size="14px" class="rotating" />
+          <span class="compression-text">{{ compressionMessage }}</span>
+        </div>
       </div>
-    </div>
 
-    <!-- Frontend queued user messages -->
-    <div v-if="queuedMessages.length > 0" class="queued-list">
-      <div
-        v-for="item in queuedMessages"
-        :key="item.id"
-        class="queued-item"
-        :class="{ 'queued-item--processing': item.status === 'preparing_attachments' }">
-        <div class="queued-item-main">
-          <cs
-            :name="item.icon || 'clock'"
-            size="12px"
-            class="queued-icon"
-            :class="{ 'cs-spin': item.status === 'preparing_attachments' }" />
-          <div class="queued-content">
-            <span v-if="item.content" class="queued-text">{{ item.content }}</span>
-            <div v-if="item.attachments?.length > 0" class="queued-attachments">
-              <div
-                v-for="(attachment, attachmentIndex) in item.attachments"
-                :key="`${item.id}_attachment_${attachment.id || attachmentIndex}`"
-                class="queued-attachment-item">
-                <el-image
-                  v-if="attachment.type === 'image' && (attachment.url || attachment.sourceUrl)"
-                  :src="attachment.url || attachment.sourceUrl"
-                  :preview-src-list="[attachment.url || attachment.sourceUrl]"
-                  :initial-index="0"
-                  fit="cover"
-                  class="queued-attachment-image"
-                  preview-teleported />
-                <span v-else class="queued-attachment-name">{{ attachment.name }}</span>
+      <!-- Frontend queued user messages -->
+      <div v-if="queuedMessages.length > 0" class="queued-list">
+        <div
+          v-for="item in queuedMessages"
+          :key="item.id"
+          class="queued-item"
+          :class="{ 'queued-item--processing': item.status === 'preparing_attachments' }">
+          <div class="queued-item-main">
+            <cs
+              :name="item.icon || 'clock'"
+              size="12px"
+              class="queued-icon"
+              :class="{ 'cs-spin': item.status === 'preparing_attachments' }" />
+            <div class="queued-content">
+              <span v-if="item.content" class="queued-text">{{ item.content }}</span>
+              <div v-if="item.attachments?.length > 0" class="queued-attachments">
+                <div
+                  v-for="(attachment, attachmentIndex) in item.attachments"
+                  :key="`${item.id}_attachment_${attachment.id || attachmentIndex}`"
+                  class="queued-attachment-item">
+                  <el-image
+                    v-if="attachment.type === 'image' && (attachment.url || attachment.sourceUrl)"
+                    :src="attachment.url || attachment.sourceUrl"
+                    :preview-src-list="[attachment.url || attachment.sourceUrl]"
+                    :initial-index="0"
+                    fit="cover"
+                    class="queued-attachment-image"
+                    preview-teleported />
+                  <span v-else class="queued-attachment-name">{{ attachment.name }}</span>
+                </div>
               </div>
+              <span v-if="item.statusText" class="queued-status-text">{{ item.statusText }}</span>
             </div>
-            <span v-if="item.statusText" class="queued-status-text">{{ item.statusText }}</span>
           </div>
+          <button
+            v-if="canRemoveQueuedMessage(item)"
+            type="button"
+            class="queued-remove"
+            @click="$emit('remove-queued-message', item.id)">
+            <cs name="close" size="12px" />
+          </button>
         </div>
-        <button
-          v-if="canRemoveQueuedMessage(item)"
-          type="button"
-          class="queued-remove"
-          @click="$emit('remove-queued-message', item.id)">
-          <cs name="close" size="12px" />
-        </button>
       </div>
-    </div>
     </template>
   </div>
 </template>
@@ -1362,9 +1396,9 @@ const captureScrollAnchor = container => {
 
   const containerRect = container.getBoundingClientRect()
   const anchorTop = containerRect.top
-  const messageElements = Array.from(container.querySelectorAll('.message[data-message-id]')).filter(
-    element => element.getBoundingClientRect().bottom > anchorTop + 1
-  )
+  const messageElements = Array.from(
+    container.querySelectorAll('.message[data-message-id]')
+  ).filter(element => element.getBoundingClientRect().bottom > anchorTop + 1)
   const anchorElement = messageElements.find(
     element => !!element.getAttribute('data-window-anchor-id')
   )
@@ -1400,12 +1434,7 @@ const handleScroll = () => {
   syncReadingScrollAnchor()
 }
 
-const restoreScrollPosition = ({
-  container,
-  anchor,
-  previousScrollTop,
-  previousScrollHeight
-}) => {
+const restoreScrollPosition = ({ container, anchor, previousScrollTop, previousScrollHeight }) => {
   if (!container) return { mode: 'no_container', heightDelta: 0 }
 
   const containerRect = container.getBoundingClientRect()
@@ -1541,9 +1570,7 @@ const jsonSnapshotSectionText = value => {
 
 const getContextSnapshotV2Kind = snapshot => {
   if (snapshot?.schema_version !== 2) return ''
-  return ['pressure_handoff', 'completed_task_rollup'].includes(snapshot?.kind)
-    ? snapshot.kind
-    : ''
+  return ['pressure_handoff', 'completed_task_rollup'].includes(snapshot?.kind) ? snapshot.kind : ''
 }
 
 const snapshotEntryText = value => {
@@ -1620,11 +1647,17 @@ const formatV2ContextSnapshot = snapshot => {
 
   const sections = [
     kind === 'pressure_handoff'
-      ? [t('workflow.contextSnapshot.userDirectives'), snapshotMarkdownList(snapshot.user_directives)]
+      ? [
+          t('workflow.contextSnapshot.userDirectives'),
+          snapshotMarkdownList(snapshot.user_directives)
+        ]
       : null,
     [t('workflow.contextSnapshot.confirmedFacts'), snapshotMarkdownList(snapshot.confirmed_facts)],
     kind === 'pressure_handoff'
-      ? [t('workflow.contextSnapshot.boundaryOpenItems'), formatBoundaryOpenItems(snapshot.boundary_open_items)]
+      ? [
+          t('workflow.contextSnapshot.boundaryOpenItems'),
+          formatBoundaryOpenItems(snapshot.boundary_open_items)
+        ]
       : [
           t('workflow.contextSnapshot.unresolvedCarryovers'),
           snapshotMarkdownList(snapshot.unresolved_carryovers)
@@ -1857,9 +1890,7 @@ const getShellExecutionRouteLabel = message => {
   const plan = getShellExecutionPlan(message)
   if (!plan) return ''
   const routeKey = String(plan.backend_origin || '').toLowerCase()
-  const routeTranslationKey = routeKey
-    ? `workflow.approval.executionRoutes.${routeKey}`
-    : ''
+  const routeTranslationKey = routeKey ? `workflow.approval.executionRoutes.${routeKey}` : ''
   const backend = plan.backend ? t(`workflow.approval.executionBackends.${plan.backend}`) : ''
   const route = routeTranslationKey ? t(routeTranslationKey) : ''
   return [backend, route].filter(value => value && value !== routeTranslationKey).join(' · ')
@@ -2055,9 +2086,7 @@ const hasSubsequentVisibleOutput = message => {
   return visibleMessages.value.slice(index + 1).some(item => item.role !== 'user')
 }
 
-const hasStreamingThoughtCompleted = computed(
-  () => props.chatState?.reasoningStatus === 'done'
-)
+const hasStreamingThoughtCompleted = computed(() => props.chatState?.reasoningStatus === 'done')
 
 const hasThoughtCompleted = message => {
   if (!message) return false
@@ -2084,8 +2113,7 @@ const isApprovalInFlight = message =>
 
 const isToolAwaitingExecution = message => {
   const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
-  const hasApprovedSubmission =
-    approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(message)
+  const hasApprovedSubmission = approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(message)
   return isWorkflowToolAwaitingExecution(message, hasApprovedSubmission)
 }
 
@@ -2528,8 +2556,10 @@ const getChoiceGroups = message =>
 // locally during future template refactors.
 const isSubAgentRunMessage = message => shouldRenderSubAgentCard(message)
 
-const getSubAgentCardExpandId = message => `${message?.displayId || message?.id || 'sub-agent'}:card`
-const getSubAgentCostExpandId = message => `${message?.displayId || message?.id || 'sub-agent'}:cost`
+const getSubAgentCardExpandId = message =>
+  `${message?.displayId || message?.id || 'sub-agent'}:card`
+const getSubAgentCostExpandId = message =>
+  `${message?.displayId || message?.id || 'sub-agent'}:cost`
 
 const isSubAgentCardExpanded = message =>
   props.isMessageExpanded({
@@ -3538,7 +3568,7 @@ defineExpose({
 
 .tool-group__expand-button:hover {
   background: var(--cs-hover-bg-color);
-  transform: rotate(-90deg)
+  transform: rotate(-90deg);
 }
 
 .tool-group__summary.expanded .tool-group__expand-button {

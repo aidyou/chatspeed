@@ -6864,7 +6864,11 @@ impl WorkflowExecutor {
         // Cleanup pending approvals when transitioning away from approval-waiting states
         if matches!(
             new_state,
-            WorkflowState::Thinking | WorkflowState::Executing | WorkflowState::Completed
+            WorkflowState::Thinking
+                | WorkflowState::Executing
+                | WorkflowState::Completed
+                | WorkflowState::Cancelled
+                | WorkflowState::Error
         ) {
             let pending_count = self.pending_approvals.len();
             if pending_count > 0 {
@@ -10432,6 +10436,59 @@ mod recovery_tests {
             completion_index < queued_user_index,
             "queued user input must apply after the sub-agent completion Observe"
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_sub_agent_state_clears_pending_approvals() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "terminal-sub-agent-approval-cleanup";
+        let agent = test_agent("terminal-sub-agent-approval-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            Some("Code Explorer".to_string()),
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(34).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingApproval;
+        executor.pending_approvals.insert(
+            "pending-child-tool".to_string(),
+            json!({
+                "name": "bash",
+                "arguments": { "command": "echo pending" },
+                "details": { "command": "echo pending" },
+                "display_type": "text"
+            }),
+        );
+        executor.enqueue_pending_approval("pending-child-tool");
+
+        executor
+            .update_state(WorkflowState::Cancelled)
+            .await
+            .expect("cancelled transition should succeed");
+
+        assert!(executor.pending_approvals.is_empty());
+        assert!(executor.pending_approval_queue.is_empty());
+        assert!(executor.export_execution_context().pending_tools.is_empty());
     }
 
     #[tokio::test]

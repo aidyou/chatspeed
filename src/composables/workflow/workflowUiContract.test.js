@@ -158,16 +158,20 @@ test('empty new workflows require an authorized directory before accepting input
 })
 
 test('child session panes preserve a confirm received while snapshot hydration is in flight', async () => {
-  const [workflowView, messageList, sessionPane, sessionMessages, workflowCore, engine] = await Promise.all([
+  const [workflowView, messageList, sessionPane, sessionMessages, workflowCore, engine, workflowCommand, workflowDb] = await Promise.all([
     readFile('src/views/Workflow.vue', 'utf8'),
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
     readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
     readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8'),
     readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
-    readFile('src-tauri/src/workflow/react/engine.rs', 'utf8')
+    readFile('src-tauri/src/workflow/react/engine.rs', 'utf8'),
+    readFile('src-tauri/src/commands/workflow.rs', 'utf8'),
+    readFile('src-tauri/src/db/workflow.rs', 'utf8')
   ])
 
   assert.match(messageList, /<cs name="fullscreen-off"\s*\/>/)
+  assert.match(messageList, /sub-agent-card__status[\s\S]*?sub-agent-card__open-button/)
+  assert.match(messageList, /sub-agent-card__title-wrap[\s\S]*?sub-agent-card__meta/)
   assert.match(messageList, /@click\.stop="\$emit\('open-sub-agent', message\.subAgentCard\.taskId\)"/)
   assert.match(workflowView, /v-if="activeSubAgentSessionId && activeSubAgentParentSessionId === currentWorkflowId"/)
   assert.match(workflowView, /const openSubAgentMessagePane = sessionId => \{[\s\S]*?activeSubAgentParentSessionId\.value = parentSessionId/)
@@ -182,6 +186,11 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionPane, /:active-approval-id="approval\.activeApprovalId\.value"/, 'the message list must receive the active approval ID, not its ref')
   assert.match(sessionPane, /:is-approval-submitting="approval\.isApprovalSubmitting\.value"/, 'the message list must receive the resolved approval-submission predicate')
   assert.match(sessionPane, /<cs name="fullscreen"\s*\/>/)
+  assert.match(sessionPane, /{{ childAgentTitle }}/)
+  assert.match(sessionPane, /class="workflow-session-message-pane__status"[\s\S]*?:class="childStatusClass"/)
+  assert.match(sessionPane, /workflow\.subAgent\.statusCompleted/)
+  assert.match(sessionPane, /workflow\.subAgent\.statusCancelled/)
+  assert.match(sessionPane, /agentStore\.agents\.find/)
   assert.doesNotMatch(sessionPane, /WorkflowInputArea/)
   assert.match(sessionMessages, /hydrateWorkflowSession\(/, 'child hydration must install its event buffer before listener registration')
   assert.match(sessionMessages, /registerListener: handleEvent => listen\(`workflow:\/\/event\/\$\{targetSessionId\}`/, 'child hydration must listen to its own channel')
@@ -191,8 +200,35 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionMessages, /workflow:\/\/event\/\$\{targetSessionId\}/, 'child pane must listen to its own channel')
   assert.doesNotMatch(sessionMessages, /selectWorkflow\(/, 'child pane must not replace the root selection')
   assert.match(workflowCore, /targetSessionId: payload\.sub_agent_id,[\s\S]*?navigationSessionId: payload\.parent_session_id/)
+  assert.match(workflowCore, /const clearPendingApprovalEntriesBySubAgent = subAgentId =>/)
+  assert.match(workflowCore, /nextEntries\[key\]\?\.subAgentId !== normalizedSubAgentId/)
+  assert.match(workflowCore, /sub_agent_progress[\s\S]*?clearPendingApprovalEntriesBySubAgent\(payload\.sub_agent_id\)/)
+  assert.match(workflowCore, /\['completed', 'failed', 'cancelled', 'interrupted', 'error'\]/)
   assert.match(engine, /GatewayPayload::SubAgentApprovalRequested/)
   assert.match(engine, /GatewayPayload::SubAgentApprovalResolved/)
+  assert.match(
+    engine,
+    /WorkflowState::Completed\s*\| WorkflowState::Cancelled\s*\| WorkflowState::Error/,
+    'terminal child workflows must clear their authoritative pending approvals'
+  )
+  assert.match(
+    workflowCore,
+    /const activeParentWorkflowIds = new Set\([\s\S]*?!TERMINAL_STATUSES\.includes\(status\)/,
+    'the frontend must skip restoration when every parent workflow is terminal'
+  )
+  assert.match(workflowCore, /if \(!activeParentWorkflowIds\.size\) return/)
+  assert.match(workflowCore, /if \(!activeParentWorkflowIds\.has\(parentSessionId\)\) continue/)
+  assert.match(workflowCommand, /list_child_workflows_with_pending_approvals\(\)/)
+  assert.match(
+    workflowDb,
+    /status IN \('awaiting_approval', 'awaiting_auto_approval'\)/,
+    'the backend query must only load child workflows currently waiting for approval'
+  )
+  assert.match(
+    workflowDb,
+    /parent\.status NOT IN \('completed', 'failed', 'error', 'cancelled'\)/,
+    'the backend query must exclude children of terminal parents before loading snapshots'
+  )
 })
 
 test('MCP tool calls show their arguments and format only valid JSON results', async () => {

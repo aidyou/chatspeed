@@ -1251,6 +1251,20 @@ impl MainStore {
         })
     }
 
+    pub fn list_child_workflows_with_pending_approvals(&self) -> Result<Vec<Workflow>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT child.* FROM workflows AS child
+                 INNER JOIN workflows AS parent ON parent.id = child.parent_session_id
+                 WHERE child.status IN ('awaiting_approval', 'awaiting_auto_approval')
+                   AND parent.status NOT IN ('completed', 'failed', 'error', 'cancelled')
+                 ORDER BY child.created_at ASC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn list_child_workflows_for_parent(
         &self,
         parent_session_id: &str,
@@ -4281,6 +4295,72 @@ mod tests {
             Some("parent-session"),
             "child workflow should not appear in top-level workflow list"
         );
+    }
+
+    #[test]
+    fn test_list_child_workflows_with_pending_approvals_excludes_terminal_parents_and_children() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-parent");
+        seed_agent(&store, "agent-child");
+
+        store
+            .create_workflow("parent", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "completed-parent",
+                "Completed parent query",
+                "agent-parent",
+                None,
+                None,
+            )
+            .expect("failed to create completed parent workflow");
+        for (parent_id, child_id, child_status) in [
+            ("parent", "approval-child", "awaiting_approval"),
+            ("parent", "completed-child", "completed"),
+            (
+                "completed-parent",
+                "completed-parent-child",
+                "awaiting_approval",
+            ),
+        ] {
+            store
+                .create_workflow(
+                    child_id,
+                    "Child query",
+                    "agent-child",
+                    None,
+                    Some(parent_id),
+                )
+                .expect("failed to create child workflow");
+            store
+                .update_workflow_status(child_id, child_status)
+                .expect("failed to update child workflow status");
+        }
+        store
+            .update_workflow_status("completed-parent", "completed")
+            .expect("failed to update completed parent workflow status");
+
+        let children = store
+            .list_child_workflows_with_pending_approvals()
+            .expect("failed to list child workflows awaiting approval");
+
+        assert_eq!(children.len(), 1);
+        assert!(children.iter().all(|child| {
+            matches!(
+                child.status.as_str(),
+                "awaiting_approval" | "awaiting_auto_approval"
+            )
+        }));
+        assert!(children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("approval-child")));
+        assert!(!children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("completed-child")));
+        assert!(!children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("completed-parent-child")));
     }
 
     #[test]

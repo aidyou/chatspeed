@@ -2904,7 +2904,7 @@ pub async fn list_pending_sub_agent_approvals(
     tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
         let mut entries = Vec::new();
         for child in store
-            .list_child_workflows()
+            .list_child_workflows_with_pending_approvals()
             .map_err(|error| error.to_string())?
         {
             let Some(parent_session_id) = child.parent_session_id else {

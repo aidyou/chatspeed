@@ -234,8 +234,8 @@ assert.match(
 )
 assert.match(
   globalApprovalProjection,
-  /const key = `\$\{entry\?\.sessionId \|\| ''\}:\$\{entry\?\.id \|\| ''\}`/,
-  'global action reminders must deduplicate per session and approval, not collapse all sessions'
+  /const key = entry\?\.key \|\| `\$\{entry\?\.targetSessionId \|\| entry\?\.sessionId \|\| ''\}:\$\{entry\?\.id \|\| ''\}`/,
+  'global action reminders must deduplicate each child approval using its target session and tool-call ID'
 )
 const queuedImageSend = sourceSection(
   workflowView,

@@ -791,6 +791,26 @@ export function useWorkflowCore({
         pendingApprovalEntries.value = nextEntries
     }
 
+    const clearPendingApprovalEntriesBySubAgent = subAgentId => {
+        if (!subAgentId) return
+
+        const normalizedSubAgentId = String(subAgentId).trim()
+        if (!normalizedSubAgentId) return
+
+        const nextEntries = { ...pendingApprovalEntries.value }
+        let changed = false
+
+        for (const key of Object.keys(nextEntries)) {
+            if (nextEntries[key]?.subAgentId !== normalizedSubAgentId) continue
+            delete nextEntries[key]
+            changed = true
+        }
+
+        if (changed) {
+            pendingApprovalEntries.value = nextEntries
+        }
+    }
+
     const reconcileApprovalEntriesFromExecutionContext = (sessionId, workflow) => {
         if (!sessionId || isWorkflowBeingDeleted(sessionId)) return
 
@@ -926,6 +946,14 @@ export function useWorkflowCore({
                             payload.tool_call_id,
                             payload.sub_agent_id
                         )
+                        return
+                    }
+
+                    if (payload.type === 'sub_agent_progress') {
+                        const status = String(payload.status || payload.workflow_state || '').toLowerCase()
+                        if (['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(status)) {
+                            clearPendingApprovalEntriesBySubAgent(payload.sub_agent_id)
+                        }
                         return
                     }
 
@@ -1310,9 +1338,11 @@ export function useWorkflowCore({
                     )
                 } else if (payload.type === 'sub_agent_progress') {
                     const status = String(payload.status || payload.workflow_state || '').toLowerCase()
-                    const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
+                    const isTerminal = ['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(status)
                     if (!isTerminal) {
                         markSessionLiveFromNonTerminalEvent()
+                    } else {
+                        clearPendingApprovalEntriesBySubAgent(payload.sub_agent_id)
                     }
                     workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
@@ -1344,6 +1374,16 @@ export function useWorkflowCore({
     }
 
     const reconcilePendingSubAgentApprovals = async () => {
+        const activeParentWorkflowIds = new Set(
+            workflows.value
+                .filter(workflow => {
+                    const status = String(workflow?.status || '').toLowerCase()
+                    return workflow?.id && status && !TERMINAL_STATUSES.includes(status)
+                })
+                .map(workflow => workflow.id)
+        )
+        if (!activeParentWorkflowIds.size) return
+
         try {
             const entries = await invokeWrapper('list_pending_sub_agent_approvals')
             for (const entry of entries || []) {
@@ -1351,7 +1391,7 @@ export function useWorkflowCore({
                 const subAgentId = String(entry?.sub_agent_id || '').trim()
                 const toolCallId = String(entry?.tool_call_id || '').trim()
                 if (!parentSessionId || !subAgentId || !toolCallId) continue
-                if (!workflows.value.some(workflow => workflow?.id === parentSessionId)) continue
+                if (!activeParentWorkflowIds.has(parentSessionId)) continue
                 upsertPendingApprovalEntry(parentSessionId, {
                     id: toolCallId,
                     action: entry.tool_name,

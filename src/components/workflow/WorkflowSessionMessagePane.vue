@@ -3,8 +3,14 @@
     <header v-if="agentRole === 'child'" class="workflow-session-message-pane__header">
       <div class="workflow-session-message-pane__title">
         <cs name="task" />
-        <span>{{ $t('workflow.messageList') }}</span>
-        <span v-if="childStatus" class="workflow-session-message-pane__status">{{ childStatus }}</span>
+        <span>{{ childAgentTitle }}</span>
+        <span
+          v-if="childStatus"
+          class="workflow-session-message-pane__status"
+          :class="childStatusClass">
+          <cs name="loading" class="cs-spin" v-if="childIsRunning" />
+          {{ childStatusLabel }}
+        </span>
       </div>
       <el-tooltip :content="$t('common.close')" :hide-after="0" :enterable="false">
         <button type="button" class="workflow-session-message-pane__close" @click="$emit('close')">
@@ -60,7 +66,9 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
+import { useAgentStore } from '@/stores/agent'
 import { useWorkflowMessages } from '@/composables/workflow/useWorkflowMessages'
 import { useWorkflowApproval } from '@/composables/workflow/useWorkflowApproval'
 import { useWorkflowSessionMessages } from '@/composables/workflow/useWorkflowSessionMessages'
@@ -68,7 +76,11 @@ import WorkflowMessageList from './WorkflowMessageList.vue'
 
 const props = defineProps({
   sessionId: { type: String, default: '' },
-  agentRole: { type: String, default: 'primary', validator: value => ['primary', 'child'].includes(value) },
+  agentRole: {
+    type: String,
+    default: 'primary',
+    validator: value => ['primary', 'child'].includes(value)
+  },
   primaryChatState: { type: Object, default: null },
   primaryIsChatting: { type: Boolean, default: false },
   primaryIsCompressing: { type: Boolean, default: false },
@@ -78,25 +90,90 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'submit-ask-user', 'remove-queued-message', 'open-sub-agent'])
+const { t } = useI18n()
 const workflowStore = useWorkflowStore()
+const agentStore = useAgentStore()
 const messageListRef = ref(null)
 const sessionIdRef = computed(() => props.sessionId)
 const agentRoleRef = computed(() => props.agentRole)
-const childSession = useWorkflowSessionMessages({ sessionId: sessionIdRef, agentRole: agentRoleRef })
+const childSession = useWorkflowSessionMessages({
+  sessionId: sessionIdRef,
+  agentRole: agentRoleRef
+})
 const source = props.agentRole === 'child' ? childSession.source : workflowStore
 const messageProjection = useWorkflowMessages(source)
 
-const resolvedChatState = computed(() => props.agentRole === 'child' ? childSession.chatState.value : props.primaryChatState)
-const isChatting = computed(() => props.agentRole === 'child' ? childSession.isRunning.value : props.primaryIsChatting)
-const isCompressing = computed(() => props.agentRole === 'child' ? childSession.isCompressing.value : props.primaryIsCompressing)
-const compressionMessage = computed(() => props.agentRole === 'child' ? childSession.compressionMessage.value : props.primaryCompressionMessage)
-const isLoadingMessages = computed(() => props.agentRole === 'child' ? childSession.isLoadingMessages.value : workflowStore.isLoadingMessages)
-const isRunning = computed(() => props.agentRole === 'child' ? childSession.isRunning.value : workflowStore.isRunning)
-const resolvedWaitReason = computed(() => props.agentRole === 'child' ? childSession.waitReason.value : props.primaryWaitReason)
-const resolvedPendingApprovals = computed(() => props.agentRole === 'child' ? childSession.pendingApprovals.value : workflowStore.currentInlinePendingApprovals)
-const resolvedPendingApprovalIds = computed(() => props.agentRole === 'child' ? childSession.pendingApprovalIds.value : workflowStore.currentInlinePendingApprovalIds)
-const childStatus = computed(() => childSession.workflow.value?.status || '')
-const getToolStream = toolCallId => props.agentRole === 'child' ? childSession.source.getToolStream(toolCallId) : workflowStore.getToolStream(toolCallId)
+const resolvedChatState = computed(() =>
+  props.agentRole === 'child' ? childSession.chatState.value : props.primaryChatState
+)
+const isChatting = computed(() =>
+  props.agentRole === 'child' ? childSession.isRunning.value : props.primaryIsChatting
+)
+const isCompressing = computed(() =>
+  props.agentRole === 'child' ? childSession.isCompressing.value : props.primaryIsCompressing
+)
+const compressionMessage = computed(() =>
+  props.agentRole === 'child'
+    ? childSession.compressionMessage.value
+    : props.primaryCompressionMessage
+)
+const isLoadingMessages = computed(() =>
+  props.agentRole === 'child'
+    ? childSession.isLoadingMessages.value
+    : workflowStore.isLoadingMessages
+)
+const isRunning = computed(() =>
+  props.agentRole === 'child' ? childSession.isRunning.value : workflowStore.isRunning
+)
+const resolvedWaitReason = computed(() =>
+  props.agentRole === 'child' ? childSession.waitReason.value : props.primaryWaitReason
+)
+const resolvedPendingApprovals = computed(() =>
+  props.agentRole === 'child'
+    ? childSession.pendingApprovals.value
+    : workflowStore.currentInlinePendingApprovals
+)
+const resolvedPendingApprovalIds = computed(() =>
+  props.agentRole === 'child'
+    ? childSession.pendingApprovalIds.value
+    : workflowStore.currentInlinePendingApprovalIds
+)
+const childStatus = computed(() => String(childSession.workflow.value?.status || '').toLowerCase())
+const childAgentTitle = computed(() => {
+  const workflow = childSession.workflow.value || {}
+  const agent = agentStore.agents.find(
+    candidate => candidate.id === workflow.agentId || candidate.id === workflow.agent_id
+  )
+  return (
+    agent?.name ||
+    workflow.agentName ||
+    workflow.agent_name ||
+    workflow.title ||
+    t('workflow.untitled')
+  )
+})
+const childIsRunning = computed(() =>
+  ['running', 'thinking', 'executing'].includes(childStatus.value)
+)
+const childStatusLabel = computed(() => {
+  if (['completed', 'success'].includes(childStatus.value))
+    return t('workflow.subAgent.statusCompleted')
+  if (['failed', 'error'].includes(childStatus.value)) return t('workflow.subAgent.statusFailed')
+  if (['cancelled', 'interrupted', 'stopped'].includes(childStatus.value)) {
+    return t('workflow.subAgent.statusCancelled')
+  }
+  return t('workflow.subAgent.statusRunning')
+})
+const childStatusClass = computed(() => {
+  if (['completed', 'success'].includes(childStatus.value)) return 'is-completed'
+  if (['failed', 'error'].includes(childStatus.value)) return 'is-failed'
+  if (['cancelled', 'interrupted', 'stopped'].includes(childStatus.value)) return 'is-stopped'
+  return 'is-running'
+})
+const getToolStream = toolCallId =>
+  props.agentRole === 'child'
+    ? childSession.source.getToolStream(toolCallId)
+    : workflowStore.getToolStream(toolCallId)
 
 const approval = useWorkflowApproval({
   currentWorkflowId: sessionIdRef,
@@ -108,7 +185,8 @@ const approval = useWorkflowApproval({
 
 const approveTool = toolCallId => approval.onApproveAction(toolCallId, props.sessionId)
 const approveAllTool = toolCallId => approval.onApproveAllAction(toolCallId, props.sessionId)
-const rejectTool = (toolCallId, message) => approval.onRejectAction(toolCallId, message, props.sessionId)
+const rejectTool = (toolCallId, message) =>
+  approval.onRejectAction(toolCallId, message, props.sessionId)
 const approveAllPending = async payload => {
   for (const toolCallId of payload?.orderedToolCallIds || []) {
     await approval.onApproveAction(toolCallId, props.sessionId)
@@ -131,6 +209,7 @@ defineExpose({
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  width: 100%;
 }
 
 .workflow-session-message-pane :deep(.messages-container) {
@@ -157,12 +236,36 @@ defineExpose({
 }
 
 .workflow-session-message-pane__status {
-  overflow: hidden;
-  color: var(--cs-text-color-secondary);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xxs) var(--cs-space-sm);
+  border: 1px solid transparent;
+  border-radius: var(--cs-border-radius-lg);
   font-size: var(--cs-font-size-sm);
   font-weight: 400;
-  text-overflow: ellipsis;
+  line-height: 1.6;
   white-space: nowrap;
+
+  &.is-running {
+    color: var(--el-color-primary);
+    background: color-mix(in srgb, var(--el-color-primary) 10%, transparent);
+    border-color: color-mix(in srgb, var(--el-color-primary) 20%, transparent);
+  }
+
+  &.is-completed {
+    color: var(--el-color-success);
+    background: color-mix(in srgb, var(--el-color-success) 10%, transparent);
+    border-color: color-mix(in srgb, var(--el-color-success) 20%, transparent);
+  }
+
+  &.is-failed,
+  &.is-stopped {
+    color: var(--el-color-danger);
+    background: color-mix(in srgb, var(--el-color-danger) 10%, transparent);
+    border-color: color-mix(in srgb, var(--el-color-danger) 20%, transparent);
+  }
 }
 
 .workflow-session-message-pane__close {

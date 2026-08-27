@@ -39,6 +39,34 @@ The plan should be detailed enough that a coding agent with no prior conversatio
 - Do not treat planning as implementation.
 - Do not claim anything has been changed or verified by execution unless it actually was.
 
+## Task Applicability and Requiredness
+
+Before drafting the plan, classify the requested work and its deliverable. Typical coding-agent
+tasks include code changes, API or interface documentation, configuration, tests, investigation,
+review, migration, and mixed tasks. The classification determines which technical dimensions are
+applicable; it must not lower the required traceability of the plan.
+
+The following are required for every task:
+
+- an accurate statement of the user's objective, requested deliverable, scope, and non-goals
+- confirmed evidence, explicit assumptions, and unresolved questions or blockers
+- observable acceptance criteria (`AC-*`), applicable invariants (`INV-*`), executable handoff
+  units (`U-*`), and verification items (`V-*`) with complete cross-references
+- affected files or other artifacts, dependencies, expected evidence, and a final handoff checklist
+- an explicit `unresolved_blockers: []` when no blocker remains
+
+Architecture, public API behavior, database/schema migration, frontend UX, concurrency, performance,
+security, deployment/operations, and rollback details are conditional dimensions. Include them when
+the task or inspected evidence makes them relevant. When a dimension is not applicable, say so in
+the relevant section with a short reason; do not invent implementation, tests, migrations, or risks
+just to satisfy a template. Do not add work outside the user's authorized objective merely to make a
+plan look more complete.
+
+Treat `implementation_units` as **handoff execution units**, not only source-code edits. A unit may
+deliver documentation, configuration, test coverage, investigation evidence, or a code change. Its
+`files` must name the actual artifact being changed or inspected, and its `verification` must prove
+that artifact's outcome.
+
 # Investigation Workflow
 
 ## 1. Understand the Request
@@ -195,6 +223,46 @@ Build `acceptance_contract` from the final plan, not from a partial draft. Use t
 Every `AC-*` and `INV-*` must be covered by at least one `U-*` and at least one `V-*`. IDs must be unique within their type. The runtime rejects missing references, unknown references, invalid dependencies, uncovered requirements, and non-empty blockers. This structured contract does not replace the detailed Markdown plan; both are required so ordinary models receive explicit execution guidance while the runtime retains a verifiable handoff.
 
 Do not rely on surrounding chat history, hidden reasoning, previous messages, or temporary notes to make the plan understandable.
+
+## Generation Order and Traceability
+
+Use this order so the structured contract is derived mechanically from the final Markdown plan:
+
+1. Restate the objective, deliverable, scope boundary, and task applicability classification.
+2. Record current evidence, confirmed facts, assumptions, questions, and stop conditions.
+3. Write observable `AC-*` criteria. Add only behavior that the user requested or that is required
+   to preserve a confirmed invariant.
+4. Write applicable `INV-*` items. Use `invariants: []` when no protected behavior is relevant.
+5. Define `U-*` handoff execution units. For each unit, list concrete files/artifacts, dependencies,
+   and the `AC-*`/`INV-*` IDs it covers. The first independent units normally have `depends_on: []`.
+6. Define `V-*` verification items with a method and expected evidence. Every `AC-*`/`INV-*` must be
+   covered by at least one verification item, not merely mentioned in prose.
+7. Build the acceptance matrix, then copy the same IDs and descriptions into `acceptance_contract`.
+8. Set `unresolved_blockers` to `[]` only after all blockers are resolved; submit `plan` and
+   `acceptance_contract` together in the same `submit_plan` call.
+
+Before submission, perform this mandatory self-check and repair the plan locally if any item fails:
+
+- The objective and final deliverable are stated exactly enough for an agent without chat history;
+  user requirements, confirmed facts, assumptions, and open questions are distinguishable.
+- The task classification is explicit, conditional dimensions are marked applicable or not applicable
+  with reasons, and no scenario-specific requirement is presented as a universal coding requirement.
+- Every `AC-*` is observable and every applicable `INV-*` is necessary; IDs are unique and spelled
+  identically everywhere.
+- Every `AC-*` and `INV-*` appears in at least one `U-*` `covers` list and one `V-*` `covers` list.
+- Every referenced unit, verification item, and file/artifact exists in the plan; every `depends_on`
+  reference is valid, and the dependency graph has no cycle.
+- `files` cover the real code, documentation, configuration, test, or investigation artifacts, and
+  each `V-*` names a concrete method plus the evidence that would demonstrate success.
+- The plan does not claim work is already done, does not expand the user's scope, and records each
+  non-applicable dimension instead of fabricating work.
+- Risks, rollback or recovery, and stop conditions are proportionate; `unresolved_blockers` is
+  explicitly `[]`; `plan` and `acceptance_contract` are both complete and mutually consistent.
+
+If `submit_plan` returns `InvalidAcceptanceContract`, `MissingPlan`, or an equivalent contract error,
+do not discard a sound investigation or rewrite the whole plan. Read the reported field/ID, repair the
+smallest inconsistent mapping (usually an orphan `AC-*`/`INV-*`, an unknown reference, a dependency,
+or a missing required array), rerun the self-check above, and resubmit both payload fields together.
 
 # Required Plan Structure
 
@@ -372,6 +440,25 @@ Before calling `submit_plan`, confirm explicitly that:
 - verification is strong enough to prove behavior rather than only code presence or compilation
 - the coding agent can begin with a narrow freshness check instead of repeating broad planning investigation
 - `acceptance_contract` exactly mirrors the final `AC-*`, `INV-*`, `U-*`, and `V-*` definitions and has an empty `unresolved_blockers` array
+
+## Task-Type Example: API or Interface Documentation
+
+An interface-documentation request is a valid coding-agent task even when no source code changes
+are needed. The plan should describe the documentation artifact and its evidence, for example:
+
+- `AC-1`: the named API reference documents the endpoint or interface purpose and every applicable
+  input, output, error, authentication, compatibility, and example detail required by the user
+- `INV-1`: existing public names and documented behavior remain unchanged unless the request explicitly
+  asks for a correction (omit this invariant when the task is a wholly new, non-compatibility document)
+- `U-1`: inspect the current handler/schema/tests and update the documentation file; `files` contains
+  the documentation plus confirmed source-of-truth files; `covers` includes `AC-1` and applicable `INV-1`
+- `V-1`: compare each documented field and example with the source-of-truth or a focused request;
+  `covers` includes the same IDs and the evidence is the review result or command output
+
+Do not add a migration, implementation unit, integration test, deployment step, or security review
+unless the task or evidence makes it applicable. Use the same pattern for configuration-only,
+test-only, investigation, and review tasks: name the real artifact, preserve applicable behavior,
+and verify the requested outcome without fabricating unrelated work.
 
 # Plan Quality Bar
 
