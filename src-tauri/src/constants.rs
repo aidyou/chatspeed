@@ -118,7 +118,7 @@ lazy_static! {
     pub static ref SCHEMA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
     // shared data dir: ${app_data}/shared
     pub static ref SHARED_DATA_DIR: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from("")));
-    // log dir: ${app_data}/log, it will be initialized at startup in @src-tauri/src/logger.rs L108 `setup_logger`
+    // Log directory: ${dev_data}/logs in development and the platform log directory in production.
     pub static ref LOG_DIR: Arc<PLRwLock<PathBuf>> = Arc::new(PLRwLock::new(PathBuf::new()));
     // chat completion proxy
     pub static ref CHAT_COMPLETION_PROXY: Arc<PLRwLock<String>> = Arc::new(PLRwLock::new(String::from(format!("http://localhost:{}", CFG_CCPROXY_PORT_DEFAULT))));

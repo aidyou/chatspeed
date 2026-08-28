@@ -4,6 +4,7 @@ use std::backtrace::Backtrace;
 #[cfg(test)]
 use std::fs::File;
 use std::fs::OpenOptions;
+#[cfg(not(debug_assertions))]
 use tauri::Manager;
 
 /// Simplifies file paths by extracting relevant parts from cargo registry paths
@@ -187,10 +188,12 @@ fn replace_sensitive_info(message: &str) -> String {
 ///
 /// # Arguments
 /// * `app` - A reference to the Tauri application
-pub fn setup_logger(app: &tauri::App) {
-    // 1. Try to get log directory safely
-    let log_dir_res = app.path().app_log_dir();
-    let log_dir = match log_dir_res {
+pub fn setup_logger(_app: &tauri::App) {
+    #[cfg(debug_assertions)]
+    let log_dir = crate::STORE_DIR.read().join("logs");
+
+    #[cfg(not(debug_assertions))]
+    let log_dir = match _app.path().app_log_dir() {
         Ok(path) => path,
         Err(e) => {
             eprintln!("========================================");
