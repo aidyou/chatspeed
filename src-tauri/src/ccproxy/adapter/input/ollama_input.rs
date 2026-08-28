@@ -107,18 +107,21 @@ pub fn from_ollama(
                 Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: None,
                     include_thoughts: Some(true),
+                    ..Default::default()
                 })
             }
             serde_json::Value::Bool(false) => {
                 Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: None,
                     include_thoughts: Some(false),
+                    ..Default::default()
                 })
             }
             serde_json::Value::String(level) if !level.trim().is_empty() => {
                 Some(crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: None,
                     include_thoughts: Some(true),
+                    ..Default::default()
                 })
             }
             _ => None,

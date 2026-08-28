@@ -29,6 +29,8 @@ pub struct ClaudeNativeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ClaudeThinking>, // Extended thinking configuration
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<ClaudeCacheControl>, // Cache control breakpoint
 }
 
@@ -112,13 +114,11 @@ pub struct ClaudeMetadata {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ClaudeThinking {
     #[serde(rename = "type")]
-    pub thinking_type: String, // "enabled"
-    #[serde(default = "default_thinking_budget")]
-    pub budget_tokens: i32, // x >= 1024 and < max_tokens
-}
-
-fn default_thinking_budget() -> i32 {
-    1024
+    pub thinking_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 /// Cache control configuration for Claude
@@ -375,18 +375,22 @@ impl ClaudeNativeRequest {
             return Err("max_tokens must be positive".to_string());
         }
 
-        // Validate thinking budget_tokens if present
         if let Some(ref mut thinking) = self.thinking {
-            if thinking.budget_tokens < 1024 {
-                thinking.budget_tokens = 1024.min(self.max_tokens - 1);
-                log::warn!("thinking budget_tokens must be at least 1024");
-            }
-            if thinking.budget_tokens >= self.max_tokens {
-                // From claude cli, claude-sonnet-4-5 already supports thinking.budget_tokens >= self.max_tokens
-                if !wildmatch::WildMatch::new("claude-*-4-5-*").matches(&self.model) {
-                    thinking.budget_tokens = (self.max_tokens - 1).max(0);
-                    log::warn!("thinking budget_tokens must be less than max_tokens");
+            if thinking.thinking_type == "enabled" {
+                let budget_tokens = thinking.budget_tokens.get_or_insert(1024);
+                if *budget_tokens < 1024 {
+                    *budget_tokens = 1024.min(self.max_tokens - 1);
+                    log::warn!("thinking budget_tokens must be at least 1024");
                 }
+                if *budget_tokens >= self.max_tokens {
+                    // From claude cli, claude-sonnet-4-5 already supports thinking.budget_tokens >= self.max_tokens
+                    if !wildmatch::WildMatch::new("claude-*-4-5-*").matches(&self.model) {
+                        *budget_tokens = (self.max_tokens - 1).max(0);
+                        log::warn!("thinking budget_tokens must be less than max_tokens");
+                    }
+                }
+            } else {
+                thinking.budget_tokens = None;
             }
         }
 
@@ -417,6 +421,24 @@ impl ClaudeNativeRequest {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn adaptive_thinking_deserializes_without_a_budget() {
+        let request: ClaudeNativeRequest = serde_json::from_value(json!({
+            "model": "claude-opus-5",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "max_tokens": 1024,
+            "thinking": { "type": "adaptive", "display": "summarized" },
+            "effort": "high"
+        }))
+        .expect("adaptive thinking request should deserialize");
+
+        let thinking = request.thinking.expect("thinking should be present");
+        assert_eq!(thinking.thinking_type, "adaptive");
+        assert_eq!(thinking.budget_tokens, None);
+        assert_eq!(thinking.display.as_deref(), Some("summarized"));
+        assert_eq!(request.effort.as_deref(), Some("high"));
+    }
 
     #[test]
     fn test_stream_usage_deserializes_cache_tokens() {

@@ -88,6 +88,7 @@ mod tests {
             thinking: Some(UnifiedThinking {
                 include_thoughts: Some(true),
                 budget_tokens: Some(8192),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -130,6 +131,7 @@ mod tests {
             thinking: Some(UnifiedThinking {
                 include_thoughts: Some(true),
                 budget_tokens: Some(2048),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -170,6 +172,7 @@ mod tests {
             thinking: Some(UnifiedThinking {
                 include_thoughts: Some(true),
                 budget_tokens: Some(1024),
+                ..Default::default()
             }),
             ..Default::default()
         };

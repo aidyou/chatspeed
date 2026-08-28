@@ -190,6 +190,8 @@ pub fn from_gemini(
                 |thinking| crate::ccproxy::adapter::unified::UnifiedThinking {
                     budget_tokens: thinking.thinking_budget,
                     include_thoughts: thinking.include_thoughts,
+                    thinking_level: thinking.thinking_level.clone(),
+                    ..Default::default()
                 },
             ),
         cache_control: None, // Gemini uses cached_content instead

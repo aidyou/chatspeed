@@ -5,6 +5,7 @@ pub mod sse;
 pub mod stat_guard;
 pub mod stream_handler;
 mod stream_processor;
+pub mod thinking;
 pub mod tool_use_xml;
 
 pub use common::*;

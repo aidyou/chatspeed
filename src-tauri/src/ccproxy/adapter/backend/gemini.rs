@@ -661,6 +661,10 @@ impl BackendAdapter for GeminiBackendAdapter {
                 thinking_config: unified_request.thinking.as_ref().map(|t| {
                     crate::ccproxy::types::gemini::GeminiThinkingConfig {
                         thinking_budget: t.budget_tokens,
+                        thinking_level: t
+                            .thinking_level
+                            .clone()
+                            .or_else(|| unified_request.reasoning_effort.clone()),
                         include_thoughts: t.include_thoughts,
                     }
                 }),
@@ -683,6 +687,11 @@ impl BackendAdapter for GeminiBackendAdapter {
         crate::ai::util::merge_custom_params_value(
             &mut request_json,
             &unified_request.custom_params,
+        );
+        crate::ccproxy::helper::thinking::normalize_request(
+            &mut request_json,
+            _model,
+            full_provider_url,
         );
 
         if log_proxy_to_file {
@@ -1214,6 +1223,55 @@ mod tests {
         let parts = GeminiBackendAdapter::build_native_message_parts(&tool_msg);
         assert!(parts[0].thought_signature.is_none());
         assert!(parts[0].function_response.is_some());
+    }
+
+    #[tokio::test]
+    async fn supported_gemini_model_serializes_normalized_thinking_level() {
+        let client = reqwest::Client::new();
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut unified_request = UnifiedRequest {
+            model: "gemini-3.1-flash-lite-image".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hi".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            reasoning_effort: Some("xhigh".to_string()),
+            thinking: Some(crate::ccproxy::adapter::unified::UnifiedThinking {
+                include_thoughts: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let request = GeminiBackendAdapter
+            .adapt_request(
+                &client,
+                &mut unified_request,
+                "test-key",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent",
+                "gemini-3.1-flash-lite-image",
+                false,
+                &mut headers,
+            )
+            .await
+            .expect("request should build")
+            .build()
+            .expect("request should finalize");
+
+        let body = request.body().and_then(|body| body.as_bytes()).unwrap();
+        let payload: GeminiRequest =
+            serde_json::from_slice(body).expect("payload should deserialize");
+        assert_eq!(
+            payload
+                .generation_config
+                .and_then(|config| config.thinking_config)
+                .and_then(|config| config.thinking_level)
+                .as_deref(),
+            Some("high")
+        );
     }
 
     #[tokio::test]

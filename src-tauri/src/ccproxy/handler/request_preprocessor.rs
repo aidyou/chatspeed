@@ -13,126 +13,6 @@ fn should_relax_required_tool_choice(base_url: &str) -> bool {
         .is_some_and(|host| host == "api.deepseek.com" || host == "api.deepseek.cn")
 }
 
-fn deepseek_reasoning_enabled(body_json: &Value) -> bool {
-    if let Some(thinking_enabled) = body_json
-        .get("thinking")
-        .and_then(|thinking| thinking.get("type"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.eq_ignore_ascii_case("enabled"))
-    {
-        return thinking_enabled;
-    }
-
-    if let Some(enable_thinking) = body_json
-        .get("enable_thinking")
-        .and_then(|value| value.as_bool())
-    {
-        return enable_thinking;
-    }
-
-    if body_json
-        .get("reasoning_effort")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        return true;
-    }
-
-    body_json
-        .get("thinking_budget")
-        .and_then(|value| value.as_i64())
-        .is_some_and(|value| value > 0)
-}
-
-fn normalize_deepseek_reasoning_effort(body_json: &mut Value) {
-    let Some(reasoning_effort) = body_json
-        .get_mut("reasoning_effort")
-        .and_then(|value| value.as_str().map(str::to_owned))
-    else {
-        return;
-    };
-
-    if reasoning_effort.eq_ignore_ascii_case("xhigh") {
-        body_json["reasoning_effort"] = Value::String("max".to_string());
-    }
-}
-
-fn normalize_sensenova_reasoning_effort(body_json: &mut Value, model: &str) {
-    if !model.trim().to_ascii_lowercase().starts_with("sensenova-") {
-        return;
-    }
-
-    let Some(reasoning_effort) = body_json
-        .get_mut("reasoning_effort")
-        .and_then(|value| value.as_str().map(str::to_owned))
-    else {
-        return;
-    };
-
-    if reasoning_effort.eq_ignore_ascii_case("xhigh") {
-        body_json["reasoning_effort"] = Value::String("high".to_string());
-    }
-}
-
-fn normalize_deepseek_reasoning_replay(body_json: &mut Value) {
-    if !deepseek_reasoning_enabled(body_json) {
-        return;
-    }
-
-    let has_tool_round = body_json
-        .get("messages")
-        .and_then(|messages| messages.as_array())
-        .is_some_and(|messages| {
-            messages.iter().any(|message| {
-                message
-                    .get("role")
-                    .and_then(|role| role.as_str())
-                    .is_some_and(|role| role == "tool")
-                    || message
-                        .get("tool_calls")
-                        .and_then(|tool_calls| tool_calls.as_array())
-                        .is_some_and(|tool_calls| !tool_calls.is_empty())
-            })
-        });
-
-    if !has_tool_round {
-        return;
-    }
-
-    let Some(messages) = body_json
-        .get_mut("messages")
-        .and_then(|messages| messages.as_array_mut())
-    else {
-        return;
-    };
-
-    for message in messages.iter_mut() {
-        let Some(role) = message.get("role").and_then(|role| role.as_str()) else {
-            continue;
-        };
-        if role != "assistant" {
-            continue;
-        }
-
-        let Some(message_obj) = message.as_object_mut() else {
-            continue;
-        };
-
-        if message_obj.contains_key("reasoning_content") {
-            continue;
-        }
-
-        if let Some(thinking) = message_obj.get("thinking").cloned() {
-            message_obj.insert("reasoning_content".to_string(), thinking);
-        } else {
-            message_obj.insert(
-                "reasoning_content".to_string(),
-                Value::String(String::new()),
-            );
-        }
-    }
-}
-
 pub fn preprocess_client_request_body(
     client_request_body: Bytes,
     chat_protocol: &ChatProtocol,
@@ -142,7 +22,11 @@ pub fn preprocess_client_request_body(
         CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
 
-    normalize_sensenova_reasoning_effort(&mut body_json, &proxy_model.model);
+    crate::ccproxy::helper::thinking::normalize_request(
+        &mut body_json,
+        &proxy_model.model,
+        &proxy_model.base_url,
+    );
 
     if should_relax_required_tool_choice(&proxy_model.base_url)
         && matches!(
@@ -162,9 +46,6 @@ pub fn preprocess_client_request_body(
                 }
             }
         }
-
-        normalize_deepseek_reasoning_effort(&mut body_json);
-        normalize_deepseek_reasoning_replay(&mut body_json);
     }
 
     serde_json::to_vec(&body_json)
@@ -221,7 +102,41 @@ mod tests {
     }
 
     #[test]
-    fn preprocess_deepseek_maps_xhigh_reasoning_effort_to_max() {
+    fn preprocess_mistral_normalizes_effort_without_rewriting_thinking_chunks() {
+        let body = json!({
+            "model": "mistral-small-latest",
+            "reasoning_effort": "xhigh",
+            "messages": [{
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": [{ "type": "text", "text": "raw trace" }]
+                }]
+            }]
+        });
+        let mut proxy_model = deepseek_proxy_model();
+        proxy_model.provider = "Mistral".to_string();
+        proxy_model.base_url = "https://api.mistral.ai/v1".to_string();
+        proxy_model.model = "mistral-small-latest".to_string();
+
+        let processed = preprocess_client_request_body(
+            Bytes::from(body.to_string()),
+            &ChatProtocol::OpenAI,
+            &proxy_model,
+        )
+        .expect("preprocess should succeed");
+        let processed_json: serde_json::Value =
+            serde_json::from_slice(&processed).expect("processed body should be valid json");
+
+        assert_eq!(processed_json["reasoning_effort"], "high");
+        assert_eq!(
+            processed_json["messages"][0]["content"],
+            body["messages"][0]["content"]
+        );
+    }
+
+    #[test]
+    fn preprocess_deepseek_maps_xhigh_reasoning_effort_to_high() {
         let body = json!({
             "model": "deepseek-v4-flash",
             "thinking": { "type": "enabled" },
@@ -238,7 +153,7 @@ mod tests {
         let processed_json: serde_json::Value =
             serde_json::from_slice(&processed).expect("processed body should be valid json");
 
-        assert_eq!(processed_json["reasoning_effort"], "max");
+        assert_eq!(processed_json["reasoning_effort"], "high");
     }
 
     #[test]

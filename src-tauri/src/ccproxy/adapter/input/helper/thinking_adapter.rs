@@ -11,6 +11,9 @@ pub(crate) enum ReasoningModelFamily {
     DeepSeek,
     Qwen,
     Kimi,
+    StepFun,
+    Doubao,
+    Mistral,
     MiniMax,
     Glm,
     Claude,
@@ -52,6 +55,12 @@ pub(crate) fn detect_family(model: &str) -> ReasoningModelFamily {
         ReasoningModelFamily::Qwen
     } else if lower.contains("kimi") || lower.contains("moonshot") {
         ReasoningModelFamily::Kimi
+    } else if lower.contains("step-") || lower.contains("stepfun") {
+        ReasoningModelFamily::StepFun
+    } else if lower.contains("doubao") {
+        ReasoningModelFamily::Doubao
+    } else if lower.contains("mistral-small-latest") || lower.contains("mistral-medium-3-5") {
+        ReasoningModelFamily::Mistral
     } else if lower.contains("minimax") {
         ReasoningModelFamily::MiniMax
     } else if lower.contains("glm") {
@@ -400,6 +409,7 @@ pub fn build_unified_thinking_from_openai_request(
         } else {
             thinking_budget
         },
+        ..Default::default()
     })
 }
 
@@ -407,7 +417,6 @@ pub fn adapt_vendor_thinking_params_for_openai_backend(
     model: &str,
     thinking: Option<&UnifiedThinking>,
     reasoning_effort: Option<&str>,
-    has_tools: bool,
 ) -> VendorThinkingParams {
     let family = detect_family(model);
     let Some(thinking) = thinking else {
@@ -430,14 +439,11 @@ pub fn adapt_vendor_thinking_params_for_openai_backend(
         },
         ReasoningModelFamily::DeepSeek => {
             let mapped_effort = if include_thoughts {
-                let selected = if has_tools {
-                    "max".to_string()
-                } else {
-                    normalized_effort.unwrap_or_else(|| "high".to_string())
-                };
+                let selected = normalized_effort.unwrap_or_else(|| "high".to_string());
                 let deepseek_effort = match selected.as_str() {
-                    "none" | "minimal" | "low" | "medium" | "high" => "high",
-                    "xhigh" | "max" => "max",
+                    "low" => "low",
+                    "medium" | "high" | "xhigh" => "high",
+                    "max" => "max",
                     _ => "high",
                 };
                 Some(deepseek_effort.to_string())
@@ -466,7 +472,37 @@ pub fn adapt_vendor_thinking_params_for_openai_backend(
             },
             ..Default::default()
         },
-        ReasoningModelFamily::Kimi | ReasoningModelFamily::Glm => VendorThinkingParams {
+        ReasoningModelFamily::Kimi => {
+            if crate::ccproxy::helper::thinking::is_kimi_k3_model(model) {
+                VendorThinkingParams {
+                    reasoning_effort: if include_thoughts {
+                        normalized_effort
+                    } else {
+                        None
+                    },
+                    ..Default::default()
+                }
+            } else if crate::ccproxy::helper::thinking::is_kimi_k2_7_code_model(model) {
+                VendorThinkingParams::default()
+            } else {
+                VendorThinkingParams {
+                    thinking: Some(ZhipuThinking {
+                        r#type: if include_thoughts {
+                            "enabled".to_string()
+                        } else {
+                            "disabled".to_string()
+                        },
+                    }),
+                    ..Default::default()
+                }
+            }
+        }
+        ReasoningModelFamily::Glm => VendorThinkingParams {
+            reasoning_effort: if include_thoughts {
+                normalized_effort
+            } else {
+                None
+            },
             thinking: Some(ZhipuThinking {
                 r#type: if include_thoughts {
                     "enabled".to_string()
@@ -474,6 +510,38 @@ pub fn adapt_vendor_thinking_params_for_openai_backend(
                     "disabled".to_string()
                 },
             }),
+            ..Default::default()
+        },
+        ReasoningModelFamily::Doubao => VendorThinkingParams {
+            thinking: Some(ZhipuThinking {
+                r#type: if include_thoughts {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                },
+            }),
+            ..Default::default()
+        },
+        ReasoningModelFamily::StepFun => VendorThinkingParams {
+            reasoning_effort: if include_thoughts {
+                normalized_effort
+            } else {
+                None
+            },
+            ..Default::default()
+        },
+        ReasoningModelFamily::Mistral => VendorThinkingParams {
+            reasoning_effort: if include_thoughts {
+                Some(
+                    match normalized_effort.as_deref() {
+                        Some("none") => "none",
+                        _ => "high",
+                    }
+                    .to_string(),
+                )
+            } else {
+                Some("none".to_string())
+            },
             ..Default::default()
         },
         ReasoningModelFamily::MiniMax => VendorThinkingParams {
@@ -742,6 +810,7 @@ mod tests {
         let thinking = UnifiedThinking {
             include_thoughts: Some(true),
             budget_tokens: Some(1024),
+            ..Default::default()
         };
 
         normalize_nvidia_nim_thinking_fields(
@@ -812,21 +881,21 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_vendor_mapping_promotes_agent_requests_to_max() {
+    fn deepseek_vendor_mapping_respects_requested_effort_with_tools() {
         let params = adapt_vendor_thinking_params_for_openai_backend(
             "deepseek-chat",
             Some(&UnifiedThinking {
                 include_thoughts: Some(true),
                 budget_tokens: Some(1024),
+                ..Default::default()
             }),
             Some("medium"),
-            true,
         );
         assert_eq!(
             params.thinking.as_ref().map(|value| value.r#type.as_str()),
             Some("enabled")
         );
-        assert_eq!(params.reasoning_effort.as_deref(), Some("max"));
+        assert_eq!(params.reasoning_effort.as_deref(), Some("high"));
     }
 
     #[test]
@@ -836,12 +905,35 @@ mod tests {
             Some(&UnifiedThinking {
                 include_thoughts: Some(true),
                 budget_tokens: Some(8192),
+                ..Default::default()
             }),
             None,
-            false,
         );
         assert_eq!(params.enable_thinking, Some(true));
         assert_eq!(params.thinking_budget, Some(8192));
+    }
+
+    #[test]
+    fn mistral_vendor_mapping_uses_supported_efforts() {
+        let enabled = adapt_vendor_thinking_params_for_openai_backend(
+            "mistral-small-latest",
+            Some(&UnifiedThinking {
+                include_thoughts: Some(true),
+                ..Default::default()
+            }),
+            Some("medium"),
+        );
+        let disabled = adapt_vendor_thinking_params_for_openai_backend(
+            "mistral-medium-3-5",
+            Some(&UnifiedThinking {
+                include_thoughts: Some(false),
+                ..Default::default()
+            }),
+            Some("high"),
+        );
+
+        assert_eq!(enabled.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(disabled.reasoning_effort.as_deref(), Some("none"));
     }
 
     #[test]

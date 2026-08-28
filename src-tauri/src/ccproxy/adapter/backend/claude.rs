@@ -480,16 +480,22 @@ impl BackendAdapter for ClaudeBackendAdapter {
                     user_id: m.user_id.clone(),
                 }
             }),
-            thinking: unified_request.thinking.as_ref().and_then(|t| {
-                if matches!(t.include_thoughts, Some(true)) {
-                    Some(crate::ccproxy::types::claude::ClaudeThinking {
-                        thinking_type: "enabled".to_string(),
-                        budget_tokens: t.budget_tokens.unwrap_or(1024), // Use 1024 as a reasonable default
-                    })
-                } else {
-                    None
+            thinking: unified_request.thinking.as_ref().map(|t| {
+                let thinking_type = t.thinking_type.clone().unwrap_or_else(|| {
+                    if matches!(t.include_thoughts, Some(false)) {
+                        "disabled".to_string()
+                    } else {
+                        "enabled".to_string()
+                    }
+                });
+                crate::ccproxy::types::claude::ClaudeThinking {
+                    budget_tokens: (thinking_type == "enabled")
+                        .then_some(t.budget_tokens.unwrap_or(1024)),
+                    thinking_type,
+                    display: t.display.clone(),
                 }
             }),
+            effort: unified_request.reasoning_effort.clone(),
             cache_control: unified_request.cache_control.as_ref().map(|c| {
                 crate::ccproxy::types::claude::ClaudeCacheControl {
                     cache_type: c.cache_type.clone(),
@@ -524,6 +530,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
         crate::ai::util::merge_custom_params_value(
             &mut request_json,
             &unified_request.custom_params,
+        );
+        crate::ccproxy::helper::thinking::normalize_request(
+            &mut request_json,
+            model,
+            full_provider_url,
         );
 
         if log_proxy_to_file {

@@ -247,11 +247,15 @@ pub fn from_claude(
         user: req.metadata.as_ref().and_then(|m| m.user_id.clone()),
         logprobs: None,
         top_logprobs: None,
+        reasoning_effort: req.effort.clone(),
         // Claude-specific parameters
         metadata: req.metadata.map(|m| UnifiedMetadata { user_id: m.user_id }),
         thinking: req.thinking.map(|t| UnifiedThinking {
-            budget_tokens: Some(t.budget_tokens),
-            include_thoughts: Some(t.thinking_type == "enabled"),
+            budget_tokens: t.budget_tokens,
+            include_thoughts: Some(!t.thinking_type.eq_ignore_ascii_case("disabled")),
+            thinking_type: Some(t.thinking_type),
+            thinking_level: None,
+            display: t.display,
         }),
         cache_control: req.cache_control.map(|c| UnifiedCacheControl {
             cache_type: c.cache_type,

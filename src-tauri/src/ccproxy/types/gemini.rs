@@ -227,6 +227,8 @@ pub struct GeminiThinkingConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<i32>, // Token budget for internal reasoning, 0 disables thinking
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub include_thoughts: Option<bool>,
 }
 

@@ -402,10 +402,6 @@ impl BackendAdapter for OpenAIBackendAdapter {
             model,
             unified_request.thinking.as_ref(),
             unified_request.reasoning_effort.as_deref(),
-            unified_request
-                .tools
-                .as_ref()
-                .is_some_and(|tools| !tools.is_empty()),
         );
         let reasoning_effort = vendor_thinking_params.reasoning_effort.clone();
         let reasoning_split = vendor_thinking_params.reasoning_split;
@@ -566,6 +562,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
             model,
             unified_request.thinking.as_ref(),
             unified_request.reasoning_effort.as_deref(),
+        );
+        crate::ccproxy::helper::thinking::normalize_request(
+            &mut request_json,
+            model,
+            full_provider_url,
         );
 
         if log_proxy_to_file {

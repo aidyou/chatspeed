@@ -250,6 +250,9 @@ pub struct UnifiedMetadata {
 pub struct UnifiedThinking {
     pub budget_tokens: Option<i32>, // Token budget for internal reasoning
     pub include_thoughts: Option<bool>,
+    pub thinking_type: Option<String>,
+    pub thinking_level: Option<String>,
+    pub display: Option<String>,
 }
 
 /// Unified cache control configuration (primarily for Claude)
