@@ -2007,10 +2007,20 @@ const getDiffNewContent = message => {
   return payload?.new_string ?? payload?.content ?? ''
 }
 
+// MCP tool messages already render arguments from structured tool_call metadata,
+// so their approval preview keeps only the tool line without duplicated arguments.
+const stripMcpApprovalArgumentsPreview = text => {
+  const raw = String(text || '')
+  const index = raw.indexOf('\nArguments:')
+  return index === -1 ? raw : raw.slice(0, index).trimEnd()
+}
+
 const getApprovalDetailsPayload = message => {
   const structuredDetails = message?.metadata?.details
   if (structuredDetails !== undefined && structuredDetails !== null) {
-    return structuredDetails
+    return isMcpToolMessage(message) && typeof structuredDetails === 'string'
+      ? stripMcpApprovalArgumentsPreview(structuredDetails)
+      : structuredDetails
   }
 
   const toolName = getMessageToolName(message)
@@ -2021,7 +2031,10 @@ const getApprovalDetailsPayload = message => {
     }
   }
 
-  return props.removeSystemReminder(message?.message || '')
+  const fallbackText = props.removeSystemReminder(message?.message || '')
+  return isMcpToolMessage(message)
+    ? stripMcpApprovalArgumentsPreview(fallbackText)
+    : fallbackText
 }
 
 const isFinishTaskMessage = message => isWorkflowCompletionMessage(message)
