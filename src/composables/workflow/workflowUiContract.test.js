@@ -438,17 +438,22 @@ test('workflow slash commands manage authorized directories', async () => {
     readFile('src/views/Workflow.vue', 'utf8')
   ])
 
-  assert.match(workflowView, /name: 'dir-add'[\s\S]*?commandDirAddDesc/)
-  assert.match(workflowView, /name: 'dir-remove'[\s\S]*?commandDirRemoveDesc/)
+  assert.match(workflowView, /name: 'add-dir'[\s\S]*?commandDirAddDesc[\s\S]*?requiresArgument: true/)
+  assert.match(workflowView, /name: 'remove-dir'[\s\S]*?commandDirRemoveDesc/)
   assert.match(
     workflowView,
-    /commandName === 'dir-add'[\s\S]*?unwrapDirectoryCommandPath\(commandArgument\)[\s\S]*?addAuthorizedPathFromCommand\(path\)/,
-    'dir-add must pass its path argument through the existing authorized-path update flow'
+    /commandName === 'add-dir'[\s\S]*?unwrapDirectoryCommandPath\(commandArgument\)[\s\S]*?addAuthorizedPathFromCommand\(path\)/,
+    'add-dir must pass its path argument through the existing authorized-path update flow'
   )
   assert.match(
     workflowView,
-    /commandName === 'dir-remove'[\s\S]*?openDirectoryRemovalPanel\?\.\(\)/,
-    'dir-remove must open the directory removal panel'
+    /import \{ homeDir \} from '@tauri-apps\/api\/path'[\s\S]*?const expandDirectoryCommandPath = async value =>[\s\S]*?homeDir\(\)[\s\S]*?return `\$\{home\}\$\{path\.slice\(1\)\}`/,
+    'add-dir must expand a leading tilde through the Tauri home directory'
+  )
+  assert.match(
+    workflowView,
+    /commandName === 'remove-dir'[\s\S]*?openDirectoryRemovalPanel\?\.\(\)/,
+    'remove-dir must open the directory removal panel'
   )
   assert.match(
     inputArea,
@@ -457,6 +462,18 @@ test('workflow slash commands manage authorized directories', async () => {
   )
   assert.match(inputArea, /const openDirectoryRemovalPanel = \(\) =>/)
   assert.match(inputArea, /defineExpose\(\{[\s\S]*?openDirectoryRemovalPanel/)
+
+  const workflowInput = await readFile('src/composables/workflow/useWorkflowInput.ts', 'utf8')
+  assert.match(
+    workflowInput,
+    /skill\.type === 'command' && skill\.requiresArgument === true[\s\S]*?inputMessage\.value = '\/' \+ skill\.name \+ ' '/,
+    'argument-taking commands must be inserted into the composer before execution'
+  )
+  assert.match(
+    workflowInput,
+    /skill\.type === 'command' && skill\.requiresArgument === true[\s\S]*?return\n\s*}\n\n\s*if \(skill\.type === 'command' && typeof onBuiltinCommandSelect === 'function'\)[\s\S]*?onBuiltinCommandSelect\(skill\)/,
+    'argument-taking commands must return before the ordinary command callback'
+  )
 })
 
 test('auto-compression starts disabled until explicitly enabled', async () => {

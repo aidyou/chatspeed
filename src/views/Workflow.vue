@@ -326,6 +326,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
+import { homeDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
@@ -785,13 +786,14 @@ const builtinCommands = computed(() => {
 
   commands.push(
     {
-      name: 'dir-add',
+      name: 'add-dir',
       description: t('workflow.commandDirAddDesc'),
       type: 'command',
-      group: 'chatspeed'
+      group: 'chatspeed',
+      requiresArgument: true
     },
     {
-      name: 'dir-remove',
+      name: 'remove-dir',
       description: t('workflow.commandDirRemoveDesc'),
       type: 'command',
       group: 'chatspeed'
@@ -1692,7 +1694,7 @@ const handleWorkflowSlashCommand = async command => {
   const commandName = commandMatch[1].toLowerCase()
   const commandArgument = commandMatch[2]?.trim() || ''
 
-  if (commandName === 'dir-add') {
+  if (commandName === 'add-dir') {
     const path = unwrapDirectoryCommandPath(commandArgument)
     if (!path) {
       showMessage(t('workflow.authorizedDirectoryPathRequired'), 'warning')
@@ -1702,7 +1704,7 @@ const handleWorkflowSlashCommand = async command => {
     return true
   }
 
-  if (commandName === 'dir-remove') {
+  if (commandName === 'remove-dir') {
     if (commandArgument) {
       showMessage(t('workflow.authorizedDirectoryRemoveNoArgs'), 'warning')
       return true
@@ -1757,16 +1759,27 @@ const unwrapDirectoryCommandPath = value => {
   return path
 }
 
-const addAuthorizedPathFromCommand = async path => {
-  const normalizedPath = String(path || '').trim()
-  if (!normalizedPath) return false
+const expandDirectoryCommandPath = async value => {
+  const path = String(value || '').trim()
+  if (!/^~(?:$|[\\/])/.test(path)) return path
 
-  if (currentPaths.value.includes(normalizedPath)) {
-    showMessage(t('workflow.authorizedDirectoryAlreadyAdded'), 'info')
-    return false
+  const home = String(await homeDir()).trim().replace(/[\\/]+$/, '')
+  if (!home) {
+    throw new Error('Unable to resolve the current user home directory')
   }
+  return `${home}${path.slice(1)}`
+}
 
+const addAuthorizedPathFromCommand = async path => {
   try {
+    const normalizedPath = await expandDirectoryCommandPath(path)
+    if (!normalizedPath) return false
+
+    if (currentPaths.value.includes(normalizedPath)) {
+      showMessage(t('workflow.authorizedDirectoryAlreadyAdded'), 'info')
+      return false
+    }
+
     await onAddPathFromTree(normalizedPath)
     showMessage(t('workflow.authorizedDirectoryAdded'), 'success')
     return true

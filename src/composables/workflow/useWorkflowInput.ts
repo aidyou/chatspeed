@@ -274,6 +274,21 @@ export function useWorkflowInput({
     }
 
     const onSkillSelect = (skill) => {
+        if (skill.type === 'command' && skill.requiresArgument === true) {
+            inputMessage.value = '/' + skill.name + ' '
+            showSkillSuggestions.value = false
+            selectedSkillIndex.value = 0
+            nextTick(() => {
+                if (inputRef.value) {
+                    inputRef.value.focus()
+                    const textarea = inputRef.value?.$el?.querySelector('textarea')
+                    const position = inputMessage.value.length
+                    textarea?.setSelectionRange(position, position)
+                }
+            })
+            return
+        }
+
         if (skill.type === 'command' && typeof onBuiltinCommandSelect === 'function') {
             inputMessage.value = ''
             showSkillSuggestions.value = false
