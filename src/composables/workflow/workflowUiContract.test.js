@@ -432,6 +432,33 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
 })
 
+test('workflow slash commands manage authorized directories', async () => {
+  const [inputArea, workflowView] = await Promise.all([
+    readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8')
+  ])
+
+  assert.match(workflowView, /name: 'dir-add'[\s\S]*?commandDirAddDesc/)
+  assert.match(workflowView, /name: 'dir-remove'[\s\S]*?commandDirRemoveDesc/)
+  assert.match(
+    workflowView,
+    /commandName === 'dir-add'[\s\S]*?unwrapDirectoryCommandPath\(commandArgument\)[\s\S]*?addAuthorizedPathFromCommand\(path\)/,
+    'dir-add must pass its path argument through the existing authorized-path update flow'
+  )
+  assert.match(
+    workflowView,
+    /commandName === 'dir-remove'[\s\S]*?openDirectoryRemovalPanel\?\.\(\)/,
+    'dir-remove must open the directory removal panel'
+  )
+  assert.match(
+    inputArea,
+    /directoryRemovalPanelVisible[\s\S]*?v-for="path in currentPaths"[\s\S]*?directory-command-remove[\s\S]*?removeDirectoryPath\(path\)/,
+    'the removal panel must list current paths with an action button for each path'
+  )
+  assert.match(inputArea, /const openDirectoryRemovalPanel = \(\) =>/)
+  assert.match(inputArea, /defineExpose\(\{[\s\S]*?openDirectoryRemovalPanel/)
+})
+
 test('auto-compression starts disabled until explicitly enabled', async () => {
   const [workflowView, workflowCore] = await Promise.all([
     readFile('src/views/Workflow.vue', 'utf8'),

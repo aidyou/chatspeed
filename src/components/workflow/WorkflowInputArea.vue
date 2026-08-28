@@ -56,6 +56,42 @@
         </span>
       </div>
     </div>
+
+    <!-- Authorized Directory Removal Panel -->
+    <div
+      v-if="directoryRemovalPanelVisible"
+      class="slash-command-panel directory-removal-panel"
+      @mousedown.stop
+      @click.stop>
+      <div class="directory-panel-header">
+        <span class="directory-panel-title">{{ $t('workflow.authorizedDirectoriesTitle') }}</span>
+        <button
+          type="button"
+          class="directory-panel-close"
+          :title="$t('common.close')"
+          @click="closeDirectoryRemovalPanel">
+          <cs name="close" size="14px" />
+        </button>
+      </div>
+      <div v-if="currentPaths.length > 0" class="directory-command-list">
+        <div v-for="path in currentPaths" :key="path" class="directory-command-item">
+          <cs name="folder" size="14px" class="directory-command-icon" />
+          <span class="directory-command-path" :title="path">{{ path }}</span>
+          <button
+            type="button"
+            class="directory-command-remove"
+            :title="$t('workflow.authorizedDirectoryRemove')"
+            :aria-label="$t('workflow.authorizedDirectoryRemove')"
+            :disabled="removingDirectoryPath === path"
+            @click="removeDirectoryPath(path)">
+            <cs name="delete" size="14px" />
+          </button>
+        </div>
+      </div>
+      <div v-else class="directory-command-empty">
+        {{ $t('workflow.authorizedDirectoriesEmpty') }}
+      </div>
+    </div>
     <StatusNotifier :chat-state="chatState" :is-chatting="isChatting" />
     <div class="input" :class="{ expanded: isInputExpanded }">
       <button
@@ -799,6 +835,10 @@ const props = defineProps({
     default: () => []
   },
   onAddAuthorizedPath: {
+    type: Function,
+    default: null
+  },
+  onRemoveAuthorizedPath: {
     type: Function,
     default: null
   },
@@ -1566,6 +1606,8 @@ const createWorkflowInheritCurrent = ref(true)
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 const isInputExpanded = ref(false)
+const directoryRemovalPanelVisible = ref(false)
+const removingDirectoryPath = ref('')
 const requiresAuthorizedPathSelection = computed(
   () =>
     Boolean(props.currentWorkflowId && props.currentWorkflow) &&
@@ -1585,6 +1627,28 @@ const handleInputClick = async () => {
   await nextTick()
   if (!requiresAuthorizedPathSelection.value) {
     inputRef.value?.focus()
+  }
+}
+
+const openDirectoryRemovalPanel = () => {
+  directoryRemovalPanelVisible.value = true
+}
+
+const closeDirectoryRemovalPanel = () => {
+  directoryRemovalPanelVisible.value = false
+  removingDirectoryPath.value = ''
+}
+
+const removeDirectoryPath = async path => {
+  if (!path || typeof props.onRemoveAuthorizedPath !== 'function') return
+
+  removingDirectoryPath.value = path
+  try {
+    await props.onRemoveAuthorizedPath(path)
+  } finally {
+    if (removingDirectoryPath.value === path) {
+      removingDirectoryPath.value = ''
+    }
   }
 }
 
@@ -1741,11 +1805,107 @@ const handlePaste = event => {
 defineExpose({
   inputRef,
   focus: () => inputRef.value?.focus(),
-  openCreateWorkflowDialog
+  openCreateWorkflowDialog,
+  openDirectoryRemovalPanel,
+  closeDirectoryRemovalPanel
 })
 </script>
 
 <style scoped lang="scss">
+.directory-removal-panel {
+  padding: var(--cs-space-xxs, 4px);
+}
+
+.directory-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cs-space-sm, 8px);
+  padding: var(--cs-space-xs, 6px) var(--cs-space-sm, 8px);
+  border-bottom: 1px solid var(--cs-border-color);
+}
+
+.directory-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.directory-panel-close,
+.directory-command-remove {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--cs-border-radius-round);
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+}
+
+.directory-panel-close:hover,
+.directory-command-remove:hover:not(:disabled) {
+  background: var(--cs-hover-bg-color);
+  color: var(--cs-text-color-primary);
+}
+
+.directory-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-xxs, 4px);
+  padding-top: var(--cs-space-xxs, 4px);
+}
+
+.directory-command-item {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm, 8px);
+  min-width: 0;
+  padding: var(--cs-space-xs, 6px) var(--cs-space-sm, 8px);
+  border-radius: var(--cs-border-radius, 4px);
+}
+
+.directory-command-item:hover {
+  background: var(--cs-bg-color-deep);
+}
+
+.directory-command-icon {
+  flex: 0 0 auto;
+  color: var(--el-color-primary);
+}
+
+.directory-command-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cs-text-color-primary);
+  font-family: var(--cs-font-family-mono, monospace);
+  font-size: var(--cs-font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-command-remove:disabled {
+  cursor: wait;
+  opacity: 0.45;
+}
+
+.directory-command-empty {
+  padding: var(--cs-space-md, 12px) var(--cs-space-sm, 8px);
+  color: var(--cs-text-color-secondary);
+  font-size: var(--cs-font-size-sm);
+  text-align: center;
+}
+
 .new-workflow-options {
   display: flex;
   flex-direction: column;

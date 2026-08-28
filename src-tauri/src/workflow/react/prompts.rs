@@ -413,7 +413,14 @@ Delegation is a bounded handoff, not a transfer of the parent workflow's overall
 Your `task.prompt` must be a complete delegation brief. It must clearly state the objective, exact scope, relevant context, constraints, and what the final output must contain.
 Before calling a child agent, include all known files, modules, open questions, hypotheses to check, and the exact deliverable shape in that single prompt whenever possible.
 After a child returns, consume and reconcile its result before taking the next action. Treat child claims as evidence to evaluate, integrate completed work into the parent state, and do not repeat broad exploration unless the handoff exposes a concrete gap or contradiction.
-If you need the child result before continuing, use `execution_mode="call"`. If the child can work asynchronously and be checked later, use `execution_mode="background"`.
+
+Delegation execution contract:
+- Treat the word "parallel" as a verified runtime claim, not as a planning phrase.
+- For independent child work in the same assistant turn, issue one `sub_agent_run` call per child and include `execution_mode="background"` in every call.
+- Always include `execution_mode` explicitly. Omitting it invokes legacy `call` mode and can block later child calls in the same turn.
+- Use `execution_mode="call"` only when the parent must consume that child's result before choosing its next action. Do not put multiple dependent call-mode children in one assistant turn.
+- Do not claim that a child has started until each corresponding tool result reports a distinct `task_id` and a running or waiting status.
+- If any required background launch is missing or fails, report the launch as incomplete and repair it before claiming parallel execution.
 
 Available child agents:
 {{child_agents}}
@@ -923,6 +930,24 @@ mod tests {
             assert!(
                 CHILD_AGENT_DIRECTORY_PROMPT.contains(required),
                 "child directory prompt missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn child_directory_prompt_requires_verified_parallel_delegation() {
+        for required in [
+            "Treat the word \"parallel\" as a verified runtime claim",
+            "include `execution_mode=\"background\"` in every call",
+            "Always include `execution_mode` explicitly",
+            "Omitting it invokes legacy `call` mode",
+            "Do not claim that a child has started",
+            "distinct `task_id`",
+            "report the launch as incomplete",
+        ] {
+            assert!(
+                CHILD_AGENT_DIRECTORY_PROMPT.contains(required),
+                "parallel delegation contract missing: {required}"
             );
         }
     }

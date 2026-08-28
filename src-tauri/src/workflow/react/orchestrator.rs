@@ -1291,8 +1291,9 @@ impl ToolDefinition for TaskTool {
         Include all known files, modules, open questions, and hypotheses to check in that first prompt whenever possible so the child can explore efficiently in one pass. \
         If the child agent must return structured findings, explicitly state which facts, files, risks, or conclusions must be included. \
         After a call-mode child returns, the parent should consume that result before doing more broad exploration; only re-open exploration if the child result leaves a concrete unresolved gap. \
-        execution_mode defaults to 'call'. Use execution_mode='call' when the parent cannot continue until the child finishes; the parent pauses and receives the result automatically. \
-        Use execution_mode='background' when the child can run in parallel while the parent continues other work; completion will be reported automatically, and sub_agent_output can be used later if the result is explicitly needed."
+        execution_mode is required for new delegations. Use execution_mode='call' only when the parent must wait for that specific child result before choosing its next action. \
+        Use execution_mode='background' for independent work that may run concurrently, and include it explicitly in every parallel sub_agent_run call. \
+        Never claim parallel execution until every corresponding tool result reports a distinct task_id with a running or waiting status."
     }
 
     fn category(&self) -> ToolCategory {
@@ -1359,11 +1360,10 @@ impl ToolDefinition for TaskTool {
                     "execution_mode": {
                         "type": "string",
                         "enum": ["call", "background"],
-                        "default": "call",
-                        "description": "Execution mode for the child agent. Use 'call' if you must wait for the child to finish before continuing; the parent workflow will pause and resume with the final child result. Use 'background' if you can continue other work in parallel; the system will report completion automatically, and you may inspect the result later with sub_agent_output when needed."
+                        "description": "Required for new delegations. Use 'call' only when the parent must wait for this child before choosing its next action. Use 'background' for independent work that may run concurrently. Include this field explicitly in every parallel sub_agent_run call."
                     }
                 },
-                "required": ["description", "prompt"]
+                "required": ["description", "prompt", "execution_mode"]
             }),
             output_schema: None,
             disabled: false,
@@ -1376,7 +1376,17 @@ impl ToolDefinition for TaskTool {
         let prompt = params["prompt"]
             .as_str()
             .ok_or(ToolError::InvalidParams("prompt is required".to_string()))?;
-        let execution_mode = params["execution_mode"].as_str().unwrap_or("call");
+        let execution_mode = match params["execution_mode"].as_str() {
+            Some(mode) => mode,
+            None => {
+                // Keep legacy calls recoverable, but make the implicit blocking behavior visible.
+                log::warn!(
+                    "[Workflow][session={:?}][phase=sub_agent_run] execution_mode was omitted; using legacy call mode",
+                    self.parent_session_id
+                );
+                "call"
+            }
+        };
         if !matches!(execution_mode, "call" | "background") {
             return Err(ToolError::InvalidParams(format!(
                 "execution_mode must be either 'call' or 'background', got '{}'",
@@ -2643,6 +2653,16 @@ mod tests {
         assert_eq!(
             declaration.input_schema["properties"]["child_agent_name"]["enum"],
             json!(["Explorer"])
+        );
+        assert_eq!(
+            declaration.input_schema["required"],
+            json!(["description", "prompt", "execution_mode"])
+        );
+        assert!(
+            declaration.input_schema["properties"]["execution_mode"]
+                .get("default")
+                .is_none(),
+            "new delegations must choose an explicit execution mode"
         );
         assert!(!declaration.description.contains("Final Reviewer"));
     }

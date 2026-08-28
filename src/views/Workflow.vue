@@ -229,6 +229,7 @@
               :current-workflow-id="currentWorkflowId"
               :current-paths="currentPaths"
               :on-add-authorized-path="onAddPath"
+              :on-remove-authorized-path="removeAuthorizedPathFromCommand"
               :selected-agent="selectedAgent"
               :can-edit-agent="canEditCurrentWorkflowAgent"
               :show-planning-mode-toggle="showPlanningModeToggle"
@@ -781,6 +782,21 @@ const builtinCommands = computed(() => {
       group: 'chatspeed'
     })
   }
+
+  commands.push(
+    {
+      name: 'dir-add',
+      description: t('workflow.commandDirAddDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    },
+    {
+      name: 'dir-remove',
+      description: t('workflow.commandDirRemoveDesc'),
+      type: 'command',
+      group: 'chatspeed'
+    }
+  )
 
   return commands
 })
@@ -1669,9 +1685,35 @@ const triggerManualCompression = async () => {
 }
 
 const handleWorkflowSlashCommand = async command => {
-  const cmd = command.trim().toLowerCase()
+  const rawCommand = command.trim()
+  const commandMatch = rawCommand.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/)
+  if (!commandMatch) return false
 
-  if (cmd === '/clear') {
+  const commandName = commandMatch[1].toLowerCase()
+  const commandArgument = commandMatch[2]?.trim() || ''
+
+  if (commandName === 'dir-add') {
+    const path = unwrapDirectoryCommandPath(commandArgument)
+    if (!path) {
+      showMessage(t('workflow.authorizedDirectoryPathRequired'), 'warning')
+      return true
+    }
+    await addAuthorizedPathFromCommand(path)
+    return true
+  }
+
+  if (commandName === 'dir-remove') {
+    if (commandArgument) {
+      showMessage(t('workflow.authorizedDirectoryRemoveNoArgs'), 'warning')
+      return true
+    }
+    inputAreaRef.value?.openDirectoryRemovalPanel?.()
+    return true
+  }
+
+  if (commandArgument) return false
+
+  if (commandName === 'clear') {
     if (!workflowStore.canClearContext) {
       return false
     }
@@ -1679,28 +1721,75 @@ const handleWorkflowSlashCommand = async command => {
     return true
   }
 
-  if (cmd === '/new') {
+  if (commandName === 'new') {
     await createNewWorkflow()
     return true
   }
 
-  if (cmd === '/plan') {
+  if (commandName === 'plan') {
     return togglePlanningModeWithFeedback()
   }
 
-  if (cmd === '/audit') {
+  if (commandName === 'audit') {
     return toggleFinalAuditModeWithFeedback()
   }
 
-  if (cmd === '/compress') {
+  if (commandName === 'compress') {
     return await triggerManualCompression()
   }
 
-  if (cmd === '/attach') {
+  if (commandName === 'attach') {
     return await openImageAttachmentDialogWithFeedback()
   }
 
   return false
+}
+
+const unwrapDirectoryCommandPath = value => {
+  const path = String(value || '').trim()
+  if (path.length >= 2) {
+    const first = path[0]
+    const last = path[path.length - 1]
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return path.slice(1, -1).replace(/\\([\\"'])/g, '$1').trim()
+    }
+  }
+  return path
+}
+
+const addAuthorizedPathFromCommand = async path => {
+  const normalizedPath = String(path || '').trim()
+  if (!normalizedPath) return false
+
+  if (currentPaths.value.includes(normalizedPath)) {
+    showMessage(t('workflow.authorizedDirectoryAlreadyAdded'), 'info')
+    return false
+  }
+
+  try {
+    await onAddPathFromTree(normalizedPath)
+    showMessage(t('workflow.authorizedDirectoryAdded'), 'success')
+    return true
+  } catch (error) {
+    console.error('Failed to add authorized directory from slash command:', error)
+    showMessage(t('workflow.authorizedDirectoryAddFailed', { error: String(error) }), 'error')
+    return false
+  }
+}
+
+const removeAuthorizedPathFromCommand = async path => {
+  const normalizedPath = String(path || '').trim()
+  if (!normalizedPath) return false
+
+  try {
+    await onRemovePathFromTree(normalizedPath)
+    showMessage(t('workflow.authorizedDirectoryRemoved'), 'success')
+    return true
+  } catch (error) {
+    console.error('Failed to remove authorized directory from slash command:', error)
+    showMessage(t('workflow.authorizedDirectoryRemoveFailed', { error: String(error) }), 'error')
+    return false
+  }
 }
 
 const onClearContextFrame = async () => {
