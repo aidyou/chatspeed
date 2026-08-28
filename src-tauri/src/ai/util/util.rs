@@ -372,115 +372,54 @@ pub fn get_family_from_model_id(lower_model_id: &str) -> Option<String> {
     family
 }
 
-/// Checks if a model likely supports function calling (tool use).
+/// Checks whether a model is expected to support native function calling (tool use).
+///
+/// Provider model lists frequently omit capability metadata. Treat capable chat models as
+/// supporting tools by default, while excluding non-chat and explicitly lightweight models.
 pub fn is_function_call_supported(lower_model_id: &str) -> bool {
-    if lower_model_id.contains("gpt-")
-        || lower_model_id.starts_with("o1-")
-        || lower_model_id.starts_with("o3-")
-    {
+    let is_non_chat_model = lower_model_id.contains("embedding")
+        || lower_model_id.contains("rerank")
+        || lower_model_id.contains("moderation")
+        || lower_model_id.contains("whisper")
+        || lower_model_id.contains("tts")
+        || lower_model_id.contains("dall-e")
+        || lower_model_id.contains("image-generation")
+        || lower_model_id.contains("text-to-image")
+        || lower_model_id.contains("speech-to-text");
+    if is_non_chat_model {
+        return false;
+    }
+
+    // StepFun explicitly documents tool calling for both reasoning Flash models.
+    if lower_model_id.contains("step-3.5-flash") || lower_model_id.contains("step-3.7-flash") {
         return true;
     }
 
-    if lower_model_id.contains("claude") {
-        return true;
-    }
+    let is_lightweight_model = lower_model_id.contains("small")
+        || lower_model_id.contains("mini")
+        || lower_model_id.contains("nano")
+        || lower_model_id.contains("lite")
+        || lower_model_id.contains("haiku");
 
-    if lower_model_id.contains("gemini") {
-        return true;
-    }
-
-    if lower_model_id.contains("qwq")
-        || lower_model_id.contains("qw2.5")
-        || lower_model_id.contains("qwen3")
-    {
-        return true;
-    }
-
-    if lower_model_id.contains("qwen")
-        && (lower_model_id.contains("chat")
-            || lower_model_id.contains("instruct")
-            || lower_model_id.contains("turbo")
-            || lower_model_id.contains("plus")
-            || lower_model_id.contains("max"))
-        && !lower_model_id.contains("audio")
-    {
-        return true;
-    }
-
-    if lower_model_id.contains("deepseek")
-        && (lower_model_id.contains("chat")
-            || lower_model_id.contains("coder")
-            || lower_model_id.contains("v3"))
-    {
-        return true;
-    }
-
-    if lower_model_id.contains("yi-large") {
-        return true;
-    }
-
-    // Kimi (Moonshot)
-    if lower_model_id.contains("kimi")
-        && (lower_model_id.contains("k2")
-            || lower_model_id.contains("k1.5")
-            || lower_model_id.contains("k1.6")
-            || lower_model_id.contains("latest"))
-    {
-        return true;
-    }
-
-    // GLM (Zhipu AI)
-    if lower_model_id.contains("glm")
-        && (lower_model_id.contains("4")
-            || lower_model_id.contains("3")
-            || lower_model_id.contains("turbo")
-            || lower_model_id.contains("flash")
-            || lower_model_id.contains("air"))
-    {
-        return true;
-    }
-
-    // MiniMax
-    if lower_model_id.contains("minimax")
-        && (lower_model_id.contains("2.")
-            || lower_model_id.contains("text")
-            || lower_model_id.contains("chat"))
-    {
-        return true;
-    }
-
-    // StepFun
-    if lower_model_id.contains("step")
-        && (lower_model_id.contains("1")
-            || lower_model_id.contains("2")
-            || lower_model_id.contains("chat"))
-    {
-        return true;
-    }
-
-    if lower_model_id.contains("baichuan")
-        && (lower_model_id.contains("turbo")
-            || lower_model_id.contains("chat")
-            || lower_model_id.contains("instruct")
-            || lower_model_id.contains("pro")
-            || lower_model_id.contains("4"))
-    {
-        return true;
-    }
-
-    false
+    !is_lightweight_model
 }
 
-/// Checks if a model is known to explicitly support or output reasoning/thinking steps
+/// Checks if a model is explicitly documented as supporting reasoning/thinking steps.
 pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
-    if lower_model_id.contains("qwq")
+    let is_qwen_reasoning_model = lower_model_id.contains("qwq")
         || lower_model_id.contains("qwen3")
-        || (lower_model_id.contains("qwen") && lower_model_id.contains("thinking"))
-    {
+        || lower_model_id.contains("qwen-plus")
+        || lower_model_id.contains("qwen-flash")
+        || lower_model_id.contains("qwen-turbo")
+        || (lower_model_id.contains("qwen") && lower_model_id.contains("thinking"));
+    if is_qwen_reasoning_model {
         return true;
     }
 
-    if lower_model_id.starts_with("o1-") || lower_model_id.starts_with("o3") {
+    if lower_model_id.starts_with("o1-")
+        || lower_model_id.starts_with("o3-")
+        || lower_model_id.contains("gpt-5")
+    {
         return true;
     }
 
@@ -492,59 +431,52 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
         return true;
     }
 
-    if lower_model_id.contains("nemotron-3")
-        || lower_model_id.contains("gemma-4")
-        || lower_model_id.contains("thinkingmachines/inkling")
-        || lower_model_id.contains("sarvam-m")
-    {
+    if lower_model_id.contains("gemini-2.5-") || lower_model_id.contains("gemini-3") {
         return true;
     }
 
-    if lower_model_id.contains("gemini-2.5-flash") {
-        return true;
-    }
-
-    if lower_model_id.contains("claude-opus-4")
+    if lower_model_id.contains("claude-opus-5")
+        || lower_model_id.contains("claude-sonnet-5")
+        || lower_model_id.contains("claude-fable-5")
+        || lower_model_id.contains("claude-mythos-5")
+        || lower_model_id.contains("claude-opus-4")
         || lower_model_id.contains("claude-sonnet-4")
         || lower_model_id.contains("claude-3-7-sonnet")
+        || lower_model_id.contains("claude-3.7-sonnet")
     {
         return true;
     }
 
-    if lower_model_id.contains("glm-4.5")
-        || lower_model_id.contains("glm4.5")
-        || lower_model_id.contains("glm-4.6")
-        || lower_model_id.contains("glm4.6")
+    if lower_model_id.contains("glm-5")
+        || lower_model_id.contains("glm5")
         || lower_model_id.contains("glm-4.7")
         || lower_model_id.contains("glm4.7")
-        || lower_model_id.contains("glm-5")
-        || lower_model_id.contains("glm5")
+        || lower_model_id.contains("glm-4.6")
+        || lower_model_id.contains("glm4.6")
+        || lower_model_id.contains("glm-4.5")
+        || lower_model_id.contains("glm4.5")
     {
         return true;
     }
 
-    // Kimi (Moonshot) - K2 and K3 support reasoning
-    if lower_model_id.contains("kimi")
-        && (lower_model_id.contains("k2") || lower_model_id.contains("k3"))
+    if lower_model_id.contains("kimi-k3")
+        || lower_model_id.contains("kimi-k2.7-code")
+        || lower_model_id.contains("kimi-k2.6")
+        || lower_model_id.contains("kimi-k2.5")
     {
         return true;
     }
 
-    // MiniMax - M2 and M3 support reasoning
-    if lower_model_id.contains("minimax")
-        && (lower_model_id.contains("m2")
-            || lower_model_id.contains("m3")
-            || lower_model_id.contains("2"))
+    if lower_model_id.contains("step-3.5-flash") || lower_model_id.contains("step-3.7-flash") {
+        return true;
+    }
+
+    if lower_model_id.contains("hy4-preview")
+        || lower_model_id.contains("doubao-seed-1.6")
+        || lower_model_id.contains("doubao-1.5-thinking-vision-pro")
+        || lower_model_id.contains("mistral-small-latest")
+        || lower_model_id.contains("mistral-medium-3-5")
     {
-        return true;
-    }
-
-    // StepFun - Step-2 and above support reasoning
-    if lower_model_id.contains("step") && lower_model_id.contains("2") {
-        return true;
-    }
-
-    if lower_model_id.contains("thinking") {
         return true;
     }
 
@@ -604,32 +536,58 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn recognizes_new_reasoning_model_families() {
+    fn recognizes_documented_reasoning_models() {
         for model in [
+            "gpt-5.6",
+            "o3-mini",
             "deepseek-ai/deepseek-v4-flash",
-            "deepseek-ai/deepseek-v3.2",
+            "qwen/qwen-plus-2025-04-28",
             "qwen/qwen3-235b-a22b",
-            "nvidia/nemotron-3-super-120b-a12b",
-            "google/gemma-4-31b-it",
-            "thinkingmachines/inkling",
-            "sarvamai/sarvam-m",
-            "minimaxai/minimax-m3",
-            "moonshotai/kimi-k3",
-            "glm-5.1",
-            "glm-5.2",
-            "glm-5",
-            "glm-5-turbo",
-            "glm-4.7",
-            "glm-4.7-flash",
-            "glm-4.6",
-            "glm-4.5",
-            "glm-4.5-flash",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-3.1-flash-lite-image",
+            "claude-opus-5",
+            "glm-5.3-flash",
+            "moonshotai/kimi-k2.7-code",
+            "step-3.7-flash",
+            "hy4-preview",
+            "bytedance/doubao-seed-1.6",
+            "mistral-small-latest",
         ] {
             assert!(is_reasoning_supported(model), "model: {model}");
         }
-        assert!(!is_reasoning_supported(
-            "meta/llama-4-maverick-17b-128e-instruct"
-        ));
+
+        for model in [
+            "meta/llama-4-maverick-17b-128e-instruct",
+            "google/gemini-2.0-flash",
+            "step-2-mini",
+            "mistral-large-latest",
+            "custom-thinking-model",
+        ] {
+            assert!(!is_reasoning_supported(model), "model: {model}");
+        }
+    }
+
+    #[test]
+    fn function_calling_defaults_to_supported_except_weak_or_non_chat_models() {
+        for model in [
+            "deepseek-chat",
+            "qwen3-235b-a22b",
+            "glm-5.3",
+            "unknown-provider/chat-model",
+            "step-3.5-flash",
+        ] {
+            assert!(is_function_call_supported(model), "model: {model}");
+        }
+
+        for model in [
+            "text-embedding-3-large",
+            "whisper-1",
+            "claude-3-haiku",
+            "gpt-4o-mini",
+            "gemini-2.5-flash-lite",
+        ] {
+            assert!(!is_function_call_supported(model), "model: {model}");
+        }
     }
 
     #[test]
