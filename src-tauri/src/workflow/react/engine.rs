@@ -999,6 +999,9 @@ impl WorkflowExecutor {
             )));
         }
 
+        // This terminal-only path bypasses init and the normal run loop, so synchronize the
+        // compressor explicitly before constructing or sending any compression request.
+        self.sync_runtime_models_from_agent_config();
         self.state = terminal_state.clone();
         self.context.load_history().await?;
         let Some((compression_candidate, compressed_until_message_id)) =
@@ -3011,10 +3014,23 @@ impl WorkflowExecutor {
             ));
         }
 
-        let mut signal_rx = self
-            .signal_rx
-            .take()
-            .ok_or_else(|| WorkflowEngineError::General("Signal receiver already taken".into()))?;
+        let mut signal_rx = self.signal_rx.take().ok_or_else(|| {
+            log::error!(
+                "[Workflow][session={}][phase=run_loop][event=signal_receiver_missing] Signal receiver already taken before run loop; state={:?}, sub_agent_id={:?}",
+                self.session_id,
+                self.state,
+                self.sub_agent_id
+            );
+            WorkflowEngineError::General("Signal receiver already taken".into())
+        })?;
+
+        log::info!(
+            "[Workflow][session={}][phase=run_loop][event=signal_receiver_acquired] Run loop acquired signal receiver; state={:?}, sub_agent_id={:?}, pending_approvals={}",
+            self.session_id,
+            self.state,
+            self.sub_agent_id,
+            self.pending_approvals.len()
+        );
 
         loop {
             while self.state != WorkflowState::Completed
@@ -3031,8 +3047,10 @@ impl WorkflowExecutor {
                     || self.state == WorkflowState::AwaitingUser
                     || self.state == WorkflowState::AwaitingApproval
                     || self.state == WorkflowState::AwaitingSubAgent;
+                // Active execution must consume only signals it owns. Every typed wait signal,
+                // including a sub-agent approval that arrives while a previous tool runs, stays
+                // in the per-session FIFO stash until its compatible wait state is entered.
                 if !is_waiting_state {
-                    // Check stop/config/user-message queue signals at loop start (non-waiting only)
                     if self.check_stop_signal(&mut signal_rx).await? {
                         break;
                     }
@@ -3078,9 +3096,23 @@ impl WorkflowExecutor {
                         );
                         signal
                     } else {
-                        signal_rx.recv().await.ok_or_else(|| {
-                            WorkflowEngineError::General("Signal channel closed".into())
-                        })?
+                        match signal_rx.recv().await {
+                            Some(signal) => signal,
+                            None => {
+                                log::error!(
+                                    "[Workflow][session={}][phase=wait][event=signal_channel_closed] Signal receiver returned None while waiting; state={:?}, wait_reason={:?}, sub_agent_id={:?}, pending_approvals={}, pending_queue={}",
+                                    self.session_id,
+                                    self.state,
+                                    wait_reason_enum,
+                                    self.sub_agent_id,
+                                    self.pending_approvals.len(),
+                                    self.pending_approval_queue.len()
+                                );
+                                return Err(WorkflowEngineError::General(
+                                    "Signal channel closed".into(),
+                                ));
+                            }
+                        }
                     };
 
                     let workflow_signal = WorkflowSignal::parse(&signal_str);
@@ -3217,6 +3249,15 @@ impl WorkflowExecutor {
                                 approve_all,
                                 rejection_message,
                             } => {
+                                log::info!(
+                                    "[Workflow][session={}][phase=approval][event=approval_decision] Accepted approval decision; tool_call_id={}, approved={}, approve_all={}, pending_before={}, state={:?}",
+                                    self.session_id,
+                                    tool_call_id,
+                                    approved,
+                                    approve_all,
+                                    self.pending_approvals.len(),
+                                    self.state
+                                );
                                 let tool_name = self
                                     .pending_approvals
                                     .get(&tool_call_id)
@@ -8073,7 +8114,7 @@ impl WorkflowExecutor {
         Ok(false)
     }
 
-    /// Checks if a stop signal is pending in the channel
+    /// Drains active-operation signals without consuming typed signals owned by a wait state.
     async fn check_stop_signal(
         &mut self,
         rx: &mut tokio::sync::mpsc::Receiver<String>,
@@ -8081,7 +8122,10 @@ impl WorkflowExecutor {
         let mut stashed_signals: std::collections::VecDeque<String> =
             take_stashed_runtime_signals(&self.session_id).into();
 
-        while let Some(s) = stashed_signals.pop_front().or_else(|| rx.try_recv().ok()) {
+        loop {
+            let Some(s) = stashed_signals.pop_front().or_else(|| rx.try_recv().ok()) else {
+                break;
+            };
             let sig_json: Value = serde_json::from_str(&s).unwrap_or_default();
             let sig_type_str = sig_json["type"].as_str().unwrap_or_default();
             let sig_type_enum = SignalType::from_str(sig_type_str);
@@ -8158,6 +8202,7 @@ impl WorkflowExecutor {
                     }
 
                     if matches!(signal_type, Some(SignalType::SubAgentComplete))
+                        && self.current_wait_reason() == Some(WaitReason::SubAgent)
                         && self.apply_startup_pending_sub_agent_completion().await?
                     {
                         continue;
@@ -8204,8 +8249,9 @@ impl WorkflowExecutor {
             }
 
             // This active drain owns user messages, stop, runtime configuration, and
-            // compression signals only. Preserve every remaining typed signal in FIFO
-            // order so its canonical waiting handler can consume it later.
+            // compression signals only. Preserve every remaining recognized typed signal in FIFO
+            // order so its canonical waiting handler can consume it later. Unknown raw signals
+            // are intentionally ignored after logging because no wait handler can own them.
             if matches!(parse_runtime_signal(&s), RuntimeSignal::Other { .. }) {
                 if let Some(signal) = WorkflowSignal::parse(&s) {
                     log::debug!(
@@ -9066,7 +9112,28 @@ mod recovery_tests {
     async fn terminal_manual_compression_without_candidate_keeps_terminal_lifecycle() {
         let (_temp_dir, store) = create_test_store();
         let session_id = "terminal-manual-compression-no-candidate";
-        let agent = test_agent("terminal-manual-compression-agent");
+        let mut agent = test_agent("terminal-manual-compression-agent");
+        agent.models = Some(crate::db::agent::AgentModels {
+            act: Some(crate::db::agent::ModelConfig {
+                id: 11,
+                model: "act-model".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
+            utility: Some(crate::db::agent::ModelConfig {
+                id: 22,
+                model: "utility-model".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
+            ..Default::default()
+        });
         store.add_agent(&agent).expect("failed to add test agent");
         store
             .create_workflow(session_id, "Completed task", &agent.id, None, None)
@@ -9104,6 +9171,14 @@ mod recovery_tests {
             .expect("terminal manual compression should not enter normal recovery");
 
         assert!(!applied);
+        assert_eq!(
+            executor.compressor.provider_id, 22,
+            "terminal manual compression must use the configured utility provider"
+        );
+        assert_eq!(
+            executor.compressor.model, "utility-model",
+            "terminal manual compression must use the configured utility model"
+        );
         assert_eq!(executor.state, WorkflowState::Completed);
         assert_eq!(
             store
@@ -10259,6 +10334,63 @@ mod recovery_tests {
             objective_events.len(),
             1,
             "ask_user responses must not change the effective task objective"
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_signal_arriving_during_active_execution_is_stashed_for_approval_wait() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "active-approval-signal-stash";
+        let agent = test_agent("active-approval-signal-stash-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            Some("Code Explorer".to_string()),
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(35).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Executing;
+
+        let (signal_tx, mut signal_rx) = mpsc::channel(1);
+        let approval_signal = serde_json::json!({
+            "type": "approval",
+            "id": "child-tool-approval",
+            "approved": true,
+            "approve_all": false
+        })
+        .to_string();
+        signal_tx
+            .send(approval_signal.clone())
+            .await
+            .expect("failed to send approval signal");
+
+        assert!(!executor
+            .check_stop_signal(&mut signal_rx)
+            .await
+            .expect("active signal drain should not stop"));
+        assert_eq!(
+            take_stashed_runtime_signal(session_id),
+            Some(approval_signal),
+            "approval submitted while active must remain available for AwaitingApproval"
         );
     }
 

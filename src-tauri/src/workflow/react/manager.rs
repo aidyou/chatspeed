@@ -377,8 +377,9 @@ impl WorkflowManager {
         }
     }
 
+    #[cfg(test)]
     pub fn register_session_signal_tx(session_id: String, tx: tokio::sync::mpsc::Sender<String>) {
-        Self::register_session_signal_tx_with_source(session_id, tx, "unspecified");
+        Self::register_session_signal_tx_with_source(session_id, tx, "test");
     }
 
     pub fn register_session_signal_tx_with_source(
@@ -390,23 +391,35 @@ impl WorkflowManager {
             return;
         };
         let replaced = map.insert(session_id.clone(), tx).is_some();
+        let capacity = map
+            .get(&session_id)
+            .map(tokio::sync::mpsc::Sender::capacity)
+            .unwrap_or_default();
+        let is_closed = map
+            .get(&session_id)
+            .is_some_and(tokio::sync::mpsc::Sender::is_closed);
         if replaced {
             log::info!(
-                "[WorkflowManager][session={}][event=signal_channel_replaced] Replaced existing GLOBAL_SIGNAL_TX entry, source={}",
+                "[WorkflowManager][session={}][event=signal_channel_replaced] Replaced existing GLOBAL_SIGNAL_TX entry, source={}, capacity={}, is_closed={}",
                 session_id,
-                source
+                source,
+                capacity,
+                is_closed
             );
         } else {
             log::info!(
-                "[WorkflowManager][session={}][event=signal_channel_registered] Registered GLOBAL_SIGNAL_TX entry, source={}",
+                "[WorkflowManager][session={}][event=signal_channel_registered] Registered GLOBAL_SIGNAL_TX entry, source={}, capacity={}, is_closed={}",
                 session_id,
-                source
+                source,
+                capacity,
+                is_closed
             );
         }
     }
 
+    #[cfg(test)]
     pub fn unregister_session_signal_tx(session_id: &str) {
-        Self::unregister_session_signal_tx_with_source(session_id, "unspecified");
+        Self::unregister_session_signal_tx_with_source(session_id, "test");
     }
 
     pub fn unregister_session_signal_tx_with_source(session_id: &str, source: &str) {
@@ -434,9 +447,30 @@ impl WorkflowManager {
             return Err("GLOBAL_SIGNAL_TX poisoned".to_string());
         };
         let Some(tx) = map.get(session_id) else {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_send_missing] GLOBAL_SIGNAL_TX entry not found",
+                session_id
+            );
             return Err(format!("Session {} signal channel not found", session_id));
         };
-        tx.try_send(signal).map_err(|error| error.to_string())
+        let capacity = tx.capacity();
+        let is_closed = tx.is_closed();
+        log::debug!(
+            "[WorkflowManager][session={}][event=signal_send_attempt] Sending runtime signal, capacity={}, is_closed={}",
+            session_id,
+            capacity,
+            is_closed
+        );
+        tx.try_send(signal).map_err(|error| {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_send_failed] Runtime signal delivery failed, capacity={}, is_closed={}, error={}",
+                session_id,
+                capacity,
+                tx.is_closed(),
+                error
+            );
+            error.to_string()
+        })
     }
 
     pub async fn send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
@@ -447,12 +481,34 @@ impl WorkflowManager {
             map.get(session_id).cloned()
         };
         let Some(tx) = tx else {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_send_missing] GLOBAL_SIGNAL_TX entry not found",
+                session_id
+            );
             return Err(format!("Session {} signal channel not found", session_id));
         };
-        tokio::time::timeout(std::time::Duration::from_secs(5), tx.send(signal))
+        let capacity = tx.capacity();
+        let is_closed = tx.is_closed();
+        log::debug!(
+            "[WorkflowManager][session={}][event=signal_send_attempt] Sending runtime signal, capacity={}, is_closed={}",
+            session_id,
+            capacity,
+            is_closed
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), tx.send(signal))
             .await
             .map_err(|_| format!("Session {session_id} signal channel remained full for 5s"))?
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        if let Err(error) = &result {
+            log::warn!(
+                "[WorkflowManager][session={}][event=signal_send_failed] Runtime signal delivery failed, capacity={}, is_closed={}, error={}",
+                session_id,
+                capacity,
+                tx.is_closed(),
+                error
+            );
+        }
+        result
     }
 }
 

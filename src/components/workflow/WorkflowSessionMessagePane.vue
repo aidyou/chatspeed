@@ -48,7 +48,7 @@
       :pending-approval-ids="resolvedPendingApprovalIds"
       :current-workflow-id="sessionId"
       :wait-reason="resolvedWaitReason"
-      :is-approval-submitting="approval.isApprovalSubmitting.value"
+      :is-approval-submitting="resolvedIsApprovalSubmitting"
       :get-tool-stream="getToolStream"
       @message-window-anchor-change="messageProjection.setMessageWindowAnchor"
       @toggle-expand="messageProjection.toggleMessageExpand"
@@ -138,6 +138,10 @@ const resolvedPendingApprovalIds = computed(() =>
     ? childSession.pendingApprovalIds.value
     : workflowStore.currentInlinePendingApprovalIds
 )
+const resolvedIsApprovalSubmitting = (sessionId, toolCallId) =>
+  props.agentRole === 'child'
+    ? childSession.isApprovalSubmitting(toolCallId)
+    : approval.isApprovalSubmitting.value(sessionId, toolCallId)
 const childStatus = computed(() => String(childSession.workflow.value?.status || '').toLowerCase())
 const childAgentTitle = computed(() => {
   const workflow = childSession.workflow.value || {}
@@ -180,7 +184,19 @@ const approval = useWorkflowApproval({
   getPendingApprovalEntry: () => null,
   clearPendingApprovalEntry: () => {},
   upsertPendingApprovalEntry: () => {},
-  trackToolState: props.agentRole === 'primary'
+  trackToolState: props.agentRole === 'primary',
+  markApprovalSubmitted:
+    props.agentRole === 'child'
+      ? (_, toolCallId) => childSession.markApprovalSubmitted(toolCallId)
+      : undefined,
+  clearApprovalSubmission:
+    props.agentRole === 'child'
+      ? (_, toolCallId) => childSession.clearApprovalSubmission(toolCallId)
+      : undefined,
+  isApprovalSubmitted:
+    props.agentRole === 'child'
+      ? (_, toolCallId) => childSession.isApprovalSubmitting(toolCallId)
+      : undefined
 })
 
 const approveTool = toolCallId => approval.onApproveAction(toolCallId, props.sessionId)

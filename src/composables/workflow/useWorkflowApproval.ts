@@ -14,7 +14,10 @@ export function useWorkflowApproval({
   getPendingApprovalEntry,
   clearPendingApprovalEntry,
   upsertPendingApprovalEntry,
-  trackToolState = true
+  trackToolState = true,
+  markApprovalSubmitted,
+  clearApprovalSubmission,
+  isApprovalSubmitted
 }) {
   const { t } = useI18n()
   const workflowStore = useWorkflowStore()
@@ -23,7 +26,9 @@ export function useWorkflowApproval({
   const activeApprovalId = ref('')
 
   const isApprovalSubmitting = computed(
-    () => (sessionId, toolCallId) => trackToolState && workflowStore.isApprovalSubmitted(sessionId, toolCallId)
+    () => (sessionId, toolCallId) =>
+      isApprovalSubmitted?.(sessionId, toolCallId) ??
+      (trackToolState && workflowStore.isApprovalSubmitted(sessionId, toolCallId))
   )
 
   const submitApproval = async ({
@@ -33,13 +38,17 @@ export function useWorkflowApproval({
     rejectionMessage = '',
     sessionId = currentWorkflowId.value
   }) => {
-    if (!toolCallId || !sessionId || (trackToolState && workflowStore.isApprovalSubmitted(sessionId, toolCallId))) {
+    if (!toolCallId || !sessionId || isApprovalSubmitting.value(sessionId, toolCallId)) {
       return
     }
     approvalLoading.value = true
     activeApprovalId.value = toolCallId
     const pendingEntry = getPendingApprovalEntry?.(sessionId, toolCallId) || null
-    if (trackToolState) workflowStore.markApprovalSubmitted(sessionId, toolCallId)
+    if (markApprovalSubmitted) {
+      markApprovalSubmitted(sessionId, toolCallId)
+    } else if (trackToolState) {
+      workflowStore.markApprovalSubmitted(sessionId, toolCallId)
+    }
 
     try {
       const signal = JSON.stringify({
@@ -59,7 +68,11 @@ export function useWorkflowApproval({
         workflowStore.markToolRejected(toolCallId, rejectionMessage)
       }
     } catch (error) {
-      if (trackToolState) workflowStore.clearApprovalSubmission(sessionId, toolCallId)
+      if (clearApprovalSubmission) {
+        clearApprovalSubmission(sessionId, toolCallId)
+      } else if (trackToolState) {
+        workflowStore.clearApprovalSubmission(sessionId, toolCallId)
+      }
       if (pendingEntry) {
         upsertPendingApprovalEntry?.(sessionId, {
           id: pendingEntry.id,

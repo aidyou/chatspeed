@@ -100,6 +100,29 @@ assert.equal(
   'a stale pending transcript row must not keep approval controls visible after resolution'
 )
 
+const submittedApprovalIds = new Set([toolCallId])
+const submittedApprovals = deriveInlinePendingApprovals({
+  currentWorkflowId: sessionId,
+  workflowTitle: 'Approval UI contract',
+  status: 'awaiting_approval',
+  waitReason: 'approval',
+  executionContext: {
+    ...executionContext,
+    pending_tools: [
+      ...executionContext.pending_tools,
+      { tool_call_id: 'tool_still_pending', tool_name: 'write_file' }
+    ]
+  },
+  messages: [pendingMessage],
+  submittedToolIds: submittedApprovalIds,
+  approvalWaitingStatuses
+})
+assert.deepEqual(
+  submittedApprovals.map(approval => approval.toolCallId),
+  ['tool_still_pending'],
+  'locally submitted child approvals must leave only the remaining structured pending tools'
+)
+
 console.log('workflow UI contract tests passed')
 
 test('authorized root drag sorting stays on the existing structured allowed-path update path', async () => {
@@ -184,9 +207,8 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionPane, /:last-assistant-message="messageProjection\.lastAssistantMessage\.value"/, 'the message list must receive the resolved last assistant message')
   assert.match(sessionPane, /:approval-loading="approval\.approvalLoading\.value"/, 'the message list must receive the approval loading boolean, not its ref')
   assert.match(sessionPane, /:active-approval-id="approval\.activeApprovalId\.value"/, 'the message list must receive the active approval ID, not its ref')
-  assert.match(sessionPane, /:is-approval-submitting="approval\.isApprovalSubmitting\.value"/, 'the message list must receive the resolved approval-submission predicate')
+  assert.match(sessionPane, /:is-approval-submitting="resolvedIsApprovalSubmitting"/, 'child panes must use their session-local approval submission state')
   assert.match(sessionPane, /<cs name="fullscreen"\s*\/>/)
-  assert.match(sessionPane, /{{ childAgentTitle }}/)
   assert.match(sessionPane, /class="workflow-session-message-pane__status"[\s\S]*?:class="childStatusClass"/)
   assert.match(sessionPane, /workflow\.subAgent\.statusCompleted/)
   assert.match(sessionPane, /workflow\.subAgent\.statusCancelled/)
@@ -196,7 +218,31 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionMessages, /registerListener: handleEvent => listen\(`workflow:\/\/event\/\$\{targetSessionId\}`/, 'child hydration must listen to its own channel')
   assert.match(sessionMessages, /fetchSnapshot: \(\) => invokeWrapper\('get_workflow_snapshot', \{ sessionId: targetSessionId \}\)/, 'child hydration must use the canonical snapshot')
   assert.match(sessionMessages, /applyEvent,[\s\S]*?isCurrent: \(\) => revision === loadRevision\.value && targetSessionId === sessionId\.value,[\s\S]*?onListenerRegistered: stop =>/, 'the listener must be retained from registration through snapshot replay for the active child session')
+  assert.match(sessionPane, /const resolvedIsApprovalSubmitting = \(sessionId, toolCallId\) =>[\s\S]*?childSession\.isApprovalSubmitting\(toolCallId\)/)
+  assert.match(sessionMessages, /const approvalSubmissions = ref\(new Set\(\)\)/)
+  assert.match(sessionMessages, /submittedToolIds: approvalSubmissions\.value/)
+  assert.match(sessionMessages, /const markApprovalSubmitted = toolCallId =>/)
+  assert.match(sessionMessages, /const clearApprovalSubmission = toolCallId =>/)
+  assert.match(sessionMessages, /const isApprovalSubmitting = toolCallId =>[\s\S]*?approvalSubmissions\.value\.has/)
+  assert.match(sessionMessages, /payload\.type === 'approval_resolved'[\s\S]*?clearApprovalSubmission\(toolCallId\)/)
+  assert.match(sessionMessages, /payload\.type === 'tool_started'[\s\S]*?clearApprovalSubmission\(toolCallId\)/)
+  assert.match(sessionPane, /markApprovalSubmitted:[\s\S]*?childSession\.markApprovalSubmitted\(toolCallId\)[\s\S]*?clearApprovalSubmission:[\s\S]*?childSession\.clearApprovalSubmission\(toolCallId\)[\s\S]*?isApprovalSubmitted:[\s\S]*?childSession\.isApprovalSubmitting\(toolCallId\)/)
   assert.match(sessionPane, /onApproveAction\(toolCallId, props\.sessionId\)/, 'child approvals must still target the child session')
+  assert.match(
+    engine,
+    /Active execution must consume only signals it owns[\s\S]*?sub-agent approval that arrives while a previous tool runs[\s\S]*?per-session FIFO stash until its compatible wait state is entered/,
+    'active child execution must preserve approvals until AwaitingApproval owns them'
+  )
+  assert.match(
+    engine,
+    /async fn check_stop_signal[\s\S]*?signal_deferred_non_waiting[\s\S]*?stash_runtime_signal\(&self\.session_id, s\)/,
+    'the active signal drain must defer typed wait signals instead of consuming child approvals'
+  )
+  assert.match(
+    engine,
+    /let signal_str = if let Some\(signal\)\s*=\s*take_stashed_runtime_signal\(&self\.session_id\)[^]*?Signal receiver returned None while waiting[^]*?Signal channel closed/,
+    'AwaitingApproval must consume deferred signals before reading the live channel'
+  )
   assert.match(sessionMessages, /workflow:\/\/event\/\$\{targetSessionId\}/, 'child pane must listen to its own channel')
   assert.doesNotMatch(sessionMessages, /selectWorkflow\(/, 'child pane must not replace the root selection')
   assert.match(workflowCore, /targetSessionId: payload\.sub_agent_id,[\s\S]*?navigationSessionId: payload\.parent_session_id/)

@@ -63,6 +63,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
   const toolStreams = ref(new Map())
   const taskCompletionRevision = ref(0)
   const lastTaskCompletion = ref(null)
+  const approvalSubmissions = ref(new Set())
   const chatState = ref({ content: '', reasoning: '', reasoningStatus: 'idle', blocks: [], retryInfo: null })
   const compression = ref({ isCompressing: false, message: '' })
   const loadRevision = ref(0)
@@ -83,9 +84,27 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     waitReason: waitReason.value,
     messages: messages.value,
     executionContext: executionContext.value,
+    submittedToolIds: approvalSubmissions.value,
     approvalWaitingStatuses: ['awaiting_approval', 'awaiting_auto_approval']
   }))
   const pendingApprovalIds = computed(() => pendingApprovals.value.map(entry => entry.id))
+
+  const markApprovalSubmitted = toolCallId => {
+    const normalizedToolCallId = String(toolCallId || '').trim()
+    if (!normalizedToolCallId || approvalSubmissions.value.has(normalizedToolCallId)) return
+    approvalSubmissions.value = new Set(approvalSubmissions.value).add(normalizedToolCallId)
+  }
+
+  const clearApprovalSubmission = toolCallId => {
+    const normalizedToolCallId = String(toolCallId || '').trim()
+    if (!normalizedToolCallId || !approvalSubmissions.value.has(normalizedToolCallId)) return
+    const next = new Set(approvalSubmissions.value)
+    next.delete(normalizedToolCallId)
+    approvalSubmissions.value = next
+  }
+
+  const isApprovalSubmitting = toolCallId =>
+    approvalSubmissions.value.has(String(toolCallId || '').trim())
 
   const replaceMessages = incomingMessage => {
     messages.value = reconcileWorkflowToolMessages(messages.value, incomingMessage)
@@ -132,6 +151,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
         ...(workflow.value || {}),
         executionContext: resolveExecutionContextPendingTool(executionContext.value, toolCallId)
       }
+      clearApprovalSubmission(toolCallId)
       patchToolLifecycle(toolCallId, {
         approval_status: payload.approved ? 'approved' : 'rejected',
         execution_status: payload.execution_status || (payload.approved ? 'approval_submitted' : 'rejected'),
@@ -145,6 +165,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
         ...(workflow.value || {}),
         executionContext: resolveExecutionContextPendingTool(executionContext.value, toolCallId)
       }
+      clearApprovalSubmission(toolCallId)
       patchToolLifecycle(toolCallId, {
         approval_status: 'approved',
         execution_status: 'running',
@@ -157,6 +178,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
         ...(workflow.value || {}),
         executionContext: resolveExecutionContextPendingTool(executionContext.value, toolCallId)
       }
+      clearApprovalSubmission(toolCallId)
     } else if (payload.type === 'state') {
       workflow.value = { ...(workflow.value || {}), status: payload.state, waitReason: payload.wait_reason || null }
       if (!['thinking', 'executing'].includes(String(payload.state || '').toLowerCase())) {
@@ -226,6 +248,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     messages.value = []
     workflow.value = null
     toolStreams.value = new Map()
+    approvalSubmissions.value = new Set()
     if (agentRole.value !== 'child') return
     await hydrateChildSession()
   }, { immediate: true })
@@ -256,6 +279,9 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     compressionMessage: computed(() => compression.value.message),
     pendingApprovals,
     pendingApprovalIds,
+    markApprovalSubmitted,
+    clearApprovalSubmission,
+    isApprovalSubmitting,
     loadSnapshot: hydrateChildSession
   }
 }

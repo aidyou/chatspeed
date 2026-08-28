@@ -480,7 +480,10 @@ fn render_task_output(result: &Value) -> String {
 fn recover_terminal_sub_agent_finalization(main_store: &Arc<MainStore>, task_id: &str) {
     get_sub_agent_registry().unregister_sub_agent(task_id);
     TASK_OUTPUT_THROTTLE.remove(task_id);
-    crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(task_id);
+    crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
+        task_id,
+        "recover_terminal_sub_agent_finalization",
+    );
     BACKGROUND_TASKS.remove(task_id);
 
     // A completed child can no longer make progress in memory. Its child workflow state and
@@ -688,7 +691,10 @@ pub async fn stop_background_task(task_id: &str, chat_state: Option<&Arc<ChatSta
                     error
                 );
             }
-            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(task_id);
+            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
+                task_id,
+                "stop_background_task.cancel_sub_agent",
+            );
             remember_completed_task(
                 task_id,
                 owner_session_id,
@@ -865,9 +871,10 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         .await?;
 
         let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(32);
-        crate::workflow::react::manager::WorkflowManager::register_session_signal_tx(
+        crate::workflow::react::manager::WorkflowManager::register_session_signal_tx_with_source(
             session_id.to_string(),
             signal_tx,
+            "DefaultSubAgentFactory.create_executor",
         );
 
         let mut policy = if subagent_type == "Planning" {
@@ -1059,11 +1066,24 @@ pub async fn spawn_call_sub_agent(
     );
 
     tokio::spawn(async move {
+        log::info!(
+            "[Workflow][session={}][parent={}][phase=sub_agent_run][event=run_loop_started] Call-mode sub-agent task started",
+            task_id_clone,
+            parent_session_id
+        );
         let (result, final_state, messages) = {
             let mut guard = exec_clone.lock().await;
             let result = guard.run_loop().await;
             let final_state = guard.state();
             let messages = guard.messages();
+            log::info!(
+                "[Workflow][session={}][parent={}][phase=sub_agent_run][event=run_loop_finished] Call-mode sub-agent task finished; result_is_err={}, final_state={:?}, message_count={}",
+                task_id_clone,
+                parent_session_id,
+                result.is_err(),
+                final_state,
+                messages.len()
+            );
             (result, final_state, messages)
         };
         let completion_result = match build_terminal_sub_agent_result_async(
@@ -1154,10 +1174,20 @@ pub async fn spawn_call_sub_agent(
             );
         }
 
+        log::info!(
+            "[Workflow][session={}][parent={}][phase=sub_agent_completion][event=cleanup_start] Cleaning up terminal call-mode sub-agent; completion_status={}",
+            task_id_clone,
+            parent_session_id,
+            completion_result
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("completed")
+        );
         get_sub_agent_registry().unregister_sub_agent(&task_id_clone);
         TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
-        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
             &task_id_clone,
+            "spawn_call_sub_agent.terminal_cleanup",
         );
         BACKGROUND_TASKS.remove(&task_id_clone);
     });
@@ -1457,8 +1487,9 @@ impl ToolDefinition for TaskTool {
                     };
                     if !projected {
                         TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
-                        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+                        crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
                             &task_id_clone,
+                            "background_sub_agent.completion_not_projected",
                         );
                         BACKGROUND_TASKS.remove(&task_id_clone);
                         return;
@@ -1552,8 +1583,9 @@ impl ToolDefinition for TaskTool {
                     }
                 }
                 TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
-                crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+                crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
                     &task_id_clone,
+                    "background_sub_agent.terminal_cleanup",
                 );
                 BACKGROUND_TASKS.remove(&task_id_clone);
             });
@@ -1713,8 +1745,9 @@ impl ToolDefinition for TaskTool {
 
             get_sub_agent_registry().unregister_sub_agent(&task_id_clone);
             TASK_OUTPUT_THROTTLE.remove(&task_id_clone);
-            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx(
+            crate::workflow::react::manager::WorkflowManager::unregister_session_signal_tx_with_source(
                 &task_id_clone,
+                "call_sub_agent.terminal_cleanup",
             );
             BACKGROUND_TASKS.remove(&task_id_clone);
         });
