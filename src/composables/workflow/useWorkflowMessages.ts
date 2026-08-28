@@ -7,6 +7,7 @@ import {
   excludeLeadingWorkflowTaskBoundaryMessages,
   getStructuredWorkflowToolName,
   getWorkflowMessageWindowAnchorId,
+  hasVisibleWorkflowText,
   isWorkflowManualClearContextMessage,
   normalizeVisibleCompletionReport,
   reconcileWorkflowTaskWindowState,
@@ -77,7 +78,7 @@ export function useWorkflowMessages(source = null) {
     if (uiVisibility === 'hide') return true
     if (message?.role !== 'user') return false
     if ((message.stepType || '').toLowerCase() !== 'observe') return false
-    return removeSystemReminder(message.message || '').trim() === ''
+    return !hasVisibleWorkflowText(removeSystemReminder(message.message || ''))
   }
 
   const isSubAgentCompletionObservation = message => {
@@ -1100,7 +1101,7 @@ export function useWorkflowMessages(source = null) {
         }
         if (m.role === 'assistant') {
           const hasTextContent =
-            (m.message && m.message.trim()) || (m.reasoning && m.reasoning.trim())
+            hasVisibleWorkflowText(m.message) || hasVisibleWorkflowText(m.reasoning)
           if (hasTextContent) return true
           if (m.pendingToolCalls && m.pendingToolCalls.length > 0) return true
           return false
@@ -1647,7 +1648,7 @@ export function useWorkflowMessages(source = null) {
   const shouldShowToolRawContent = message => {
     const meta = message.metadata || {}
     const content = removeSystemReminder(message.message || '')
-    if (!content) return false
+    if (!hasVisibleWorkflowText(content)) return false
     if (meta.hide_approval_details && meta.execution_status === 'running') return false
     if (
       (message.toolDisplay?.hasStreamOutput ||
@@ -1865,7 +1866,7 @@ export function useWorkflowMessages(source = null) {
         }
 
         return {
-          content: parsedContent,
+          content: hasVisibleWorkflowText(parsedContent) ? parsedContent : '',
           toolCalls: parsedToolCalls,
           isError
         }
@@ -1875,7 +1876,7 @@ export function useWorkflowMessages(source = null) {
     }
 
     return {
-      content,
+      content: hasVisibleWorkflowText(content) ? content : '',
       toolCalls: [],
       isError
     }

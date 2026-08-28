@@ -11,6 +11,7 @@ import {
   getWorkflowMessageWindowAnchorId,
   getWorkflowPersistedMessageId,
   getWorkflowToolGroupRenderOrders,
+  hasVisibleWorkflowText,
   hasIncompleteWorkflowToolCallChain,
   hasOpenWorkflowTaskFrame,
   inferWorkflowToolExecutionStatus,
@@ -143,6 +144,54 @@ const projectMessageList = (messages, options = {}) =>
     translate: (key, values = {}) => `${key}:${values.count ?? ''}`,
     ...options
   })
+
+assert.equal(
+  hasVisibleWorkflowText('\u200B'),
+  false,
+  'zero-width formatting characters must not count as visible workflow text'
+)
+assert.equal(
+  hasVisibleWorkflowText(' \t\n '),
+  false,
+  'whitespace-only workflow text must not count as visible content'
+)
+assert.equal(
+  hasVisibleWorkflowText('  visible content  '),
+  true,
+  'visible workflow text may include surrounding whitespace'
+)
+
+const zeroWidthThoughtProjection = projectMessageList([
+  {
+    id: 'tool-before-zero-width-thought',
+    role: 'tool',
+    metadata: { tool_call_id: 'tool-before-zero-width-thought', tool_name: 'read_file' },
+    toolDisplay: { summary: 'Read before' }
+  },
+  {
+    id: 'zero-width-thought',
+    role: 'assistant',
+    stepType: 'Think',
+    message: '\u200B',
+    reasoning: ''
+  },
+  {
+    id: 'tool-after-zero-width-thought',
+    role: 'tool',
+    metadata: { tool_call_id: 'tool-after-zero-width-thought', tool_name: 'read_file' },
+    toolDisplay: { summary: 'Read after' }
+  }
+])
+assert.equal(
+  zeroWidthThoughtProjection.length,
+  1,
+  'an invisible Think message must not split adjacent tool activity'
+)
+assert.deepEqual(
+  zeroWidthThoughtProjection[0].groupedTools.map(message => message.id),
+  ['tool-before-zero-width-thought', 'tool-after-zero-width-thought'],
+  'tool activity around an invisible Think message must remain in one group'
+)
 
 assert.deepEqual(
   projectMessageList({ messages: [] }),

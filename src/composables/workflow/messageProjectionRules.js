@@ -1,5 +1,15 @@
 import { isWorkflowMcpTool } from './toolClassification.js'
 
+// Models occasionally emit zero-width formatting characters as an otherwise empty message.
+// They are not removed by String.prototype.trim(), so exclude them from visibility checks.
+const INVISIBLE_WORKFLOW_CHARACTERS = /[\u200B-\u200D\u2060\uFEFF]/g
+
+export const normalizeWorkflowTextForVisibility = value =>
+  String(value ?? '').replace(INVISIBLE_WORKFLOW_CHARACTERS, '')
+
+export const hasVisibleWorkflowText = value =>
+  normalizeWorkflowTextForVisibility(value).trim().length > 0
+
 /**
  * Frontend workflow projection rules that must stay aligned with backend authority.
  *
@@ -952,8 +962,8 @@ export const projectWorkflowMessageList = (
     message?.role === 'assistant' && message?.metadata?.message_kind === 'completion_report'
   const isThinkOnlyAssistantMessage = message =>
     message?.role === 'assistant' &&
-    !removeSystemReminder(message?.message || '').trim() &&
-    !!String(message?.reasoning || '').trim()
+    !hasVisibleWorkflowText(removeSystemReminder(message?.message || '')) &&
+    hasVisibleWorkflowText(message?.reasoning || '')
   const getReadOnlyToolCategory = toolName => {
     if (COLLAPSIBLE_READ_TOOL_NAMES.has(toolName)) return 'read'
     if (COLLAPSIBLE_SEARCH_TOOL_NAMES.has(toolName)) return 'search'
@@ -1135,7 +1145,8 @@ export const projectWorkflowMessageList = (
         call => !groupedToolIds.has(getToolCallId(call))
       )
       const hasAssistantContent = Boolean(
-        String(message?.message || '').trim() || String(message?.reasoning || '').trim()
+        hasVisibleWorkflowText(removeSystemReminder(message?.message || '')) ||
+          hasVisibleWorkflowText(message?.reasoning || '')
       )
       if (message?.role !== 'assistant' || hasAssistantContent || remainingPendingCalls.length > 0) {
         projected.push({ ...message, pendingToolCalls: remainingPendingCalls })
@@ -1154,7 +1165,10 @@ export const projectWorkflowMessageList = (
     if (isCompletionReportMessage(message) || isWorkflowCompletionMessage(message)) return true
     if (isWorkflowExplorationBatchMessage(message)) return true
     if (message.role === 'assistant') {
-      return !isThinkOnlyAssistantMessage(message) && !!removeSystemReminder(message?.message || '').trim()
+      return (
+        !isThinkOnlyAssistantMessage(message) &&
+        hasVisibleWorkflowText(removeSystemReminder(message?.message || ''))
+      )
     }
     return message.role === 'tool' && !getCollapsibleToolGroupKind(message)
   }
@@ -1167,7 +1181,10 @@ export const projectWorkflowMessageList = (
     if (isCompletionReportMessage(message) || isWorkflowCompletionMessage(message)) return true
     if (isWorkflowExplorationBatchMessage(message)) return true
     if (message.role === 'assistant') {
-      return !isThinkOnlyAssistantMessage(message) && !!removeSystemReminder(message?.message || '').trim()
+      return (
+        !isThinkOnlyAssistantMessage(message) &&
+        hasVisibleWorkflowText(removeSystemReminder(message?.message || ''))
+      )
     }
     return message.role === 'tool' && (isApprovalPending(message) || !getCollapsibleToolGroupKind(message))
   }
@@ -1332,8 +1349,16 @@ export const projectWorkflowMessageList = (
       return false
     }
     if (getWorkflowAskUserResponseItems(message).length > 0) return false
-    return removeSystemReminder(message.message || '').trim() === ''
+    return !hasVisibleWorkflowText(removeSystemReminder(message.message || ''))
   }
+
+  const isEmptyAssistantMessage = message =>
+    message?.role === 'assistant' &&
+    !isCollapsedWorkflowToolGroupMessage(message) &&
+    !isCompletionReportMessage(message) &&
+    !hasVisibleWorkflowText(removeSystemReminder(message?.message || '')) &&
+    !hasVisibleWorkflowText(message?.reasoning || '') &&
+    !(message?.pendingToolCalls?.length > 0)
 
   return excludeLeadingManualClearContextMarkers(
     collapseToolActivityGroups(
@@ -1341,7 +1366,9 @@ export const projectWorkflowMessageList = (
         collapseAssistantCompletionPairs(
           collapseRepeatedFinishTaskErrors(
             sourceMessages.filter(
-              message => !isHiddenSystemObservation(message) || isWorkflowManualClearContextMessage(message)
+              message =>
+                (!isHiddenSystemObservation(message) || isWorkflowManualClearContextMessage(message)) &&
+                !isEmptyAssistantMessage(message)
             )
           )
         )

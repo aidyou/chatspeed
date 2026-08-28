@@ -452,12 +452,12 @@ test('execution style popover uses a DOM reference and preserves Agent-scoped ch
 
   assert.match(
     inputArea,
-    /<el-dropdown-item command="skillsConfig"[\s\S]*?<el-popover[\s\S]*?v-model:visible="autoApprovedPopoverVisible"[\s\S]*?placement="right-start"[\s\S]*?<span class="auto-approved-reference">[\s\S]*?<el-dropdown-item class="auto-approved-dropdown-trigger"[\s\S]*?<cs name="caret-right"[\s\S]*?<!-- execution style -->/,
+    /<el-dropdown-item command="skillsConfig"[\s\S]*?<el-popover[\s\S]*?v-model:visible="autoApprovedPopoverVisible"[\s\S]*?placement="right-start"[\s\S]*?<span class="tool-config-reference">[\s\S]*?<el-dropdown-item class="tool-config-dropdown-trigger"[\s\S]*?<cs name="caret-right"[\s\S]*?<!-- execution style -->/,
     'the quick-actions menu must place the auto-approval submenu after Skills and before execution style'
   )
   assert.doesNotMatch(
     inputArea,
-    /<el-dropdown-item class="auto-approved-dropdown-trigger" @click\.stop>/,
+    /<el-dropdown-item class="tool-config-dropdown-trigger" @click\.stop>/,
     'the auto-approval submenu trigger must let click events reach its popover reference'
   )
   assert.match(
@@ -526,15 +526,15 @@ test('message resize observer is hoisted for immediate watchers', async () => {
 })
 
 test('off-bottom readers preserve a message window anchor while new messages render', async () => {
-  const [workflowView, workflowMessages, messageList] = await Promise.all([
-    readFile('src/views/Workflow.vue', 'utf8'),
+  const [workflowSessionPane, workflowMessages, messageList] = await Promise.all([
+    readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
     readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
   ])
 
   assert.match(
-    workflowView,
-    /@message-window-anchor-change="setMessageWindowAnchor"/,
+    workflowSessionPane,
+    /@message-window-anchor-change="messageProjection\.setMessageWindowAnchor"/,
     'the workflow view must pass the reader anchor from the message list to the projection'
   )
   assert.match(
@@ -649,21 +649,21 @@ test('cost analysis interaction is gated by accepted completion and terminal chi
   assert.match(messageList, /getFinishTaskCostExpandId/)
   assert.match(messageList, /finish-task-cost-card/)
   assert.doesNotMatch(messageList, /finish-task-display--in-card/)
-  assert.match(styles, /margin-left: 15px/)
+  assert.match(styles, /margin-left: var\(--cs-space\)/)
   assert.match(styles, /:hover \.finish-task-cost-arrow/)
 })
 
 test('message history loading renders an Element Plus skeleton from the store loading state', async () => {
-  const [messageList, workflowView, workflowStore, styles] = await Promise.all([
+  const [messageList, workflowSessionPane, workflowStore, styles] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
     readFile('src/stores/workflow.js', 'utf8'),
     readFile('src/styles/workflow/messages.scss', 'utf8')
   ])
 
   assert.match(messageList, /v-if="props\.isLoading" class="message-skeleton"/)
   assert.match(messageList, /<el-skeleton animated>/)
-  assert.match(workflowView, /:is-loading="workflowStore\.isLoadingMessages"/)
+  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages"/)
   assert.match(
     workflowStore,
     /const requestRevision = \+\+messageLoadRevision;\s*isLoadingMessages\.value = true;/
@@ -739,7 +739,7 @@ test('tool activity grouping keeps only explicit independent segments as boundar
   )
   assert.match(
     projectionRules,
-    /!removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\) &&\s*!!String\(message\?\.reasoning \|\| ''\)\.trim\(\)/,
+    /!hasVisibleWorkflowText\(removeSystemReminder\(message\?\.message \|\| ''\)\) &&\s*hasVisibleWorkflowText\(message\?\.reasoning \|\| ''\)/,
     'only assistant messages without visible content may be treated as thought-only tool activity'
   )
   assert.doesNotMatch(
@@ -749,7 +749,7 @@ test('tool activity grouping keeps only explicit independent segments as boundar
   )
   assert.match(
     projectionRules,
-    /if \(message\.role === 'assistant'\) \{\s*return !isThinkOnlyAssistantMessage\(message\) && !!removeSystemReminder\(message\?\.message \|\| ''\)\.trim\(\)/,
+    /if \(message\.role === 'assistant'\) \{\s*return \(\s*!isThinkOnlyAssistantMessage\(message\) &&\s*hasVisibleWorkflowText\(removeSystemReminder\(message\?\.message \|\| ''\)\)/,
     'a visible non-thought assistant text message must still split tool groups, while thought text does not'
   )
   assert.match(

@@ -993,7 +993,10 @@
 
               <!-- Thought/Content FIRST (Separate reasoning field has priority) -->
               <div
-                v-else-if="message.reasoning || message.stepType === 'Think'"
+                v-else-if="
+                  hasVisibleWorkflowText(message.reasoning) ||
+                  (message.stepType === 'Think' && hasVisibleWorkflowText(message.message))
+                "
                 class="reasoning-container">
                 <div class="reasoning-header" @click="toggleReasoningForMessage(message)">
                   <cs
@@ -1199,6 +1202,7 @@ import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
   getWorkflowAskUserResponseItems,
+  hasVisibleWorkflowText,
   isCollapsedWorkflowToolGroupMessage,
   isWorkflowContextSnapshotMessage,
   isWorkflowCompletionMessage,
@@ -2042,8 +2046,8 @@ const lastVisibleMessage = computed(
 const hasStreamingThoughtOnly = computed(
   () =>
     props.isChatting &&
-    !String(props.chatState?.content || '').trim() &&
-    !!String(props.chatState?.reasoning || '').trim()
+    !hasVisibleWorkflowText(props.chatState?.content) &&
+    hasVisibleWorkflowText(props.chatState?.reasoning)
 )
 const isStreamingThoughtMergedIntoToolGroup = message =>
   hasStreamingThoughtOnly.value &&
@@ -2064,7 +2068,8 @@ const getStreamingThoughtGroupOrder = message =>
 const shouldShowStandaloneStreamingChat = computed(
   () =>
     props.isChatting &&
-    !!(props.chatState?.content || props.chatState?.reasoning) &&
+    (hasVisibleWorkflowText(props.chatState?.content) ||
+      hasVisibleWorkflowText(props.chatState?.reasoning)) &&
     !isStreamingThoughtMergedIntoToolGroup(lastVisibleMessage.value)
 )
 const isReasoningExpandedForMessage = message => {
@@ -2097,7 +2102,7 @@ const hasThoughtCompleted = message => {
     message === lastVisibleMessage.value &&
     props.isRunning &&
     !props.isChatting &&
-    !!(message.reasoning || message.message)
+    (hasVisibleWorkflowText(message.reasoning) || hasVisibleWorkflowText(message.message))
   ) {
     return true
   }
@@ -2255,7 +2260,7 @@ const isExplorationToolExpanded = (message, groupIndex, toolIndex) =>
 const shouldShowExplorationToolRawContent = tool => {
   if (!tool) return false
   if (tool.sourceMessage) return props.shouldShowToolRawContent(tool.sourceMessage)
-  return !!props.removeSystemReminder(tool.message || '').trim()
+  return hasVisibleWorkflowText(props.removeSystemReminder(tool.message || ''))
 }
 
 const getVisiblePendingApprovalIds = () => {

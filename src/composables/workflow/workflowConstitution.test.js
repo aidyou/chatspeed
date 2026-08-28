@@ -104,7 +104,10 @@ assert.match(
   workflowMessageStyles,
   /&\.ask_user \{[\s\S]*padding: 0;[\s\S]*background: none;[\s\S]*border-radius: 0;/
 )
-assert.match(workflowMessageStyles, /&\.ask_user \{[\s\S]*\.choice-container \{[\s\S]*padding: 5px;/)
+assert.match(
+  workflowMessageStyles,
+  /&\.ask_user \{[\s\S]*\.choice-container \{[\s\S]*padding: var\(--cs-space-xs\);/
+)
 assert.doesNotMatch(messageList, /:action="message\.metadata\?\.tool_name/)
 assert.match(
   messageList,
@@ -132,7 +135,7 @@ assert.match(bashCommandStyles, /\.bash-command \{[\s\S]*background: transparent
 const toolGroupProjectionStart = projectionRules.indexOf('export const projectWorkflowMessageList')
 assert.notEqual(toolGroupProjectionStart, -1, 'missing centralized message-list projection')
 const toolGroupProjection = projectionRules.slice(toolGroupProjectionStart)
-assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName\)/)
+assert.match(toolGroupProjection, /isWorkflowMcpTool\(toolName(?:, getToolCategory\(message\))?\)/)
 assert.match(toolGroupProjection, /mcp_tools/)
 assert.match(projectionRules, /mcp_tools: 'mcp'/)
 assert.match(toolGroupProjection, /mixed_tools/)
@@ -153,7 +156,7 @@ assert.match(
 )
 assert.match(
   toolGroupProjection,
-  /if \(isWorkflowMcpTool\(toolName\)\) return translate\('workflow\.toolGroups\.callMcp'\)/,
+  /if \(isWorkflowMcpTool\(toolName, getToolCategory\(message\)\)\) return translate\('workflow\.toolGroups\.callMcp'\)/,
   'MCP tools must aggregate under the MCP operation label'
 )
 assert.match(
@@ -598,7 +601,7 @@ assert.match(
 )
 assert.match(
   workflowMessages,
-  /workflowStore\.hiddenEarlierMessageCount[\s\S]*loadedHiddenEarlierMessageCount\.value/
+  /workflowSource\.hiddenEarlierMessageCount[\s\S]*loadedHiddenEarlierMessageCount\.value/
 )
 const clearContextEligibility = sourceSection(
   workflowStore,
