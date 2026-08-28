@@ -2337,13 +2337,20 @@ fn reconcile_child_workflows(
             let _ = store.add_workflow_message(&parent_message)?;
 
             if let Some(mut parent_context) = store.get_execution_context(&parent_session_id)? {
+                let parent_workflow_is_terminal = store
+                    .get_workflow(&parent_session_id)?
+                    .and_then(|workflow| workflow.status.parse::<WorkflowState>().ok())
+                    .is_some_and(|state| compat_is_terminal_snapshot_status(&state.to_string()))
+                    || terminal_workflow_state(&parent_context.state).is_some();
                 parent_context
                     .sub_agent_sessions
                     .retain(|existing| existing != &child_id);
                 if parent_context.waiting_on_sub_agent_id.as_deref() == Some(&child_id) {
                     parent_context.waiting_on_sub_agent_id = None;
                     parent_context.wait_reason = None;
-                    parent_context.state = RuntimeState::Pending;
+                    if !parent_workflow_is_terminal {
+                        parent_context.state = RuntimeState::Pending;
+                    }
                 }
                 parent_context
                     .pending_sub_agent_completions
@@ -2363,10 +2370,12 @@ fn reconcile_child_workflows(
                         consumed: true,
                     });
                 store.upsert_execution_context(&parent_context)?;
-                store.update_workflow_status(
-                    &parent_session_id,
-                    &WorkflowState::Pending.to_string(),
-                )?;
+                if !parent_workflow_is_terminal {
+                    store.update_workflow_status(
+                        &parent_session_id,
+                        &WorkflowState::Pending.to_string(),
+                    )?;
+                }
             }
         }
     }
@@ -4188,6 +4197,7 @@ pub async fn workflow_start(
         BackgroundTask::SubAgent {
             owner_session_id: None,
             executor: shared_executor.clone(),
+            lifecycle_factory: None,
             output_accessible: false,
         },
     );
@@ -6433,9 +6443,14 @@ mod tests {
 
         let mut parent_context = ExecutionContext::new("terminal-parent".to_string());
         parent_context.state = RuntimeState::Cancelled;
+        parent_context.waiting_on_sub_agent_id = Some("terminal-parent-child".to_string());
+        parent_context.sub_agent_sessions = vec!["terminal-parent-child".to_string()];
         store
             .upsert_execution_context(&parent_context)
             .expect("failed to persist terminal parent snapshot");
+        store
+            .update_workflow_status("terminal-parent", &WorkflowState::Cancelled.to_string())
+            .expect("failed to persist terminal parent status");
 
         reconcile_child_workflows_for_parent(&store, "terminal-parent")
             .expect("terminal parent reconciliation should be skipped safely");
@@ -6444,11 +6459,18 @@ mod tests {
             .get_workflow("terminal-parent-child")
             .expect("failed to load child workflow")
             .expect("child workflow should exist");
-        assert_eq!(child.status, "pending");
-        assert!(store
-            .list_workflow_events("terminal-parent")
-            .expect("failed to load parent events")
-            .is_empty());
+        assert_eq!(child.status, "cancelled");
+        let parent = store
+            .get_workflow("terminal-parent")
+            .expect("failed to load parent workflow")
+            .expect("parent workflow should exist");
+        assert_eq!(parent.status, "cancelled");
+        let parent_context = store
+            .get_execution_context("terminal-parent")
+            .expect("failed to load parent context")
+            .expect("parent context should exist");
+        assert_eq!(parent_context.state, RuntimeState::Cancelled);
+        assert!(parent_context.wait_reason.is_none());
     }
 
     #[test]

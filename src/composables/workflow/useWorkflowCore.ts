@@ -904,7 +904,6 @@ export function useWorkflowCore({
                 .filter((workflow) => {
                     if (!workflow?.id) return false
                     if (isWorkflowBeingDeleted(workflow.id)) return false
-                    if (workflow.id === activeSessionId) return false
                     const status = String(workflow.status || '').toLowerCase()
                     return status && !TERMINAL_STATUSES.includes(status)
                 })
@@ -931,6 +930,7 @@ export function useWorkflowCore({
                     if (isWorkflowBeingDeleted(sessionId)) return
                     const payload = event.payload
                     if (!payload?.type) return
+                    const isActiveSession = sessionId === (currentWorkflowId.value || currentSessionId.value)
 
                     if (payload.type === 'sub_agent_approval_requested') {
                         const existed = !!pendingApprovalEntries.value[
@@ -963,6 +963,8 @@ export function useWorkflowCore({
                         }
                         return
                     }
+
+                    if (isActiveSession) return
 
                     if (payload.type === 'confirm') {
                         workflowStore.upsertPendingTool(
@@ -1324,24 +1326,6 @@ export function useWorkflowCore({
                         sessionId,
                         payload.current_context_tokens ?? payload.total_tokens,
                         payload.max_context_tokens
-                    )
-                } else if (payload.type === 'sub_agent_approval_requested') {
-                    const existed = !!pendingApprovalEntries.value[
-                        `${payload.sub_agent_id}:${payload.tool_call_id}`
-                    ]
-                    upsertPendingApprovalEntry(payload.parent_session_id, {
-                        id: payload.tool_call_id,
-                        action: payload.tool_name,
-                        targetSessionId: payload.sub_agent_id,
-                        navigationSessionId: payload.parent_session_id,
-                        subAgentId: payload.sub_agent_id
-                    })
-                    if (!existed) playApprovalNotificationSound()
-                } else if (payload.type === 'sub_agent_approval_resolved') {
-                    clearPendingApprovalEntry(
-                        payload.parent_session_id,
-                        payload.tool_call_id,
-                        payload.sub_agent_id
                     )
                 } else if (payload.type === 'sub_agent_progress') {
                     const status = String(payload.status || payload.workflow_state || '').toLowerCase()

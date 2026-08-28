@@ -17,6 +17,18 @@ pub trait Gateway: Send + Sync {
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError>;
 
+    /// Registers the input channel owned by a live workflow session.
+    async fn register_session_input(
+        &self,
+        _session_id: String,
+        _tx: mpsc::Sender<String>,
+    ) -> Result<(), WorkflowEngineError> {
+        Ok(())
+    }
+
+    /// Removes all transport channels owned by a workflow session.
+    async fn unregister_session_input(&self, _session_id: &str) {}
+
     /// This should be called by a Tauri command to inject user input or approvals
     async fn inject_input(
         &self,
@@ -214,6 +226,21 @@ impl TauriGateway {
 
 #[async_trait]
 impl Gateway for TauriGateway {
+    async fn register_session_input(
+        &self,
+        session_id: String,
+        tx: mpsc::Sender<String>,
+    ) -> Result<(), WorkflowEngineError> {
+        self.register_session_tx_with_source(session_id, tx, "sub_agent_factory")
+            .await;
+        Ok(())
+    }
+
+    async fn unregister_session_input(&self, session_id: &str) {
+        self.unregister_session_with_source(session_id, "sub_agent_cleanup")
+            .await;
+    }
+
     async fn send(
         &self,
         session_id: &str,

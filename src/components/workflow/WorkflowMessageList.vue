@@ -1364,7 +1364,7 @@ const emit = defineEmits([
 const messagesRef = ref(null)
 const approvalDrafts = ref({})
 const askUserDrafts = ref({})
-const approvedSubmissionIds = new Set()
+const approvedSubmissionIds = ref(new Set())
 const userMessageOverflowMap = ref({})
 const userMessageCollapsedHeightMap = ref({})
 const AUTO_SCROLL_THRESHOLD = 64
@@ -2118,7 +2118,8 @@ const isApprovalInFlight = message =>
 
 const isToolAwaitingExecution = message => {
   const toolCallId = String(message?.metadata?.tool_call_id || '').trim()
-  const hasApprovedSubmission = approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(message)
+  const hasApprovedSubmission =
+    approvedSubmissionIds.value.has(toolCallId) && isApprovalInFlight(message)
   return isWorkflowToolAwaitingExecution(message, hasApprovedSubmission)
 }
 
@@ -2128,7 +2129,7 @@ const isToolMessageExpanded = message =>
 const isToolGroupItemRunning = tool => {
   const toolCallId = String(tool?.metadata?.tool_call_id || '').trim()
   const hasApprovedSubmission =
-    !!toolCallId && approvedSubmissionIds.has(toolCallId) && isApprovalInFlight(tool)
+    !!toolCallId && approvedSubmissionIds.value.has(toolCallId) && isApprovalInFlight(tool)
   return isWorkflowToolRunningForDisplay(tool, hasApprovedSubmission)
 }
 
@@ -2297,28 +2298,32 @@ const setApprovalDraft = (toolCallId, value) => {
 
 const onApproveTool = toolCallId => {
   if (!toolCallId || props.isBatchApprovalSubmitting) return
-  approvedSubmissionIds.add(toolCallId)
+  approvedSubmissionIds.value = new Set(approvedSubmissionIds.value).add(toolCallId)
   emit('approve-tool', toolCallId)
 }
 
 const onApproveAllTool = toolCallId => {
   if (!toolCallId || props.isBatchApprovalSubmitting) return
-  approvedSubmissionIds.add(toolCallId)
+  approvedSubmissionIds.value = new Set(approvedSubmissionIds.value).add(toolCallId)
   emit('approve-all-tool', toolCallId)
 }
 
 const onRejectTool = toolCallId => {
   if (!toolCallId || props.isBatchApprovalSubmitting) return
-  approvedSubmissionIds.delete(toolCallId)
+  const nextIds = new Set(approvedSubmissionIds.value)
+  nextIds.delete(toolCallId)
+  approvedSubmissionIds.value = nextIds
   emit('reject-tool', toolCallId, getApprovalDraft(toolCallId))
 }
 
 const onApproveAllPending = toolCallId => {
   if (props.isBatchApprovalSubmitting) return
   const pendingToolCallIds = getVisiblePendingApprovalIds()
+  const nextIds = new Set(approvedSubmissionIds.value)
   for (const pendingToolCallId of pendingToolCallIds) {
-    approvedSubmissionIds.add(pendingToolCallId)
+    nextIds.add(pendingToolCallId)
   }
+  approvedSubmissionIds.value = nextIds
   emit('approve-all-pending', {
     startingToolCallId: toolCallId,
     orderedToolCallIds: pendingToolCallIds

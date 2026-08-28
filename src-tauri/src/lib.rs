@@ -810,6 +810,7 @@ pub async fn run() -> crate::error::Result<()> {
                 main_store: main_store.clone(),
                 chat_state: chat_state.clone(),
                 gateway: gateway.clone(),
+                workflow_manager: workflow_manager.clone(),
                 app_data_dir: app.path().app_data_dir().unwrap_or_default(),
                 tsid_generator: tsid_generator.clone(),
             });
