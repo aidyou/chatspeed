@@ -897,13 +897,6 @@ impl OpenAIChat {
                         None,
                     ));
                     log::debug!("dispatching proposed tool call: {}", trimmed_tcd.name);
-                    #[cfg(debug_assertions)]
-                    {
-                        log::debug!(
-                            "tool_call: {}",
-                            serde_json::to_string_pretty(&trimmed_tcd).unwrap_or_default()
-                        );
-                    }
                 }
                 Err(e) => {
                     let err = AiError::ToolCallSerializationFailed {
