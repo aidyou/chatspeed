@@ -1088,12 +1088,17 @@ impl OpenAIChat {
 /// 1. Workflow: `wf_{session_id}` from `WorkflowUsageAttribution`
 /// 2. Chat: `conv_{conversation_id}` from `ChatMetadata.extra`
 /// 3. Fallback: `conv_{chat_id}`
+///
+/// The raw key is then mapped to a deterministic UUID so the wire value has
+/// the same session-shaped UUID format the official Codex client sends (its
+/// `prompt_cache_key` equals `client_metadata.session_id`). The mapping is
+/// stable, so cache affinity per conversation/workflow session is preserved.
 pub(crate) fn build_prompt_cache_key(
     workflow_attribution: Option<&crate::ai::traits::chat::WorkflowUsageAttribution>,
     extra: Option<&serde_json::Map<String, serde_json::Value>>,
     chat_id: &str,
 ) -> Option<String> {
-    workflow_attribution
+    let raw_key = workflow_attribution
         .map(|attr| format!("wf_{}", attr.workflow_session_id))
         .or_else(|| {
             extra
@@ -1101,7 +1106,14 @@ pub(crate) fn build_prompt_cache_key(
                 .and_then(|value| value.as_u64())
                 .map(|id| format!("conv_{id}"))
         })
-        .or_else(|| Some(format!("conv_{chat_id}")))
+        .or_else(|| Some(format!("conv_{chat_id}")))?;
+    Some(
+        uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_DNS,
+            format!("chatspeed:cache:{raw_key}").as_bytes(),
+        )
+        .to_string(),
+    )
 }
 
 fn is_gpt_56_model_id(model_id: &str) -> bool {
@@ -1386,22 +1398,44 @@ mod tests {
             root_task_run_id: "root_run_1".to_string(),
             request_kind: "llm".to_string(),
         };
-        let key = build_prompt_cache_key(Some(&attr), None, "fallback_id");
-        assert_eq!(key, Some("wf_session_abc".to_string()));
+        let key = build_prompt_cache_key(Some(&attr), None, "fallback_id").unwrap();
+        // The key must be a stable, session-shaped UUID (Codex wire format).
+        assert!(uuid::Uuid::parse_str(&key).is_ok());
+        assert_eq!(
+            key,
+            build_prompt_cache_key(Some(&attr), None, "fallback_id").unwrap()
+        );
+        // Workflow keys must differ from plain conversation keys.
+        assert_ne!(
+            key,
+            build_prompt_cache_key(None, None, "fallback_id").unwrap()
+        );
     }
 
     #[test]
     fn build_prompt_cache_key_uses_conversation_id() {
         let mut extra = serde_json::Map::new();
         extra.insert("conversationId".to_string(), json!(12345));
-        let key = build_prompt_cache_key(None, Some(&extra), "fallback_id");
-        assert_eq!(key, Some("conv_12345".to_string()));
+        let key = build_prompt_cache_key(None, Some(&extra), "fallback_id").unwrap();
+        assert!(uuid::Uuid::parse_str(&key).is_ok());
+        assert_eq!(
+            key,
+            build_prompt_cache_key(None, Some(&extra), "fallback_id").unwrap()
+        );
     }
 
     #[test]
     fn build_prompt_cache_key_falls_back_to_chat_id() {
-        let key = build_prompt_cache_key(None, None, "fallback_id");
-        assert_eq!(key, Some("conv_fallback_id".to_string()));
+        let key = build_prompt_cache_key(None, None, "fallback_id").unwrap();
+        assert!(uuid::Uuid::parse_str(&key).is_ok());
+        assert_eq!(
+            key,
+            build_prompt_cache_key(None, None, "fallback_id").unwrap()
+        );
+        assert_ne!(
+            key,
+            build_prompt_cache_key(None, None, "other_id").unwrap()
+        );
     }
 
     #[test]
@@ -1728,12 +1762,23 @@ impl AiChatTrait for OpenAIChat {
             &model_detail.metadata,
             openai_responses::RESPONSES_API_ENABLED,
         );
+        // Cache identity shared by prompt_cache_key, Codex headers and
+        // client_metadata: workflow requests key on the workflow session,
+        // normal chats on the conversation id. Deriving all identity surfaces
+        // from this one seed keeps them stable per conversation/workflow task
+        // so upstream prompt-cache affinity is preserved.
+        let prompt_cache_key = build_prompt_cache_key(
+            merged_metadata.workflow_usage_attribution.as_ref(),
+            merged_metadata.extra.as_ref(),
+            &chat_id,
+        );
         if use_responses_api {
             // Codex-compatible headers so the upstream sees the same client
             // surface as the official Codex CLI. Inserted as defaults only:
             // user-configured custom headers always take precedence (ccproxy
             // re-injects provider metadata headers after forwarding these).
-            for (key, value) in codex_header_helper::codex_responses_headers(&chat_id) {
+            let codex_identity = prompt_cache_key.as_deref().unwrap_or(&chat_id);
+            for (key, value) in codex_header_helper::codex_responses_headers(codex_identity) {
                 if let Some(headers_obj) = headers_json.as_object_mut() {
                     headers_obj.entry(key).or_insert(json!(value));
                 }
@@ -1756,11 +1801,6 @@ impl AiChatTrait for OpenAIChat {
                         .find(|model_config| model_config.id == final_model)
                 }),
             );
-            let prompt_cache_key = build_prompt_cache_key(
-                merged_metadata.workflow_usage_attribution.as_ref(),
-                merged_metadata.extra.as_ref(),
-                &chat_id,
-            );
 
             log::debug!(
                 "use responses api, prompt_cache_key: {:?}",
@@ -1778,6 +1818,12 @@ impl AiChatTrait for OpenAIChat {
                 reasoning_summary,
                 prompt_cache_key: prompt_cache_key.as_deref(),
             });
+            // Codex always sends client_metadata alongside the headers above;
+            // identity fields derive from the same cache identity seed so both
+            // surfaces stay consistent and stable per conversation/workflow.
+            payload["client_metadata"] = codex_header_helper::codex_client_metadata(
+                prompt_cache_key.as_deref().unwrap_or(&chat_id),
+            );
         }
         let selected_endpoint = if use_responses_api {
             openai_responses::responses_endpoint()

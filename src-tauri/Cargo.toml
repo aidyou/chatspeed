@@ -88,7 +88,7 @@ tokio                        = { version = "1.52.2", features = ["full"] }
 tokio-stream                 = "0.1.18"
 tower-http                   = { version = "0.6.8", features = ["cors", "fs"] }
 url                          = "2.5.8"
-uuid                         = { version = "1.23.1", features = ["v4", "v5", "serde"] }
+uuid                         = { version = "1.23.1", features = ["v4", "v5", "v7", "serde"] }
 walkdir                      = "2.5.0"
 whatlang                     = "0.18.0"
 wildmatch                    = "2.6.1"
