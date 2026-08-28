@@ -956,12 +956,21 @@ pub fn should_forward_header(name_str: &str) -> bool {
     }
 
     // 3. Allowlist for specific headers and pattern-based forwarding
+    // `originator` / `thread-id` / `session-id` are session identity headers
+    // sent by Codex CLI clients (and by our internal Responses client); they
+    // participate in upstream prompt-cache routing and must be forwarded.
+    // `chatgpt-account-id` is intentionally NOT forwarded: Codex only sends it
+    // with ChatGPT OAuth credentials, while ccproxy authenticates upstream with
+    // API keys, so forwarding it would be inconsistent with the Authorization
+    // header.
     return name_str == "x-request-id"
         || name_str == "user-agent"
         || name_str == "accept-language"
         || name_str == "http-referer"
         || name_str == "conversation-id"
         || name_str == "session-id"
+        || name_str == "thread-id"
+        || name_str == "originator"
         || name_str == "traceparent"
         || name_str.starts_with("cs-")
         || (name_str.starts_with("x-") && !name_str.starts_with("x-api-"));

@@ -144,6 +144,14 @@ pub(crate) fn build_responses_payload(ctx: ResponsesRequestContext<'_>) -> Value
         "model": ctx.model,
         "input": convert_messages_to_responses_input(ctx.messages),
         "stream": ctx.stream,
+        // Fields the official Codex client always sends on the Responses API.
+        // `store: false` matters most: omitting it makes OpenAI default to
+        // storing the conversation server-side. A user-provided `tool_choice`
+        // (merged below) still overrides the "auto" default.
+        "store": false,
+        "include": ["reasoning.encrypted_content"],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
     });
 
     if let Some(instructions) = collect_instructions(ctx.messages) {

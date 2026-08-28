@@ -24,6 +24,7 @@ use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
 
+use super::codex_header_helper;
 use super::openai_responses::{self, ResponsesRequestContext};
 
 #[cfg(test)]
@@ -1720,13 +1721,6 @@ impl AiChatTrait for OpenAIChat {
             }
         }
 
-        let config = ApiConfig::new(
-            Some(url),
-            Some(internal_api_key),
-            crate::ai::network::ProxyType::None, // No proxy, as we are calling localhost
-            Some(headers_json),
-        );
-
         let base_endpoint =
             Self::get_endpoint(&messages, &tools, &model_detail.models, &final_model);
         let use_responses_api = Self::should_use_responses_api(
@@ -1734,6 +1728,25 @@ impl AiChatTrait for OpenAIChat {
             &model_detail.metadata,
             openai_responses::RESPONSES_API_ENABLED,
         );
+        if use_responses_api {
+            // Codex-compatible headers so the upstream sees the same client
+            // surface as the official Codex CLI. Inserted as defaults only:
+            // user-configured custom headers always take precedence (ccproxy
+            // re-injects provider metadata headers after forwarding these).
+            for (key, value) in codex_header_helper::codex_responses_headers(&chat_id) {
+                if let Some(headers_obj) = headers_json.as_object_mut() {
+                    headers_obj.entry(key).or_insert(json!(value));
+                }
+            }
+        }
+
+        let config = ApiConfig::new(
+            Some(url),
+            Some(internal_api_key),
+            crate::ai::network::ProxyType::None, // No proxy, as we are calling localhost
+            Some(headers_json),
+        );
+
         if use_responses_api {
             let reasoning_summary = responses_reasoning_summary(
                 responses_summary_model_config.as_ref().or_else(|| {

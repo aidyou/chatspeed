@@ -218,12 +218,20 @@ async fn direct_forward_responses(
         reqwest::header::CONTENT_TYPE,
         reqwest::header::HeaderValue::from_static("application/json"),
     );
-    reqwest_headers.insert(
-        reqwest::header::ACCEPT,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
 
     let body_json = prepare_direct_responses_body(&client_request_body, &proxy_model.model)?;
+
+    // Mirror the client's streaming intent: Codex always sends
+    // `Accept: text/event-stream` for streaming Responses requests.
+    let accept_value = if body_json.get("stream").and_then(Value::as_bool) == Some(true) {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    reqwest_headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static(accept_value),
+    );
 
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to serialize Responses request body: {}", e))
