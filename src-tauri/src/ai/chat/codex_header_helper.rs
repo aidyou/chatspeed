@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 /// Originator advertised by the Codex CLI Rust client.
 const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 
-/// Codex CLI version as reported by the reference source tree
-/// (codex-rs workspace `CARGO_PKG_VERSION`; source builds report 0.0.0).
-const CODEX_VERSION: &str = "0.0.0";
+/// Codex CLI version advertised in the User-Agent. Defaults to a current
+/// release version; update when the mimicked client moves forward.
+const CODEX_VERSION: &str = "0.150.1";
 
 /// Terminal token used by Codex when no terminal can be detected. ChatSpeed
 /// is a desktop app, so Codex's terminal detection would not find a terminal
@@ -209,7 +209,7 @@ mod tests {
             .find(|(name, _)| name == "user-agent")
             .map(|(_, value)| value.as_str())
             .unwrap();
-        assert!(user_agent.starts_with("codex_cli_rs/0.0.0 ("));
+        assert!(user_agent.starts_with("codex_cli_rs/0.150.1 ("));
         assert!(user_agent.contains(std::env::consts::ARCH));
 
         // session-id and thread-id must equal the seed (prompt_cache_key).
