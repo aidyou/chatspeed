@@ -2265,15 +2265,25 @@ const shouldShowExplorationToolRawContent = tool => {
 }
 
 const getVisiblePendingApprovalIds = () => {
+  const pendingIds = (props.pendingApprovalIds || [])
+    .map(id => String(id || '').trim())
+    .filter(Boolean)
+  const pendingIdSet = new Set(pendingIds)
   const orderedIds = []
   const seen = new Set()
 
+  // Keep message order for a stable user-facing batch sequence, but use the
+  // canonical pending ID set as the complete target collection.
   for (const message of visibleMessages.value || []) {
     const toolCallId = getMessageToolCallId(message)
-    if (!toolCallId || seen.has(toolCallId)) continue
-    if (!isApprovalPending(message)) continue
-    if (!shouldShowApprovalDialog(message)) continue
+    if (!toolCallId || seen.has(toolCallId) || !pendingIdSet.has(toolCallId)) continue
 
+    seen.add(toolCallId)
+    orderedIds.push(toolCallId)
+  }
+
+  for (const toolCallId of pendingIds) {
+    if (seen.has(toolCallId)) continue
     seen.add(toolCallId)
     orderedIds.push(toolCallId)
   }
@@ -2281,7 +2291,7 @@ const getVisiblePendingApprovalIds = () => {
   return orderedIds
 }
 
-const inlineBulkApprovalCount = computed(() => getVisiblePendingApprovalIds().length)
+const inlineBulkApprovalCount = computed(() => props.pendingCount)
 
 const getApprovalDraft = toolCallId => {
   if (!toolCallId) return ''
@@ -3592,7 +3602,6 @@ defineExpose({
   margin-bottom: 0;
   padding-top: var(--cs-space-sm);
   animation: tool-expand-enter 0.16s ease-out both;
-  will-change: opacity, transform;
 }
 
 .shell-execution-route-badge {
@@ -3618,7 +3627,6 @@ defineExpose({
 
 .tool-detail--expanded {
   animation: tool-expand-enter 0.16s ease-out both;
-  will-change: opacity, transform;
 }
 
 @keyframes tool-expand-enter {
@@ -3637,7 +3645,6 @@ defineExpose({
   .collapsed-tool-group__body,
   .tool-detail--expanded {
     animation: none;
-    will-change: auto;
   }
 }
 

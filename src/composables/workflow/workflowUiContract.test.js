@@ -246,6 +246,42 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionMessages, /workflow:\/\/event\/\$\{targetSessionId\}/, 'child pane must listen to its own channel')
   assert.doesNotMatch(sessionMessages, /selectWorkflow\(/, 'child pane must not replace the root selection')
   assert.match(workflowCore, /targetSessionId: payload\.sub_agent_id,[\s\S]*?navigationSessionId: payload\.parent_session_id/)
+  assert.match(
+    messageList,
+    /const inlineBulkApprovalCount = computed\(\(\) => props\.pendingCount\)/,
+    'the bulk approval count must follow the canonical pending ID count instead of rendered message timing'
+  )
+  assert.match(
+    messageList,
+    /const pendingIdSet = new Set\(pendingIds\)[\s\S]*?pendingIdSet\.has\(toolCallId\)/,
+    'bulk approval ordering must be constrained by the canonical pending ID set'
+  )
+  assert.match(
+    workflowCore,
+    /const handleSubAgentApprovalRequested = payload =>[\s\S]*?playApprovalNotificationSound\(\)/,
+    'sub-agent approval requests must use the shared reminder and notification path'
+  )
+  assert.match(
+    workflowCore,
+    /if \(payload\.type === 'sub_agent_approval_requested'\) \{\s*handleSubAgentApprovalRequested\(payload\)/,
+    'active workflow listeners must process bridged sub-agent approvals'
+  )
+  assert.match(
+    workflowCore,
+    /workflowStore\.clearApprovalSubmission\(sessionId, payload\.tool_call_id\)/,
+    'background approval resolution must clear local submission state'
+  )
+  assert.match(
+    workflowCore,
+    /if \(workflow\.id === activeSessionId\) return false/,
+    'the active workflow must have one authoritative event listener'
+  )
+  assert.match(sessionPane, /:pending-count="resolvedPendingApprovalIds\.length"/)
+  assert.match(
+    engine,
+    /SubAgentApprovalRequested \{[\s\S]*?arguments: arguments\.clone\(\),[\s\S]*?details: details\.clone\(\)/,
+    'sub-agent approval bridges must preserve structured approval payloads'
+  )
   assert.match(workflowCore, /const clearPendingApprovalEntriesBySubAgent = subAgentId =>/)
   assert.match(workflowCore, /nextEntries\[key\]\?\.subAgentId !== normalizedSubAgentId/)
   assert.match(workflowCore, /sub_agent_progress[\s\S]*?clearPendingApprovalEntriesBySubAgent\(payload\.sub_agent_id\)/)
