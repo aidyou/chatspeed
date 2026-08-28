@@ -171,7 +171,7 @@ function buildHistoryMessages(historyMessages) {
       if (message.role === 'assistant') {
         // Handle assistant messages with potential tool calls
         const cleanContent = message.content
-          .replace(/<think>[\s\S]*?<\/think>/, '') // remove first reasonning content
+          .replace(/<think>[\s\S]*?<\/think>/, '') // remove first reasoning content
           .replace(/<!--\[ToolCalls\]-->/g, '')
         const toolCalls = message.metadata?.toolCall
 
