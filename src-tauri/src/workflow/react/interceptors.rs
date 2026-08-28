@@ -2917,19 +2917,19 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             );
         }
 
-        self.gateway
-            .send(
-                &self.session_id,
-                GatewayPayload::Confirm {
-                    id: id.to_string(),
-                    action: name.to_string(),
-                    tool_name: name.to_string(),
-                    arguments: args.clone(),
-                    details: details_value,
-                    display_type: Some(display_type.clone()),
-                },
-            )
-            .await?;
+        // Route through the canonical UI dispatch path so a sub-agent Confirm is
+        // bridged to the parent session as SubAgentApprovalRequested; sending via
+        // the gateway directly would bypass that bridge and leave the parent UI
+        // (top-bar reminder, notification sound) unaware until a refresh.
+        self.dispatch_ui_payload(GatewayPayload::Confirm {
+            id: id.to_string(),
+            action: name.to_string(),
+            tool_name: name.to_string(),
+            arguments: args.clone(),
+            details: details_value,
+            display_type: Some(display_type.clone()),
+        })
+        .await?;
 
         // 4. Return a 'waiting' result to the engine loop.
         // Use standard title generation to match the UI screenshot provided.

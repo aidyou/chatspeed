@@ -1672,7 +1672,7 @@ impl WorkflowExecutor {
         executor
     }
 
-    async fn dispatch_ui_payload(
+    pub(crate) async fn dispatch_ui_payload(
         &self,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
