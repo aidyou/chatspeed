@@ -374,11 +374,7 @@
             <el-input v-model="modelConfigForm.group" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
-            <el-select v-model="modelConfigForm.reasoning" style="width: 100%">
-              <el-option :label="$t('settings.model.unset')" :value="null" />
-              <el-option :label="$t('settings.model.enabled')" :value="true" />
-              <el-option :label="$t('settings.model.disabled')" :value="false" />
-            </el-select>
+            <el-switch v-model="modelConfigForm.reasoning" />
           </el-form-item>
           <el-form-item v-if="isGpt56ModelId(modelConfigForm.id)"
             :label="$t('settings.model.responsesReasoningSummary')" prop="reasoningSummary">
@@ -396,18 +392,10 @@
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
-            <el-select v-model="modelConfigForm.functionCall" style="width: 100%">
-              <el-option :label="$t('settings.model.unset')" :value="null" />
-              <el-option :label="$t('settings.model.enabled')" :value="true" />
-              <el-option :label="$t('settings.model.disabled')" :value="false" />
-            </el-select>
+            <el-switch v-model="modelConfigForm.functionCall" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
-            <el-select v-model="modelConfigForm.imageInput" style="width: 100%">
-              <el-option :label="$t('settings.model.unset')" :value="null" />
-              <el-option :label="$t('settings.model.enabled')" :value="true" />
-              <el-option :label="$t('settings.model.disabled')" :value="false" />
-            </el-select>
+            <el-switch v-model="modelConfigForm.imageInput" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
@@ -538,7 +526,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 const { t } = useI18n()
@@ -1136,15 +1124,15 @@ const createDefaultModelConfig = () => ({
   id: '',
   name: '',
   group: '',
-  functionCall: null,
-  reasoning: null,
+  functionCall: false,
+  reasoning: false,
   reasoningSummary: 'none',
   thinking: null,
   thinkingLevel: 'low',
-  imageInput: null,
-  contextSize: null,
-  temperature: null,
-  maxTokens: null,
+  imageInput: false,
+  contextSize: 128000,
+  temperature: -0.1,
+  maxTokens: 0,
   pricing: createDefaultPricing(),
   customParams: []
 })
@@ -1169,9 +1157,22 @@ const modelThinkingLevelOptions = [
   { value: 'high', label: 'settings.model.reasoningHigh' },
   { value: 'max', label: 'settings.model.reasoningMax' }
 ]
+const modelAliasFromId = (value, fallback = '') => {
+  const source = String(value || fallback || '').trim()
+  return source.split(/[\/@]/).pop() || source
+}
+const thinkingLevelFromCatalog = profile => {
+  const effort = profile?.reasoning?.defaultEffort
+  if (effort === 'low' || effort === 'minimal') return 'low'
+  if (effort === 'medium') return 'medium'
+  if (effort === 'high') return 'high'
+  if (effort === 'max' || effort === 'xhigh') return 'max'
+  return profile?.capabilities?.reasoning ? 'medium' : 'low'
+}
 const modelConfigRules = {
   id: [{ required: true, message: t('settings.model.modelIdRequired') }]
 }
+const modelConfigDialogVisible = ref(false)
 const prevModelConfigId = ref('')
 const modelConfigForm = ref(createDefaultModelConfig())
 const modelConfigActiveTab = ref('basic')
@@ -1208,23 +1209,15 @@ const resolveNewModelCatalog = async () => {
       modelCatalogResolveSignature() !== signature
     ) return
     const capabilities = profile.capabilities || {}
-    if (modelConfigForm.value.reasoning == null && capabilities.reasoning != null) {
-      modelConfigForm.value.reasoning = capabilities.reasoning
-    }
-    if (modelConfigForm.value.functionCall == null && capabilities.functionCall != null) {
-      modelConfigForm.value.functionCall = capabilities.functionCall
-    }
-    if (modelConfigForm.value.imageInput == null && capabilities.imageInput != null) {
-      modelConfigForm.value.imageInput = capabilities.imageInput
-    }
-    if (modelConfigForm.value.contextSize == null && profile.contextSize != null) {
-      modelConfigForm.value.contextSize = profile.contextSize
-    }
-    if (modelConfigForm.value.maxTokens == null && profile.maxOutputTokens != null) {
-      modelConfigForm.value.maxTokens = profile.maxOutputTokens
-    }
-    if (modelConfigForm.value.temperature == null && profile.recommendedTemperature != null) {
-      modelConfigForm.value.temperature = profile.recommendedTemperature
+    modelConfigForm.value.reasoning = capabilities.reasoning ?? false
+    modelConfigForm.value.functionCall = capabilities.functionCall ?? false
+    modelConfigForm.value.imageInput = capabilities.imageInput ?? false
+    modelConfigForm.value.contextSize = profile.contextSize ?? 128000
+    modelConfigForm.value.maxTokens = profile.maxOutputTokens ?? 0
+    modelConfigForm.value.temperature = profile.recommendedTemperature ?? -0.1
+    modelConfigForm.value.thinkingLevel = thinkingLevelFromCatalog(profile)
+    if (!modelConfigForm.value.name) {
+      modelConfigForm.value.name = modelAliasFromId(modelId)
     }
   } catch (error) {
     console.warn('Model catalog resolution failed:', error)
@@ -1232,11 +1225,9 @@ const resolveNewModelCatalog = async () => {
 }
 const modelGroups = computed(() => {
   return modelForm.value.models.reduce((groups, x) => {
-    if (!x.group) {
-      x.group = t('settings.model.ungrouped')
-    }
-    groups[x.group] = groups[x.group] || []
-    groups[x.group].push(x)
+    const group = x.group || t('settings.model.ungrouped')
+    groups[group] = groups[group] || []
+    groups[group].push(x)
     return groups
   }, {})
 })
@@ -1297,7 +1288,7 @@ const updateModelConfig = () => {
   const updatedModelConfig = {
     ...modelConfigForm.value,
     id: trimmedId,
-    name: modelConfigForm.value.name?.trim() || trimmedId,
+    name: modelConfigForm.value.name?.trim() || modelAliasFromId(trimmedId),
     group: modelConfigForm.value.group?.trim() || '',
     thinking: modelConfigForm.value.reasoning
       ? {
@@ -1494,28 +1485,52 @@ const onProviderModelSelected = id => {
   }
 }
 
-const onProviderModelSave = () => {
+const onProviderModelSave = async () => {
   if (!fetchedProviderModels.value.length) return
   const selectedModels = Object.keys(providerModelSelected.value)
   if (!selectedModels.length) {
     showMessage(t('settings.model.noModelSelected'), 'error')
     return
   }
-  const modelsToAdd = fetchedProviderModels.value
-    .filter(model => providerModelSelected.value[model.id])
-    .map(model => ({
-      id: model.id.trim(),
-      name: model.name,
-      group: model.family || t('settings.model.ungrouped'),
-      reasoning: model.reasoning ?? null,
-      thinking: null,
-      functionCall: model.functionCall ?? null,
-      imageInput: model.imageInput ?? null,
-      contextSize: model.maxInputTokens ?? null,
-      temperature: model.recommendedTemperature ?? null,
-      maxTokens: model.maxOutputTokens ?? null
-    }))
-  console.log('modelsToAdd', modelsToAdd)
+  const selectedProviderModels = fetchedProviderModels.value.filter(
+    model => providerModelSelected.value[model.id]
+  )
+  const modelsToAdd = await Promise.all(
+    selectedProviderModels.map(async model => {
+      let profile = null
+      try {
+        profile = await modelStore.resolveModelProfile(
+          model.id.trim(),
+          modelForm.value.baseUrl,
+          modelForm.value.apiProtocol,
+          modelForm.value.metadata
+        )
+      } catch (error) {
+        console.warn(`Model catalog resolution failed for ${model.id}:`, error)
+      }
+      const capabilities = profile?.capabilities || {}
+      const thinkingLevel = thinkingLevelFromCatalog(profile)
+      return {
+        id: model.id.trim(),
+        name: modelAliasFromId(model.id, model.name),
+        group: model.family || '',
+        reasoning: capabilities.reasoning ?? false,
+        thinking: capabilities.reasoning
+          ? {
+            type: 'enabled',
+            budgetTokens: budgetFromThinkingLevel(thinkingLevel)
+          }
+          : null,
+        functionCall: capabilities.functionCall ?? false,
+        imageInput: capabilities.imageInput ?? false,
+        contextSize: profile?.contextSize ?? 128000,
+        temperature: profile?.recommendedTemperature ?? -0.1,
+        maxTokens: profile?.maxOutputTokens ?? 0,
+        pricing: createDefaultPricing(),
+        customParams: []
+      }
+    })
+  )
   if (modelsToAdd.length) {
     modelForm.value.models.push(...modelsToAdd)
   }
