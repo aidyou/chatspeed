@@ -16,8 +16,17 @@
       },
       "family": "deepseek",
       "capabilities": { "reasoning": true, "functionCall": true },
+      "contextSize": 1000000,
+      "maxOutputTokens": 384000,
       "reasoning": { "supportedEfforts": ["none", "low", "high", "max"], "defaultEffort": "high" },
-      "sources": [{ "url": "docs/reasoning/deepseek.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://api-docs.deepseek.com/quick_start/pricing/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "deepseek-vision-exp",
+      "priority": 150,
+      "match": { "model": ["deepseek-v4-flash-vision-exp*", "deepseek/deepseek-v4-flash-vision-exp*"] },
+      "capabilities": { "imageInput": true },
+      "sources": [{ "url": "https://api-docs.deepseek.com/quick_start/pricing/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "qwen-vision-family",
@@ -32,8 +41,9 @@
       "match": { "model": ["qwen-qwq*", "qwq*"] },
       "family": "qwen",
       "capabilities": { "reasoning": true },
+      "contextSize": 128000,
       "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
-      "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "qwen3-thinking-family",
@@ -42,7 +52,7 @@
       "family": "qwen",
       "capabilities": { "reasoning": true, "functionCall": true },
       "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
-      "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "qwen-thinking-default-off-family",
@@ -51,7 +61,113 @@
       "family": "qwen",
       "capabilities": { "reasoning": true, "functionCall": true },
       "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "none" },
-      "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.8-max",
+      "priority": 200,
+      "match": { "model": ["qwen3.8-max*"] },
+      "contextSize": 1000000,
+      "maxOutputTokens": 131072,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.8-flash-family",
+      "priority": 200,
+      "match": { "model": ["qwen3.8-flash*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.7-family",
+      "priority": 200,
+      "match": { "model": ["qwen3.7-*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.6-family",
+      "priority": 200,
+      "match": { "model": ["qwen3.6-plus*", "qwen3.6-flash*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.6-max-preview",
+      "priority": 200,
+      "match": { "model": ["qwen3.6-max-preview*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.5-family",
+      "priority": 200,
+      "match": { "model": ["qwen3.5-plus*", "qwen3.5-flash*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3.5-256k-family",
+      "priority": 200,
+      "match": { "model": ["qwen3.5-397b-a17b*", "qwen3.5-122b-a10b*", "qwen3.5-27b*", "qwen3.5-35b-a3b*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3-max-family",
+      "priority": 200,
+      "match": { "model": ["qwen3-max*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3-open-family",
+      "priority": 200,
+      "match": { "model": ["qwen3-235b*", "qwen3-next*", "qwen3-32b*", "qwen3-30b*", "qwen3-14b*", "qwen3-8b*"] },
+      "contextSize": 128000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3-coder-family",
+      "priority": 200,
+      "match": { "model": ["qwen3-coder-plus*", "qwen3-coder-flash*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen3-coder-next-family",
+      "priority": 200,
+      "match": { "model": ["qwen3-coder-next*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen-plus-flash-family",
+      "priority": 200,
+      "match": { "model": ["qwen-plus*", "qwen-flash*"] },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen-turbo-family",
+      "priority": 200,
+      "match": { "model": ["qwen-turbo*"] },
+      "contextSize": 128000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen-max-family",
+      "priority": 200,
+      "match": { "model": ["qwen-max*"] },
+      "contextSize": 32000,
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "qwen-omni-multimodal",
+      "priority": 200,
+      "match": { "model": ["qwen3.5-omni-plus*", "qwen3.8-max*", "qwen3.7-plus*"] },
+      "capabilities": { "imageInput": true },
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "hunyuan-hy4-preview",
@@ -59,17 +175,21 @@
       "match": { "model": ["hy4-preview", "hunyuan/hy4-preview", "hunyuan-hy4-preview"] },
       "family": "hunyuan",
       "capabilities": { "reasoning": true, "functionCall": true },
+      "contextSize": 1000000,
+      "maxOutputTokens": 64000,
       "recommendedTemperature": 0.9,
       "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
-      "sources": [{ "url": "docs/reasoning/hy.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "hunyuan-hy3-family",
       "priority": 100,
       "match": { "model": ["hy3", "hy3-preview", "hunyuan/hy3", "hunyuan/hy3-preview"] },
       "family": "hunyuan",
-      "capabilities": { "reasoning": true },
-      "sources": [{ "url": "docs/reasoning/hy.md", "verifiedAt": "2026-08-28" }]
+      "capabilities": { "reasoning": true, "functionCall": true },
+      "contextSize": 256000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "mistral-reasoning-family",
@@ -91,6 +211,24 @@
       "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
     },
     {
+      "id": "minimax-m3-family",
+      "priority": 200,
+      "match": { "model": ["minimax-m3*", "minimax/minimax-m3*"] },
+      "family": "minimax",
+      "capabilities": { "functionCall": true, "imageInput": true },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "minimax-m2-family",
+      "priority": 200,
+      "match": { "model": ["minimax-m2*", "minimax/minimax-m2*"] },
+      "family": "minimax",
+      "contextSize": 200000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
       "id": "mimo-reasoning-family",
       "priority": 100,
       "match": { "model": ["mimo-v*", "mimo-vl*", "xiaomi/mimo-v*", "xiaomi/mimo-vl*"] },
@@ -98,6 +236,14 @@
       "capabilities": { "reasoning": true, "functionCall": true },
       "recommendedTemperature": 1.0,
       "sources": [{ "url": "docs/reasoning/mimo.md", "verifiedAt": "2026-08-28" }]
+    },
+    {
+      "id": "mimo-v2-family",
+      "priority": 200,
+      "match": { "model": ["mimo-v2*", "xiaomi/mimo-v2*"] },
+      "contextSize": 1000000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "glm-reasoning-family",
@@ -125,6 +271,50 @@
       "sources": [{ "url": "docs/reasoning/glm.md", "verifiedAt": "2026-08-28" }]
     },
     {
+      "id": "glm-5.2-family",
+      "priority": 200,
+      "match": { "model": ["glm-5.2*", "z-ai/glm-5.2*"] },
+      "contextSize": 1000000,
+      "maxOutputTokens": 128000,
+      "recommendedTemperature": 1.0,
+      "sources": [{ "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "glm-5.3-family",
+      "priority": 200,
+      "match": { "model": ["glm-5.3*", "z-ai/glm-5.3*"] },
+      "contextSize": 1000000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "glm-5.3-flash-family",
+      "priority": 200,
+      "match": { "model": ["glm-5.3-flash*", "z-ai/glm-5.3-flash*"] },
+      "capabilities": { "imageInput": true },
+      "contextSize": 1000000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "glm-5-family",
+      "priority": 200,
+      "match": {
+        "model": ["glm-5", "glm-5-turbo*", "glm-5.1*", "glm-5v-turbo*", "z-ai/glm-5", "z-ai/glm-5-turbo*", "z-ai/glm-5.1*", "z-ai/glm-5v-turbo*"]
+      },
+      "contextSize": 200000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "glm-4.7-family",
+      "priority": 200,
+      "match": { "model": ["glm-4.7*", "z-ai/glm-4.7*"] },
+      "contextSize": 200000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
       "id": "kimi-reasoning-family",
       "priority": 100,
       "match": { "model": ["kimi-k2*", "kimi-k3*", "moonshotai/kimi-*"] },
@@ -140,6 +330,47 @@
       "sources": [{ "url": "docs/reasoning/kimi.md", "verifiedAt": "2026-08-28" }]
     },
     {
+      "id": "kimi-k3-family",
+      "priority": 200,
+      "match": { "model": ["kimi-k3*", "moonshotai/kimi-k3*"] },
+      "capabilities": { "imageInput": true },
+      "contextSize": 1000000,
+      "maxOutputTokens": 1000000,
+      "recommendedTemperature": 1.0,
+      "sources": [{ "url": "https://platform.kimi.com/docs/overview", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "kimi-k2-family",
+      "priority": 200,
+      "match": { "model": ["kimi-k2*", "moonshotai/kimi-k2*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "kimi-k2.7-family",
+      "priority": 200,
+      "match": { "model": ["kimi-k2.7-code*", "moonshotai/kimi-k2.7-code*"] },
+      "capabilities": { "imageInput": true },
+      "maxOutputTokens": 256000,
+      "recommendedTemperature": 1.0,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "kimi-k2.6-family",
+      "priority": 200,
+      "match": { "model": ["kimi-k2.6*", "moonshotai/kimi-k2.6*"] },
+      "capabilities": { "imageInput": true },
+      "maxOutputTokens": 256000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "kimi-k2.5-family",
+      "priority": 200,
+      "match": { "model": ["kimi-k2.5*", "moonshotai/kimi-k2.5*"] },
+      "maxOutputTokens": 16000,
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
+    },
+    {
       "id": "stepfun-reasoning-family",
       "priority": 100,
       "match": { "model": ["step-*"] },
@@ -152,8 +383,16 @@
       "id": "stepfun-flash-multimodal",
       "priority": 200,
       "match": { "model": ["step-3.7-flash*", "stepfun/step-3.7-flash*"] },
-      "capabilities": { "imageInput": true },
-      "sources": [{ "url": "docs/reasoning/stepfun.md", "verifiedAt": "2026-08-28" }]
+      "capabilities": { "imageInput": true, "functionCall": true },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "stepfun-3.5-family",
+      "priority": 200,
+      "match": { "model": ["step-3.5*", "stepfun/step-3.5*"] },
+      "contextSize": 256000,
+      "sources": [{ "url": "https://platform.stepfun.com/docs/zh/guides/models/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "doubao-reasoning-family",
@@ -169,6 +408,22 @@
       "family": "doubao",
       "capabilities": { "reasoning": true },
       "sources": [{ "url": "docs/reasoning/doubao.md", "verifiedAt": "2026-08-28" }]
+    },
+    {
+      "id": "doubao-seed-1.6-family",
+      "priority": 200,
+      "match": {
+        "model": [
+          "doubao-seed-1.6*",
+          "doubao-seed-1-6*",
+          "ByteDance/doubao-seed-1.6*",
+          "ByteDance/doubao-seed-1-6*"
+        ]
+      },
+      "capabilities": { "functionCall": true, "imageInput": true },
+      "contextSize": 256000,
+      "maxOutputTokens": 32000,
+      "sources": [{ "url": "https://www.volcengine.com/docs/82379/1554680", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "sensenova-reasoning-family",
@@ -190,6 +445,73 @@
       "sources": [{ "url": "docs/reasoning/openai.md", "verifiedAt": "2026-08-28" }]
     },
     {
+      "id": "gpt-5-flagship-family",
+      "priority": 200,
+      "match": { "model": ["gpt-5.4", "gpt-5.4-pro*", "gpt-5.5*", "gpt-5.6*"] },
+      "contextSize": 1050000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "gpt-5-standard-family",
+      "priority": 200,
+      "match": {
+        "model": ["gpt-5", "gpt-5-mini*", "gpt-5-nano*", "gpt-5.1*", "gpt-5.2*", "gpt-5.3*", "gpt-5.4-mini*", "gpt-5.4-nano*"]
+      },
+      "contextSize": 400000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "gpt-5-chat-preview-family",
+      "priority": 210,
+      "match": { "model": ["gpt-5-chat*", "gpt-5.1-chat*", "gpt-5.2-chat*", "gpt-5.3-chat*"] },
+      "contextSize": 128000,
+      "maxOutputTokens": 16384,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "openai-o1",
+      "priority": 200,
+      "match": { "model": ["o1", "o1-2024-12-17*", "openai/o1", "openai/o1-2024-12-17*"] },
+      "contextSize": 200000,
+      "maxOutputTokens": 100000,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "openai-o1-mini",
+      "priority": 200,
+      "match": { "model": ["o1-mini*", "openai/o1-mini*"] },
+      "contextSize": 128000,
+      "maxOutputTokens": 65536,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "openai-o1-preview",
+      "priority": 200,
+      "match": { "model": ["o1-preview*", "openai/o1-preview*"] },
+      "contextSize": 128000,
+      "maxOutputTokens": 32768,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "openai-o3-family",
+      "priority": 200,
+      "match": { "model": ["o3", "o3-mini*", "openai/o3", "openai/o3-mini*"] },
+      "contextSize": 200000,
+      "maxOutputTokens": 100000,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "openai-o4-family",
+      "priority": 200,
+      "match": { "model": ["o4-mini*", "openai/o4-mini*"] },
+      "capabilities": { "imageInput": true },
+      "contextSize": 200000,
+      "maxOutputTokens": 100000,
+      "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
+    },
+    {
       "id": "claude-opus-thinking-family",
       "priority": 100,
       "match": {
@@ -207,13 +529,96 @@
       "sources": [{ "url": "docs/reasoning/claude.md", "verifiedAt": "2026-08-28" }]
     },
     {
+      "id": "claude-1m-family",
+      "priority": 200,
+      "match": {
+        "model": [
+          "claude-opus-5*",
+          "claude-opus-4.6*",
+          "claude-opus-4.7*",
+          "claude-opus-4.8*",
+          "claude-sonnet-5*",
+          "claude-sonnet-4.6*",
+          "claude-fable-5*",
+          "claude-mythos-5*"
+        ]
+      },
+      "contextSize": 1000000,
+      "maxOutputTokens": 128000,
+      "sources": [{ "url": "https://platform.claude.com/docs/en/models/overview", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "claude-4.5-family",
+      "priority": 200,
+      "match": { "model": ["claude-opus-4.5*", "claude-sonnet-4.5*"] },
+      "contextSize": 200000,
+      "maxOutputTokens": 64000,
+      "sources": [{ "url": "https://platform.claude.com/docs/en/models/overview", "verifiedAt": "2026-08-29" }]
+    },
+    {
       "id": "gemini-thinking-family",
       "priority": 100,
       "match": { "model": ["gemini-2.5-*", "gemini-3*"] },
       "family": "gemini",
       "capabilities": { "reasoning": true, "functionCall": true },
+      "contextSize": 1048576,
+      "maxOutputTokens": 65536,
       "reasoning": { "supportedEfforts": ["minimal", "low", "medium", "high"], "defaultEffort": "medium" },
-      "sources": [{ "url": "docs/reasoning/gemini.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "llama-family",
+      "priority": 100,
+      "match": { "model": ["llama-*", "llama3*", "llama4*", "meta-llama/*"] },
+      "family": "llama"
+    },
+    {
+      "id": "llama-4-maverick-family",
+      "priority": 200,
+      "match": {
+        "model": ["llama-4-maverick*", "llama4-maverick*", "meta-llama/Llama-4-Maverick*", "meta-llama/llama-4-maverick*"]
+      },
+      "capabilities": { "imageInput": true },
+      "contextSize": 1000000,
+      "sources": [{ "url": "https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "llama-4-scout-family",
+      "priority": 200,
+      "match": {
+        "model": ["llama-4-scout*", "llama4-scout*", "meta-llama/Llama-4-Scout*", "meta-llama/llama-4-scout*"]
+      },
+      "capabilities": { "imageInput": true },
+      "contextSize": 10000000,
+      "sources": [{ "url": "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "phi-family",
+      "priority": 100,
+      "match": { "model": ["phi-*", "microsoft/phi-*"] },
+      "family": "phi"
+    },
+    {
+      "id": "phi-4-family",
+      "priority": 150,
+      "match": { "model": ["phi-4", "microsoft/phi-4"] },
+      "contextSize": 16000,
+      "sources": [{ "url": "https://huggingface.co/microsoft/phi-4", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "phi-4-mini-family",
+      "priority": 150,
+      "match": { "model": ["phi-4-mini*", "microsoft/phi-4-mini*"] },
+      "contextSize": 128000,
+      "sources": [{ "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "phi-4-multimodal-family",
+      "priority": 150,
+      "match": { "model": ["phi-4-multimodal*", "microsoft/phi-4-multimodal*"] },
+      "capabilities": { "imageInput": true },
+      "contextSize": 128000,
+      "sources": [{ "url": "https://huggingface.co/microsoft/Phi-4-multimodal-instruct", "verifiedAt": "2026-08-29" }]
     }
   ],
   "transports": [
@@ -222,7 +627,7 @@
       "priority": 100,
       "match": { "profile": ["glm-reasoning-family"], "endpointHost": ["open.bigmodel.cn"] },
       "thinkingAdapter": "glm",
-      "sources": [{ "url": "docs/reasoning/glm.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.z.ai/guides/capabilities/thinking", "verifiedAt": "2026-08-28" }]
     },
     {
       "id": "kimi-official",
