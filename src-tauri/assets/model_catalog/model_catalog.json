@@ -200,7 +200,7 @@
       "family": "mistral",
       "capabilities": { "reasoning": true },
       "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
-      "sources": [{ "url": "docs/reasoning/mistral.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.mistral.ai/getting-started/models/models_overview/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "minimax-reasoning-family",
@@ -208,7 +208,7 @@
       "match": { "model": ["minimax-m*", "minimax/minimax-m*"] },
       "family": "minimax",
       "capabilities": { "reasoning": true },
-      "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "minimax-m3-family",
@@ -235,7 +235,7 @@
       "family": "mimo",
       "capabilities": { "reasoning": true, "functionCall": true },
       "recommendedTemperature": 1.0,
-      "sources": [{ "url": "docs/reasoning/mimo.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "mimo-v2-family",
@@ -251,7 +251,7 @@
       "match": { "model": ["glm-5*", "glm5*", "glm-4*", "z-ai/glm-*"] },
       "family": "glm",
       "capabilities": { "reasoning": true },
-      "sources": [{ "url": "docs/reasoning/glm.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "glm-5.2-reasoning-effort",
@@ -261,14 +261,14 @@
         "supportedEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
         "defaultEffort": "max"
       },
-      "sources": [{ "url": "docs/reasoning/glm.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "glm-5.3-reasoning-effort",
       "priority": 200,
       "match": { "model": ["glm-5.3*", "z-ai/glm-5.3*"] },
       "reasoning": { "supportedEfforts": ["low", "high", "max"], "defaultEffort": "max" },
-      "sources": [{ "url": "docs/reasoning/glm.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "glm-5.2-family",
@@ -320,14 +320,14 @@
       "match": { "model": ["kimi-k2*", "kimi-k3*", "moonshotai/kimi-*"] },
       "family": "kimi",
       "capabilities": { "reasoning": true, "functionCall": true },
-      "sources": [{ "url": "docs/reasoning/kimi.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.kimi.com/docs/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "kimi-k3-reasoning",
       "priority": 200,
       "match": { "model": ["kimi-k3*", "moonshotai/kimi-k3*"] },
       "reasoning": { "supportedEfforts": ["low", "high", "max"], "defaultEffort": "max" },
-      "sources": [{ "url": "docs/reasoning/kimi.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.kimi.com/docs/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "kimi-k3-family",
@@ -377,7 +377,7 @@
       "family": "stepfun",
       "capabilities": { "reasoning": true },
       "reasoning": { "supportedEfforts": ["low", "medium", "high"], "defaultEffort": "medium" },
-      "sources": [{ "url": "docs/reasoning/stepfun.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.stepfun.com/docs/zh/guides/models/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "stepfun-flash-multimodal",
@@ -407,7 +407,7 @@
       },
       "family": "doubao",
       "capabilities": { "reasoning": true },
-      "sources": [{ "url": "docs/reasoning/doubao.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://www.volcengine.com/docs/82379/1554680", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "doubao-seed-1.6-family",
@@ -442,12 +442,22 @@
         "supportedEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
         "defaultEffort": "medium"
       },
-      "sources": [{ "url": "docs/reasoning/openai.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.openai.com/docs/models", "verifiedAt": "2026-08-29" }]
+    },
+    {
+      "id": "gpt-oss-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["gpt-oss*", "openai/gpt-oss*"] },
+      "family": "openai",
+      "capabilities": { "reasoning": true, "functionCall": true },
+      "contextSize": 128000,
+      "sources": [{ "url": "https://huggingface.co/openai/gpt-oss-120b", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "gpt-5-flagship-family",
       "priority": 200,
       "match": { "model": ["gpt-5.4", "gpt-5.4-pro*", "gpt-5.5*", "gpt-5.6*"] },
+      "capabilities": { "imageInput": true },
       "contextSize": 1050000,
       "maxOutputTokens": 128000,
       "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
@@ -474,6 +484,7 @@
       "id": "openai-o1",
       "priority": 200,
       "match": { "model": ["o1", "o1-2024-12-17*", "openai/o1", "openai/o1-2024-12-17*"] },
+      "capabilities": { "imageInput": true },
       "contextSize": 200000,
       "maxOutputTokens": 100000,
       "sources": [{ "url": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure", "verifiedAt": "2026-08-29" }]
@@ -525,8 +536,8 @@
         ]
       },
       "family": "claude",
-      "capabilities": { "reasoning": true, "functionCall": true },
-      "sources": [{ "url": "docs/reasoning/claude.md", "verifiedAt": "2026-08-28" }]
+      "capabilities": { "reasoning": true, "functionCall": true, "imageInput": true },
+      "sources": [{ "url": "https://platform.claude.com/docs/en/models/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "claude-1m-family",
@@ -560,7 +571,7 @@
       "priority": 100,
       "match": { "model": ["gemini-2.5-*", "gemini-3*"] },
       "family": "gemini",
-      "capabilities": { "reasoning": true, "functionCall": true },
+      "capabilities": { "reasoning": true, "functionCall": true, "imageInput": true },
       "contextSize": 1048576,
       "maxOutputTokens": 65536,
       "reasoning": { "supportedEfforts": ["minimal", "low", "medium", "high"], "defaultEffort": "medium" },
@@ -634,21 +645,21 @@
       "priority": 100,
       "match": { "profile": ["kimi-reasoning-family"], "endpointHost": ["api.moonshot.cn"] },
       "thinkingAdapter": "kimi",
-      "sources": [{ "url": "docs/reasoning/kimi.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.kimi.com/docs/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "stepfun-official",
       "priority": 100,
       "match": { "profile": ["stepfun-reasoning-family"], "endpointHost": ["api.stepfun.ai"] },
       "thinkingAdapter": "stepfun",
-      "sources": [{ "url": "docs/reasoning/stepfun.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.stepfun.com/docs/zh/guides/models/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "openai-official",
       "priority": 100,
       "match": { "profile": ["openai-reasoning-family"], "endpointHost": ["api.openai.com"] },
       "thinkingAdapter": "openai",
-      "sources": [{ "url": "docs/reasoning/openai.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.openai.com/docs/models", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "claude-official",
@@ -658,7 +669,7 @@
         "endpointHost": ["api.anthropic.com", "api.claude.com"]
       },
       "thinkingAdapter": "claude",
-      "sources": [{ "url": "docs/reasoning/claude.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://platform.claude.com/docs/en/models/overview", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "gemini-official",
@@ -668,14 +679,14 @@
         "endpointHost": ["generativelanguage.googleapis.com"]
       },
       "thinkingAdapter": "gemini",
-      "sources": [{ "url": "docs/reasoning/gemini.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://ai.google.dev/gemini-api/docs/models", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "doubao-official",
       "priority": 100,
       "match": { "profile": ["doubao-reasoning-family"], "endpointHost": ["api.modelverse.cn"] },
       "thinkingAdapter": "doubao",
-      "sources": [{ "url": "docs/reasoning/doubao.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://www.volcengine.com/docs/82379/1554680", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "doubao-compat-override",
@@ -697,7 +708,7 @@
         "endpointHost": ["api.deepseek.com", "api.deepseek.cn"]
       },
       "thinkingAdapter": "deepseek",
-      "sources": [{ "url": "docs/reasoning/deepseek.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://api-docs.deepseek.com/quick_start/pricing/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "qwen-dashscope",
@@ -712,7 +723,7 @@
         "endpointHost": ["dashscope.aliyuncs.com"]
       },
       "thinkingAdapter": "qwen",
-      "sources": [{ "url": "docs/reasoning/qwen.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://help.aliyun.com/zh/model-studio/text-generation-model/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "hunyuan-official",
@@ -726,14 +737,14 @@
         ]
       },
       "thinkingAdapter": "hunyuan_hy4_preview",
-      "sources": [{ "url": "docs/reasoning/hy.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "mistral-official",
       "priority": 100,
       "match": { "profile": ["mistral-reasoning-family"], "endpointHost": ["api.mistral.ai"] },
       "thinkingAdapter": "mistral",
-      "sources": [{ "url": "docs/reasoning/mistral.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://docs.mistral.ai/getting-started/models/models_overview/", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "minimax-official",
@@ -756,7 +767,9 @@
           "z-ai/*",
           "minimaxai/*",
           "nvidia/*",
-          "thinkingmachines/*"
+          "thinkingmachines/*",
+          "gpt-oss*",
+          "openai/gpt-oss*"
         ],
         "endpointHost": ["integrate.api.nvidia.com"]
       },
@@ -767,7 +780,7 @@
       "priority": 100,
       "match": { "profile": ["mimo-reasoning-family"], "endpointHost": ["api.xiaomimimo.com"] },
       "thinkingAdapter": "mimo",
-      "sources": [{ "url": "docs/reasoning/mimo.md", "verifiedAt": "2026-08-28" }]
+      "sources": [{ "url": "https://intl.cloud.tencent.com/zh/document/product/1300/78934", "verifiedAt": "2026-08-29" }]
     },
     {
       "id": "mimo-compat-override",
