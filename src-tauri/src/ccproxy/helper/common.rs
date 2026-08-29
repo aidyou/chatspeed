@@ -1,5 +1,5 @@
 use crate::{
-    ai::{network::ProxyType, util::get_proxy_type_for_key},
+    ai::{model_catalog::resolve_transport, network::ProxyType, util::get_proxy_type_for_key},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
         helper::{proxy_rotator::GlobalApiKey, CC_PROXY_ROTATOR},
@@ -13,6 +13,51 @@ use crate::{
 use reqwest::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
+
+pub(crate) fn resolve_catalog_adapter(
+    model: &str,
+    base_url: &str,
+    protocol: &ChatProtocol,
+    metadata: Option<&serde_json::Value>,
+) -> (
+    Option<crate::ai::model_catalog::ThinkingAdapter>,
+    Option<String>,
+) {
+    let metadata_map = metadata.and_then(|value| {
+        value.as_object().map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_string()))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+    });
+    match resolve_transport(
+        model,
+        Some(base_url),
+        Some(&protocol.to_string()),
+        metadata_map.as_ref(),
+    ) {
+        Ok(Some((adapter, transport_id))) => {
+            log::debug!(
+                "catalog transport selected: model={}, transport={}",
+                model,
+                transport_id
+            );
+            (Some(adapter), Some(transport_id))
+        }
+        Ok(None) => (None, None),
+        Err(error) => {
+            log::warn!(
+                "catalog transport resolution skipped for model '{}': {}",
+                model,
+                error
+            );
+            (None, None)
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct CcproxyQuery {
@@ -295,6 +340,16 @@ impl ModelResolver {
         let temp_ratio = group_config
             .as_ref()
             .map_or(1.0, |g| g.temperature.unwrap_or(1.0));
+        let (thinking_adapter, matched_transport_id) = resolve_catalog_adapter(
+            &backend_target.model,
+            &ai_model_detail.base_url,
+            &ai_model_detail
+                .api_protocol
+                .clone()
+                .try_into()
+                .unwrap_or_default(),
+            ai_model_detail.metadata.as_ref(),
+        );
 
         let prompt_replace = group_config.as_ref().map_or(Vec::new(), |g| {
             g.metadata
@@ -393,6 +448,8 @@ impl ModelResolver {
                     })
                     .unwrap_or_default(),
                 tool_compat_mode: tool_compat_mode_override.map(|s| s.to_string()),
+                thinking_adapter,
+                matched_transport_id,
             });
         }
 
@@ -443,6 +500,12 @@ impl ModelResolver {
             .and_then(|m| m.custom_params.clone());
 
         let metadata = ai_model_details.metadata.as_ref();
+        let (thinking_adapter, matched_transport_id) = resolve_catalog_adapter(
+            &global_key.model_name,
+            &ai_model_details.base_url,
+            &backend_chat_protocol,
+            metadata,
+        );
 
         Ok(ProxyModel {
             client_alias: matched_alias_key,
@@ -499,6 +562,8 @@ impl ModelResolver {
                 })
                 .unwrap_or_default(),
             tool_compat_mode: tool_compat_mode_override.map(|s| s.to_string()),
+            thinking_adapter,
+            matched_transport_id,
         })
     }
 
@@ -707,6 +772,12 @@ impl ModelResolver {
             .and_then(|m| m.custom_params.clone());
 
         let metadata = ai_model_detail.metadata.as_ref();
+        let (thinking_adapter, matched_transport_id) = resolve_catalog_adapter(
+            &model_id,
+            &ai_model_detail.base_url,
+            &chat_protocol,
+            metadata,
+        );
 
         Ok(ProxyModel {
             client_alias: model_id.clone(), // For internal requests, alias is the ID
@@ -763,6 +834,8 @@ impl ModelResolver {
                 })
                 .unwrap_or_default(),
             tool_compat_mode: None,
+            thinking_adapter,
+            matched_transport_id,
         })
     }
 
@@ -1079,7 +1152,7 @@ pub fn get_msg_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_forward_header, ModelResolver};
+    use super::{resolve_catalog_adapter, should_forward_header, ModelResolver};
     use crate::ccproxy::types::{ChatProtocol, ProxyModel};
     use indexmap::IndexMap;
 
@@ -1109,7 +1182,74 @@ mod tests {
             top_k: None,
             stop: Vec::new(),
             tool_compat_mode: None,
+            thinking_adapter: None,
+            matched_transport_id: None,
         }
+    }
+
+    #[test]
+    fn alias_target_catalog_adapter_is_endpoint_aware() {
+        let protocol = ChatProtocol::OpenAI;
+        let (adapter, transport_id) = resolve_catalog_adapter(
+            "deepseek-r1",
+            "https://api.deepseek.com/v1",
+            &protocol,
+            None,
+        );
+        assert_eq!(
+            adapter,
+            Some(crate::ai::model_catalog::ThinkingAdapter::DeepSeek)
+        );
+        assert_eq!(transport_id.as_deref(), Some("deepseek-official"));
+
+        let (adapter, transport_id) = resolve_catalog_adapter(
+            "deepseek-r1",
+            "https://openrouter.ai/api/v1",
+            &protocol,
+            None,
+        );
+        assert_eq!(adapter, None);
+        assert_eq!(transport_id, None);
+    }
+
+    #[test]
+    fn alias_target_catalog_adapter_honors_explicit_override() {
+        let protocol = ChatProtocol::OpenAI;
+        let metadata = serde_json::json!({
+            "modelCatalogTransport": "deepseek-official"
+        });
+        let (adapter, transport_id) = resolve_catalog_adapter(
+            "deepseek-r1",
+            "https://custom.example/v1",
+            &protocol,
+            Some(&metadata),
+        );
+        assert_eq!(
+            adapter,
+            Some(crate::ai::model_catalog::ThinkingAdapter::DeepSeek)
+        );
+        assert_eq!(transport_id.as_deref(), Some("deepseek-official"));
+    }
+
+    #[test]
+    fn alias_target_resolution_uses_selected_model_not_rotated_target() {
+        let protocol = ChatProtocol::OpenAI;
+        let (adapter, transport_id) =
+            resolve_catalog_adapter("qwq-32b", "https://api.siliconflow.cn/v1", &protocol, None);
+        assert_eq!(adapter, None);
+        assert_eq!(transport_id, None);
+
+        let (adapter, transport_id) = resolve_catalog_adapter(
+            "qwq-32b",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            &protocol,
+            None,
+        );
+        assert_eq!(
+            adapter,
+            Some(crate::ai::model_catalog::ThinkingAdapter::Qwen)
+        );
+        assert_eq!(transport_id.as_deref(), Some("qwen-dashscope"));
     }
 
     #[test]

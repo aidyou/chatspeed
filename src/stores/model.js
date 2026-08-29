@@ -321,9 +321,22 @@ export const useModelStore = defineStore('modelProvider', () => {
     })
   }
 
-  // =================================================
-  // Initialize the model store and export the functions
-  // =================================================
+  /**
+   * Resolve model capabilities and catalog transport facts through Rust.
+   * @param {string} modelId - Backend model identifier.
+   * @param {string|null} baseUrl - Actual backend base URL.
+   * @param {string|null} backendProtocol - Backend protocol.
+   * @param {Object|null} metadata - Provider metadata and optional override.
+   * @returns {Promise<Object>} Resolved catalog profile.
+   */
+  const resolveModelProfile = (modelId, baseUrl, backendProtocol, metadata) =>
+    invokeWrapper('resolve_model_profile', {
+      modelId,
+      baseUrl,
+      backendProtocol,
+      metadata
+    })
+
 
   const persistedDefaultProvider = csGetStorage(csStorageKey.defaultProvider, {})
   if (!isEmpty(persistedDefaultProvider)) {
@@ -344,6 +357,7 @@ export const useModelStore = defineStore('modelProvider', () => {
     setDefaultModelProvider,
     deleteModelProvider,
     updateModelProviderOrder,
-    listModels
+    listModels,
+    resolveModelProfile
   };
 })

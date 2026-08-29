@@ -9,6 +9,7 @@ pub mod env;
 pub mod fs;
 pub mod mcp;
 pub mod message;
+pub mod model_catalog;
 pub mod note;
 pub mod proxy_group;
 pub mod sandbox;

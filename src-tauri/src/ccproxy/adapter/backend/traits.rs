@@ -6,6 +6,14 @@ use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder};
 use std::sync::{Arc, RwLock};
 
+use crate::ai::model_catalog::ThinkingAdapter;
+
+/// Non-serialized context resolved once by ModelResolver for backend adaptation.
+#[derive(Debug, Clone, Default)]
+pub struct BackendRequestContext {
+    pub thinking_adapter: Option<ThinkingAdapter>,
+}
+
 /// Represents a raw response from a backend, before being converted to a unified format.
 pub struct BackendResponse {
     pub body: bytes::Bytes,
@@ -23,6 +31,7 @@ pub trait BackendAdapter: Send + Sync {
         api_key: &str,
         provider_full_url: &str,
         model: &str,
+        context: &BackendRequestContext,
         log_proxy_to_file: bool,
         headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error>;

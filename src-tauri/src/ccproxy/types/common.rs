@@ -9,6 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ai::model_catalog::ThinkingAdapter;
 use crate::ccproxy::errors::CCProxyError;
 
 /// Represents a target backend model for a proxy alias.
@@ -102,6 +103,9 @@ pub struct ProxyModel {
     pub stop: Vec<String>,
     // Tool compatibility mode from metadata: "auto", "compat", "native"
     pub tool_compat_mode: Option<String>,
+    /// Catalog-selected vendor thinking wire adapter, resolved once by ModelResolver.
+    pub thinking_adapter: Option<ThinkingAdapter>,
+    pub matched_transport_id: Option<String>,
 }
 
 //======================================================

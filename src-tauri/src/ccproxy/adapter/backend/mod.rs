@@ -10,7 +10,7 @@ pub use common::{generate_tool_prompt, update_message_block};
 pub use gemini::GeminiBackendAdapter;
 pub use ollama::OllamaBackendAdapter;
 pub use openai::OpenAIBackendAdapter;
-pub use traits::{BackendAdapter, BackendResponse};
+pub use traits::{BackendAdapter, BackendRequestContext, BackendResponse};
 
 #[cfg(test)]
 mod openai_test;

@@ -330,6 +330,10 @@ pub struct ModelDetails {
     /// image support, like claude series
     pub image_input: Option<bool>,
 
+    /// Recommended temperature for new model configurations, when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_temperature: Option<f32>,
+
     /// Additional metadata for provider-specific information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,

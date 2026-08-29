@@ -365,7 +365,7 @@
       <el-tabs v-model="modelConfigActiveTab">
         <el-tab-pane :label="$t('settings.model.basicInfo')" name="basic">
           <el-form-item :label="$t('settings.model.modelId')" prop="id">
-            <el-input v-model="modelConfigForm.id" />
+            <el-input v-model="modelConfigForm.id" @input="invalidateModelCatalogResolve" @change="resolveNewModelCatalog" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.modelAlias')" prop="name">
             <el-input v-model="modelConfigForm.name" />
@@ -374,7 +374,11 @@
             <el-input v-model="modelConfigForm.group" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
-            <el-switch v-model="modelConfigForm.reasoning" />
+            <el-select v-model="modelConfigForm.reasoning" style="width: 100%">
+              <el-option :label="$t('settings.model.unset')" :value="null" />
+              <el-option :label="$t('settings.model.enabled')" :value="true" />
+              <el-option :label="$t('settings.model.disabled')" :value="false" />
+            </el-select>
           </el-form-item>
           <el-form-item v-if="isGpt56ModelId(modelConfigForm.id)"
             :label="$t('settings.model.responsesReasoningSummary')" prop="reasoningSummary">
@@ -392,10 +396,18 @@
             </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
-            <el-switch v-model="modelConfigForm.functionCall" />
+            <el-select v-model="modelConfigForm.functionCall" style="width: 100%">
+              <el-option :label="$t('settings.model.unset')" :value="null" />
+              <el-option :label="$t('settings.model.enabled')" :value="true" />
+              <el-option :label="$t('settings.model.disabled')" :value="false" />
+            </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
-            <el-switch v-model="modelConfigForm.imageInput" />
+            <el-select v-model="modelConfigForm.imageInput" style="width: 100%">
+              <el-option :label="$t('settings.model.unset')" :value="null" />
+              <el-option :label="$t('settings.model.enabled')" :value="true" />
+              <el-option :label="$t('settings.model.disabled')" :value="false" />
+            </el-select>
           </el-form-item>
           <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
@@ -413,7 +425,9 @@
                   style="flex: 1" />
                 <span style="font-size: 12px; min-width: 32px; text-align: right">
                   {{
-                    modelConfigForm.temperature < 0 ? 'Off' : modelConfigForm.temperature.toFixed(1) }} </span>
+                    modelConfigForm.temperature == null || modelConfigForm.temperature < 0
+                      ? 'Off'
+                      : modelConfigForm.temperature.toFixed(1) }} </span>
               </div>
             </el-tooltip>
           </el-form-item>
@@ -524,7 +538,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watchEffect } from 'vue'
+import { computed, ref, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 const { t } = useI18n()
@@ -1122,15 +1136,15 @@ const createDefaultModelConfig = () => ({
   id: '',
   name: '',
   group: '',
-  functionCall: false,
-  reasoning: false,
+  functionCall: null,
+  reasoning: null,
   reasoningSummary: 'none',
   thinking: null,
   thinkingLevel: 'low',
-  imageInput: false,
-  contextSize: 128000,
-  temperature: -0.1,
-  maxTokens: 0,
+  imageInput: null,
+  contextSize: null,
+  temperature: null,
+  maxTokens: null,
   pricing: createDefaultPricing(),
   customParams: []
 })
@@ -1160,8 +1174,62 @@ const modelConfigRules = {
 }
 const prevModelConfigId = ref('')
 const modelConfigForm = ref(createDefaultModelConfig())
-const modelConfigDialogVisible = ref(false)
 const modelConfigActiveTab = ref('basic')
+const modelConfigResolveToken = ref(0)
+const invalidateModelCatalogResolve = () => {
+  modelConfigResolveToken.value++
+}
+const modelCatalogProviderSignature = () =>
+  JSON.stringify({
+    baseUrl: modelForm.value.baseUrl || '',
+    protocol: modelForm.value.apiProtocol || '',
+    metadata: modelForm.value.metadata || null
+  })
+const modelCatalogResolveSignature = () =>
+  JSON.stringify({
+    id: modelConfigForm.value.id?.trim() || '',
+    provider: modelCatalogProviderSignature()
+  })
+const resolveNewModelCatalog = async () => {
+  const modelId = modelConfigForm.value.id?.trim()
+  if (prevModelConfigId.value || !modelId) return
+  const token = ++modelConfigResolveToken.value
+  const signature = modelCatalogResolveSignature()
+  try {
+    const profile = await modelStore.resolveModelProfile(
+      modelId,
+      modelForm.value.baseUrl,
+      modelForm.value.apiProtocol,
+      modelForm.value.metadata
+    )
+    if (
+      token !== modelConfigResolveToken.value ||
+      prevModelConfigId.value ||
+      modelCatalogResolveSignature() !== signature
+    ) return
+    const capabilities = profile.capabilities || {}
+    if (modelConfigForm.value.reasoning == null && capabilities.reasoning != null) {
+      modelConfigForm.value.reasoning = capabilities.reasoning
+    }
+    if (modelConfigForm.value.functionCall == null && capabilities.functionCall != null) {
+      modelConfigForm.value.functionCall = capabilities.functionCall
+    }
+    if (modelConfigForm.value.imageInput == null && capabilities.imageInput != null) {
+      modelConfigForm.value.imageInput = capabilities.imageInput
+    }
+    if (modelConfigForm.value.contextSize == null && profile.contextSize != null) {
+      modelConfigForm.value.contextSize = profile.contextSize
+    }
+    if (modelConfigForm.value.maxTokens == null && profile.maxOutputTokens != null) {
+      modelConfigForm.value.maxTokens = profile.maxOutputTokens
+    }
+    if (modelConfigForm.value.temperature == null && profile.recommendedTemperature != null) {
+      modelConfigForm.value.temperature = profile.recommendedTemperature
+    }
+  } catch (error) {
+    console.warn('Model catalog resolution failed:', error)
+  }
+}
 const modelGroups = computed(() => {
   return modelForm.value.models.reduce((groups, x) => {
     if (!x.group) {
@@ -1195,6 +1263,7 @@ const onModelConfig = model => {
   } else {
     prevModelConfigId.value = ''
     modelConfigForm.value = createDefaultModelConfig()
+    void resolveNewModelCatalog()
   }
   modelConfigDialogVisible.value = true
 }
@@ -1438,13 +1507,13 @@ const onProviderModelSave = () => {
       id: model.id.trim(),
       name: model.name,
       group: model.family || t('settings.model.ungrouped'),
-      reasoning: model.reasoning || false,
+      reasoning: model.reasoning ?? null,
       thinking: null,
-      functionCall: model.functionCall || false,
-      imageInput: model.imageInput || false,
-      contextSize: model.contextSize ?? 128000,
-      temperature: model.temperature ?? -0.1,
-      maxTokens: model.maxTokens ?? 0
+      functionCall: model.functionCall ?? null,
+      imageInput: model.imageInput ?? null,
+      contextSize: model.maxInputTokens ?? null,
+      temperature: model.recommendedTemperature ?? null,
+      maxTokens: model.maxOutputTokens ?? null
     }))
   console.log('modelsToAdd', modelsToAdd)
   if (modelsToAdd.length) {

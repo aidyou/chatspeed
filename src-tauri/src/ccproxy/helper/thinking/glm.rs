@@ -1,7 +1,10 @@
 use serde_json::Value;
 
-use super::common::{host_matches, normalize_effort};
+#[cfg(test)]
+use super::common::host_matches;
+use super::common::normalize_effort;
 
+#[cfg(test)]
 pub(super) fn applies_to(base_url: &str) -> bool {
     host_matches(base_url, "open.bigmodel.cn")
 }

@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use super::common::normalize_effort;
 
+#[cfg(test)]
 pub(super) fn applies_to(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
     model.starts_with("hy3") || model.starts_with("hy4") || model.contains("hunyuan")

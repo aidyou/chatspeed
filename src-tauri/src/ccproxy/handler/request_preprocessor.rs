@@ -22,10 +22,11 @@ pub fn preprocess_client_request_body(
         CCProxyError::InternalError(format!("Failed to deserialize request body: {}", e))
     })?;
 
-    crate::ccproxy::helper::thinking::normalize_request(
+    crate::ccproxy::helper::thinking::normalize_request_with_adapter(
         &mut body_json,
         &proxy_model.model,
         &proxy_model.base_url,
+        proxy_model.thinking_adapter,
     );
 
     if should_relax_required_tool_choice(&proxy_model.base_url)
@@ -68,6 +69,7 @@ pub fn preprocess_unified_request(unified_request: &mut UnifiedRequest, proxy_mo
 #[cfg(test)]
 mod tests {
     use super::preprocess_client_request_body;
+    use crate::ai::model_catalog::ThinkingAdapter;
     use crate::ccproxy::{types::ProxyModel, ChatProtocol};
     use bytes::Bytes;
     use serde_json::json;
@@ -98,6 +100,8 @@ mod tests {
             top_k: None,
             stop: Vec::new(),
             tool_compat_mode: None,
+            thinking_adapter: Some(ThinkingAdapter::DeepSeek),
+            matched_transport_id: None,
         }
     }
 
@@ -118,6 +122,7 @@ mod tests {
         proxy_model.provider = "Mistral".to_string();
         proxy_model.base_url = "https://api.mistral.ai/v1".to_string();
         proxy_model.model = "mistral-small-latest".to_string();
+        proxy_model.thinking_adapter = Some(ThinkingAdapter::Mistral);
 
         let processed = preprocess_client_request_body(
             Bytes::from(body.to_string()),
@@ -165,6 +170,7 @@ mod tests {
         });
         let mut proxy_model = deepseek_proxy_model();
         proxy_model.model = "sensenova-6.8-flash-lite".to_string();
+        proxy_model.thinking_adapter = Some(ThinkingAdapter::SenseNova);
 
         let processed = preprocess_client_request_body(
             Bytes::from(body.to_string()),

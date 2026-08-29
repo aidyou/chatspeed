@@ -23,7 +23,7 @@ use crate::ccproxy::{
     utils::token_estimator::estimate_tokens,
 };
 
-use super::{BackendAdapter, BackendResponse};
+use super::{BackendAdapter, BackendRequestContext, BackendResponse};
 use crate::ccproxy::adapter::backend::common;
 
 pub struct OllamaBackendAdapter;
@@ -37,6 +37,7 @@ impl BackendAdapter for OllamaBackendAdapter {
         _api_key: &str, // Ollama doesn't use API keys
         provider_full_url: &str,
         model: &str,
+        _context: &BackendRequestContext,
         log_proxy_to_file: bool,
         headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {

@@ -6,6 +6,7 @@ use serde_json::{from_str, json, Value};
 use crate::{
     ai::{
         error::AiError,
+        model_catalog::resolve_model_profile,
         network::{ApiClient, ApiConfig, DefaultApiClient, ErrorFormat},
         traits::chat::ModelDetails,
         util::{
@@ -19,6 +20,67 @@ use crate::{
 const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 const CALUDE_BASE_URL: &str = "https://api.anthropic.com/v1";
 const GEMINI_DEFAULT_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
+
+fn is_known_non_chat_model(model_id: &str) -> bool {
+    [
+        "embedding",
+        "rerank",
+        "moderation",
+        "whisper",
+        "tts",
+        "dall-e",
+        "image-generation",
+        "text-to-image",
+        "speech-to-text",
+    ]
+    .iter()
+    .any(|marker| model_id.contains(marker))
+}
+
+fn enrich_model_details(mut details: ModelDetails) -> Result<ModelDetails, AiError> {
+    let catalog = resolve_model_profile(&details.id).map_err(|error| {
+        AiError::InitFailed(format!("model catalog resolution failed: {error}"))
+    })?;
+
+    if details.family.is_none() {
+        details.family = catalog.family;
+    }
+    if details.reasoning.is_none() {
+        details.reasoning = catalog.capabilities.reasoning;
+    }
+    if details.function_call.is_none() {
+        details.function_call = catalog.capabilities.function_call;
+    }
+    if details.image_input.is_none() {
+        details.image_input = catalog.capabilities.image_input;
+    }
+    if details.recommended_temperature.is_none() {
+        details.recommended_temperature = catalog.recommended_temperature;
+    }
+    if details.max_output_tokens.is_none() {
+        details.max_output_tokens = catalog.max_output_tokens;
+    }
+
+    let model_id = details.id.to_ascii_lowercase();
+    if details.family.is_none() {
+        details.family = get_family_from_model_id(&model_id);
+    }
+    if details.reasoning.is_none() && is_reasoning_supported(&model_id) {
+        details.reasoning = Some(true);
+    }
+    if details.function_call.is_none() {
+        if is_function_call_supported(&model_id) {
+            details.function_call = Some(true);
+        } else if is_known_non_chat_model(&model_id) {
+            details.function_call = Some(false);
+        }
+    }
+    if details.image_input.is_none() && is_image_input_supported(&model_id) {
+        details.image_input = Some(true);
+    }
+
+    Ok(details)
+}
 
 #[derive(Deserialize, Debug)]
 struct OpenAIModel {
@@ -163,9 +225,7 @@ pub async fn openai_list_models(
         })
         .into_values()
         .map(|model| {
-            let id = model.id.to_lowercase();
-
-            ModelDetails {
+            enrich_model_details(ModelDetails {
                 id: model.id.clone(),
                 name: model.id, // OpenAI API doesn't provide a separate "friendly name"
                 protocol: ChatProtocol::OpenAI,
@@ -177,17 +237,18 @@ pub async fn openai_list_models(
                 )),
                 last_updated: DateTime::from_timestamp(model.created.unwrap_or_default(), 0)
                     .map(|dt: DateTime<Utc>| dt.to_rfc3339()),
-                family: get_family_from_model_id(&id),
-                function_call: Some(is_function_call_supported(&id)),
-                reasoning: Some(is_reasoning_supported(&id)),
-                image_input: Some(is_image_input_supported(&id)),
+                family: None,
+                function_call: None,
+                reasoning: None,
+                image_input: None,
+                recommended_temperature: None,
                 metadata: Some(json!({
                     "object": model.object.unwrap_or_default(),
                     "owned_by": model.owned_by.unwrap_or_default(),
                 })),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(model_details)
 }
@@ -276,25 +337,24 @@ pub async fn claude_list_models(
         .into_values()
         .map(|api_model| {
             let model_id = api_model.id.to_lowercase();
-            ModelDetails {
+            enrich_model_details(ModelDetails {
                 id: api_model.id.clone(),
-                name: api_model.display_name.unwrap_or(model_id.clone()),
+                name: api_model.display_name.unwrap_or(model_id),
                 protocol: ChatProtocol::Claude,
                 max_input_tokens: api_model.input_token_limit,
                 max_output_tokens: api_model.output_token_limit,
                 description: api_model.description,
                 last_updated: api_model.created_at, // Use created_at from API
-                family: get_family_from_model_id(&model_id),
-                // Prioritize API's supports_tools, fallback to helper function if not present
-                function_call: api_model
-                    .supports_tools
-                    .or_else(|| Some(is_function_call_supported(&model_id))),
-                reasoning: Some(is_reasoning_supported(&model_id)),
-                image_input: Some(is_image_input_supported(&model_id)),
+                family: None,
+                // The Claude API's supports_tools is authoritative; heuristic is only fallback.
+                function_call: api_model.supports_tools,
+                reasoning: None,
+                image_input: None,
+                recommended_temperature: None,
                 metadata: None,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(models)
 }
@@ -372,9 +432,7 @@ pub async fn gemini_list_models(
                 .contains(&"generateContent".to_string())
         })
         .map(|model| {
-            let id_for_utils = model.name.to_lowercase();
-
-            ModelDetails {
+            enrich_model_details(ModelDetails {
                 id: model
                     .name
                     .clone()
@@ -387,17 +445,65 @@ pub async fn gemini_list_models(
                 max_output_tokens: model.output_token_limit,
                 description: model.description,
                 last_updated: model.version.clone(), // Use version as a proxy for update info
-                family: get_family_from_model_id(&id_for_utils),
-                function_call: Some(is_function_call_supported(&id_for_utils)),
-                reasoning: Some(is_reasoning_supported(&id_for_utils)),
-                image_input: Some(is_image_input_supported(&id_for_utils)),
+                family: None,
+                function_call: None,
+                reasoning: None,
+                image_input: None,
+                recommended_temperature: None,
                 metadata: Some(json!({
                     "version": model.version,
                     "supported_generation_methods": model.supported_generation_methods,
                 })),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(model_details)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn details(id: &str) -> ModelDetails {
+        ModelDetails {
+            id: id.to_string(),
+            name: id.to_string(),
+            protocol: ChatProtocol::OpenAI,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            description: None,
+            last_updated: None,
+            family: None,
+            reasoning: None,
+            function_call: None,
+            image_input: None,
+            recommended_temperature: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn enrichment_uses_catalog_before_heuristics() {
+        let result = enrich_model_details(details("QWQ-32B")).expect("catalog");
+        assert_eq!(result.family.as_deref(), Some("qwen"));
+        assert_eq!(result.reasoning, Some(true));
+        assert_eq!(result.image_input, None);
+    }
+
+    #[test]
+    fn enrichment_includes_catalog_recommended_temperature() {
+        let model = details("hy4-preview");
+        let result = enrich_model_details(model).expect("catalog");
+        assert_eq!(result.recommended_temperature, Some(0.9));
+    }
+    #[test]
+    fn enrichment_preserves_explicit_provider_facts() {
+        let mut model = details("deepseek-r1");
+        model.reasoning = Some(false);
+        model.function_call = Some(false);
+        let result = enrich_model_details(model).expect("catalog");
+        assert_eq!(result.reasoning, Some(false));
+        assert_eq!(result.function_call, Some(false));
+    }
 }

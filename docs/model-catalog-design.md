@@ -18,7 +18,7 @@
 新增一个独立的模型目录作为唯一事实来源，建议位置：
 
 ```text
-src-tauri/resources/model_catalog.json
+src-tauri/assets/model_catalog/model_catalog.json
 ```
 
 不要将这类规则重新放回 `public/presetTextAiProvider.json`：

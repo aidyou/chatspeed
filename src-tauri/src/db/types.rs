@@ -237,6 +237,8 @@ pub struct ModelConfig {
     pub thinking: Option<ThinkingConfig>,
     #[serde(rename = "functionCall", skip_serializing_if = "Option::is_none")]
     pub function_call: Option<bool>,
+    #[serde(rename = "imageInput", skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<bool>,
     #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
     pub context_size: Option<i32>,
     #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
@@ -255,13 +257,14 @@ impl Default for ModelConfig {
             id: String::new(),
             name: String::new(),
             group: String::new(),
-            reasoning: Some(false),
+            reasoning: None,
             reasoning_summary: None,
             thinking: None,
             function_call: None,
-            context_size: Some(128000),
-            max_tokens: Some(0),
-            temperature: Some(-0.1),
+            image_input: None,
+            context_size: None,
+            max_tokens: None,
+            temperature: None,
             custom_params: None,
             pricing: None,
         }
@@ -419,3 +422,29 @@ pub struct Config {
 //     pub created_at: String,
 //     pub updated_at: String,
 // }
+
+#[cfg(test)]
+mod model_config_tests {
+    use super::ModelConfig;
+
+    #[test]
+    fn legacy_model_json_leaves_optional_fields_unset() {
+        let config: ModelConfig =
+            serde_json::from_str(r#"{"id":"demo","name":"Demo","group":"test","reasoning":false}"#)
+                .expect("legacy model config");
+        assert_eq!(config.image_input, None);
+        assert_eq!(config.context_size, None);
+        assert_eq!(config.max_tokens, None);
+        assert_eq!(config.temperature, None);
+    }
+
+    #[test]
+    fn image_input_round_trips_three_states() {
+        for (value, expected) in [("true", Some(true)), ("false", Some(false)), ("null", None)] {
+            let json =
+                format!(r#"{{"id":"demo","name":"Demo","group":"test","imageInput":{value}}}"#);
+            let config: ModelConfig = serde_json::from_str(&json).expect("model config");
+            assert_eq!(config.image_input, expected);
+        }
+    }
+}

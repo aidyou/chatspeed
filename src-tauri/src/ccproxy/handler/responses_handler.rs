@@ -483,6 +483,8 @@ mod tests {
             top_k: None,
             stop: Vec::new(),
             tool_compat_mode: None,
+            thinking_adapter: None,
+            matched_transport_id: None,
         }
     }
 

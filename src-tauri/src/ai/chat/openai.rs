@@ -1432,10 +1432,7 @@ mod tests {
             key,
             build_prompt_cache_key(None, None, "fallback_id").unwrap()
         );
-        assert_ne!(
-            key,
-            build_prompt_cache_key(None, None, "other_id").unwrap()
-        );
+        assert_ne!(key, build_prompt_cache_key(None, None, "other_id").unwrap());
     }
 
     #[test]

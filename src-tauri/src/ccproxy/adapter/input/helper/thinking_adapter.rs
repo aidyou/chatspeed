@@ -74,6 +74,7 @@ pub(crate) fn detect_family(model: &str) -> ReasoningModelFamily {
     }
 }
 
+#[cfg(test)]
 pub fn supports_native_reasoning_history_for_openai_backend(model: &str) -> bool {
     matches!(
         detect_family(model),
@@ -262,23 +263,15 @@ fn build_nvidia_nim_chat_template_kwargs(
     }
 }
 
-pub fn normalize_nvidia_nim_thinking_fields(
+pub fn normalize_nvidia_nim_thinking_fields_with_adapter(
     body: &mut Value,
-    provider_url: &str,
     model: &str,
     fallback_thinking: Option<&UnifiedThinking>,
     fallback_reasoning_effort: Option<&str>,
 ) {
-    let is_nvidia_nim = reqwest::Url::parse(provider_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .is_some_and(|host| host.eq_ignore_ascii_case("integrate.api.nvidia.com"));
     let Some(profile) = detect_nvidia_nim_thinking_profile(model) else {
         return;
     };
-    if !is_nvidia_nim {
-        return;
-    }
 
     let explicit_enabled = body
         .get("thinking")
@@ -340,6 +333,28 @@ pub fn normalize_nvidia_nim_thinking_fields(
         body_object.remove("thinking_budget");
         body_object.remove("reasoning_effort");
         body_object.remove("reasoning_split");
+    }
+}
+
+#[cfg(test)]
+pub fn normalize_nvidia_nim_thinking_fields(
+    body: &mut Value,
+    provider_url: &str,
+    model: &str,
+    fallback_thinking: Option<&UnifiedThinking>,
+    fallback_reasoning_effort: Option<&str>,
+) {
+    let is_nvidia_nim = reqwest::Url::parse(provider_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host.eq_ignore_ascii_case("integrate.api.nvidia.com"));
+    if is_nvidia_nim {
+        normalize_nvidia_nim_thinking_fields_with_adapter(
+            body,
+            model,
+            fallback_thinking,
+            fallback_reasoning_effort,
+        );
     }
 }
 
@@ -413,12 +428,49 @@ pub fn build_unified_thinking_from_openai_request(
     })
 }
 
+#[cfg(test)]
 pub fn adapt_vendor_thinking_params_for_openai_backend(
     model: &str,
     thinking: Option<&UnifiedThinking>,
     reasoning_effort: Option<&str>,
 ) -> VendorThinkingParams {
-    let family = detect_family(model);
+    adapt_vendor_thinking_params_for_openai_backend_with_adapter(
+        model,
+        thinking,
+        reasoning_effort,
+        Some(match detect_family(model) {
+            ReasoningModelFamily::OpenAI => crate::ai::model_catalog::ThinkingAdapter::OpenAi,
+            ReasoningModelFamily::DeepSeek => crate::ai::model_catalog::ThinkingAdapter::DeepSeek,
+            ReasoningModelFamily::Qwen => crate::ai::model_catalog::ThinkingAdapter::Qwen,
+            ReasoningModelFamily::Kimi => crate::ai::model_catalog::ThinkingAdapter::Kimi,
+            ReasoningModelFamily::Glm => crate::ai::model_catalog::ThinkingAdapter::Glm,
+            ReasoningModelFamily::Doubao => crate::ai::model_catalog::ThinkingAdapter::Doubao,
+            ReasoningModelFamily::StepFun => crate::ai::model_catalog::ThinkingAdapter::StepFun,
+            ReasoningModelFamily::Mistral => crate::ai::model_catalog::ThinkingAdapter::Mistral,
+            ReasoningModelFamily::MiniMax => crate::ai::model_catalog::ThinkingAdapter::Minimax,
+            _ => return VendorThinkingParams::default(),
+        }),
+    )
+}
+
+pub fn adapt_vendor_thinking_params_for_openai_backend_with_adapter(
+    model: &str,
+    thinking: Option<&UnifiedThinking>,
+    reasoning_effort: Option<&str>,
+    adapter: Option<crate::ai::model_catalog::ThinkingAdapter>,
+) -> VendorThinkingParams {
+    let family = adapter.map_or(ReasoningModelFamily::Other, |adapter| match adapter {
+        crate::ai::model_catalog::ThinkingAdapter::OpenAi => ReasoningModelFamily::OpenAI,
+        crate::ai::model_catalog::ThinkingAdapter::DeepSeek => ReasoningModelFamily::DeepSeek,
+        crate::ai::model_catalog::ThinkingAdapter::Qwen => ReasoningModelFamily::Qwen,
+        crate::ai::model_catalog::ThinkingAdapter::Kimi => ReasoningModelFamily::Kimi,
+        crate::ai::model_catalog::ThinkingAdapter::Glm => ReasoningModelFamily::Glm,
+        crate::ai::model_catalog::ThinkingAdapter::Doubao => ReasoningModelFamily::Doubao,
+        crate::ai::model_catalog::ThinkingAdapter::StepFun => ReasoningModelFamily::StepFun,
+        crate::ai::model_catalog::ThinkingAdapter::Mistral => ReasoningModelFamily::Mistral,
+        crate::ai::model_catalog::ThinkingAdapter::Minimax => ReasoningModelFamily::MiniMax,
+        _ => ReasoningModelFamily::Other,
+    });
     let Some(thinking) = thinking else {
         return VendorThinkingParams::default();
     };
@@ -558,6 +610,7 @@ mod tests {
         adapt_vendor_thinking_params_for_openai_backend, build_openai_compat_thinking_fields,
         build_unified_thinking_from_openai_request, effort_from_budget_tokens,
         merge_reasoning_into_openai_message_content, normalize_nvidia_nim_thinking_fields,
+        normalize_nvidia_nim_thinking_fields_with_adapter,
         supports_native_reasoning_history_for_openai_backend,
     };
     use crate::ccproxy::adapter::unified::UnifiedThinking;
@@ -604,6 +657,28 @@ mod tests {
         );
         assert_eq!(fields.reasoning_effort.as_deref(), Some("medium"));
         assert_eq!(fields.thinking_budget, Some(2048));
+    }
+
+    #[test]
+    fn nvidia_nim_adapter_works_on_explicit_custom_endpoint() {
+        let mut body = serde_json::json!({
+            "thinking": { "type": "enabled" },
+            "reasoning_effort": "medium",
+        });
+
+        normalize_nvidia_nim_thinking_fields_with_adapter(
+            &mut body,
+            "deepseek-ai/deepseek-v4-flash",
+            None,
+            None,
+        );
+
+        assert_eq!(
+            body["chat_template_kwargs"],
+            serde_json::json!({ "thinking": true, "reasoning_effort": "high" })
+        );
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]

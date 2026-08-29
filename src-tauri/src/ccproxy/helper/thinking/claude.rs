@@ -1,7 +1,9 @@
 use serde_json::Value;
 
+#[cfg(test)]
 use super::common::host_matches;
 
+#[cfg(test)]
 pub(super) fn applies_to(base_url: &str) -> bool {
     host_matches(base_url, "api.anthropic.com") || host_matches(base_url, "api.claude.com")
 }

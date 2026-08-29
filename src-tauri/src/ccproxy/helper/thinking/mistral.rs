@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+#[cfg(test)]
 pub(super) fn applies_to(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
     model.contains("mistral-small-latest") || model.contains("mistral-medium-3-5")

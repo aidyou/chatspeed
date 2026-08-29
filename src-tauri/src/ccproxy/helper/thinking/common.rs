@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+#[cfg(test)]
 pub(super) fn host_matches(base_url: &str, expected_host: &str) -> bool {
     reqwest::Url::parse(base_url)
         .ok()

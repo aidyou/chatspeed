@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "defaults": {
+    "capabilities": {
+      "reasoning": null,
+      "functionCall": null,
+      "imageInput": null
+    }
+  },
+  "profiles": [
+    {
+      "id": "deepseek-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["deepseek-r1*", "deepseek/deepseek-r1*"] },
+      "family": "deepseek",
+      "capabilities": { "reasoning": true },
+      "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
+      "sources": [{ "url": "docs/reasoning/deepseek.md", "verifiedAt": "2026-08-28" }]
+    },
+    {
+      "id": "qwen-vision-family",
+      "priority": 80,
+      "match": { "model": ["qwen*-vl-*", "qwen*-vision-*"] },
+      "family": "qwen",
+      "capabilities": { "imageInput": true }
+    },
+    {
+      "id": "qwen-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["qwen-qwq*", "qwq*"] },
+      "family": "qwen",
+      "capabilities": { "reasoning": true },
+      "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" }
+    },
+    {
+      "id": "hunyuan-hy4-preview",
+      "priority": 200,
+      "match": { "model": ["hy4-preview", "hunyuan/hy4-preview", "hunyuan-hy4-preview"] },
+      "family": "hunyuan",
+      "capabilities": { "reasoning": true },
+      "recommendedTemperature": 0.9,
+      "reasoning": { "supportedEfforts": ["none", "high"], "defaultEffort": "high" },
+      "sources": [{ "url": "docs/reasoning/hy.md", "verifiedAt": "2026-08-28" }]
+    },
+    {
+      "id": "mistral-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["magistral*", "mistral/magistral*"] },
+      "family": "mistral",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "minimax-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["minimax-m*", "minimax/minimax-m*"] },
+      "family": "minimax",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "mimo-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["mimo-v*", "mimo-vl*", "xiaomi/mimo-v*", "xiaomi/mimo-vl*"] },
+      "family": "mimo",
+      "capabilities": { "reasoning": true, "imageInput": true }
+    },
+    {
+      "id": "glm-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["glm-5*", "glm5*", "z-ai/glm-*"] },
+      "family": "glm",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "kimi-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["kimi-k2*", "kimi-k3*", "moonshotai/kimi-*"] },
+      "family": "kimi",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "stepfun-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["step-*"] },
+      "family": "stepfun",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "doubao-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["doubao-seed-1.6*", "doubao-1.5-thinking-vision-pro*"] },
+      "family": "doubao",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "sensenova-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["sensenova-*"] },
+      "family": "sensenova",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "openai-reasoning-family",
+      "priority": 100,
+      "match": { "model": ["o1*", "o3*", "o4*", "gpt-5*"] },
+      "family": "openai",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "claude-opus-thinking-family",
+      "priority": 100,
+      "match": { "model": ["claude-opus-5*"] },
+      "family": "claude",
+      "capabilities": { "reasoning": true }
+    },
+    {
+      "id": "gemini-thinking-family",
+      "priority": 100,
+      "match": { "model": ["gemini-2.5-*", "gemini-3.*"] },
+      "family": "gemini",
+      "capabilities": { "reasoning": true }
+    }
+  ],
+  "transports": [
+    {
+      "id": "glm-official",
+      "priority": 100,
+      "match": { "profile": ["glm-reasoning-family"], "endpointHost": ["open.bigmodel.cn"] },
+      "thinkingAdapter": "glm"
+    },
+    {
+      "id": "kimi-official",
+      "priority": 100,
+      "match": { "profile": ["kimi-reasoning-family"], "endpointHost": ["api.moonshot.cn"] },
+      "thinkingAdapter": "kimi"
+    },
+    {
+      "id": "stepfun-official",
+      "priority": 100,
+      "match": { "profile": ["stepfun-reasoning-family"], "endpointHost": ["api.stepfun.ai"] },
+      "thinkingAdapter": "stepfun"
+    },
+    {
+      "id": "openai-official",
+      "priority": 100,
+      "match": { "profile": ["openai-reasoning-family"], "endpointHost": ["api.openai.com"] },
+      "thinkingAdapter": "openai"
+    },
+    {
+      "id": "claude-official",
+      "priority": 100,
+      "match": {
+        "profile": ["claude-opus-thinking-family"],
+        "endpointHost": ["api.anthropic.com", "api.claude.com"]
+      },
+      "thinkingAdapter": "claude"
+    },
+    {
+      "id": "gemini-official",
+      "priority": 100,
+      "match": {
+        "profile": ["gemini-thinking-family"],
+        "endpointHost": ["generativelanguage.googleapis.com"]
+      },
+      "thinkingAdapter": "gemini"
+    },
+    {
+      "id": "doubao-compat-override",
+      "priority": 10,
+      "match": { "profile": ["doubao-reasoning-family"] },
+      "thinkingAdapter": "doubao"
+    },
+    {
+      "id": "sensenova-compat-override",
+      "priority": 10,
+      "match": { "profile": ["sensenova-reasoning-family"] },
+      "thinkingAdapter": "sensenova"
+    },
+    {
+      "id": "deepseek-official",
+      "priority": 100,
+      "match": {
+        "profile": ["deepseek-reasoning-family"],
+        "endpointHost": ["api.deepseek.com", "api.deepseek.cn"]
+      },
+      "thinkingAdapter": "deepseek"
+    },
+    {
+      "id": "qwen-dashscope",
+      "priority": 100,
+      "match": {
+        "profile": ["qwen-reasoning-family", "qwen-vision-family"],
+        "endpointHost": ["dashscope.aliyuncs.com"]
+      },
+      "thinkingAdapter": "qwen"
+    },
+    {
+      "id": "hunyuan-official",
+      "priority": 100,
+      "match": {
+        "profile": ["hunyuan-hy4-preview"],
+        "endpointHost": ["api.hunyuan.cloud.tencent.com", "api.lkeap.cloud.tencent.com"]
+      },
+      "thinkingAdapter": "hunyuan_hy4_preview"
+    },
+    {
+      "id": "mistral-official",
+      "priority": 100,
+      "match": { "profile": ["mistral-reasoning-family"], "endpointHost": ["api.mistral.ai"] },
+      "thinkingAdapter": "mistral"
+    },
+    {
+      "id": "minimax-official",
+      "priority": 100,
+      "match": {
+        "profile": ["minimax-reasoning-family"],
+        "endpointHost": ["api.minimax.io", "api.minimaxi.com"]
+      },
+      "thinkingAdapter": "minimax"
+    },
+    {
+      "id": "nvidia-nim-thinking",
+      "priority": 100,
+      "match": {
+        "model": [
+          "deepseek-ai/*",
+          "moonshotai/*",
+          "google/gemma-*",
+          "qwen/*",
+          "z-ai/*",
+          "minimaxai/*",
+          "nvidia/*",
+          "thinkingmachines/*"
+        ],
+        "endpointHost": ["integrate.api.nvidia.com"]
+      },
+      "thinkingAdapter": "nvidia_nim"
+    },
+    {
+      "id": "mimo-compat-override",
+      "priority": 10,
+      "match": { "model": ["mimo-v*", "xiaomi/mimo-v*"] },
+      "thinkingAdapter": "mimo"
+    }
+  ]
+}

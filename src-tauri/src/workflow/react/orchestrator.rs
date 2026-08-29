@@ -2192,11 +2192,11 @@ impl ToolDefinition for TaskStopTool {
 mod tests {
     use super::{
         build_terminal_sub_agent_result, cleanup_sub_agent_runtime,
-        clear_completed_background_tasks_for_owner,
+        clear_completed_background_tasks_for_owner, get_sub_agent_registry,
         persist_background_completion_projection, persist_sub_agent_completion,
         remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
         DefaultSubAgentFactory, SubAgentFactory, TaskOutputTool, TaskTool, BACKGROUND_TASKS,
-        COMPLETED_BACKGROUND_TASKS, TASK_OUTPUT_THROTTLE, get_sub_agent_registry,
+        COMPLETED_BACKGROUND_TASKS, TASK_OUTPUT_THROTTLE,
     };
     use crate::ai::interaction::chat_completion::ChatState;
     use crate::db::{AgentConfig, MainStore, WorkflowMessage};
@@ -3109,9 +3109,8 @@ mod tests {
         let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
             input_sessions: input_sessions.clone(),
         });
-        let executor: Arc<Mutex<dyn ReActExecutor>> = Arc::new(Mutex::new(
-            DiagnosticMockExecutor::new(task_id.to_string()),
-        ));
+        let executor: Arc<Mutex<dyn ReActExecutor>> =
+            Arc::new(Mutex::new(DiagnosticMockExecutor::new(task_id.to_string())));
         let (tx, _rx) = mpsc::channel(1);
         manager
             .register_session(
@@ -3122,10 +3121,8 @@ mod tests {
             .expect("child manager registration should succeed");
         WorkflowManager::register_session_signal_tx(task_id.to_string(), tx);
         input_sessions.lock().await.insert(task_id.to_string());
-        get_sub_agent_registry().register_sub_agent(
-            task_id.to_string(),
-            "parent-session".to_string(),
-        );
+        get_sub_agent_registry()
+            .register_sub_agent(task_id.to_string(), "parent-session".to_string());
         BACKGROUND_TASKS.insert(
             task_id.to_string(),
             BackgroundTask::SubAgent {
@@ -3139,9 +3136,11 @@ mod tests {
         cleanup_sub_agent_runtime(task_id, &gateway, &manager, "test.cleanup_all").await;
 
         assert!(!manager.has_session(task_id));
-        assert!(WorkflowManager::send_signal_to_session(task_id, "approval".to_string())
-            .await
-            .is_err());
+        assert!(
+            WorkflowManager::send_signal_to_session(task_id, "approval".to_string())
+                .await
+                .is_err()
+        );
         assert!(!input_sessions.lock().await.contains(task_id));
         assert!(!get_sub_agent_registry().is_sub_agent(task_id));
         assert!(!BACKGROUND_TASKS.contains_key(task_id));

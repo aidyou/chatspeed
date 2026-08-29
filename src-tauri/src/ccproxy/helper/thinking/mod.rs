@@ -13,10 +13,42 @@ mod qwen;
 mod sensenova;
 mod stepfun;
 
+use crate::ai::model_catalog::ThinkingAdapter;
 use serde_json::Value;
+
+/// Normalizes vendor-specific thinking fields using a resolved catalog adapter.
+pub fn normalize_request_with_adapter(
+    body: &mut Value,
+    model: &str,
+    base_url: &str,
+    adapter: Option<ThinkingAdapter>,
+) {
+    let Some(adapter) = adapter else {
+        return;
+    };
+    match adapter {
+        ThinkingAdapter::DeepSeek => deepseek::normalize_request(body, model, base_url),
+        ThinkingAdapter::Doubao => doubao::normalize_request(body, model, base_url),
+        ThinkingAdapter::Mistral => mistral::normalize_request(body, model, base_url),
+        ThinkingAdapter::Mimo => mimo::normalize_request(body, model, base_url),
+        ThinkingAdapter::HunyuanHy4Preview => hunyuan::normalize_request(body, model, base_url),
+        ThinkingAdapter::Glm => glm::normalize_request(body, model, base_url),
+        ThinkingAdapter::Kimi => kimi::normalize_request(body, model, base_url),
+        ThinkingAdapter::Qwen => qwen::normalize_request(body, model, base_url),
+        ThinkingAdapter::StepFun => stepfun::normalize_request(body, model, base_url),
+        ThinkingAdapter::Claude => claude::normalize_request(body, model, base_url),
+        ThinkingAdapter::Gemini => gemini::normalize_request(body, model, base_url),
+        ThinkingAdapter::OpenAi => openai::normalize_request(body, model, base_url),
+        ThinkingAdapter::SenseNova => sensenova::normalize_request(body, model, base_url),
+        ThinkingAdapter::Minimax | ThinkingAdapter::NvidiaNim => {
+            common::normalize_request(body, model, base_url)
+        }
+    }
+}
 
 /// Normalizes vendor-specific thinking fields immediately before a provider request is
 /// forwarded. Unknown providers use the no-op common fallback to preserve their contracts.
+#[cfg(test)]
 pub fn normalize_request(body: &mut Value, model: &str, base_url: &str) {
     if doubao::applies_to(model) {
         doubao::normalize_request(body, model, base_url);

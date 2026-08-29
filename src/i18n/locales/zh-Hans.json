@@ -719,6 +719,9 @@
         "none": "不使用代理"
       },
       "reasoning": "支持推理",
+      "unset": "未设置",
+      "enabled": "启用",
+      "disabled": "禁用",
       "reasoningHigh": "高",
       "reasoningLow": "低",
       "reasoningMax": "最大",

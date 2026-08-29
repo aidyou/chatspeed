@@ -53,6 +53,7 @@ use commands::env::*;
 use commands::fs::*;
 use commands::mcp::*;
 use commands::message::*;
+use commands::model_catalog::resolve_model_profile;
 use commands::note::*;
 use commands::proxy_group::*;
 use commands::sandbox::*;
@@ -254,6 +255,7 @@ pub async fn run() -> crate::error::Result<()> {
             write_clipboard,
             // chat
             list_models,
+            resolve_model_profile,
             chat_completion,
             stop_chat,
             sync_state,

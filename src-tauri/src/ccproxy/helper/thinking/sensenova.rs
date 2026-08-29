@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use super::common::normalize_effort;
 
+#[cfg(test)]
 pub(super) fn applies_to(model: &str) -> bool {
     model.trim().to_ascii_lowercase().starts_with("sensenova-")
 }

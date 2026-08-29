@@ -1,7 +1,10 @@
 use serde_json::Value;
 
-use super::common::{ensure_reasoning_replay, host_matches, normalize_effort};
+#[cfg(test)]
+use super::common::host_matches;
+use super::common::{ensure_reasoning_replay, normalize_effort};
 
+#[cfg(test)]
 pub(super) fn applies_to(base_url: &str) -> bool {
     host_matches(base_url, "api.deepseek.com") || host_matches(base_url, "api.deepseek.cn")
 }

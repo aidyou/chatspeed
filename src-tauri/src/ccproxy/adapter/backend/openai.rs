@@ -3,7 +3,7 @@ use reqwest::{Client, RequestBuilder};
 use serde_json::json;
 use std::sync::{Arc, RwLock};
 
-use super::{BackendAdapter, BackendResponse};
+use super::{BackendAdapter, BackendRequestContext, BackendResponse};
 use crate::ccproxy::get_tool_id;
 use crate::ccproxy::openai::{
     OpenAIChatCompletionRequest, OpenAIChatCompletionResponse, OpenAIChatCompletionStreamResponse,
@@ -17,9 +17,9 @@ use crate::ccproxy::{
     adapter::{
         backend::{common, update_message_block},
         input::helper::thinking_adapter::{
-            adapt_vendor_thinking_params_for_openai_backend,
-            merge_reasoning_into_openai_message_content, normalize_nvidia_nim_thinking_fields,
-            supports_native_reasoning_history_for_openai_backend,
+            adapt_vendor_thinking_params_for_openai_backend_with_adapter,
+            merge_reasoning_into_openai_message_content,
+            normalize_nvidia_nim_thinking_fields_with_adapter,
         },
         range_adapter::adapt_temperature,
         unified::{
@@ -43,6 +43,7 @@ impl BackendAdapter for OpenAIBackendAdapter {
         api_key: &str,
         full_provider_url: &str,
         model: &str,
+        context: &BackendRequestContext,
         log_proxy_to_file: bool,
         headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
@@ -308,10 +309,19 @@ impl BackendAdapter for OpenAIBackendAdapter {
                         content = Some(OpenAIMessageContent::Text(" ".to_string()));
                     }
 
-                    let reasoning_content = if role_str == "assistant"
-                        && supports_native_reasoning_history_for_openai_backend(
-                            &unified_request.model,
-                        ) {
+                    let native_reasoning_history = context.thinking_adapter.is_some()
+                        && matches!(
+                            context.thinking_adapter,
+                            Some(
+                                crate::ai::model_catalog::ThinkingAdapter::OpenAi
+                                    | crate::ai::model_catalog::ThinkingAdapter::DeepSeek
+                                    | crate::ai::model_catalog::ThinkingAdapter::Qwen
+                                    | crate::ai::model_catalog::ThinkingAdapter::Kimi
+                                    | crate::ai::model_catalog::ThinkingAdapter::Minimax
+                                    | crate::ai::model_catalog::ThinkingAdapter::Glm
+                            )
+                        );
+                    let reasoning_content = if role_str == "assistant" && native_reasoning_history {
                         combined_reasoning
                     } else {
                         if role_str == "assistant" {
@@ -398,10 +408,11 @@ impl BackendAdapter for OpenAIBackendAdapter {
         // Check if it's a Kimi (Moonshot) model
         let _is_kimi = unified_request.model.to_lowercase().contains("kimi")
             || unified_request.model.to_lowercase().contains("moonshot");
-        let vendor_thinking_params = adapt_vendor_thinking_params_for_openai_backend(
+        let vendor_thinking_params = adapt_vendor_thinking_params_for_openai_backend_with_adapter(
             model,
             unified_request.thinking.as_ref(),
             unified_request.reasoning_effort.as_deref(),
+            context.thinking_adapter.clone(),
         );
         let reasoning_effort = vendor_thinking_params.reasoning_effort.clone();
         let reasoning_split = vendor_thinking_params.reasoning_split;
@@ -556,17 +567,22 @@ impl BackendAdapter for OpenAIBackendAdapter {
             &mut request_json,
             &unified_request.custom_params,
         );
-        normalize_nvidia_nim_thinking_fields(
+        if matches!(
+            context.thinking_adapter,
+            Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim)
+        ) {
+            normalize_nvidia_nim_thinking_fields_with_adapter(
+                &mut request_json,
+                model,
+                unified_request.thinking.as_ref(),
+                unified_request.reasoning_effort.as_deref(),
+            );
+        }
+        crate::ccproxy::helper::thinking::normalize_request_with_adapter(
             &mut request_json,
-            full_provider_url,
-            model,
-            unified_request.thinking.as_ref(),
-            unified_request.reasoning_effort.as_deref(),
-        );
-        crate::ccproxy::helper::thinking::normalize_request(
-            &mut request_json,
             model,
             full_provider_url,
+            context.thinking_adapter.clone(),
         );
 
         if log_proxy_to_file {

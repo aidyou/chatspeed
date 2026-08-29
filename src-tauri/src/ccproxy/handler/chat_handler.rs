@@ -352,6 +352,9 @@ pub(crate) async fn execute_unified_chat_request(
             &proxy_model.api_key,
             &full_url,
             &proxy_model.model,
+            &backend::BackendRequestContext {
+                thinking_adapter: proxy_model.thinking_adapter.clone(),
+            },
             log_proxy_to_file,
             &mut final_headers,
         )
@@ -653,6 +656,18 @@ pub async fn handle_chat_completion(
     let preprocessed_request_body =
         preprocess_client_request_body(client_request_body, &chat_protocol, &proxy_model)?;
 
+    log::debug!(
+        "ccproxy transport decision: model={}, adapter={:?}, transport={:?}, path={}",
+        proxy_model.model,
+        proxy_model.thinking_adapter,
+        proxy_model.matched_transport_id,
+        if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
+            "direct"
+        } else {
+            "unified"
+        }
+    );
+
     if chat_protocol == proxy_model.chat_protocol && !final_tool_compat_mode {
         let is_streaming = match chat_protocol {
             ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
@@ -759,6 +774,8 @@ mod usage_attribution_tests {
             top_k: None,
             stop: Vec::new(),
             tool_compat_mode: None,
+            thinking_adapter: None,
+            matched_transport_id: None,
         }
     }
 

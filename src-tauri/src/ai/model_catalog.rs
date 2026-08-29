@@ -1,0 +1,608 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use url::Url;
+use wildmatch::WildMatch;
+
+const EMBEDDED_CATALOG: &str = include_str!("../../assets/model_catalog/model_catalog.json");
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingAdapter {
+    #[serde(alias = "openai")]
+    OpenAi,
+    Claude,
+    Gemini,
+    #[serde(alias = "deepseek")]
+    DeepSeek,
+    Qwen,
+    Glm,
+    Kimi,
+    #[serde(alias = "stepfun")]
+    StepFun,
+    HunyuanHy4Preview,
+    Doubao,
+    #[serde(alias = "sensenova")]
+    SenseNova,
+    Mistral,
+    Mimo,
+    Minimax,
+    NvidiaNim,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Capabilities {
+    #[serde(default)]
+    pub reasoning: Option<bool>,
+    #[serde(default)]
+    pub function_call: Option<bool>,
+    #[serde(default)]
+    pub image_input: Option<bool>,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            reasoning: None,
+            function_call: None,
+            image_input: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReasoningPolicy {
+    pub supported_efforts: Vec<String>,
+    pub default_effort: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MatchPatterns {
+    #[serde(default)]
+    model: Vec<String>,
+    #[serde(default)]
+    profile: Vec<String>,
+    #[serde(default)]
+    endpoint_host: Vec<String>,
+    #[serde(default)]
+    backend_protocol: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Source {
+    url: String,
+    verified_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProfileRule {
+    id: String,
+    priority: i32,
+    #[serde(rename = "match")]
+    matcher: MatchPatterns,
+    #[serde(default)]
+    family: Option<String>,
+    #[serde(default)]
+    capabilities: Capabilities,
+    #[serde(default)]
+    context_size: Option<u32>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+    #[serde(default)]
+    recommended_temperature: Option<f32>,
+    #[serde(default)]
+    reasoning: Option<ReasoningPolicy>,
+    #[serde(default)]
+    sources: Vec<Source>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TransportRule {
+    id: String,
+    priority: i32,
+    #[serde(rename = "match")]
+    matcher: MatchPatterns,
+    thinking_adapter: ThinkingAdapter,
+    #[serde(default)]
+    sources: Vec<Source>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Defaults {
+    capabilities: Capabilities,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CatalogDocument {
+    version: u32,
+    defaults: Defaults,
+    profiles: Vec<ProfileRule>,
+    transports: Vec<TransportRule>,
+}
+
+#[derive(Debug, Error)]
+pub enum CatalogError {
+    #[error("failed to parse model catalog: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("unsupported model catalog version {0}")]
+    UnsupportedVersion(u32),
+    #[error("duplicate catalog {kind} id '{id}'")]
+    DuplicateId { kind: &'static str, id: String },
+    #[error("catalog field conflict at priority {priority}: {field}")]
+    Conflict { priority: i32, field: &'static str },
+    #[error("catalog profile '{0}' is missing")]
+    MissingProfile(String),
+    #[error("catalog transport '{0}' is missing")]
+    MissingTransport(String),
+    #[error("catalog transport '{transport}' has an invalid reasoning default effort")]
+    InvalidReasoningDefault { transport: String },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedModelProfile {
+    pub catalog_version: u32,
+    pub matched_profile_ids: Vec<String>,
+    pub family: Option<String>,
+    pub capabilities: Capabilities,
+    pub context_size: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub recommended_temperature: Option<f32>,
+    pub reasoning: Option<ReasoningPolicy>,
+    pub thinking_adapter: Option<ThinkingAdapter>,
+    pub matched_transport_id: Option<String>,
+}
+
+static CATALOG: LazyLock<Result<CatalogDocument, CatalogError>> =
+    LazyLock::new(|| parse_catalog(EMBEDDED_CATALOG));
+
+fn normalize(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn matches(patterns: &[String], value: &str) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| WildMatch::new(&normalize(pattern)).matches(value))
+}
+
+fn parse_catalog(source: &str) -> Result<CatalogDocument, CatalogError> {
+    let catalog: CatalogDocument = serde_json::from_str(source)?;
+    if catalog.version != 1 {
+        return Err(CatalogError::UnsupportedVersion(catalog.version));
+    }
+    let mut profile_ids = HashSet::new();
+    for profile in &catalog.profiles {
+        if !profile_ids.insert(profile.id.clone()) {
+            return Err(CatalogError::DuplicateId {
+                kind: "profile",
+                id: profile.id.clone(),
+            });
+        }
+        if let Some(policy) = &profile.reasoning {
+            if !policy
+                .supported_efforts
+                .iter()
+                .any(|effort| effort == &policy.default_effort)
+            {
+                return Err(CatalogError::InvalidReasoningDefault {
+                    transport: profile.id.clone(),
+                });
+            }
+        }
+    }
+    let mut transport_ids = HashSet::new();
+    for transport in &catalog.transports {
+        if !transport_ids.insert(transport.id.clone()) {
+            return Err(CatalogError::DuplicateId {
+                kind: "transport",
+                id: transport.id.clone(),
+            });
+        }
+        for profile_id in &transport.matcher.profile {
+            if !profile_ids.contains(profile_id) {
+                return Err(CatalogError::MissingProfile(profile_id.clone()));
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+fn merge_option<T: Clone + PartialEq>(
+    current: &mut Option<T>,
+    current_priority: &mut Option<i32>,
+    value: &Option<T>,
+    priority: i32,
+    field: &'static str,
+) -> Result<(), CatalogError> {
+    let Some(value) = value else { return Ok(()) };
+    match *current_priority {
+        Some(existing_priority) if existing_priority > priority => return Ok(()),
+        Some(existing_priority)
+            if existing_priority == priority && current.as_ref() != Some(value) =>
+        {
+            return Err(CatalogError::Conflict { priority, field });
+        }
+        _ => {
+            *current = Some(value.clone());
+            *current_priority = Some(priority);
+        }
+    }
+    Ok(())
+}
+
+fn profile_matches(rule: &ProfileRule, model: &str) -> bool {
+    rule.matcher.model.is_empty() || matches(&rule.matcher.model, model)
+}
+
+fn transport_matches(
+    rule: &TransportRule,
+    model: &str,
+    host: Option<&str>,
+    protocol: Option<&str>,
+    profile_ids: &[String],
+    ignore_host: bool,
+) -> bool {
+    let profile_ok = rule.matcher.profile.is_empty()
+        || rule
+            .matcher
+            .profile
+            .iter()
+            .any(|id| profile_ids.iter().any(|matched| matched == id));
+    let model_ok = rule.matcher.model.is_empty() || matches(&rule.matcher.model, model);
+    let host_ok = ignore_host
+        || rule.matcher.endpoint_host.is_empty()
+        || host.is_some_and(|host| matches(&rule.matcher.endpoint_host, host));
+    let protocol_ok = rule.matcher.backend_protocol.is_empty()
+        || protocol.is_some_and(|protocol| matches(&rule.matcher.backend_protocol, protocol));
+    profile_ok && model_ok && host_ok && protocol_ok
+}
+
+fn catalog_document() -> Result<CatalogDocument, CatalogError> {
+    match CATALOG.as_ref() {
+        Ok(catalog) => Ok(catalog.clone()),
+        Err(error) => Err(CatalogError::Parse(serde_json::Error::io(
+            std::io::Error::other(error.to_string()),
+        ))),
+    }
+}
+
+pub fn resolve_model_profile(model_id: &str) -> Result<ResolvedModelProfile, CatalogError> {
+    let catalog = catalog_document()?;
+    resolve_model_profile_with_catalog(&catalog, model_id, None, None, None)
+}
+
+pub fn resolve_transport(
+    model_id: &str,
+    base_url: Option<&str>,
+    backend_protocol: Option<&str>,
+    metadata: Option<&HashMap<String, String>>,
+) -> Result<Option<(ThinkingAdapter, String)>, CatalogError> {
+    let catalog = catalog_document()?;
+    resolve_transport_with_catalog(&catalog, model_id, base_url, backend_protocol, metadata)
+}
+
+fn resolve_transport_with_catalog(
+    catalog: &CatalogDocument,
+    model_id: &str,
+    base_url: Option<&str>,
+    backend_protocol: Option<&str>,
+    metadata: Option<&HashMap<String, String>>,
+) -> Result<Option<(ThinkingAdapter, String)>, CatalogError> {
+    let profile = resolve_model_profile_with_catalog(
+        catalog,
+        model_id,
+        base_url,
+        backend_protocol,
+        metadata,
+    )?;
+    let model = normalize(model_id);
+    let host = base_url
+        .and_then(|url| Url::parse(url.trim()).ok())
+        .and_then(|url| url.host_str().map(normalize));
+    if let Some(override_id) = metadata.and_then(|values| values.get("modelCatalogTransport")) {
+        let transport = catalog
+            .transports
+            .iter()
+            .find(|rule| rule.id == override_id.trim())
+            .ok_or_else(|| CatalogError::MissingTransport(override_id.clone()))?;
+        if transport_matches(
+            transport,
+            &model,
+            None,
+            backend_protocol.map(normalize).as_deref(),
+            &profile.matched_profile_ids,
+            true,
+        ) {
+            return Ok(Some((transport.thinking_adapter, transport.id.clone())));
+        }
+        return Ok(None);
+    }
+    let mut candidates: Vec<&TransportRule> = catalog
+        .transports
+        .iter()
+        .filter(|rule| {
+            !rule.matcher.endpoint_host.is_empty()
+                && transport_matches(
+                    rule,
+                    &model,
+                    host.as_deref(),
+                    backend_protocol.map(normalize).as_deref(),
+                    &profile.matched_profile_ids,
+                    false,
+                )
+        })
+        .collect();
+    let Some(max_priority) = candidates.iter().map(|rule| rule.priority).max() else {
+        return Ok(None);
+    };
+    candidates.retain(|rule| rule.priority == max_priority);
+    let transport_ids: HashSet<&str> = candidates.iter().map(|rule| rule.id.as_str()).collect();
+    if transport_ids.len() != 1 {
+        log::warn!(
+            "ambiguous model catalog transport for model '{}' at priority {}: {} candidates",
+            model,
+            max_priority,
+            transport_ids.len()
+        );
+        return Ok(None);
+    }
+    Ok(candidates
+        .first()
+        .map(|rule| (rule.thinking_adapter, rule.id.clone())))
+}
+
+fn resolve_model_profile_with_catalog(
+    catalog: &CatalogDocument,
+    model_id: &str,
+    _base_url: Option<&str>,
+    _protocol: Option<&str>,
+    _metadata: Option<&HashMap<String, String>>,
+) -> Result<ResolvedModelProfile, CatalogError> {
+    let model = normalize(model_id);
+    let mut rules: Vec<&ProfileRule> = catalog
+        .profiles
+        .iter()
+        .filter(|rule| profile_matches(rule, &model))
+        .collect();
+    rules.sort_by_key(|rule| (rule.priority, &rule.id));
+    let mut result = ResolvedModelProfile {
+        catalog_version: catalog.version,
+        matched_profile_ids: rules.iter().map(|rule| rule.id.clone()).collect(),
+        family: None,
+        capabilities: catalog.defaults.capabilities.clone(),
+        context_size: None,
+        max_output_tokens: None,
+        recommended_temperature: None,
+        reasoning: None,
+        thinking_adapter: None,
+        matched_transport_id: None,
+    };
+    let mut family_priority = None;
+    let mut reasoning_priority = None;
+    let mut reasoning_capability_priority = None;
+    let mut function_call_priority = None;
+    let mut image_input_priority = None;
+    let mut context_priority = None;
+    let mut output_priority = None;
+    let mut temperature_priority = None;
+    for rule in rules {
+        merge_option(
+            &mut result.family,
+            &mut family_priority,
+            &rule.family,
+            rule.priority,
+            "family",
+        )?;
+        merge_option(
+            &mut result.capabilities.reasoning,
+            &mut reasoning_capability_priority,
+            &rule.capabilities.reasoning,
+            rule.priority,
+            "capabilities.reasoning",
+        )?;
+        merge_option(
+            &mut result.capabilities.function_call,
+            &mut function_call_priority,
+            &rule.capabilities.function_call,
+            rule.priority,
+            "capabilities.functionCall",
+        )?;
+        merge_option(
+            &mut result.capabilities.image_input,
+            &mut image_input_priority,
+            &rule.capabilities.image_input,
+            rule.priority,
+            "capabilities.imageInput",
+        )?;
+        merge_option(
+            &mut result.context_size,
+            &mut context_priority,
+            &rule.context_size,
+            rule.priority,
+            "contextSize",
+        )?;
+        merge_option(
+            &mut result.max_output_tokens,
+            &mut output_priority,
+            &rule.max_output_tokens,
+            rule.priority,
+            "maxOutputTokens",
+        )?;
+        merge_option(
+            &mut result.recommended_temperature,
+            &mut temperature_priority,
+            &rule.recommended_temperature,
+            rule.priority,
+            "recommendedTemperature",
+        )?;
+        merge_option(
+            &mut result.reasoning,
+            &mut reasoning_priority,
+            &rule.reasoning,
+            rule.priority,
+            "reasoning",
+        )?;
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_catalog_is_valid() {
+        assert!(CATALOG.is_ok());
+    }
+
+    #[test]
+    fn profile_matching_normalizes_and_supports_wildcards() {
+        let profile = resolve_model_profile("  QWQ-32B  ").expect("catalog");
+        assert_eq!(profile.family.as_deref(), Some("qwen"));
+        assert_eq!(profile.capabilities.reasoning, Some(true));
+    }
+
+    #[test]
+    fn aggregator_does_not_select_official_transport() {
+        assert!(resolve_transport(
+            "deepseek-r1",
+            Some("https://openrouter.ai/api/v1"),
+            Some("openai"),
+            None
+        )
+        .expect("catalog")
+        .is_none());
+    }
+
+    #[test]
+    fn invalid_catalog_shapes_are_rejected() {
+        let duplicate = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"x","priority":1,"match":{"model":["x"]}},{"id":"x","priority":2,"match":{"model":["y"]}}],"transports":[]}"#;
+        assert!(matches!(
+            parse_catalog(duplicate),
+            Err(CatalogError::DuplicateId {
+                kind: "profile",
+                ..
+            })
+        ));
+
+        let unknown = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[],"transports":[],"unexpected":true}"#;
+        assert!(parse_catalog(unknown).is_err());
+
+        let invalid_effort = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"x","priority":1,"match":{"model":["x"]},"reasoning":{"supportedEfforts":["low"],"defaultEffort":"high"}}],"transports":[]}"#;
+        assert!(matches!(
+            parse_catalog(invalid_effort),
+            Err(CatalogError::InvalidReasoningDefault { .. })
+        ));
+    }
+
+    #[test]
+    fn higher_priority_rule_overrides_lower_priority_field() {
+        let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"family","priority":1,"match":{"model":["demo*"]},"family":"base","capabilities":{"reasoning":false}},{"id":"exact","priority":2,"match":{"model":["demo-1"]},"family":"exact","capabilities":{"reasoning":true}}],"transports":[]}"#;
+        let catalog = parse_catalog(source).expect("catalog");
+        let result = resolve_model_profile_with_catalog(&catalog, "demo-1", None, None, None)
+            .expect("profile");
+        assert_eq!(result.family.as_deref(), Some("exact"));
+        assert_eq!(result.capabilities.reasoning, Some(true));
+    }
+
+    #[test]
+    fn same_priority_conflicting_fields_are_rejected() {
+        let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"a","priority":1,"match":{"model":["demo"]},"family":"one"},{"id":"b","priority":1,"match":{"model":["demo"]},"family":"two"}],"transports":[]}"#;
+        let catalog = parse_catalog(source).expect("catalog");
+        assert!(matches!(
+            resolve_model_profile_with_catalog(&catalog, "demo", None, None, None),
+            Err(CatalogError::Conflict {
+                priority: 1,
+                field: "family"
+            })
+        ));
+    }
+
+    #[test]
+    fn legacy_official_transports_are_endpoint_bound() {
+        let cases = [
+            (
+                "glm-5.3-flash",
+                "https://open.bigmodel.cn/api/paas/v4",
+                ThinkingAdapter::Glm,
+            ),
+            (
+                "kimi-k3",
+                "https://api.moonshot.cn/v1",
+                ThinkingAdapter::Kimi,
+            ),
+            (
+                "step-1-flash",
+                "https://api.stepfun.ai/v1",
+                ThinkingAdapter::StepFun,
+            ),
+            (
+                "o3-mini",
+                "https://api.openai.com/v1",
+                ThinkingAdapter::OpenAi,
+            ),
+        ];
+        for (model, endpoint, adapter) in cases {
+            assert_eq!(
+                resolve_transport(model, Some(endpoint), Some("openai"), None)
+                    .expect("catalog")
+                    .map(|(resolved, _)| resolved),
+                Some(adapter)
+            );
+            assert!(resolve_transport(
+                model,
+                Some("https://openrouter.ai/api/v1"),
+                Some("openai"),
+                None
+            )
+            .expect("catalog")
+            .is_none());
+        }
+    }
+    #[test]
+    fn same_adapter_at_same_priority_is_still_ambiguous() {
+        let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"demo","priority":1,"match":{"model":["demo"]}}],"transports":[{"id":"demo-a","priority":10,"match":{"profile":["demo"],"endpointHost":["example.com"]},"thinkingAdapter":"deepseek"},{"id":"demo-b","priority":10,"match":{"profile":["demo"],"endpointHost":["example.com"]},"thinkingAdapter":"deepseek"}]}"#;
+        let catalog = parse_catalog(source).expect("catalog");
+        assert!(resolve_transport_with_catalog(
+            &catalog,
+            "demo",
+            Some("https://example.com/v1"),
+            Some("openai"),
+            None,
+        )
+        .expect("catalog")
+        .is_none());
+    }
+
+    #[test]
+    fn explicit_transport_override_is_validated() {
+        let mut metadata = HashMap::from([(
+            String::from("modelCatalogTransport"),
+            String::from("deepseek-official"),
+        )]);
+        assert!(resolve_transport(
+            "deepseek-r1",
+            Some("https://custom.example/v1"),
+            Some("openai"),
+            Some(&metadata)
+        )
+        .expect("catalog")
+        .is_some());
+        metadata.insert("modelCatalogTransport".into(), "missing".into());
+        assert!(matches!(
+            resolve_transport("deepseek-r1", None, None, Some(&metadata)),
+            Err(CatalogError::MissingTransport(_))
+        ));
+    }
+}

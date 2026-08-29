@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Originator advertised by the Codex CLI Rust client.
 const CODEX_ORIGINATOR: &str = "codex_cli_rs";
@@ -91,10 +91,7 @@ pub(crate) fn codex_responses_headers(identity_seed: &str) -> Vec<(String, Strin
         ("session-id".to_string(), identity_seed.to_string()),
         ("thread-id".to_string(), identity_seed.to_string()),
         // Codex sets x-client-request-id to the thread id on the HTTP path.
-        (
-            "x-client-request-id".to_string(),
-            identity_seed.to_string(),
-        ),
+        ("x-client-request-id".to_string(), identity_seed.to_string()),
         // Codex formats the window id as "{thread_id}:{counter}".
         (
             "x-codex-window-id".to_string(),

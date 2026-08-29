@@ -1,4 +1,4 @@
-use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_nim_thinking_fields;
+use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_nim_thinking_fields_with_adapter;
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
 use crate::ccproxy::helper::{get_tool_id, send_with_retry, RetryConfig};
 use crate::ccproxy::openai::OpenAIUsage;
@@ -96,12 +96,22 @@ pub async fn handle_direct_forward(
     ModelResolver::merge_parameters_json(&mut body_json, &proxy_model);
 
     body_json = enhance_direct_request_body(body_json, &proxy_model, &proxy_model.chat_protocol);
-    normalize_nvidia_nim_thinking_fields(
+    if matches!(
+        proxy_model.thinking_adapter,
+        Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim)
+    ) {
+        normalize_nvidia_nim_thinking_fields_with_adapter(
+            &mut body_json,
+            &proxy_model.model,
+            None,
+            None,
+        );
+    }
+    crate::ccproxy::helper::thinking::normalize_request_with_adapter(
         &mut body_json,
-        &proxy_model.base_url,
         &proxy_model.model,
-        None,
-        None,
+        &proxy_model.base_url,
+        proxy_model.thinking_adapter,
     );
     // Force set the model field for protocols that require it in the body to ensure the backend receives the correct ID.
     if let Some(obj) = body_json.as_object_mut() {
@@ -1460,6 +1470,8 @@ mod tests {
             top_k: None,
             stop: Vec::new(),
             tool_compat_mode: None,
+            thinking_adapter: None,
+            matched_transport_id: None,
         }
     }
 

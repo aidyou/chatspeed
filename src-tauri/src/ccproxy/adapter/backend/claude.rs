@@ -3,7 +3,7 @@ use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
 use std::sync::{Arc, RwLock};
 
-use super::{BackendAdapter, BackendResponse};
+use super::{BackendAdapter, BackendRequestContext, BackendResponse};
 use crate::ccproxy::claude::{
     ClaudeNativeContentBlock, ClaudeNativeMessage, ClaudeNativeRequest, ClaudeNativeResponse,
     ClaudeNativeTool, ClaudeStreamEvent, ClaudeToolChoice,
@@ -208,6 +208,7 @@ impl BackendAdapter for ClaudeBackendAdapter {
         api_key: &str,
         full_provider_url: &str,
         model: &str,
+        context: &BackendRequestContext,
         log_proxy_to_file: bool,
         headers: &mut reqwest::header::HeaderMap,
     ) -> Result<RequestBuilder, anyhow::Error> {
@@ -531,10 +532,11 @@ impl BackendAdapter for ClaudeBackendAdapter {
             &mut request_json,
             &unified_request.custom_params,
         );
-        crate::ccproxy::helper::thinking::normalize_request(
+        crate::ccproxy::helper::thinking::normalize_request_with_adapter(
             &mut request_json,
             model,
             full_provider_url,
+            context.thinking_adapter,
         );
 
         if log_proxy_to_file {

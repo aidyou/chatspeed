@@ -100,6 +100,9 @@ mod tests {
                 "test-api-key",
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 "deepseek-ai/deepseek-v4-flash",
+                &crate::ccproxy::adapter::backend::BackendRequestContext {
+                    thinking_adapter: Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim),
+                },
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -143,6 +146,9 @@ mod tests {
                 "test-api-key",
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 "moonshotai/kimi-k2-instruct",
+                &crate::ccproxy::adapter::backend::BackendRequestContext {
+                    thinking_adapter: Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim),
+                },
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -184,6 +190,9 @@ mod tests {
                 "test-api-key",
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 "google/gemma-4-31b-it",
+                &crate::ccproxy::adapter::backend::BackendRequestContext {
+                    thinking_adapter: Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim),
+                },
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -198,6 +207,48 @@ mod tests {
         assert!(payload.get("thinking").is_none());
         assert!(payload.get("reasoning_effort").is_none());
         assert!(payload.get("thinking_budget").is_none());
+    }
+
+    #[tokio::test]
+    async fn nvidia_override_custom_endpoint_uses_same_typed_adapter() {
+        let mut unified_request = UnifiedRequest {
+            model: "proxy-alias".to_string(),
+            messages: vec![UnifiedMessage {
+                role: UnifiedRole::User,
+                content: vec![UnifiedContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+                reasoning_content: None,
+            }],
+            reasoning_effort: Some("medium".to_string()),
+            thinking: Some(UnifiedThinking {
+                include_thoughts: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let request = OpenAIBackendAdapter
+            .adapt_request(
+                &Client::new(),
+                &mut unified_request,
+                "test-api-key",
+                "https://custom.example/v1/chat/completions",
+                "deepseek-ai/deepseek-v4-flash",
+                &crate::ccproxy::adapter::backend::BackendRequestContext {
+                    thinking_adapter: Some(crate::ai::model_catalog::ThinkingAdapter::NvidiaNim),
+                },
+                false,
+                &mut reqwest::header::HeaderMap::new(),
+            )
+            .await
+            .expect("override endpoint should adapt");
+        let payload = request_json(request);
+
+        assert_eq!(
+            payload["chat_template_kwargs"],
+            json!({ "thinking": true, "reasoning_effort": "high" })
+        );
+        assert!(payload.get("thinking").is_none());
     }
 
     #[tokio::test]
@@ -247,6 +298,7 @@ mod tests {
                 "test-api-key",
                 "https://example.com/v1/chat/completions",
                 "deepseek-v4-pro",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -394,6 +446,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -430,6 +483,9 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "deepseek-chat",
+                &crate::ccproxy::adapter::backend::BackendRequestContext {
+                    thinking_adapter: Some(crate::ai::model_catalog::ThinkingAdapter::DeepSeek),
+                },
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -466,6 +522,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "claude-3-7-sonnet",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -563,6 +620,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -636,6 +694,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -1432,6 +1491,7 @@ mod tests {
                 "test-api-key",
                 "https://api.abc.com/v1",
                 "gpt-4",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )
@@ -1467,6 +1527,7 @@ mod tests {
                 "test-api-key",
                 "https://api.openai.com/v1",
                 "gpt-4",
+                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
                 false,
                 &mut reqwest::header::HeaderMap::new(),
             )

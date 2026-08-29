@@ -719,6 +719,9 @@
         "none": "No Proxy"
       },
       "reasoning": "Reasoning Support",
+      "unset": "Not set",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
       "reasoningHigh": "High",
       "reasoningLow": "Low",
       "reasoningMax": "Max",
