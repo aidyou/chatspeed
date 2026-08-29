@@ -1466,6 +1466,13 @@ mod tests {
             .structured_content
             .expect("mcp_tool_load must return a declaration");
         assert_eq!(declaration["name"], "search");
+        assert!(loaded
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains("Full MCP tool definition:")));
+        assert!(loaded.content.as_deref().is_some_and(|content| {
+            content.contains("Call 'search' directly in your next tool action")
+        }));
     }
 
     #[tokio::test]

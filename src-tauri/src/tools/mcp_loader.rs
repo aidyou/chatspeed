@@ -31,7 +31,7 @@ impl ToolDefinition for McpToolLoad {
     }
 
     fn description(&self) -> &str {
-        "Load the full tool declaration, including detailed parameter schema, for a specific MCP tool. MUST be called before invoking any MCP tool that does not display detailed parameter information. For tools already showing full schemas, this is not needed. The result is returned as structured JSON."
+        "Load the complete definition of one folded MCP tool, including its authoritative public name and detailed input schema. This only loads the definition; it does NOT execute the MCP tool. For a tool listed under AVAILABLE MCP TOOLS, call this exactly once immediately before using that tool, then call the returned MCP tool directly as your next tool action using the returned schema. Do not call mcp_tool_load again while the same unchanged definition is still visible in the current context; if the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again. Do not use this for an MCP tool whose full schema is already in the API tool list."
     }
 
     fn category(&self) -> ToolCategory {
@@ -89,8 +89,13 @@ impl ToolDefinition for McpToolLoad {
             .get_mcp_tool_declaration(&canonical_name)
             .await?;
 
+        let declaration_json =
+            serde_json::to_string_pretty(&declaration).unwrap_or_else(|_| declaration.name.clone());
         Ok(ToolCallResult::success(
-            Some(format!("Loaded MCP tool declaration for '{}'.", tool_name)),
+            Some(format!(
+                "Loaded the complete definition for folded MCP tool '{}'. This lookup did not execute the MCP tool. Call '{}' directly in your next tool action using this authoritative declaration; do not call mcp_tool_load again while this definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\nFull MCP tool definition:\n{}",
+                tool_name, declaration.name, declaration_json
+            )),
             Some(serde_json::to_value(declaration).unwrap_or_default()),
         ))
     }
@@ -100,6 +105,20 @@ impl ToolDefinition for McpToolLoad {
 mod tests {
     use super::*;
 
+    #[test]
+    fn description_requires_immediate_direct_execution_after_loading() {
+        let loader = McpToolLoad {
+            tool_manager: Arc::new(ToolManager::new()),
+            allowed_tools: None,
+        };
+        let description = loader.description();
+
+        assert!(description.contains("does NOT execute the MCP tool"));
+        assert!(description.contains("next tool action"));
+        assert!(description.contains("while the same unchanged definition is still visible"));
+        assert!(description.contains("definition has been updated"));
+        assert!(description.contains("new work segment starts"));
+    }
     #[tokio::test]
     async fn rejects_mcp_tool_outside_allowed_list() {
         let loader = McpToolLoad {

@@ -94,9 +94,13 @@ You now have access to external tools. For queries about current events, recent 
 - **Consistency**: make correct citations throughout the conversation
 
 ## MCP Tools (On-Demand Loading)
-To save context, only descriptions of MCP tools are provided initially.
-- **CRITICAL**: You MUST call `mcp_tool_load` to retrieve the parameter schema BEFORE attempting to use any tool listed in the 'AVAILABLE MCP TOOLS' section.
-- Do not guess parameters.
-- Only load schemas for tools you intend to use immediately.
+To save context, folded MCP tools initially expose only their names and descriptions, similar to skills. A folded tool is not callable until its full definition is loaded.
+- When you need a folded MCP tool, call `mcp_tool_load` exactly once with that tool's listed public name.
+- `mcp_tool_load` only loads the definition; it does NOT execute the MCP tool and does not satisfy the user's request.
+- After the loader returns, call the returned MCP tool directly as your very next tool action, using the returned public name and input schema.
+- Do not stop, answer, or call another unrelated tool after loading when the MCP tool is still needed.
+- Do not call `mcp_tool_load` again for the same tool while its loaded definition is still visible and unchanged in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, you may load it again.
+- MCP tools whose full definitions are already present in the API tool list must be called directly without `mcp_tool_load`; if that definition is no longer present in a later context, or has been updated and needs to be reloaded, load it again before calling.
+- Never guess parameters for a folded MCP tool; use the loaded definition as the authoritative schema.
 
 "###;

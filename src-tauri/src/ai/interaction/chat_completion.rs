@@ -414,6 +414,32 @@ pub async fn start_new_chat_interaction(
     Ok(())
 }
 
+fn add_loaded_mcp_tool_to_turn_tools(
+    tools: &mut Option<Vec<MCPToolDeclaration>>,
+    messages: &[Value],
+) {
+    let Some(tools) = tools.as_mut() else {
+        return;
+    };
+
+    for declaration in messages.iter().filter_map(|message| {
+        (message.get("role").and_then(Value::as_str) == Some("tool")
+            && message.get("name").and_then(Value::as_str)
+                == Some(crate::tools::TOOL_MCP_TOOL_LOAD))
+        .then(|| {
+            message
+                .get("structured_content")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<MCPToolDeclaration>(value).ok())
+        })
+        .flatten()
+    }) {
+        if !tools.iter().any(|tool| tool.name == declaration.name) {
+            tools.push(declaration);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct PendingToolCalls {
     requested_count: usize,
@@ -731,7 +757,11 @@ async fn global_message_processor_loop(
                                 let provider_id = chat_param.provider_id;
                                 let model = chat_param.model;
                                 let org_metadata = *chat_param.org_metadata;
-                                let tools_for_next_turn = chat_param.active_tools_for_turn;
+                                let mut tools_for_next_turn = chat_param.active_tools_for_turn;
+                                add_loaded_mcp_tool_to_turn_tools(
+                                    &mut tools_for_next_turn,
+                                    &messages_for_next_ai_turn,
+                                );
                                 let retry_on_transient_error = chat_param.retry_on_transient_error;
                                 let mut next_metadata = org_metadata;
                                 next_metadata.retry_on_transient_error = retry_on_transient_error;
@@ -847,6 +877,22 @@ async fn global_message_processor_loop(
                                     )
                                 ),
                             });
+                            if t_name_clone == crate::tools::TOOL_MCP_TOOL_LOAD {
+                                if let Some(structured_content) = tool_execution_actual_result
+                                    .get("structured_content")
+                                    .cloned()
+                                {
+                                    if let Some(object) =
+                                        tool_result_msg_for_history.as_object_mut()
+                                    {
+                                        object.insert(
+                                            "structured_content".to_string(),
+                                            structured_content,
+                                        );
+                                    }
+                                }
+                            }
+
                             if let Some(responses_item_id) =
                                 tool_decl_to_execute.responses_item_id.as_ref()
                             {

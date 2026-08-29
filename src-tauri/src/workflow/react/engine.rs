@@ -188,6 +188,9 @@ pub struct WorkflowExecutor {
     /// Server-side shell execution plans bound to a canonical approval.
     pub(crate) approved_shell_execution_plans:
         Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
+    /// MCP tools loaded from folded summaries and exposed with their full definitions for this
+    /// runtime. These are session-local expansions and do not change the user's MCP settings.
+    pub(crate) loaded_mcp_tools: HashSet<String>,
     /// One-shot cache of bash commands approved by Smart AI review to prevent
     /// the generic approval path from re-intercepting the same command.
     pub(crate) smart_approved_bash_commands: HashSet<String>,
@@ -609,9 +612,12 @@ impl WorkflowExecutor {
     }
 
     fn mcp_tool_exposure_set(&self) -> HashSet<String> {
-        self.mcp_tool_config()
+        let mut exposed: HashSet<String> = self
+            .mcp_tool_config()
             .map(|config| config.auto_expand.into_iter().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        exposed.extend(self.loaded_mcp_tools.iter().cloned());
+        exposed
     }
 
     fn available_tools_allowlist(raw_tools: Option<&str>) -> Option<HashSet<String>> {
@@ -858,6 +864,7 @@ impl WorkflowExecutor {
                 compressed_until_message_id,
             )
             .await?;
+        self.loaded_mcp_tools.clear();
         self.last_compression_step = self.current_step;
         self.last_compression_boundary_id = Some(compressed_until_message_id);
         self.background_compression_boundary_id = None;
@@ -1218,6 +1225,7 @@ impl ReActExecutor for WorkflowExecutor {
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.pending_completion_reports.clear();
         self.next_llm_runtime_reminder = None;
+        self.loaded_mcp_tools.clear();
         self.context
             .begin_new_task_segment_from_runtime_projection()
             .await?;
@@ -1240,6 +1248,7 @@ impl ReActExecutor for WorkflowExecutor {
         self.approved_shell_execution_plans.clear();
         self.smart_approved_bash_commands.clear();
         self.smart_approved_tool_call_ids.clear();
+        self.loaded_mcp_tools.clear();
         self.loop_detector = LoopDetector::new();
         self.recovery_failed = false;
         self.recovery_error = None;
@@ -1422,6 +1431,7 @@ impl WorkflowExecutor {
         self.pending_approval_queue.clear();
         self.smart_approved_bash_commands.clear();
         self.smart_approved_tool_call_ids.clear();
+        self.loaded_mcp_tools.clear();
         self.loop_detector = LoopDetector::new();
         self.recovery_failed = false;
         self.recovery_error = None;
@@ -1628,6 +1638,7 @@ impl WorkflowExecutor {
             pending_approval_queue: VecDeque::new(),
             approved_shell_execution_plans: Arc::new(dashmap::DashMap::new()),
             smart_approved_bash_commands: HashSet::new(),
+            loaded_mcp_tools: HashSet::new(),
             smart_approved_tool_call_ids: HashSet::new(),
             recovery_failed: false,
             recovery_error: None,
@@ -2561,7 +2572,12 @@ impl WorkflowExecutor {
             {
                 tm.register_tool(Arc::new(McpToolLoad {
                     tool_manager: self.global_tool_manager.clone(),
-                    allowed_tools: Some(folded_mcp_tools),
+                    allowed_tools: Some(
+                        allowed_mcp_tools
+                            .iter()
+                            .map(|tool| tool.canonical_name.clone())
+                            .collect(),
+                    ),
                 }))
                 .await?;
             }
@@ -2689,6 +2705,7 @@ impl WorkflowExecutor {
         self.context
             .begin_execution_segment_from_approved_plan()
             .await?;
+        self.loaded_mcp_tools.clear();
         let preserved_config = self.sync_runtime_preferences_from_snapshot();
 
         let updated_agent_config = {
@@ -6229,6 +6246,25 @@ impl WorkflowExecutor {
         tool_call: &serde_json::Value,
         result: Result<serde_json::Value, crate::tools::ToolError>,
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
+        if name == crate::tools::TOOL_MCP_TOOL_LOAD && result.is_ok() {
+            if let Some(requested_tool_name) = args.get("tool_name").and_then(Value::as_str) {
+                if let Some(canonical_tool_name) = self
+                    .global_tool_manager
+                    .resolve_mcp_tool_name(requested_tool_name)
+                    .await
+                {
+                    if self.loaded_mcp_tools.insert(canonical_tool_name.clone()) {
+                        log::info!(
+                            "WorkflowExecutor {}: Loaded folded MCP tool '{}' as '{}' for direct use in subsequent turns",
+                            self.session_id,
+                            requested_tool_name,
+                            canonical_tool_name
+                        );
+                    }
+                }
+            }
+        }
+
         if name == crate::tools::TOOL_SUB_AGENT_RUN {
             if let Ok(val) = &result {
                 if let Some(sub_agent_id) = Self::extract_call_mode_sub_agent_task_id(args, val) {

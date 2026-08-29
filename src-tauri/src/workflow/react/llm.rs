@@ -1320,7 +1320,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                     tool.description.replace("\n", " ")
                 ));
             }
-            reminders.push_str("<SYSTEM_REMINDER>The MCP tools listed above are folded. Use `mcp_tool_load` to get a listed tool's detailed parameter schema before calling it. MCP tools already present in the API tool list include their schemas and should be called directly.</SYSTEM_REMINDER>\n\n");
+            reminders.push_str("<SYSTEM_REMINDER>Folded MCP tools are discoverable capabilities, similar to skills: only their names and descriptions are shown here, so they are not callable until loaded. When you need one, call `mcp_tool_load` exactly once with its listed public name, then treat the returned full definition as authoritative and call that MCP tool directly as your very next tool action using the returned public name and input schema. Loading the definition is not execution and does not satisfy the request; do not stop or call another unrelated tool after loading. Do not load the same tool again while the same unchanged definition is still visible in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again before calling the tool. MCP tools already present in the API tool list include their full definitions and must be called directly without `mcp_tool_load`; if that definition is no longer present in a later context, or has been updated and needs reloading, load it again.</SYSTEM_REMINDER>\n\n");
         }
 
         // Skills
@@ -2096,8 +2096,10 @@ mod tests {
 
         assert!(alpha_mcp < zeta_mcp);
         assert!(alpha_skill < zeta_skill);
-        assert!(rendered.contains("The MCP tools listed above are folded."));
-        assert!(rendered.contains("should be called directly."));
+        assert!(rendered.contains("Folded MCP tools are discoverable capabilities"));
+        assert!(rendered.contains("exactly once"));
+        assert!(rendered.contains("next tool action"));
+        assert!(rendered.contains("must be called directly"));
     }
 
     #[test]
