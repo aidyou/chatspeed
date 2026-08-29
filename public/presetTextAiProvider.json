@@ -300,7 +300,7 @@
       "keyApplyUrl": "https://platform.openai.com/settings/organization/api-keys"
     },
     {
-      "protocol": "openai",
+      "protocol": "claude",
       "name": "Anthropic (Claude)",
       "logo": "https://www.anthropic.com/favicon.ico",
       "desc": "Claude is Anthropic's AI assistant built with Constitutional AI, integrating ethical principles directly into the model.",
