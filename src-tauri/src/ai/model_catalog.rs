@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::LazyLock,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -13,8 +14,8 @@ pub mod pricing;
 const EMBEDDED_CATALOG: &str = include_str!("../../assets/model_catalog/model_catalog.json");
 const EMBEDDED_TRANSPORT_CATALOG: &str =
     include_str!("../../assets/model_catalog/transport_catalog.json");
-const MODELS_DEV_CATALOG: &str = include_str!("../../assets/models_dev/catalog.json");
-
+const EMBEDDED_MODELS_DEV_CATALOG: &str = include_str!("../../assets/models_dev/catalog.json");
+pub const MODELS_DEV_CACHE_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ModelsDevCatalog {
@@ -32,6 +33,8 @@ pub struct ModelsDevProvider {
     pub api: Option<String>,
     #[serde(default)]
     pub doc: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     pub models: HashMap<String, ModelsDevModel>,
 }
@@ -102,8 +105,55 @@ pub struct ModelCost {
 
 use crate::db::{PricingConfig, PricingTier};
 
-pub fn models_dev_catalog() -> Result<ModelsDevCatalog, CatalogError> {
-    serde_json::from_str(MODELS_DEV_CATALOG).map_err(CatalogError::Parse)
+#[derive(Default)]
+struct CatalogCache<T> {
+    value: Option<T>,
+    last_used: Option<Instant>,
+}
+
+impl<T> CatalogCache<T> {
+    fn get(&mut self) -> Option<&T> {
+        let expired = self
+            .last_used
+            .is_some_and(|last_used| last_used.elapsed() >= MODELS_DEV_CACHE_IDLE_TTL);
+        if expired {
+            self.value = None;
+            self.last_used = None;
+            return None;
+        }
+        self.last_used = Some(Instant::now());
+        self.value.as_ref()
+    }
+
+    fn set(&mut self, value: T) {
+        self.value = Some(value);
+        self.last_used = Some(Instant::now());
+    }
+}
+
+static MODELS_DEV: Mutex<CatalogCache<Arc<ModelsDevCatalog>>> = Mutex::new(CatalogCache {
+    value: None,
+    last_used: None,
+});
+
+pub fn set_models_dev_catalog(catalog: ModelsDevCatalog) -> Result<(), CatalogError> {
+    MODELS_DEV
+        .lock()
+        .map_err(|_| CatalogError::CachePoisoned)?
+        .set(Arc::new(catalog));
+    Ok(())
+}
+
+pub fn models_dev_catalog() -> Result<Arc<ModelsDevCatalog>, CatalogError> {
+    let mut cache = MODELS_DEV.lock().map_err(|_| CatalogError::CachePoisoned)?;
+    if let Some(catalog) = cache.get() {
+        return Ok(catalog.clone());
+    }
+    let catalog: ModelsDevCatalog =
+        serde_json::from_str(EMBEDDED_MODELS_DEV_CATALOG).map_err(CatalogError::Parse)?;
+    let catalog = Arc::new(catalog);
+    cache.set(catalog.clone());
+    Ok(catalog)
 }
 
 pub fn pricing_config_from_model(model: &ModelsDevModel) -> Option<PricingConfig> {
@@ -293,6 +343,8 @@ pub enum CatalogError {
     MissingProfile(String),
     #[error("models.dev catalog is empty or has no usable providers")]
     EmptyModelsDevCatalog,
+    #[error("model.dev catalog cache is unavailable")]
+    CachePoisoned,
     #[error("catalog transport '{0}' is missing")]
     MissingTransport(String),
     #[error("catalog transport '{transport}' has an invalid reasoning default effort")]
@@ -341,6 +393,12 @@ struct TransportDocument {
 }
 fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn catalog_model_ids(model_id: &str) -> impl Iterator<Item = String> + '_ {
+    let normalized = normalize(model_id);
+    let base = normalized.split_once(':').map_or(normalized.clone(), |(base, _)| base.to_string());
+    [normalized, base].into_iter()
 }
 
 fn matches(patterns: &[String], value: &str) -> bool {
@@ -459,7 +517,8 @@ fn transport_document() -> Result<CatalogDocument, CatalogError> {
     }
 }
 pub fn resolve_model_profile(model_id: &str) -> Result<ResolvedModelProfile, CatalogError> {
-    resolve_model_profile_from_catalog(&models_dev_catalog()?, model_id)
+    let catalog = models_dev_catalog()?;
+    resolve_model_profile_from_catalog(catalog.as_ref(), model_id)
 }
 
 pub fn resolve_model_profile_from_catalog(
@@ -468,12 +527,13 @@ pub fn resolve_model_profile_from_catalog(
 ) -> Result<ResolvedModelProfile, CatalogError> {
     let mut profile =
         resolve_model_profile_with_catalog(&catalog_document()?, model_id, None, None, None)?;
-    let normalized = normalize(model_id);
-    let model = models_dev.models.get(&normalized).or_else(|| {
-        models_dev
-            .providers
-            .values()
-            .find_map(|p| p.models.get(&normalized))
+    let model = catalog_model_ids(model_id).find_map(|candidate| {
+        models_dev.models.get(&candidate).or_else(|| {
+            models_dev
+                .providers
+                .values()
+                .find_map(|provider| provider.models.get(&candidate))
+        })
     });
     if let Some(model) = model {
         profile.family = profile.family.or_else(|| model.family.clone());
@@ -481,6 +541,11 @@ pub fn resolve_model_profile_from_catalog(
         profile.capabilities.function_call = profile.capabilities.function_call.or(model.tool_call);
         profile.attachment = model.attachment.or(profile.attachment);
         profile.structured_output = model.structured_output.or(profile.structured_output);
+        profile.capabilities.image_input = model
+            .modalities
+            .as_ref()
+            .map(|modalities| modalities.input.iter().any(|value| value == "image"))
+            .or(profile.capabilities.image_input);
         profile.audio_input = model
             .modalities
             .as_ref()

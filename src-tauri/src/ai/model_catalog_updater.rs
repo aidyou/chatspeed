@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use serde_json::from_str;
 
 use super::{
-    model_catalog::{models_dev_catalog, CatalogError, ModelsDevCatalog},
+    model_catalog::{models_dev_catalog, set_models_dev_catalog, CatalogError, ModelsDevCatalog},
     network::{ApiClient, ApiConfig, DefaultApiClient, ErrorFormat, ProxyType},
 };
 
@@ -39,12 +39,13 @@ impl ModelsDevCatalogService {
                     Ok(catalog)
                 }) {
                     Ok(catalog) => catalog,
-                    Err(_) => models_dev_catalog()?,
+                    Err(_) => models_dev_catalog()?.as_ref().clone(),
                 }
             }
-            _ => models_dev_catalog()?,
+            _ => models_dev_catalog()?.as_ref().clone(),
         };
         validate_catalog(&index)?;
+        set_models_dev_catalog(index.clone())?;
         Ok(Self {
             index: Arc::new(RwLock::new(Arc::new(index))),
             success_path: app_data_dir.as_ref().join(SUCCESS_FILE),
@@ -194,7 +195,8 @@ impl ModelsDevCatalogService {
         }
         let _ = fs::remove_file(&backup);
         let _ = fs::remove_file(&success_backup);
-        *self.index.write() = Arc::new(catalog);
+        *self.index.write() = Arc::new(catalog.clone());
+        set_models_dev_catalog(catalog).map_err(|error| error.to_string())?;
         Ok(true)
     }
 }

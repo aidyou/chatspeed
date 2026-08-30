@@ -398,24 +398,6 @@
           <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
             <el-switch v-model="modelConfigForm.imageInput" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.attachment')" prop="attachment">
-            <el-switch v-model="modelConfigForm.attachment" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.model.structuredOutput')" prop="structuredOutput">
-            <el-switch v-model="modelConfigForm.structuredOutput" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.model.audioInput')" prop="audioInput">
-            <el-switch v-model="modelConfigForm.audioInput" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.model.audioOutput')" prop="audioOutput">
-            <el-switch v-model="modelConfigForm.audioOutput" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.model.videoInput')" prop="videoInput">
-            <el-switch v-model="modelConfigForm.videoInput" />
-          </el-form-item>
-          <el-form-item :label="$t('settings.model.pdfInput')" prop="pdfInput">
-            <el-switch v-model="modelConfigForm.pdfInput" />
-          </el-form-item>
           <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
               style="width: 100%" />
@@ -441,6 +423,49 @@
         </el-tab-pane>
 
         <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
+          <el-form-item :label="$t('settings.model.structuredOutput')" prop="structuredOutput">
+            <el-switch v-model="modelConfigForm.structuredOutput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.attachment')" prop="attachment">
+            <el-switch v-model="modelConfigForm.attachment" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioInput')" prop="audioInput">
+            <el-switch v-model="modelConfigForm.audioInput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioOutput')" prop="audioOutput">
+            <el-switch v-model="modelConfigForm.audioOutput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.videoInput')" prop="videoInput">
+            <el-switch v-model="modelConfigForm.videoInput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.pdfInput')" prop="pdfInput">
+            <el-switch v-model="modelConfigForm.pdfInput" />
+          </el-form-item>
+
+          <div class="custom-headers-section">
+            <div class="header-title">
+              <span>{{ $t('settings.model.customParams') }}</span>
+              <el-tooltip :content="$t('settings.model.customParamsTip')" placement="top">
+                <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
+              </el-tooltip>
+            </div>
+
+            <div v-for="(param, index) in modelConfigForm.customParams" :key="index" class="header-row"
+              style="display: flex; gap: 10px; margin-bottom: 10px">
+              <el-input v-model="param.key" :placeholder="$t('settings.model.paramKey')" style="flex: 1" />
+              <el-input v-model="param.value" :placeholder="$t('settings.model.paramValue')" style="flex: 2" />
+              <el-button type="danger" link @click="removeModelConfigParam(index)" style="padding: 0; min-width: 24px">
+                <cs name="trash" size="16px" />
+              </el-button>
+            </div>
+
+            <el-button type="primary" plain size="small" @click="addModelConfigParam" style="width: 100%">
+              <cs name="add" /> {{ $t('settings.model.addParam') }}
+            </el-button>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane :label="$t('settings.model.pricingInfo')" name="pricing">
           <el-form-item :label="$t('settings.model.inputPricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.inputPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
@@ -483,30 +508,6 @@
           <div class="form-tip">
             {{ $t('settings.model.pricingNote') }}
           </div>
-
-          <el-divider border-style="dashed" />
-
-          <div class="custom-headers-section">
-            <div class="header-title">
-              <span>{{ $t('settings.model.customParams') }}</span>
-              <el-tooltip :content="$t('settings.model.customParamsTip')" placement="top">
-                <cs name="help-circle" size="14px" color="secondary" style="margin-left: 4px" />
-              </el-tooltip>
-            </div>
-
-            <div v-for="(param, index) in modelConfigForm.customParams" :key="index" class="header-row"
-              style="display: flex; gap: 10px; margin-bottom: 10px">
-              <el-input v-model="param.key" :placeholder="$t('settings.model.paramKey')" style="flex: 1" />
-              <el-input v-model="param.value" :placeholder="$t('settings.model.paramValue')" style="flex: 2" />
-              <el-button type="danger" link @click="removeModelConfigParam(index)" style="padding: 0; min-width: 24px">
-                <cs name="trash" size="16px" />
-              </el-button>
-            </div>
-
-            <el-button type="primary" plain size="small" @click="addModelConfigParam" style="width: 100%">
-              <cs name="add" /> {{ $t('settings.model.addParam') }}
-            </el-button>
-          </div>
         </el-tab-pane>
       </el-tabs>
     </el-form>
@@ -536,27 +537,24 @@
       </div>
 
       <div class="preset-models-list">
-        <el-card v-for="model in filteredModels" :key="model.name" class="preset-model-card" shadow="hover">
+        <el-card v-for="provider in filteredModels" :key="provider.id" class="preset-model-card" shadow="hover">
           <div class="model-item">
             <div class="model-info">
-              <img :src="model.logo" class="model-logo" @error="onProviderLogoError" />
+              <img :src="provider.logo" class="model-logo" @error="onProviderLogoError" />
               <div class="model-details">
-                <h3>{{ model.name }}</h3>
-                <p>{{ model.desc }}</p>
+                <h3>{{ provider.name }}</h3>
+                <p>{{ provider.desc }}</p>
               </div>
-              <el-button type="success" @click="importPresetModel(model)">{{
-                $t('settings.model.addFromPreset')
-                }}</el-button>
+              <el-button type="success" @click="importPresetModel(provider)">
+                {{ $t('settings.model.addFromPreset') }}
+              </el-button>
             </div>
             <div class="links">
-              <el-link v-if="model.documentationUrl" type="primary" @click="openUrl(model.documentationUrl)">
+              <el-link v-if="provider.documentationUrl" type="primary" @click="openUrl(provider.documentationUrl)">
                 {{ $t('settings.model.documentation') }}
               </el-link>
-              <el-link v-if="model.modelListUrl" type="primary" @click="openUrl(model.modelListUrl)">
+              <el-link v-if="provider.modelListUrl" type="primary" @click="openUrl(provider.modelListUrl)">
                 {{ $t('settings.model.modelInfo') }}
-              </el-link>
-              <el-link v-if="model.keyApplyUrl" type="primary" @click="openUrl(model.keyApplyUrl)">
-                {{ $t('settings.model.applyKey') }}
               </el-link>
             </div>
           </div>
@@ -932,64 +930,17 @@ const editModel = async (id, model) => {
     modelForm.value.metadata = {
       ...(modelForm.value.metadata || {}),
       modelsDevProviderId: model.providerId,
-      modelsDevModelId: model.model
+      modelsDevModelId: null
     }
-    modelConfigForm.value = {
-      ...createDefaultModelConfig(),
-      id: model.model,
-      name: model.name,
-      reasoning: model.reasoning,
-      functionCall: model.functionCall,
-      imageInput: model.imageInput,
-      attachment: model.attachment,
-      structuredOutput: model.structuredOutput,
-      audioInput: model.audioInput,
-      audioOutput: model.audioOutput,
-      videoInput: model.videoInput,
-      pdfInput: model.pdfInput,
-      contextSize: model.contextSize,
-      maxTokens: model.maxTokens,
-      pricing: normalizePricing({
-        inputPerMillion: model.pricing?.input,
-        outputPerMillion: model.pricing?.output,
-        cachePerMillion: model.pricing?.cache_read,
-        cacheWritePerMillion: model.pricing?.cache_write,
-        audioInputPerMillion: model.pricing?.input_audio,
-        audioOutputPerMillion: model.pricing?.output_audio,
-        tiers: model.pricing?.tiers,
-        pricingSource: model.pricing?.pricingSource || 'models.dev',
-        reasoningPricingMode: model.pricing?.reasoning != null ? 'separate' : 'output'
-      })
-    }
-
-    const keys = ['name', 'logo', 'baseUrl', 'maxTokens', 'temperature', 'topP', 'topK']
-    keys.forEach(key => {
-      modelForm.value[key] = model[key]
-      console.log(key, model[key])
-    })
-    if (!modelForm.value.baseUrl) {
-      modelForm.value.baseUrl = baseUrlPlaceholder.value
-    }
-
-    console.log(modelForm.value)
+    modelConfigForm.value = createDefaultModelConfig()
   } else {
     editId.value = null
     modelForm.value = createDefaultFormData()
-    if (!modelForm.baseUrl) {
+    if (!modelForm.value.baseUrl) {
       modelForm.value.baseUrl = baseUrlPlaceholder.value
     }
   }
   modelDialogVisible.value = true
-
-  fetchedProviderModelsFromServer(
-    modelForm.value.apiProtocol,
-    modelForm.value.baseUrl,
-    modelForm.value.apiKey,
-    {
-      proxyType: modelForm.value.proxyType,
-      proxyServers: modelForm.value.proxyServers
-    }
-  )
 }
 
 const onModelDialogClose = () => {
@@ -1616,26 +1567,26 @@ const onProviderModelSave = async () => {
       return {
         id: model.id.trim(),
         name: modelAliasFromId(model.id, model.name),
-        group: model.family || '',
-        reasoning: capabilities.reasoning ?? false,
+        group: model.family || profile?.family || '',
+        reasoning: capabilities.reasoning ?? model.reasoning ?? false,
         thinking: capabilities.reasoning
           ? {
             type: 'enabled',
             budgetTokens: budgetFromThinkingLevel(thinkingLevel)
           }
           : null,
-        functionCall: model.functionCall,
-        imageInput: model.imageInput,
-        attachment: model.attachment,
-        structuredOutput: model.structuredOutput,
-        audioInput: model.audioInput,
-        audioOutput: model.audioOutput,
-        videoInput: model.videoInput,
-        pdfInput: model.pdfInput,
-        contextSize: model.contextSize,
-        temperature: model.temperatureSupported ? 0.7 : -0.1,
-        maxTokens: model.maxTokens,
-        pricing: normalizePricing({
+        functionCall: capabilities.functionCall ?? model.functionCall ?? false,
+        imageInput: capabilities.imageInput ?? model.imageInput ?? false,
+        attachment: profile?.attachment ?? model.attachment ?? false,
+        structuredOutput: profile?.structuredOutput ?? model.structuredOutput ?? false,
+        audioInput: profile?.audioInput ?? model.audioInput ?? false,
+        audioOutput: profile?.audioOutput ?? model.audioOutput ?? false,
+        videoInput: profile?.videoInput ?? model.videoInput ?? false,
+        pdfInput: profile?.pdfInput ?? model.pdfInput ?? false,
+        contextSize: profile?.contextSize ?? model.contextSize ?? 128000,
+        temperature: profile?.recommendedTemperature ?? (model.temperatureSupported ? 0.7 : -0.1),
+        maxTokens: profile?.maxOutputTokens ?? model.maxTokens ?? 0,
+        pricing: normalizePricing(profile?.pricing || {
           inputPerMillion: model.pricing?.input,
           outputPerMillion: model.pricing?.output,
           cachePerMillion: model.pricing?.cache_read,
@@ -1710,7 +1661,7 @@ const searchQuery = ref('')
 const filteredModels = computed(() => {
   if (!searchQuery.value) return presetModels.value
   const search = searchQuery.value.toLowerCase()
-  return presetModels.value.filter(model => model.searchName.includes(search))
+  return presetModels.value.filter(provider => provider.searchName.includes(search))
 })
 
 /**
@@ -1722,9 +1673,10 @@ const showPresetModels = async () => {
         const providers = await modelStore.listModelsDevProviders()
         presetModels.value = providers
           .filter(provider => provider.api && provider.models && Object.keys(provider.models).length)
-          .flatMap(provider => Object.values(provider.models).map(model => ({
+          .map(provider => ({
+            id: provider.id,
             name: provider.name,
-            desc: model.name,
+            desc: provider.description || provider.name,
             logo: getProviderLogo(provider.id, provider.api),
             documentationUrl: provider.doc,
             modelListUrl: provider.doc,
@@ -1733,22 +1685,9 @@ const showPresetModels = async () => {
             protocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
             apiProtocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
             baseUrl: provider.api,
-            models: [model.id],
-            model: model.id,
-            attachment: model.attachment ?? false,
-            reasoning: model.reasoning ?? false,
-            functionCall: model.tool_call ?? false,
-            structuredOutput: model.structured_output ?? false,
-            temperatureSupported: model.temperature ?? false,
-            imageInput: model.modalities?.input?.includes('image') ?? false,
-            audioInput: model.modalities?.input?.includes('audio') ?? false,
-            videoInput: model.modalities?.input?.includes('video') ?? false,
-            pdfInput: model.modalities?.input?.includes('pdf') ?? false,
-            contextSize: model.limit?.context ?? 128000,
-            maxTokens: model.limit?.output ?? 0,
-            pricing: model.cost,
-            searchName: `${provider.name} ${model.name} ${model.id}`.toLowerCase()
-          })))
+            models: [],
+            searchName: `${provider.name} ${provider.description || ''}`.toLowerCase()
+          }))
     } catch (error) {
       if (error instanceof FrontendAppError) {
         return showMessage(
@@ -1777,10 +1716,9 @@ const onManualAdd = () => {
  * Imports a preset model and opens the edit model dialog
  * @param {Object} model - The preset model data to import
  */
-const importPresetModel = model => {
+const importPresetModel = provider => {
   presetModelsVisible.value = false
-  console.log(model)
-  editModel(null, model)
+  editModel(null, provider)
 }
 </script>
 
@@ -1877,7 +1815,6 @@ const importPresetModel = model => {
         gap: var(--cs-space);
       }
     }
-
     .model-details {
       flex: 1;
       min-width: 0;

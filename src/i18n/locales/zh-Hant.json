@@ -715,6 +715,7 @@
       "priceMultiplier": "倍率",
       "presencePenalty": "存在懲罰",
       "presencePenaltyPlaceholder": "調整模型重複已出現詞語的可能性。值越大，越不容易重複。設為0或留空則不啟用。",
+      "pricingInfo": "價格資訊",
       "pricingNote": "單價支援任意幣種或計價單位，統計結果會按你填寫的單位直接計算；為避免彙總偏差，請盡量在不同模型之間使用同一單位。",
       "presetModels": "預設模型",
       "provider": "供應商",

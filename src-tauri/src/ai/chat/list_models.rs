@@ -62,6 +62,7 @@ fn enrich_model_details(mut details: ModelDetails) -> Result<ModelDetails, AiErr
     }
 
     let model_id = details.id.to_ascii_lowercase();
+
     if details.family.is_none() {
         details.family = get_family_from_model_id(&model_id);
     }
