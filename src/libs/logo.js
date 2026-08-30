@@ -1,5 +1,25 @@
 import iconFont from '@/components/icon/type.js'
 
+function googleFaviconUrl(value) {
+  try {
+    const host = new URL(value).hostname || value
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}`
+  } catch {
+    return value
+      ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(value)}`
+      : 'https://www.google.com/s2/favicons?domain=models.dev'
+  }
+}
+
+export function getProviderLogo(providerId, fallbackHost) {
+  const id = String(providerId || '').trim().toLowerCase()
+  return id ? `https://models.dev/logos/${encodeURIComponent(id)}.svg` : googleFaviconUrl(fallbackHost)
+}
+
+export function providerLogoFallback(providerId, fallbackHost) {
+  return googleFaviconUrl(fallbackHost || providerId)
+}
+
 /**
  * Retrieves the logo key associated with a given model.
  *

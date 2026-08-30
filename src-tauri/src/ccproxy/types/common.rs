@@ -86,6 +86,7 @@ pub struct ProxyModel {
     pub key_index: Option<usize>,
     pub model_metadata: Option<Value>,
     pub custom_params: Option<Value>,
+    pub pricing: Option<crate::db::PricingConfig>,
     pub prompt_injection: String,
     pub prompt_injection_position: Option<String>,
     pub prompt_text: String,

@@ -106,7 +106,12 @@ fn query_grouped_stats(
             COUNT(*) AS request_count,
             COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
             COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-            COALESCE(SUM(cache_tokens), 0) AS total_cache_tokens
+            COALESCE(SUM(cache_tokens), 0) AS total_cache_tokens,
+            COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
+            COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
+            COALESCE(SUM(audio_input_tokens), 0) AS total_audio_input_tokens,
+            COALESCE(SUM(audio_output_tokens), 0) AS total_audio_output_tokens,
+            COALESCE(SUM(estimated_cost), 0) AS total_estimated_cost
          FROM ccproxy_stats{}
          GROUP BY date, client_model, provider_id, provider, backend_model, protocol, tool_compat_mode
          ORDER BY date DESC",
@@ -129,6 +134,11 @@ fn query_grouped_stats(
                 "totalInputTokens": row.get::<_, i64>(8).unwrap_or(0),
                 "totalOutputTokens": row.get::<_, i64>(9).unwrap_or(0),
                 "totalCacheTokens": row.get::<_, i64>(10).unwrap_or(0),
+                "totalCacheWriteTokens": row.get::<_, i64>(11).unwrap_or(0),
+                "totalReasoningTokens": row.get::<_, i64>(12).unwrap_or(0),
+                "totalAudioInputTokens": row.get::<_, i64>(13).unwrap_or(0),
+                "totalAudioOutputTokens": row.get::<_, i64>(14).unwrap_or(0),
+                "totalEstimatedCost": row.get::<_, f64>(15).unwrap_or(0.0),
             }))
         })
         .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -153,6 +163,11 @@ fn query_daily_stats(
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
                 COALESCE(SUM(cache_tokens), 0) AS total_cache_tokens,
+                COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
+                COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
+                COALESCE(SUM(audio_input_tokens), 0) AS total_audio_input_tokens,
+                COALESCE(SUM(audio_output_tokens), 0) AS total_audio_output_tokens,
+                COALESCE(SUM(estimated_cost), 0) AS total_estimated_cost,
                 COUNT(DISTINCT provider) AS provider_count,
                 COUNT(*) FILTER (WHERE status_code != 200) AS error_count,
                 COUNT(*) AS total_request_count
@@ -174,6 +189,11 @@ fn query_daily_stats(
             daily_stats.total_input_tokens,
             daily_stats.total_output_tokens,
             daily_stats.total_cache_tokens,
+            daily_stats.total_cache_write_tokens,
+            daily_stats.total_reasoning_tokens,
+            daily_stats.total_audio_input_tokens,
+            daily_stats.total_audio_output_tokens,
+            daily_stats.total_estimated_cost,
             daily_stats.provider_count,
             daily_stats.error_count,
             COALESCE(ranked_models.client_model, '-'),
@@ -194,10 +214,15 @@ fn query_daily_stats(
                 "totalInputTokens": row.get::<_, i64>(1).unwrap_or(0),
                 "totalOutputTokens": row.get::<_, i64>(2).unwrap_or(0),
                 "totalCacheTokens": row.get::<_, i64>(3).unwrap_or(0),
-                "providerCount": row.get::<_, u32>(4).unwrap_or(0),
-                "errorCount": row.get::<_, u32>(5).unwrap_or(0),
-                "topProvider": row.get::<_, String>(6).unwrap_or_else(|_| "-".to_string()),
-                "totalRequestCount": row.get::<_, u32>(7).unwrap_or(0),
+                "totalCacheWriteTokens": row.get::<_, i64>(4).unwrap_or(0),
+                "totalReasoningTokens": row.get::<_, i64>(5).unwrap_or(0),
+                "totalAudioInputTokens": row.get::<_, i64>(6).unwrap_or(0),
+                "totalAudioOutputTokens": row.get::<_, i64>(7).unwrap_or(0),
+                "estimatedCost": row.get::<_, f64>(8).unwrap_or(0.0),
+                "providerCount": row.get::<_, u32>(9).unwrap_or(0),
+                "errorCount": row.get::<_, u32>(10).unwrap_or(0),
+                "topProvider": row.get::<_, String>(11).unwrap_or_else(|_| "-".to_string()),
+                "totalRequestCount": row.get::<_, u32>(12).unwrap_or(0),
             }))
         })
         .map_err(|e| StoreError::Query(e.to_string()))?;

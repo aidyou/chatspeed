@@ -179,6 +179,8 @@ pub struct PromptTokensDetails {
 pub struct CompletionTokensDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_tokens: Option<u64>,
 }
 
 impl PromptTokensDetails {

@@ -19,7 +19,8 @@
       <template #item="{ element }">
         <div class="item draggable" :key="element.id">
           <div class="label">
-            <img v-if="element.providerLogo !== ''" :src="element.providerLogo" class="provider-logo" />
+            <img v-if="element.providerLogo !== ''" :src="element.providerLogo" class="provider-logo"
+              @error="onProviderLogoError" />
             <avatar :text="element.name" color="primary" size="20px" v-else />
             {{ element.name }}
           </div>
@@ -397,6 +398,24 @@
           <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
             <el-switch v-model="modelConfigForm.imageInput" />
           </el-form-item>
+          <el-form-item :label="$t('settings.model.attachment')" prop="attachment">
+            <el-switch v-model="modelConfigForm.attachment" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.structuredOutput')" prop="structuredOutput">
+            <el-switch v-model="modelConfigForm.structuredOutput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioInput')" prop="audioInput">
+            <el-switch v-model="modelConfigForm.audioInput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioOutput')" prop="audioOutput">
+            <el-switch v-model="modelConfigForm.audioOutput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.videoInput')" prop="videoInput">
+            <el-switch v-model="modelConfigForm.videoInput" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.pdfInput')" prop="pdfInput">
+            <el-switch v-model="modelConfigForm.pdfInput" />
+          </el-form-item>
           <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
               style="width: 100%" />
@@ -432,6 +451,28 @@
           </el-form-item>
           <el-form-item :label="$t('settings.model.cachePricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.cachePerMillion" :min="0" :step="0.01" :precision="6"
+              controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.cacheWritePricePerMillion')" label-width="150px">
+            <el-input-number v-model="modelConfigForm.pricing.cacheWritePerMillion" :min="0" :step="0.01" :precision="6"
+              controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioInputPricePerMillion')" label-width="150px">
+            <el-input-number v-model="modelConfigForm.pricing.audioInputPerMillion" :min="0" :step="0.01" :precision="6"
+              controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.audioOutputPricePerMillion')" label-width="150px">
+            <el-input-number v-model="modelConfigForm.pricing.audioOutputPerMillion" :min="0" :step="0.01" :precision="6"
+              controls-position="right" style="width: 100%" />
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.reasoningPricingMode')" label-width="150px">
+            <el-radio-group v-model="modelConfigForm.pricing.reasoningPricingMode">
+              <el-radio value="output">{{ $t('settings.model.reasoningPricingOutput') }}</el-radio>
+              <el-radio value="separate">{{ $t('settings.model.reasoningPricingSeparate') }}</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item :label="$t('settings.model.reasoningPricePerMillion')" label-width="150px">
+            <el-input-number v-model="modelConfigForm.pricing.reasoningPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.priceMultiplier')" label-width="150px">
@@ -498,7 +539,7 @@
         <el-card v-for="model in filteredModels" :key="model.name" class="preset-model-card" shadow="hover">
           <div class="model-item">
             <div class="model-info">
-              <img :src="model.logo" class="model-logo" />
+              <img :src="model.logo" class="model-logo" @error="onProviderLogoError" />
               <div class="model-details">
                 <h3>{{ model.name }}</h3>
                 <p>{{ model.desc }}</p>
@@ -536,6 +577,7 @@ import { Sortable } from 'sortablejs-vue3'
 import { showMessage, toInt, toFloat, openUrl } from '@/libs/util'
 import { FrontendAppError } from '@/libs/tauri'
 import { createDefaultPricing, normalizePricing } from '@/libs/modelPricing'
+import { getProviderLogo, providerLogoFallback } from '@/libs/logo'
 import { useModelStore } from '@/stores/model'
 
 const isValidUrl = url => {
@@ -859,6 +901,8 @@ const createFromModel = srcModel => {
       srcModel?.metadata?.responsesApiPreference === 'chatCompletions'
         ? 'chatCompletions'
         : 'responses',
+    modelsDevProviderId: srcModel?.metadata?.modelsDevProviderId || null,
+    modelsDevModelId: srcModel?.metadata?.modelsDevModelId || null,
     customHeaders: srcModel?.metadata?.customHeaders || []
   }
 }
@@ -882,6 +926,41 @@ const editModel = async (id, model) => {
     modelForm.value = createDefaultFormData()
     modelForm.value.models = [...model.models]
     modelForm.value.apiProtocol = model.protocol
+    modelForm.value.name = model.providerName
+    modelForm.value.logo = model.logo
+    modelForm.value.baseUrl = model.baseUrl
+    modelForm.value.metadata = {
+      ...(modelForm.value.metadata || {}),
+      modelsDevProviderId: model.providerId,
+      modelsDevModelId: model.model
+    }
+    modelConfigForm.value = {
+      ...createDefaultModelConfig(),
+      id: model.model,
+      name: model.name,
+      reasoning: model.reasoning,
+      functionCall: model.functionCall,
+      imageInput: model.imageInput,
+      attachment: model.attachment,
+      structuredOutput: model.structuredOutput,
+      audioInput: model.audioInput,
+      audioOutput: model.audioOutput,
+      videoInput: model.videoInput,
+      pdfInput: model.pdfInput,
+      contextSize: model.contextSize,
+      maxTokens: model.maxTokens,
+      pricing: normalizePricing({
+        inputPerMillion: model.pricing?.input,
+        outputPerMillion: model.pricing?.output,
+        cachePerMillion: model.pricing?.cache_read,
+        cacheWritePerMillion: model.pricing?.cache_write,
+        audioInputPerMillion: model.pricing?.input_audio,
+        audioOutputPerMillion: model.pricing?.output_audio,
+        tiers: model.pricing?.tiers,
+        pricingSource: model.pricing?.pricingSource || 'models.dev',
+        reasoningPricingMode: model.pricing?.reasoning != null ? 'separate' : 'output'
+      })
+    }
 
     const keys = ['name', 'logo', 'baseUrl', 'maxTokens', 'temperature', 'topP', 'topK']
     keys.forEach(key => {
@@ -1008,6 +1087,8 @@ const updateModel = () => {
         topK: toInt(modelForm.value.topK),
         disabled: modelForm.value.disabled,
         metadata: {
+          modelsDevProviderId: modelForm.value.modelsDevProviderId || null,
+          modelsDevModelId: modelForm.value.modelsDevModelId || null,
           logo: modelForm.value.logo || '',
           frequencyPenalty: modelForm.value.frequencyPenalty,
           presencePenalty: modelForm.value.presencePenalty,
@@ -1129,11 +1210,17 @@ const createDefaultModelConfig = () => ({
   reasoningSummary: 'none',
   thinking: null,
   thinkingLevel: 'low',
-  imageInput: false,
+  attachment: false,
+  structuredOutput: false,
+  audioInput: false,
+  audioOutput: false,
+  videoInput: false,
+  pdfInput: false,
+  modelsDevModelId: null,
   contextSize: 128000,
   temperature: -0.1,
   maxTokens: 0,
-  pricing: createDefaultPricing(),
+  pricing: { ...createDefaultPricing(), reasoningPricingMode: 'output' },
   customParams: []
 })
 const THINKING_LEVEL_TO_BUDGET = {
@@ -1212,9 +1299,16 @@ const resolveNewModelCatalog = async () => {
     modelConfigForm.value.reasoning = capabilities.reasoning ?? false
     modelConfigForm.value.functionCall = capabilities.functionCall ?? false
     modelConfigForm.value.imageInput = capabilities.imageInput ?? false
+    modelConfigForm.value.attachment = profile.attachment ?? false
+    modelConfigForm.value.structuredOutput = profile.structuredOutput ?? false
+    modelConfigForm.value.audioInput = profile.audioInput ?? false
+    modelConfigForm.value.audioOutput = profile.audioOutput ?? false
+    modelConfigForm.value.videoInput = profile.videoInput ?? false
+    modelConfigForm.value.pdfInput = profile.pdfInput ?? false
     modelConfigForm.value.contextSize = profile.contextSize ?? 128000
     modelConfigForm.value.maxTokens = profile.maxOutputTokens ?? 0
     modelConfigForm.value.temperature = profile.recommendedTemperature ?? -0.1
+    modelConfigForm.value.pricing = normalizePricing(profile.pricing)
     modelConfigForm.value.thinkingLevel = thinkingLevelFromCatalog(profile)
     if (!modelConfigForm.value.name) {
       modelConfigForm.value.name = modelAliasFromId(modelId)
@@ -1244,7 +1338,10 @@ const onModelConfig = model => {
       ...createDefaultModelConfig(),
       ...model,
       customParams: model.customParams || [],
-      pricing: normalizePricing(model.pricing),
+      pricing: {
+        ...normalizePricing(model.pricing),
+        reasoningPricingMode: model.pricing?.reasoningPricingMode === 'separate' ? 'separate' : 'output'
+      },
       thinking: model.thinking || null,
       thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
@@ -1296,7 +1393,13 @@ const updateModelConfig = () => {
         budgetTokens: budgetFromThinkingLevel(modelConfigForm.value.thinkingLevel)
       }
       : null,
-    pricing: normalizePricing(modelConfigForm.value.pricing),
+    pricing: {
+      ...normalizePricing(modelConfigForm.value.pricing),
+      reasoningPricingMode: modelConfigForm.value.pricing.reasoningPricingMode === 'separate' ? 'separate' : 'output',
+      reasoningPerMillion: modelConfigForm.value.pricing.reasoningPricingMode === 'separate'
+        ? modelConfigForm.value.pricing.reasoningPerMillion
+        : null
+    },
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
   delete updatedModelConfig.thinkingLevel
@@ -1521,12 +1624,29 @@ const onProviderModelSave = async () => {
             budgetTokens: budgetFromThinkingLevel(thinkingLevel)
           }
           : null,
-        functionCall: capabilities.functionCall ?? false,
-        imageInput: capabilities.imageInput ?? false,
-        contextSize: profile?.contextSize ?? 128000,
-        temperature: profile?.recommendedTemperature ?? -0.1,
-        maxTokens: profile?.maxOutputTokens ?? 0,
-        pricing: createDefaultPricing(),
+        functionCall: model.functionCall,
+        imageInput: model.imageInput,
+        attachment: model.attachment,
+        structuredOutput: model.structuredOutput,
+        audioInput: model.audioInput,
+        audioOutput: model.audioOutput,
+        videoInput: model.videoInput,
+        pdfInput: model.pdfInput,
+        contextSize: model.contextSize,
+        temperature: model.temperatureSupported ? 0.7 : -0.1,
+        maxTokens: model.maxTokens,
+        pricing: normalizePricing({
+          inputPerMillion: model.pricing?.input,
+          outputPerMillion: model.pricing?.output,
+          cachePerMillion: model.pricing?.cache_read,
+          reasoningPerMillion: model.pricing?.reasoning,
+          cacheWritePerMillion: model.pricing?.cache_write,
+          audioInputPerMillion: model.pricing?.input_audio,
+          audioOutputPerMillion: model.pricing?.output_audio,
+          tiers: model.pricing?.tiers,
+          pricingSource: 'models.dev',
+          reasoningPricingMode: model.pricing?.reasoning != null ? 'separate' : 'output'
+        }),
         customParams: []
       }
     })
@@ -1569,6 +1689,19 @@ const onUpdate = e => {
   modelStore.setModelProviders(modelsCopy)
 }
 
+const onProviderLogoError = event => {
+  const image = event?.target
+  if (!image) return
+  const source = image.src
+  if (source.includes('models.dev/logos/')) {
+    image.dataset.fallbackApplied = 'true'
+    const providerId = source.match(/models\.dev\/logos\/([^/.]+)\.svg/)?.[1]
+    image.src = providerLogoFallback(providerId, providerId)
+  } else if (image.dataset.fallbackApplied === 'true') {
+    image.style.display = 'none'
+  }
+}
+
 // preset models
 const presetModelsVisible = ref(false)
 const presetModels = ref([])
@@ -1586,12 +1719,36 @@ const filteredModels = computed(() => {
 const showPresetModels = async () => {
   if (!presetModels.value.length) {
     try {
-      const response = await fetch('/presetTextAiProvider.json')
-      const data = await response.json()
-      presetModels.value = data.models.map(x => {
-        x.searchName = x.name.toLowerCase()
-        return { ...x }
-      })
+        const providers = await modelStore.listModelsDevProviders()
+        presetModels.value = providers
+          .filter(provider => provider.api && provider.models && Object.keys(provider.models).length)
+          .flatMap(provider => Object.values(provider.models).map(model => ({
+            name: provider.name,
+            desc: model.name,
+            logo: getProviderLogo(provider.id, provider.api),
+            documentationUrl: provider.doc,
+            modelListUrl: provider.doc,
+            providerId: provider.id,
+            providerName: provider.name,
+            protocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
+            apiProtocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
+            baseUrl: provider.api,
+            models: [model.id],
+            model: model.id,
+            attachment: model.attachment ?? false,
+            reasoning: model.reasoning ?? false,
+            functionCall: model.tool_call ?? false,
+            structuredOutput: model.structured_output ?? false,
+            temperatureSupported: model.temperature ?? false,
+            imageInput: model.modalities?.input?.includes('image') ?? false,
+            audioInput: model.modalities?.input?.includes('audio') ?? false,
+            videoInput: model.modalities?.input?.includes('video') ?? false,
+            pdfInput: model.modalities?.input?.includes('pdf') ?? false,
+            contextSize: model.limit?.context ?? 128000,
+            maxTokens: model.limit?.output ?? 0,
+            pricing: model.cost,
+            searchName: `${provider.name} ${model.name} ${model.id}`.toLowerCase()
+          })))
     } catch (error) {
       if (error instanceof FrontendAppError) {
         return showMessage(

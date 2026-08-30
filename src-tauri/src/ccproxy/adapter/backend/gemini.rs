@@ -276,6 +276,27 @@ impl GeminiBackendAdapter {
                                     prompt_eval_duration: None,
                                     eval_duration: None,
                                     prompt_cached_tokens: None,
+                                    audio_input_tokens: u.prompt_tokens_details.as_ref().and_then(
+                                        |details| {
+                                            details
+                                                .iter()
+                                                .find(|detail| {
+                                                    detail.modality.to_ascii_lowercase() == "audio"
+                                                })
+                                                .map(|detail| detail.token_count)
+                                        },
+                                    ),
+                                    audio_output_tokens: u
+                                        .candidates_tokens_details
+                                        .as_ref()
+                                        .and_then(|details| {
+                                            details
+                                                .iter()
+                                                .find(|detail| {
+                                                    detail.modality.to_ascii_lowercase() == "audio"
+                                                })
+                                                .map(|detail| detail.token_count)
+                                        }),
                                 })
                                 .unwrap_or_default();
 
@@ -1045,6 +1066,27 @@ impl BackendAdapter for GeminiBackendAdapter {
                                     prompt_eval_duration: None,
                                     eval_duration: None,
                                     prompt_cached_tokens: None,
+                                    audio_input_tokens: u.prompt_tokens_details.as_ref().and_then(
+                                        |details| {
+                                            details
+                                                .iter()
+                                                .find(|detail| {
+                                                    detail.modality.to_ascii_lowercase() == "audio"
+                                                })
+                                                .map(|detail| detail.token_count)
+                                        },
+                                    ),
+                                    audio_output_tokens: u
+                                        .candidates_tokens_details
+                                        .as_ref()
+                                        .and_then(|details| {
+                                            details
+                                                .iter()
+                                                .find(|detail| {
+                                                    detail.modality.to_ascii_lowercase() == "audio"
+                                                })
+                                                .map(|detail| detail.token_count)
+                                        }),
                                 })
                                 .unwrap_or_default();
                             unified_chunks

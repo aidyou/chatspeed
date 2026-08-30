@@ -559,7 +559,7 @@ impl DbRuntime {
                                 let transaction = connection.transaction()?;
                                 for stat in stats {
                                     transaction.execute(
-                                        "INSERT INTO ccproxy_stats (workflow_session_id, workflow_task_run_id, workflow_segment_id, root_session_id, root_task_run_id, request_kind, client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                                        "INSERT INTO ccproxy_stats (workflow_session_id, workflow_task_run_id, workflow_segment_id, root_session_id, root_task_run_id, request_kind, client_model, backend_model, provider_id, provider, protocol, tool_compat_mode, status_code, error_message, input_tokens, output_tokens, cache_tokens, cache_write_tokens, reasoning_tokens, audio_input_tokens, audio_output_tokens, estimated_cost, pricing_status, pricing_snapshot) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
                                         rusqlite::params![
                                             stat.workflow_session_id,
                                             stat.workflow_task_run_id,
@@ -578,6 +578,13 @@ impl DbRuntime {
                                             stat.input_tokens,
                                             stat.output_tokens,
                                             stat.cache_tokens,
+                                            stat.cache_write_tokens,
+                                            stat.reasoning_tokens,
+                                            stat.audio_input_tokens,
+                                            stat.audio_output_tokens,
+                                            stat.estimated_cost,
+                                            stat.pricing_status,
+                                            stat.pricing_snapshot,
                                         ],
                                     )?;
                                 }
@@ -1057,7 +1064,14 @@ mod tests {
                         error_message TEXT,
                         input_tokens INTEGER NOT NULL,
                         output_tokens INTEGER NOT NULL,
-                        cache_tokens INTEGER NOT NULL
+                        cache_tokens INTEGER NOT NULL,
+                        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                        reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                        audio_input_tokens INTEGER NOT NULL DEFAULT 0,
+                        audio_output_tokens INTEGER NOT NULL DEFAULT 0,
+                        estimated_cost REAL,
+                        pricing_status TEXT,
+                        pricing_snapshot TEXT
                     )",
                     [],
                 )?;
@@ -1086,6 +1100,13 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 2,
                 cache_tokens: 3,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: None,
+                pricing_snapshot: None,
                 request_at: None,
             })
             .unwrap();
@@ -1155,7 +1176,14 @@ mod tests {
                         error_message TEXT,
                         input_tokens INTEGER NOT NULL,
                         output_tokens INTEGER NOT NULL,
-                        cache_tokens INTEGER NOT NULL
+                        cache_tokens INTEGER NOT NULL,
+                        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                        reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                        audio_input_tokens INTEGER NOT NULL DEFAULT 0,
+                        audio_output_tokens INTEGER NOT NULL DEFAULT 0,
+                        estimated_cost REAL,
+                        pricing_status TEXT,
+                        pricing_snapshot TEXT
                     )",
                     [],
                 )?;
@@ -1184,6 +1212,13 @@ mod tests {
                     input_tokens: index,
                     output_tokens: index,
                     cache_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    audio_input_tokens: 0,
+                    audio_output_tokens: 0,
+                    estimated_cost: None,
+                    pricing_status: None,
+                    pricing_snapshot: None,
                     request_at: None,
                 })
                 .unwrap();
@@ -1212,6 +1247,13 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: None,
+                pricing_snapshot: None,
                 request_at: None,
             })
         });
@@ -1256,6 +1298,13 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cache_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
+            estimated_cost: None,
+            pricing_status: None,
+            pricing_snapshot: None,
             request_at: None,
         };
 
@@ -1315,6 +1364,13 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: None,
+                pricing_snapshot: None,
                 request_at: None,
             })
             .unwrap();

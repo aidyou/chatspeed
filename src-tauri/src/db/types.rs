@@ -74,6 +74,20 @@ pub struct CcproxyStat {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_tokens: i64,
+    #[serde(default)]
+    pub cache_write_tokens: i64,
+    #[serde(default)]
+    pub reasoning_tokens: i64,
+    #[serde(default)]
+    pub audio_input_tokens: i64,
+    #[serde(default)]
+    pub audio_output_tokens: i64,
+    #[serde(default)]
+    pub estimated_cost: Option<f64>,
+    #[serde(default)]
+    pub pricing_status: Option<String>,
+    #[serde(default)]
+    pub pricing_snapshot: Option<String>,
     pub request_at: Option<String>,
 }
 
@@ -138,6 +152,13 @@ mod ccproxy_usage_attribution_tests {
             input_tokens: 10,
             output_tokens: 5,
             cache_tokens: 2,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
+            estimated_cost: None,
+            pricing_status: None,
+            pricing_snapshot: None,
             request_at: None,
         }
     }
@@ -207,7 +228,27 @@ pub struct ThinkingConfig {
     pub budget_tokens: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PricingTier {
+    pub context_size: u64,
+    #[serde(default)]
+    pub input_per_million: f64,
+    #[serde(default)]
+    pub output_per_million: f64,
+    #[serde(default)]
+    pub cache_per_million: f64,
+    #[serde(default)]
+    pub reasoning_per_million: Option<f64>,
+    #[serde(default)]
+    pub cache_write_per_million: f64,
+    #[serde(default)]
+    pub audio_input_per_million: f64,
+    #[serde(default)]
+    pub audio_output_per_million: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PricingConfig {
     #[serde(default)]
@@ -216,6 +257,20 @@ pub struct PricingConfig {
     pub output_per_million: f64,
     #[serde(default)]
     pub cache_per_million: f64,
+    #[serde(default)]
+    pub reasoning_per_million: Option<f64>,
+    #[serde(default)]
+    pub reasoning_pricing_mode: String,
+    #[serde(default)]
+    pub cache_write_per_million: f64,
+    #[serde(default)]
+    pub audio_input_per_million: f64,
+    #[serde(default)]
+    pub audio_output_per_million: f64,
+    #[serde(default)]
+    pub tiers: Vec<PricingTier>,
+    #[serde(default)]
+    pub pricing_source: Option<String>,
     #[serde(default = "default_pricing_multiplier")]
     pub multiplier: f64,
 }
@@ -239,6 +294,34 @@ pub struct ModelConfig {
     pub function_call: Option<bool>,
     #[serde(rename = "imageInput", skip_serializing_if = "Option::is_none")]
     pub image_input: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    #[serde(
+        rename = "structuredOutput",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_output: Option<bool>,
+    #[serde(
+        rename = "audioInput",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub audio_input: Option<bool>,
+    #[serde(
+        rename = "audioOutput",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub audio_output: Option<bool>,
+    #[serde(
+        rename = "videoInput",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub video_input: Option<bool>,
+    #[serde(rename = "pdfInput", default, skip_serializing_if = "Option::is_none")]
+    pub pdf_input: Option<bool>,
     #[serde(rename = "contextSize", skip_serializing_if = "Option::is_none")]
     pub context_size: Option<i32>,
     #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
@@ -262,6 +345,12 @@ impl Default for ModelConfig {
             thinking: None,
             function_call: None,
             image_input: None,
+            attachment: None,
+            structured_output: None,
+            audio_input: None,
+            audio_output: None,
+            video_input: None,
+            pdf_input: None,
             context_size: None,
             max_tokens: None,
             temperature: None,

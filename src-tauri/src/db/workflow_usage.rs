@@ -1,7 +1,5 @@
 use crate::db::{MainStore, StoreError};
-use crate::workflow::react::usage::{
-    calculate_model_cost, ModelUsageBreakdown, PricingSnapshot, UsageTotals, WorkflowUsageSummary,
-};
+use crate::workflow::react::usage::{ModelUsageBreakdown, UsageTotals, WorkflowUsageSummary};
 use rusqlite::{params, OptionalExtension};
 
 impl MainStore {
@@ -15,27 +13,6 @@ impl MainStore {
         duration_ms: Option<i64>,
     ) -> Result<WorkflowUsageSummary, StoreError> {
         self.db_runtime()?.drain_blocking()?;
-        let pricing = self
-            .config
-            .get_ai_models()?
-            .into_iter()
-            .flat_map(|model| {
-                let provider_id = model.id;
-                model.models.into_iter().filter_map(move |config| {
-                    config.pricing.map(|pricing| {
-                        (
-                            (provider_id, config.id),
-                            PricingSnapshot {
-                                input_per_million: pricing.input_per_million,
-                                output_per_million: pricing.output_per_million,
-                                cache_per_million: pricing.cache_per_million,
-                                multiplier: pricing.multiplier,
-                            },
-                        )
-                    })
-                })
-            })
-            .collect::<std::collections::HashMap<_, _>>();
         let session_id = session_id.to_string();
         let task_run_id = task_run_id.to_string();
         let root_session_id = root_session_id.to_string();
@@ -45,7 +22,8 @@ impl MainStore {
         self.db_runtime()?.read_blocking(move |conn| {
             let read = |session_id: &str, task_run_id: &str| -> Result<Vec<ModelUsageBreakdown>, StoreError> {
                 let mut statement = conn.prepare(
-                    "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens)
+                    "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens), SUM(cache_write_tokens), SUM(reasoning_tokens), SUM(audio_input_tokens), SUM(audio_output_tokens), SUM(estimated_cost), CASE WHEN SUM(CASE WHEN pricing_status IS NULL OR pricing_status != 'priced' THEN 1 ELSE 0 END) > 0
+                          THEN 'legacy' ELSE 'priced' END
                      FROM ccproxy_stats
                      WHERE workflow_session_id = ?1 AND workflow_task_run_id = ?2
                      GROUP BY provider_id, backend_model",
@@ -57,26 +35,50 @@ impl MainStore {
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, Option<f64>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
                     ))
                 })?;
                 rows.map(|row| {
-                    let (provider_id, backend_model, input_tokens, output_tokens, cache_tokens) = row?;
-                    let snapshot = pricing.get(&(provider_id, backend_model.clone())).copied();
-                    let estimated_cost = snapshot.map(|snapshot| {
-                        calculate_model_cost(input_tokens, output_tokens, cache_tokens, snapshot)
-                    });
+                    let (
+                        provider_id,
+                        backend_model,
+                        input_tokens,
+                        output_tokens,
+                        cache_tokens,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        audio_input_tokens,
+                        audio_output_tokens,
+                        persisted_cost,
+                        persisted_status,
+                    ) = row?;
+                    let pricing_status = if persisted_status.as_deref() == Some("priced") {
+                        "priced".to_string()
+                    } else {
+                        persisted_status.unwrap_or_else(|| "legacy".to_string())
+                    };
                     Ok(ModelUsageBreakdown {
                         provider_id,
                         backend_model,
                         input_tokens,
                         output_tokens,
                         cache_tokens,
-                        pricing_status: if snapshot.is_some() { "priced" } else { "missing" }.to_string(),
-                        input_per_million: snapshot.map(|item| item.input_per_million),
-                        output_per_million: snapshot.map(|item| item.output_per_million),
-                        cache_per_million: snapshot.map(|item| item.cache_per_million),
-                        multiplier: snapshot.map(|item| item.multiplier),
-                        estimated_cost,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        audio_input_tokens,
+                        audio_output_tokens,
+                        pricing_status,
+                        input_per_million: None,
+                        output_per_million: None,
+                        cache_per_million: None,
+                        reasoning_per_million: None,
+                        multiplier: None,
+                        estimated_cost: persisted_cost,
                     })
                 }).collect::<Result<Vec<_>, rusqlite::Error>>().map_err(StoreError::from)
             };
@@ -93,25 +95,63 @@ impl MainStore {
             let is_root_task = session_id == root_session_id;
             let combined_breakdowns = if is_root_task {
                 let mut combined_statement = conn.prepare(
-                    "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens)
+                    "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens), SUM(cache_write_tokens), SUM(reasoning_tokens), SUM(audio_input_tokens), SUM(audio_output_tokens), SUM(estimated_cost), CASE WHEN SUM(CASE WHEN pricing_status IS NULL OR pricing_status != 'priced' THEN 1 ELSE 0 END) > 0
+                          THEN 'legacy' ELSE 'priced' END
                      FROM ccproxy_stats
                      WHERE root_session_id = ?1 AND root_task_run_id = ?2
                      GROUP BY provider_id, backend_model",
                 )?;
                 let combined_rows = combined_statement.query_map(params![root_session_id, root_task_run_id], |row| {
-                    Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?))
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, Option<f64>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                    ))
                 })?;
                 combined_rows.map(|row| {
-                    let (provider_id, backend_model, input_tokens, output_tokens, cache_tokens) = row?;
-                    let snapshot = pricing.get(&(provider_id, backend_model.clone())).copied();
+                    let (
+                        provider_id,
+                        backend_model,
+                        input_tokens,
+                        output_tokens,
+                        cache_tokens,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        audio_input_tokens,
+                        audio_output_tokens,
+                        persisted_cost,
+                        persisted_status,
+                    ) = row?;
+                    let pricing_status = if persisted_status.as_deref() == Some("priced") {
+                        "priced".to_string()
+                    } else {
+                        persisted_status.unwrap_or_else(|| "legacy".to_string())
+                    };
                     Ok(ModelUsageBreakdown {
-                        provider_id, backend_model, input_tokens, output_tokens, cache_tokens,
-                        pricing_status: if snapshot.is_some() { "priced" } else { "missing" }.to_string(),
-                        input_per_million: snapshot.map(|item| item.input_per_million),
-                        output_per_million: snapshot.map(|item| item.output_per_million),
-                        cache_per_million: snapshot.map(|item| item.cache_per_million),
-                        multiplier: snapshot.map(|item| item.multiplier),
-                        estimated_cost: snapshot.map(|item| calculate_model_cost(input_tokens, output_tokens, cache_tokens, item)),
+                        provider_id,
+                        backend_model,
+                        input_tokens,
+                        output_tokens,
+                        cache_tokens,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        audio_input_tokens,
+                        audio_output_tokens,
+                        pricing_status,
+                        input_per_million: None,
+                        output_per_million: None,
+                        cache_per_million: None,
+                        reasoning_per_million: None,
+                        multiplier: None,
+                        estimated_cost: persisted_cost,
                     })
                 }).collect::<Result<Vec<_>, rusqlite::Error>>().map_err(StoreError::from)?
             } else {

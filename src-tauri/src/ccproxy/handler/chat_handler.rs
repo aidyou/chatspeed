@@ -481,6 +481,7 @@ pub(crate) async fn execute_unified_chat_request(
             proxy_model.provider_id,
             proxy_model.provider.clone(),
             final_tool_compat_mode,
+            proxy_model.pricing.clone(),
         )
         .await?;
         Ok(res.into_response())
@@ -538,6 +539,26 @@ pub(crate) async fn execute_unified_chat_request(
                 unified_response.usage.output_tokens as i64
             };
 
+            let cache_write_tokens = unified_response
+                .usage
+                .cache_creation_input_tokens
+                .unwrap_or(0) as i64;
+            let reasoning_tokens = unified_response.usage.thoughts_tokens.unwrap_or(0) as i64;
+            let audio_input_tokens = unified_response.usage.audio_input_tokens.unwrap_or(0) as i64;
+            let audio_output_tokens =
+                unified_response.usage.audio_output_tokens.unwrap_or(0) as i64;
+            let (estimated_cost, pricing_status, pricing_snapshot) =
+                crate::ccproxy::helper::stat_guard::finalize_pricing(
+                    input_tokens,
+                    output_tokens,
+                    cache_tokens as i64,
+                    cache_write_tokens,
+                    reasoning_tokens,
+                    audio_input_tokens,
+                    audio_output_tokens,
+                    proxy_model.pricing.as_ref(),
+                );
+
             if unified_response.has_output() {
                 let _ = store.record_ccproxy_stat(
                     CcproxyStat {
@@ -559,6 +580,13 @@ pub(crate) async fn execute_unified_chat_request(
                         input_tokens,
                         output_tokens,
                         cache_tokens: cache_tokens as i64,
+                        cache_write_tokens,
+                        reasoning_tokens,
+                        audio_input_tokens,
+                        audio_output_tokens,
+                        estimated_cost,
+                        pricing_status,
+                        pricing_snapshot,
                         request_at: None,
                     }
                     .with_workflow_attribution(&client_headers),
@@ -760,6 +788,7 @@ mod usage_attribution_tests {
             key_index: None,
             model_metadata: None,
             custom_params: None,
+            pricing: None,
             prompt_injection: "off".to_string(),
             prompt_injection_position: None,
             prompt_text: String::new(),

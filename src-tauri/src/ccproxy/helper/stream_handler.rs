@@ -33,6 +33,7 @@ pub async fn handle_streamed_response(
     provider_id: i64,
     provider: String,
     tool_compat_mode: bool,
+    pricing: Option<crate::db::PricingConfig>,
 ) -> ProxyResult<Response> {
     let stream_format = match backend_protocol.as_ref() {
         ChatProtocol::Gemini => StreamFormat::Gemini,
@@ -124,6 +125,7 @@ pub async fn handle_streamed_response(
             root_session_id: None,
             root_task_run_id: None,
             request_kind: None,
+            pricing,
         }
         .with_workflow_attribution(client_headers),
     );
@@ -263,6 +265,9 @@ pub fn adapt_stream_chunk_to_log(
                 .or(usage.cache_read_input_tokens)
                 .or(usage.cached_content_tokens);
             recorder.cache_creation_tokens = usage.cache_creation_input_tokens;
+            recorder.reasoning_tokens = usage.thoughts_tokens;
+            recorder.audio_input_tokens = usage.audio_input_tokens;
+            recorder.audio_output_tokens = usage.audio_output_tokens;
 
             if log_to_file {
                 log::info!(target: "ccproxy_client_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());

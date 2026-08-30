@@ -379,6 +379,11 @@ pub struct UnifiedUsage {
     pub cached_content_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cached_tokens: Option<u64>,
+    /// Audio token subsets reported by providers. These are included in input/output totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_output_tokens: Option<u64>,
 
     // ollama
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -417,7 +422,12 @@ pub struct StreamLogRecorder {
     pub cache_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_tokens: Option<u64>,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_output_tokens: Option<u64>,
     pub has_content: bool,
     #[serde(skip)]
     pub has_thinking: bool,

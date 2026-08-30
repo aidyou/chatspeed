@@ -1,11 +1,45 @@
+use crate::ai::model_catalog::pricing::{calculate_cost, UsageBreakdown};
 use crate::ccproxy::{
     adapter::unified::{SseStatus, StreamLogRecorder},
     utils::token_estimator::token_usage_is_missing_or_zero,
 };
-use crate::db::{CcproxyStat, MainStore};
+use crate::db::{CcproxyStat, MainStore, PricingConfig};
+use serde_json::to_string;
 use std::sync::{Arc, Mutex, RwLock};
 
-/// A Drop guard to ensure proxy statistics are recorded when a stream ends.
+pub fn finalize_pricing(
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_tokens: i64,
+    cache_write_tokens: i64,
+    reasoning_tokens: i64,
+    audio_input_tokens: i64,
+    audio_output_tokens: i64,
+    pricing: Option<&PricingConfig>,
+) -> (Option<f64>, Option<String>, Option<String>) {
+    pricing
+        .map(|pricing| {
+            let cost = calculate_cost(
+                UsageBreakdown {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens: cache_tokens,
+                    cache_write_tokens,
+                    reasoning_tokens,
+                    audio_input_tokens,
+                    audio_output_tokens,
+                },
+                pricing,
+            );
+            (
+                Some(cost.total),
+                Some("priced".to_string()),
+                to_string(pricing).ok(),
+            )
+        })
+        .unwrap_or((None, Some("unpriced".to_string()), None))
+}
+
 /// This handles both normal completion and premature termination (e.g., client disconnect).
 pub struct StreamStatGuard {
     pub log_recorder: Arc<Mutex<StreamLogRecorder>>,
@@ -23,6 +57,7 @@ pub struct StreamStatGuard {
     pub root_session_id: Option<String>,
     pub root_task_run_id: Option<String>,
     pub request_kind: Option<String>,
+    pub pricing: Option<PricingConfig>,
 }
 
 impl StreamStatGuard {
@@ -49,18 +84,31 @@ impl StreamStatGuard {
 
 impl Drop for StreamStatGuard {
     fn drop(&mut self) {
-        let (input, output, cache, cache_creation, has_output, stream_failed) = {
+        let (
+            input,
+            output,
+            cache,
+            cache_creation,
+            reasoning,
+            audio_input,
+            audio_output,
+            has_output,
+            stream_failed,
+        ) = {
             if let Ok(recorder) = self.log_recorder.lock() {
                 (
                     recorder.input_tokens,
                     recorder.output_tokens,
                     recorder.cache_tokens,
                     recorder.cache_creation_tokens,
+                    recorder.reasoning_tokens,
+                    recorder.audio_input_tokens,
+                    recorder.audio_output_tokens,
                     recorder.has_content || recorder.has_thinking || recorder.has_tool_calls,
                     recorder.stream_failed,
                 )
             } else {
-                (None, None, None, None, false, true)
+                (None, None, None, None, None, None, None, false, true)
             }
         };
 
@@ -90,8 +138,19 @@ impl Drop for StreamStatGuard {
             output.unwrap_or(0)
         };
         let final_cache = cache.unwrap_or(0);
+        let final_cache_write = cache_creation.unwrap_or(0);
+        let final_reasoning = reasoning.unwrap_or(0);
+        let (estimated_cost, pricing_status, pricing_snapshot) = finalize_pricing(
+            final_input as i64,
+            final_output as i64,
+            final_cache as i64,
+            final_cache_write as i64,
+            final_reasoning as i64,
+            audio_input.unwrap_or(0) as i64,
+            audio_output.unwrap_or(0) as i64,
+            self.pricing.as_ref(),
+        );
 
-        #[cfg(debug_assertions)]
         log::debug!(
             "StreamStatGuard dropped. Recording stat: provider='{}', model='{}', tokens={}/{}/{}",
             &self.provider,
@@ -120,6 +179,13 @@ impl Drop for StreamStatGuard {
             input_tokens: final_input as i64,
             output_tokens: final_output as i64,
             cache_tokens: final_cache as i64,
+            cache_write_tokens: final_cache_write as i64,
+            reasoning_tokens: final_reasoning as i64,
+            audio_input_tokens: audio_input.unwrap_or(0) as i64,
+            audio_output_tokens: audio_output.unwrap_or(0) as i64,
+            estimated_cost,
+            pricing_status,
+            pricing_snapshot,
             request_at: None,
         });
     }
@@ -170,6 +236,7 @@ mod tests {
             root_session_id: None,
             root_task_run_id: None,
             request_kind: None,
+            pricing: None,
         }
         .with_workflow_attribution(&headers);
         drop(guard);
@@ -252,6 +319,7 @@ mod tests {
             root_session_id: None,
             root_task_run_id: None,
             request_kind: None,
+            pricing: None,
         };
         drop(guard);
         let runtime = store.db_runtime().unwrap();
@@ -301,6 +369,7 @@ mod tests {
             root_session_id: None,
             root_task_run_id: None,
             request_kind: None,
+            pricing: None,
         };
         drop(guard);
         let runtime = store.db_runtime().unwrap();

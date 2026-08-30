@@ -208,6 +208,19 @@ pub async fn handle_embedding(
         ChatProtocol::Ollama => Box::new(OutputAdapterEnum::Ollama(OllamaOutputAdapter)),
     };
 
+    let usage = unified_response.usage.clone();
+    let (estimated_cost, pricing_status, pricing_snapshot) =
+        crate::ccproxy::helper::stat_guard::finalize_pricing(
+            usage.input_tokens as i64,
+            usage.output_tokens as i64,
+            usage.cache_read_input_tokens.unwrap_or(0) as i64,
+            usage.cache_creation_input_tokens.unwrap_or(0) as i64,
+            usage.thoughts_tokens.unwrap_or(0) as i64,
+            usage.audio_input_tokens.unwrap_or(0) as i64,
+            usage.audio_output_tokens.unwrap_or(0) as i64,
+            proxy_model.pricing.as_ref(),
+        );
+
     let final_response = output_adapter
         .adapt_embedding_response(unified_response)
         .map_err(|e| CCProxyError::InternalError(e.to_string()))?;
@@ -229,9 +242,19 @@ pub async fn handle_embedding(
         tool_compat_mode: 0,
         status_code: status_code.as_u16() as i32,
         error_message: None,
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_tokens: 0,
+        input_tokens: usage.input_tokens as i64,
+        output_tokens: usage.output_tokens as i64,
+        cache_tokens: usage
+            .cache_read_input_tokens
+            .or(usage.cached_content_tokens)
+            .unwrap_or(0) as i64,
+        cache_write_tokens: usage.cache_creation_input_tokens.unwrap_or(0) as i64,
+        reasoning_tokens: usage.thoughts_tokens.unwrap_or(0) as i64,
+        audio_input_tokens: usage.audio_input_tokens.unwrap_or(0) as i64,
+        audio_output_tokens: usage.audio_output_tokens.unwrap_or(0) as i64,
+        estimated_cost,
+        pricing_status,
+        pricing_snapshot,
         request_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
     }) {
         log::error!("Failed to enqueue CCProxy embedding statistic: {error}");

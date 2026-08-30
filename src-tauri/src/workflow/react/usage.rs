@@ -1,3 +1,4 @@
+use crate::ai::model_catalog::pricing::{calculate_cost, UsageBreakdown};
 use serde::{Deserialize, Serialize};
 
 /// Immutable, snake_case usage summary persisted at a workflow task terminal boundary.
@@ -18,6 +19,14 @@ pub struct UsageTotals {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_tokens: i64,
+    #[serde(default)]
+    pub cache_write_tokens: i64,
+    #[serde(default)]
+    pub reasoning_tokens: i64,
+    #[serde(default)]
+    pub audio_input_tokens: i64,
+    #[serde(default)]
+    pub audio_output_tokens: i64,
     pub total_tokens: i64,
     pub estimated_cost: Option<f64>,
     pub effective_cost_per_million: Option<f64>,
@@ -31,15 +40,25 @@ pub struct ModelUsageBreakdown {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_tokens: i64,
+    #[serde(default)]
+    pub cache_write_tokens: i64,
+    #[serde(default)]
+    pub reasoning_tokens: i64,
+    #[serde(default)]
+    pub audio_input_tokens: i64,
+    #[serde(default)]
+    pub audio_output_tokens: i64,
     pub pricing_status: String,
     pub input_per_million: Option<f64>,
     pub output_per_million: Option<f64>,
     pub cache_per_million: Option<f64>,
+    pub reasoning_per_million: Option<f64>,
     pub multiplier: Option<f64>,
     pub estimated_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct PricingSnapshot {
     pub input_per_million: f64,
     pub output_per_million: f64,
@@ -47,20 +66,34 @@ pub struct PricingSnapshot {
     pub multiplier: f64,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn calculate_model_cost(
     input_tokens: i64,
     output_tokens: i64,
     cache_tokens: i64,
     pricing: PricingSnapshot,
 ) -> f64 {
-    let input = input_tokens.max(0) as f64;
-    let cache = cache_tokens.max(0).min(input_tokens.max(0)) as f64;
-    let output = output_tokens.max(0) as f64;
-    ((input - cache) * pricing.input_per_million
-        + cache * pricing.cache_per_million
-        + output * pricing.output_per_million)
-        / 1_000_000.0
-        * pricing.multiplier
+    calculate_cost(
+        UsageBreakdown {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens: cache_tokens,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
+        },
+        &crate::db::PricingConfig {
+            input_per_million: pricing.input_per_million,
+            output_per_million: pricing.output_per_million,
+            cache_per_million: pricing.cache_per_million,
+            reasoning_per_million: None,
+            reasoning_pricing_mode: "output".into(),
+            multiplier: pricing.multiplier,
+            ..Default::default()
+        },
+    )
+    .total
 }
 
 impl UsageTotals {
@@ -71,6 +104,22 @@ impl UsageTotals {
             .map(|item| item.output_tokens.max(0))
             .sum();
         let cache_tokens: i64 = breakdowns.iter().map(|item| item.cache_tokens.max(0)).sum();
+        let cache_write_tokens: i64 = breakdowns
+            .iter()
+            .map(|item| item.cache_write_tokens.max(0))
+            .sum();
+        let reasoning_tokens: i64 = breakdowns
+            .iter()
+            .map(|item| item.reasoning_tokens.max(0))
+            .sum();
+        let audio_input_tokens: i64 = breakdowns
+            .iter()
+            .map(|item| item.audio_input_tokens.max(0))
+            .sum();
+        let audio_output_tokens: i64 = breakdowns
+            .iter()
+            .map(|item| item.audio_output_tokens.max(0))
+            .sum();
         let total_tokens = input_tokens + output_tokens;
         let unpriced_tokens = breakdowns
             .iter()
@@ -95,6 +144,10 @@ impl UsageTotals {
             input_tokens,
             output_tokens,
             cache_tokens,
+            cache_write_tokens,
+            reasoning_tokens,
+            audio_input_tokens,
+            audio_output_tokens,
             total_tokens,
             estimated_cost,
             effective_cost_per_million,
@@ -131,10 +184,15 @@ mod tests {
             input_tokens: 100,
             output_tokens: 25,
             cache_tokens: 40,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
             pricing_status: "priced".to_string(),
             input_per_million: Some(1.0),
             output_per_million: Some(2.0),
             cache_per_million: Some(0.1),
+            reasoning_per_million: None,
             multiplier: Some(1.0),
             estimated_cost: Some(0.000145),
         }]);

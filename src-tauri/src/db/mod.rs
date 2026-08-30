@@ -32,7 +32,10 @@ pub use mcp::Mcp;
 pub use note::{Note, NoteTag};
 pub use proxy_group::ProxyGroup;
 pub use sandbox_scheme::SandboxScheme;
-pub use types::{AiModel, AiSkill, CcproxyStat, Conversation, ModelConfig, ThinkingConfig};
+pub use types::{
+    AiModel, AiSkill, CcproxyStat, Conversation, ModelConfig, PricingConfig, PricingTier,
+    ThinkingConfig,
+};
 pub use workflow::{
     Workflow, WorkflowAiContextMessage, WorkflowEfficiencyReport, WorkflowMessage, WorkflowSnapshot,
 };

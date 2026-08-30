@@ -254,6 +254,7 @@ pub async fn handle_direct_forward(
                 root_session_id: None,
                 root_task_run_id: None,
                 request_kind: None,
+                pricing: proxy_model.pricing.clone(),
             }
             .with_workflow_attribution(&client_headers),
         );
@@ -325,7 +326,7 @@ pub async fn handle_direct_forward(
                 let store = main_store_arc.as_ref();
                 // For direct forward, we try a simple extraction of tokens from the JSON body
                 let body_json: Value = serde_json::from_slice(&body_bytes).unwrap_or(Value::Null);
-                let (input, output, cache, cache_creation) =
+                let (input, output, cache, cache_creation, reasoning, audio_input, audio_output) =
                     extract_usage_from_value(&body_json, &chat_protocol_for_stat);
                 let has_output = direct_response_has_output(&body_json, &chat_protocol_for_stat);
                 let should_estimate = token_usage_is_missing_or_zero(&[
@@ -356,6 +357,17 @@ pub async fn handle_direct_forward(
                 );
 
                 if has_output {
+                    let (estimated_cost, pricing_status, pricing_snapshot) =
+                        crate::ccproxy::helper::stat_guard::finalize_pricing(
+                            final_input,
+                            final_output,
+                            cache,
+                            cache_creation,
+                            reasoning,
+                            0,
+                            0,
+                            proxy_model.pricing.as_ref(),
+                        );
                     let _ = store.record_ccproxy_stat(
                         CcproxyStat {
                             id: None,
@@ -376,6 +388,13 @@ pub async fn handle_direct_forward(
                             input_tokens: final_input,
                             output_tokens: final_output,
                             cache_tokens: cache,
+                            cache_write_tokens: cache_creation,
+                            reasoning_tokens: reasoning,
+                            audio_input_tokens: audio_input,
+                            audio_output_tokens: audio_output,
+                            estimated_cost,
+                            pricing_status,
+                            pricing_snapshot,
                             request_at: None,
                         }
                         .with_workflow_attribution(&client_headers),
@@ -1329,7 +1348,10 @@ fn estimate_direct_response_output_tokens(value: &Value, protocol: &ChatProtocol
     }
 }
 
-fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64, i64, i64) {
+fn extract_usage_from_value(
+    value: &Value,
+    protocol: &ChatProtocol,
+) -> (i64, i64, i64, i64, i64, i64, i64) {
     match protocol {
         ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
             let usage_value = value.get("usage").cloned().unwrap_or(Value::Null);
@@ -1339,6 +1361,21 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                     usage.completion_tokens as i64,
                     usage.cached_tokens_value().unwrap_or(0) as i64,
                     usage.cache_creation_tokens_value().unwrap_or(0) as i64,
+                    usage
+                        .completion_tokens_details
+                        .as_ref()
+                        .and_then(|details| details.reasoning_tokens)
+                        .unwrap_or(0) as i64,
+                    usage
+                        .prompt_tokens_details
+                        .as_ref()
+                        .and_then(|details| details.audio_tokens)
+                        .unwrap_or(0) as i64,
+                    usage
+                        .completion_tokens_details
+                        .as_ref()
+                        .and_then(|details| details.audio_tokens)
+                        .unwrap_or(0) as i64,
                 );
             }
 
@@ -1385,7 +1422,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                         .and_then(|v| v.as_i64())
                 })
                 .unwrap_or(0);
-            (input, output, cache, cache_creation)
+            (input, output, cache, cache_creation, 0, 0, 0)
         }
         ChatProtocol::Claude => {
             let usage = value.get("usage");
@@ -1404,7 +1441,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
             // Claude reports uncached input separately from cache reads. Normalize stored input to
             // total input (uncached + cache read) so the shared cost formula can subtract cache
             // tokens exactly once, matching OpenAI and Gemini statistics.
-            (input.saturating_add(cache), output, cache, 0)
+            (input.saturating_add(cache), output, cache, 0, 0, 0, 0)
         }
         ChatProtocol::Gemini => {
             let usage = value.get("usageMetadata");
@@ -1420,7 +1457,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .and_then(|u| u.get("cachedContentTokenCount"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            (input, output, cache, 0)
+            (input, output, cache, 0, 0, 0, 0)
         }
         ChatProtocol::Ollama => {
             let input = value
@@ -1431,7 +1468,7 @@ fn extract_usage_from_value(value: &Value, protocol: &ChatProtocol) -> (i64, i64
                 .get("eval_count")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            (input, output, 0, 0)
+            (input, output, 0, 0, 0, 0, 0)
         }
     }
 }
@@ -1456,6 +1493,7 @@ mod tests {
             key_index: None,
             model_metadata: None,
             custom_params: None,
+            pricing: None,
             prompt_injection: "off".to_string(),
             prompt_injection_position: None,
             prompt_text: String::new(),
@@ -1732,7 +1770,7 @@ mod tests {
 
     #[test]
     fn claude_usage_normalizes_uncached_and_cache_read_tokens() {
-        let (input, output, cache, cache_creation) = extract_usage_from_value(
+        let (input, output, cache, cache_creation, _, _, _) = extract_usage_from_value(
             &json!({
                 "usage": {
                     "input_tokens": 114,

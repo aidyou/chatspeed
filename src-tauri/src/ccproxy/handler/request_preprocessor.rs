@@ -86,6 +86,7 @@ mod tests {
             key_index: None,
             model_metadata: None,
             custom_params: None,
+            pricing: None,
             prompt_injection: "off".to_string(),
             prompt_injection_position: None,
             prompt_text: String::new(),

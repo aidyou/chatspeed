@@ -2,6 +2,8 @@ pub mod chat;
 pub mod error;
 pub mod interaction;
 pub mod model_catalog;
+pub mod model_catalog_updater;
 pub mod network;
 pub mod traits;
+pub mod transport;
 pub mod util;

@@ -1,12 +1,161 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 use wildmatch::WildMatch;
 
+pub mod pricing;
+
 const EMBEDDED_CATALOG: &str = include_str!("../../assets/model_catalog/model_catalog.json");
+const EMBEDDED_TRANSPORT_CATALOG: &str =
+    include_str!("../../assets/model_catalog/transport_catalog.json");
+const MODELS_DEV_CATALOG: &str = include_str!("../../assets/models_dev/catalog.json");
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ModelsDevCatalog {
+    pub models: HashMap<String, ModelsDevModel>,
+    pub providers: HashMap<String, ModelsDevProvider>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelsDevProvider {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub npm: Option<String>,
+    #[serde(default)]
+    pub api: Option<String>,
+    #[serde(default)]
+    pub doc: Option<String>,
+    #[serde(default)]
+    pub models: HashMap<String, ModelsDevModel>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelsDevModel {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub attachment: Option<bool>,
+    #[serde(default)]
+    pub reasoning: Option<bool>,
+    #[serde(default)]
+    pub tool_call: Option<bool>,
+    #[serde(default)]
+    pub structured_output: Option<bool>,
+    #[serde(default)]
+    pub temperature: Option<bool>,
+    #[serde(default)]
+    pub modalities: Option<Modalities>,
+    #[serde(default)]
+    pub limit: Option<ModelLimits>,
+    #[serde(default)]
+    pub cost: Option<ModelCost>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Modalities {
+    #[serde(default)]
+    pub input: Vec<String>,
+    #[serde(default)]
+    pub output: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelLimits {
+    #[serde(default)]
+    pub context: Option<u64>,
+    #[serde(default)]
+    pub input: Option<u64>,
+    #[serde(default)]
+    pub output: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelCost {
+    #[serde(default)]
+    pub input: Option<f64>,
+    #[serde(default)]
+    pub output: Option<f64>,
+    #[serde(default)]
+    pub reasoning: Option<f64>,
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    #[serde(default)]
+    pub cache_write: Option<f64>,
+    #[serde(default)]
+    pub input_audio: Option<f64>,
+    #[serde(default)]
+    pub output_audio: Option<f64>,
+    #[serde(default)]
+    pub tiers: Vec<serde_json::Value>,
+}
+
+use crate::db::{PricingConfig, PricingTier};
+
+pub fn models_dev_catalog() -> Result<ModelsDevCatalog, CatalogError> {
+    serde_json::from_str(MODELS_DEV_CATALOG).map_err(CatalogError::Parse)
+}
+
+pub fn pricing_config_from_model(model: &ModelsDevModel) -> Option<PricingConfig> {
+    let cost = model.cost.as_ref()?;
+    let tiers = cost
+        .tiers
+        .iter()
+        .filter_map(|tier| {
+            let context_size = tier.get("tier")?.get("size")?.as_u64()?;
+            Some(PricingTier {
+                context_size,
+                input_per_million: tier.get("input").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                output_per_million: tier.get("output").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                cache_per_million: tier
+                    .get("cache_read")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                reasoning_per_million: tier.get("reasoning").and_then(|v| v.as_f64()),
+                cache_write_per_million: tier
+                    .get("cache_write")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                audio_input_per_million: tier
+                    .get("input_audio")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+                audio_output_per_million: tier
+                    .get("output_audio")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0),
+            })
+        })
+        .collect();
+    Some(PricingConfig {
+        input_per_million: cost.input.unwrap_or(0.0),
+        output_per_million: cost.output.unwrap_or(0.0),
+        cache_per_million: cost.cache_read.unwrap_or(0.0),
+        reasoning_per_million: cost.reasoning,
+        reasoning_pricing_mode: if cost.reasoning.is_some_and(|value| value > 0.0) {
+            "separate"
+        } else {
+            "output"
+        }
+        .into(),
+        cache_write_per_million: cost.cache_write.unwrap_or(0.0),
+        audio_input_per_million: cost.input_audio.unwrap_or(0.0),
+        audio_output_per_million: cost.output_audio.unwrap_or(0.0),
+        tiers,
+        pricing_source: Some("models.dev".into()),
+        multiplier: 1.0,
+    })
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -142,6 +291,8 @@ pub enum CatalogError {
     Conflict { priority: i32, field: &'static str },
     #[error("catalog profile '{0}' is missing")]
     MissingProfile(String),
+    #[error("models.dev catalog is empty or has no usable providers")]
+    EmptyModelsDevCatalog,
     #[error("catalog transport '{0}' is missing")]
     MissingTransport(String),
     #[error("catalog transport '{transport}' has an invalid reasoning default effort")]
@@ -155,17 +306,39 @@ pub struct ResolvedModelProfile {
     pub matched_profile_ids: Vec<String>,
     pub family: Option<String>,
     pub capabilities: Capabilities,
+    pub attachment: Option<bool>,
+    pub structured_output: Option<bool>,
+    pub audio_input: Option<bool>,
+    pub audio_output: Option<bool>,
+    pub video_input: Option<bool>,
+    pub pdf_input: Option<bool>,
     pub context_size: Option<u32>,
     pub max_output_tokens: Option<u32>,
     pub recommended_temperature: Option<f32>,
     pub reasoning: Option<ReasoningPolicy>,
     pub thinking_adapter: Option<ThinkingAdapter>,
     pub matched_transport_id: Option<String>,
+    pub pricing: Option<PricingConfig>,
 }
 
 static CATALOG: LazyLock<Result<CatalogDocument, CatalogError>> =
     LazyLock::new(|| parse_catalog(EMBEDDED_CATALOG));
 
+static TRANSPORT_CATALOG: LazyLock<Result<CatalogDocument, CatalogError>> = LazyLock::new(|| {
+    let transport: TransportDocument = serde_json::from_str(EMBEDDED_TRANSPORT_CATALOG)?;
+    if transport.version != 1 {
+        return Err(CatalogError::UnsupportedVersion(transport.version));
+    }
+    let mut catalog = parse_catalog(EMBEDDED_CATALOG)?;
+    catalog.transports = transport.transports;
+    parse_catalog(&serde_json::to_string(&catalog).map_err(CatalogError::Parse)?)
+});
+
+#[derive(Debug, Clone, Deserialize)]
+struct TransportDocument {
+    version: u32,
+    transports: Vec<TransportRule>,
+}
 fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
@@ -277,9 +450,74 @@ fn catalog_document() -> Result<CatalogDocument, CatalogError> {
     }
 }
 
+fn transport_document() -> Result<CatalogDocument, CatalogError> {
+    match TRANSPORT_CATALOG.as_ref() {
+        Ok(catalog) => Ok(catalog.clone()),
+        Err(error) => Err(CatalogError::Parse(serde_json::Error::io(
+            std::io::Error::other(error.to_string()),
+        ))),
+    }
+}
 pub fn resolve_model_profile(model_id: &str) -> Result<ResolvedModelProfile, CatalogError> {
-    let catalog = catalog_document()?;
-    resolve_model_profile_with_catalog(&catalog, model_id, None, None, None)
+    resolve_model_profile_from_catalog(&models_dev_catalog()?, model_id)
+}
+
+pub fn resolve_model_profile_from_catalog(
+    models_dev: &ModelsDevCatalog,
+    model_id: &str,
+) -> Result<ResolvedModelProfile, CatalogError> {
+    let mut profile =
+        resolve_model_profile_with_catalog(&catalog_document()?, model_id, None, None, None)?;
+    let normalized = normalize(model_id);
+    let model = models_dev.models.get(&normalized).or_else(|| {
+        models_dev
+            .providers
+            .values()
+            .find_map(|p| p.models.get(&normalized))
+    });
+    if let Some(model) = model {
+        profile.family = profile.family.or_else(|| model.family.clone());
+        profile.capabilities.reasoning = profile.capabilities.reasoning.or(model.reasoning);
+        profile.capabilities.function_call = profile.capabilities.function_call.or(model.tool_call);
+        profile.attachment = model.attachment.or(profile.attachment);
+        profile.structured_output = model.structured_output.or(profile.structured_output);
+        profile.audio_input = model
+            .modalities
+            .as_ref()
+            .map(|modalities| modalities.input.iter().any(|value| value == "audio"))
+            .or(profile.audio_input);
+        profile.audio_output = model
+            .modalities
+            .as_ref()
+            .map(|modalities| modalities.output.iter().any(|value| value == "audio"))
+            .or(profile.audio_output);
+        profile.video_input = model
+            .modalities
+            .as_ref()
+            .map(|modalities| modalities.input.iter().any(|value| value == "video"))
+            .or(profile.video_input);
+        profile.pdf_input = model
+            .modalities
+            .as_ref()
+            .map(|modalities| modalities.input.iter().any(|value| value == "pdf"))
+            .or(profile.pdf_input);
+        profile.recommended_temperature = model
+            .temperature
+            .map(|supported| if supported { 0.7 } else { -0.1 })
+            .or(profile.recommended_temperature);
+        profile.pricing = pricing_config_from_model(model).or(profile.pricing);
+        profile.context_size = model
+            .limit
+            .as_ref()
+            .and_then(|l| l.context.map(|v| v.min(u32::MAX as u64) as u32))
+            .or(profile.context_size);
+        profile.max_output_tokens = model
+            .limit
+            .as_ref()
+            .and_then(|l| l.output.map(|v| v.min(u32::MAX as u64) as u32))
+            .or(profile.max_output_tokens);
+    }
+    Ok(profile)
 }
 
 pub fn resolve_transport(
@@ -288,7 +526,7 @@ pub fn resolve_transport(
     backend_protocol: Option<&str>,
     metadata: Option<&HashMap<String, String>>,
 ) -> Result<Option<(ThinkingAdapter, String)>, CatalogError> {
-    let catalog = catalog_document()?;
+    let catalog = transport_document()?;
     resolve_transport_with_catalog(&catalog, model_id, base_url, backend_protocol, metadata)
 }
 
@@ -381,12 +619,19 @@ fn resolve_model_profile_with_catalog(
         matched_profile_ids: rules.iter().map(|rule| rule.id.clone()).collect(),
         family: None,
         capabilities: catalog.defaults.capabilities.clone(),
+        attachment: None,
+        structured_output: None,
+        audio_input: None,
+        audio_output: None,
+        video_input: None,
+        pdf_input: None,
         context_size: None,
         max_output_tokens: None,
         recommended_temperature: None,
         reasoning: None,
         thinking_adapter: None,
         matched_transport_id: None,
+        pricing: None,
     };
     let mut family_priority = None;
     let mut reasoning_priority = None;
@@ -460,6 +705,16 @@ fn resolve_model_profile_with_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_models_dev_catalog_is_valid() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+        assert!(!catalog.providers.is_empty());
+        assert!(catalog
+            .providers
+            .values()
+            .any(|provider| { provider.models.values().any(|model| model.cost.is_some()) }));
+    }
 
     #[test]
     fn embedded_catalog_is_valid() {

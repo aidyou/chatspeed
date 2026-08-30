@@ -230,7 +230,15 @@ macro_rules! apply_sampling_params {
     };
 }
 
-/// Common logic for model retrieval and rotation
+fn get_model_pricing(ai_model: &AiModel, model_id: &str) -> Option<crate::db::PricingConfig> {
+    ai_model
+        .models
+        .iter()
+        .find(|model| model.id == model_id)
+        .and_then(|model| model.pricing.clone())
+}
+
+/// Common logic for model retrieval and rotation.
 pub struct ModelResolver;
 
 impl ModelResolver {
@@ -391,6 +399,7 @@ impl ModelResolver {
                 .find(|m| m.id == backend_target.model)
                 .and_then(|m| m.custom_params.clone());
 
+            let pricing = get_model_pricing(&ai_model_detail, &backend_target.model);
             let metadata = ai_model_detail.metadata.as_ref();
 
             return Ok(ProxyModel {
@@ -404,6 +413,7 @@ impl ModelResolver {
                 key_index: None,
                 model_metadata: ai_model_detail.metadata.clone(),
                 custom_params,
+                pricing,
                 prompt_injection_position: Some(prompt_injection_position),
                 prompt_injection: prompt_injection,
                 prompt_text: prompt_text,
@@ -499,6 +509,7 @@ impl ModelResolver {
             .find(|m| m.id == global_key.model_name)
             .and_then(|m| m.custom_params.clone());
 
+        let pricing = get_model_pricing(&ai_model_details, &global_key.model_name);
         let metadata = ai_model_details.metadata.as_ref();
         let (thinking_adapter, matched_transport_id) = resolve_catalog_adapter(
             &global_key.model_name,
@@ -518,6 +529,7 @@ impl ModelResolver {
             key_index: Some(global_key.key_index),
             model_metadata: ai_model_details.metadata.clone(),
             custom_params,
+            pricing,
             prompt_injection,
             prompt_injection_position: Some(prompt_injection_position),
             prompt_text,
@@ -754,7 +766,11 @@ impl ModelResolver {
             )
         };
 
-        let chat_protocol = ai_model_detail.api_protocol.try_into().unwrap_or_default();
+        let chat_protocol = ai_model_detail
+            .api_protocol
+            .clone()
+            .try_into()
+            .unwrap_or_default();
 
         log::info!(
             "ccproxy: model={}, provider={}, base_url={}, protocol={}, selected={}",
@@ -778,6 +794,7 @@ impl ModelResolver {
             &chat_protocol,
             metadata,
         );
+        let pricing = get_model_pricing(&ai_model_detail, &model_id);
 
         Ok(ProxyModel {
             client_alias: model_id.clone(), // For internal requests, alias is the ID
@@ -790,6 +807,7 @@ impl ModelResolver {
             key_index: selected_key_index,
             model_metadata: ai_model_detail.metadata.clone(),
             custom_params,
+            pricing,
             prompt_injection: "off".to_string(),
             prompt_injection_position: Some("system".to_string()),
             prompt_text: "".to_string(),
@@ -1168,6 +1186,7 @@ mod tests {
             key_index: None,
             model_metadata: None,
             custom_params: None,
+            pricing: None,
             prompt_injection: "off".to_string(),
             prompt_injection_position: None,
             prompt_text: String::new(),

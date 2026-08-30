@@ -140,6 +140,7 @@ impl OutputAdapter for OpenAIOutputAdapter {
                 completion_tokens_details: response.usage.thoughts_tokens.map(|t| {
                     CompletionTokensDetails {
                         reasoning_tokens: Some(t),
+                        audio_tokens: response.usage.audio_output_tokens,
                     }
                 }),
                 ..Default::default()

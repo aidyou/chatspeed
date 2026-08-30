@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "transports": [
+    {
+      "id": "glm-official",
+      "priority": 100,
+      "match": {"profile": ["glm-reasoning-family"], "endpointHost": ["open.bigmodel.cn"]},
+      "thinkingAdapter": "glm",
+      "sources": [{"url": "https://docs.z.ai/guides/capabilities/thinking", "verifiedAt": "2026-08-28"}]
+    },
+    {
+      "id": "kimi-official",
+      "priority": 100,
+      "match": {"profile": ["kimi-reasoning-family"], "endpointHost": ["api.moonshot.cn"]},
+      "thinkingAdapter": "kimi"
+    },
+    {
+      "id": "stepfun-official",
+      "priority": 100,
+      "match": {"profile": ["stepfun-reasoning-family"], "endpointHost": ["api.stepfun.ai"]},
+      "thinkingAdapter": "stepfun"
+    },
+    {
+      "id": "openai-official",
+      "priority": 100,
+      "match": {"profile": ["openai-reasoning-family"], "endpointHost": ["api.openai.com"]},
+      "thinkingAdapter": "openai"
+    },
+    {
+      "id": "claude-official",
+      "priority": 100,
+      "match": {"profile": ["claude-opus-thinking-family"], "endpointHost": ["api.anthropic.com", "api.claude.com"]},
+      "thinkingAdapter": "claude"
+    },
+    {
+      "id": "gemini-official",
+      "priority": 100,
+      "match": {"profile": ["gemini-thinking-family"], "endpointHost": ["generativelanguage.googleapis.com"]},
+      "thinkingAdapter": "gemini"
+    },
+    {
+      "id": "doubao-official",
+      "priority": 100,
+      "match": {"profile": ["doubao-reasoning-family"], "endpointHost": ["api.modelverse.cn"]},
+      "thinkingAdapter": "doubao"
+    },
+    {
+      "id": "deepseek-official",
+      "priority": 100,
+      "match": {"profile": ["deepseek-reasoning-family"], "endpointHost": ["api.deepseek.com", "api.deepseek.cn"]},
+      "thinkingAdapter": "deepseek"
+    },
+    {
+      "id": "qwen-dashscope",
+      "priority": 100,
+      "match": {"profile": ["qwen-reasoning-family", "qwen-vision-family", "qwen3-thinking-family", "qwen-thinking-default-off-family"], "endpointHost": ["dashscope.aliyuncs.com"]},
+      "thinkingAdapter": "qwen"
+    },
+    {
+      "id": "hunyuan-official",
+      "priority": 100,
+      "match": {"profile": ["hunyuan-hy4-preview"], "endpointHost": ["api.hunyuan.cloud.tencent.com", "api.lkeap.cloud.tencent.com", "tokenhub.tencentmaas.com"]},
+      "thinkingAdapter": "hunyuan_hy4_preview"
+    },
+    {
+      "id": "mistral-official",
+      "priority": 100,
+      "match": {"profile": ["mistral-reasoning-family"], "endpointHost": ["api.mistral.ai"]},
+      "thinkingAdapter": "mistral"
+    },
+    {
+      "id": "minimax-official",
+      "priority": 100,
+      "match": {"profile": ["minimax-reasoning-family"], "endpointHost": ["api.minimax.io", "api.minimaxi.com"]},
+      "thinkingAdapter": "minimax"
+    },
+    {
+      "id": "nvidia-nim-thinking",
+      "priority": 100,
+      "match": {"model": ["deepseek-ai/*", "moonshotai/*", "google/gemma-*", "qwen/*", "z-ai/*", "minimaxai/*", "nvidia/*", "thinkingmachines/*", "gpt-oss*", "openai/gpt-oss*"], "endpointHost": ["integrate.api.nvidia.com"]},
+      "thinkingAdapter": "nvidia_nim"
+    },
+    {
+      "id": "mimo-official",
+      "priority": 100,
+      "match": {"profile": ["mimo-reasoning-family"], "endpointHost": ["api.xiaomimimo.com"]},
+      "thinkingAdapter": "mimo"
+    },
+    {
+      "id": "mimo-compat-override",
+      "priority": 10,
+      "match": {"model": ["mimo-v*", "xiaomi/mimo-v*"]},
+      "thinkingAdapter": "mimo"
+    }
+  ]
+}

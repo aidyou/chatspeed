@@ -788,6 +788,14 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     .and_then(|d| d.reasoning_tokens);
                 let prompt_cached_tokens = u.cached_tokens_value();
                 let cache_creation_input_tokens = u.cache_creation_tokens_value();
+                let audio_input_tokens = u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.audio_tokens);
+                let audio_output_tokens = u
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.audio_tokens);
 
                 UnifiedUsage {
                     input_tokens: u.prompt_tokens,
@@ -795,6 +803,8 @@ impl BackendAdapter for OpenAIBackendAdapter {
                     thoughts_tokens,
                     prompt_cached_tokens,
                     cache_creation_input_tokens,
+                    audio_input_tokens,
+                    audio_output_tokens,
                     ..Default::default()
                 }
             })
@@ -1273,6 +1283,14 @@ impl OpenAIBackendAdapter {
                     .and_then(|d| d.reasoning_tokens);
                 let prompt_cached_tokens = u.cached_tokens_value();
                 let cache_creation_input_tokens = u.cache_creation_tokens_value();
+                let audio_input_tokens = u
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.audio_tokens);
+                let audio_output_tokens = u
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.audio_tokens);
 
                 UnifiedUsage {
                     input_tokens: u.prompt_tokens,
@@ -1280,6 +1298,8 @@ impl OpenAIBackendAdapter {
                     thoughts_tokens,
                     prompt_cached_tokens,
                     cache_creation_input_tokens,
+                    audio_input_tokens,
+                    audio_output_tokens,
                     ..Default::default()
                 }
             })

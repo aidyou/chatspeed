@@ -195,6 +195,20 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
               </el-table-column>
               <el-table-column
+                :label="$t('settings.proxy.stats.reasoningTokens')"
+                width="140"
+                sortable
+                sort-by="totalReasoningTokens">
+                <template #default="scope">{{ formatTokens(scope.row.totalReasoningTokens) }}</template>
+              </el-table-column>
+              <el-table-column
+                :label="$t('settings.proxy.stats.cacheWriteTokens')"
+                width="140"
+                sortable
+                sort-by="totalCacheWriteTokens">
+                <template #default="scope">{{ formatTokens(scope.row.totalCacheWriteTokens) }}</template>
+              </el-table-column>
+              <el-table-column
                 :label="$t('settings.proxy.stats.cacheHitRate')"
                 width="140"
                 sortable
@@ -608,12 +622,19 @@ const formatNumber = val => {
 }
 
 const estimateRowCost = row => {
+  if (row.estimatedCost !== undefined && row.estimatedCost !== null) {
+    return Number(row.estimatedCost) || 0
+  }
   const pricing = findPricingForUsageRow(pricingMaps.value, row)
   return estimateCostFromPricing(
     {
       inputTokens: row.totalInputTokens,
       outputTokens: row.totalOutputTokens,
-      cacheTokens: row.totalCacheTokens
+      cacheTokens: row.totalCacheTokens,
+      reasoningTokens: row.totalReasoningTokens,
+      cacheWriteTokens: row.totalCacheWriteTokens,
+      audioInputTokens: row.totalAudioInputTokens,
+      audioOutputTokens: row.totalAudioOutputTokens
     },
     pricing
   )
@@ -768,6 +789,10 @@ const regroupProviderRows = rows => {
         totalInputTokens: Number(row.totalInputTokens || 0),
         totalOutputTokens: Number(row.totalOutputTokens || 0),
         totalCacheTokens: Number(row.totalCacheTokens || 0),
+    totalCacheWriteTokens: Number(row.totalCacheWriteTokens || 0),
+    totalReasoningTokens: Number(row.totalReasoningTokens || 0),
+    totalAudioInputTokens: Number(row.totalAudioInputTokens || 0),
+    totalAudioOutputTokens: Number(row.totalAudioOutputTokens || 0),
         errorCount: Number(row.errorCount || 0),
         estimatedCost: Number(row.estimatedCost || 0),
         errorFilterClientModel: modelColumnMode.value === 'client' ? row.clientModel : null,
@@ -780,6 +805,10 @@ const regroupProviderRows = rows => {
     existing.totalInputTokens += Number(row.totalInputTokens || 0)
     existing.totalOutputTokens += Number(row.totalOutputTokens || 0)
     existing.totalCacheTokens += Number(row.totalCacheTokens || 0)
+    existing.totalCacheWriteTokens += Number(row.totalCacheWriteTokens || 0)
+    existing.totalReasoningTokens += Number(row.totalReasoningTokens || 0)
+    existing.totalAudioInputTokens += Number(row.totalAudioInputTokens || 0)
+    existing.totalAudioOutputTokens += Number(row.totalAudioOutputTokens || 0)
     existing.errorCount += Number(row.errorCount || 0)
     existing.estimatedCost += Number(row.estimatedCost || 0)
   }

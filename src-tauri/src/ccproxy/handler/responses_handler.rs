@@ -70,11 +70,11 @@ fn prepare_direct_responses_body(
     Ok(body_json)
 }
 
-fn response_usage_tokens(body_json: &Value) -> (i64, i64, i64, i64) {
+fn response_usage_tokens(body_json: &Value) -> (i64, i64, i64, i64, i64, i64, i64) {
     response_usage_tokens_from_usage(body_json.get("usage").unwrap_or(&Value::Null))
 }
 
-fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64, i64) {
+fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64, i64, i64, i64, i64) {
     let input = usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
@@ -105,10 +105,33 @@ fn response_usage_tokens_from_usage(usage: &Value) -> (i64, i64, i64, i64) {
                 .and_then(Value::as_i64)
         })
         .unwrap_or(0);
-    (input, output, cache, cache_creation)
+    let reasoning = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("reasoning_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let audio_input = usage
+        .get("input_tokens_details")
+        .and_then(|details| details.get("audio_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let audio_output = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("audio_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    (
+        input,
+        output,
+        cache,
+        cache_creation,
+        reasoning,
+        audio_input,
+        audio_output,
+    )
 }
 
-fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64, i64) {
+fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64, i64, i64, i64, i64) {
     if let Ok(body_json) = serde_json::from_slice::<Value>(body_bytes) {
         return response_usage_tokens(&body_json);
     }
@@ -135,7 +158,7 @@ fn response_usage_tokens_from_body(body_bytes: &[u8]) -> (i64, i64, i64, i64) {
         return response_usage_tokens_from_usage(usage);
     }
 
-    (0, 0, 0, 0)
+    (0, 0, 0, 0, 0, 0, 0)
 }
 
 fn response_output_item_has_content(item: &Value) -> bool {
@@ -278,12 +301,19 @@ async fn direct_forward_responses(
         .map_err(|e| CCProxyError::InternalError(format!("Failed to build response: {}", e)))?;
     *response.headers_mut() = filtered_headers;
 
-    let (input_tokens, output_tokens, cache_tokens, cache_creation_tokens) =
-        if status_code.is_success() {
-            response_usage_tokens_from_body(&body_bytes)
-        } else {
-            (0, 0, 0, 0)
-        };
+    let (
+        input_tokens,
+        output_tokens,
+        cache_tokens,
+        cache_creation_tokens,
+        reasoning_tokens,
+        audio_input_tokens,
+        audio_output_tokens,
+    ) = if status_code.is_success() {
+        response_usage_tokens_from_body(&body_bytes)
+    } else {
+        (0, 0, 0, 0, 0, 0, 0)
+    };
     let should_estimate = status_code.is_success()
         && token_usage_is_missing_or_zero(&[
             Some(input_tokens as u64),
@@ -304,6 +334,17 @@ async fn direct_forward_responses(
 
     if status_code.is_success() && responses_has_output(&body_bytes) {
         let store = main_store_arc.as_ref();
+        let (estimated_cost, pricing_status, pricing_snapshot) =
+            crate::ccproxy::helper::stat_guard::finalize_pricing(
+                estimated_input_tokens,
+                output_tokens,
+                cache_tokens,
+                cache_creation_tokens,
+                reasoning_tokens,
+                audio_input_tokens,
+                audio_output_tokens,
+                proxy_model.pricing.as_ref(),
+            );
         let _ = store.record_ccproxy_stat(
             CcproxyStat {
                 id: None,
@@ -324,6 +365,13 @@ async fn direct_forward_responses(
                 input_tokens: estimated_input_tokens,
                 output_tokens,
                 cache_tokens,
+                cache_write_tokens: cache_creation_tokens,
+                reasoning_tokens,
+                audio_input_tokens,
+                audio_output_tokens,
+                estimated_cost,
+                pricing_status,
+                pricing_snapshot,
                 request_at: None,
             }
             .with_workflow_attribution(&client_headers),
@@ -469,6 +517,7 @@ mod tests {
             key_index: None,
             model_metadata: metadata,
             custom_params: None,
+            pricing: None,
             prompt_injection: "off".to_string(),
             prompt_injection_position: None,
             prompt_text: String::new(),
@@ -590,7 +639,7 @@ mod tests {
 
     #[test]
     fn responses_usage_tokens_reads_direct_response_usage() {
-        let (input, output, cache, cache_creation) = response_usage_tokens(&json!({
+        let (input, output, cache, cache_creation, _, _, _) = response_usage_tokens(&json!({
             "usage": {
                 "input_tokens": 120,
                 "output_tokens": 35,
@@ -609,7 +658,7 @@ mod tests {
 
     #[test]
     fn responses_usage_tokens_accepts_openai_compatible_usage_names() {
-        let (input, output, cache, cache_creation) = response_usage_tokens(&json!({
+        let (input, output, cache, cache_creation, _, _, _) = response_usage_tokens(&json!({
             "usage": {
                 "prompt_tokens": 120,
                 "completion_tokens": 35,
@@ -792,7 +841,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","status":"complet
 
 "#;
 
-        let (input, output, cache, cache_creation) =
+        let (input, output, cache, cache_creation, _, _, _) =
             response_usage_tokens_from_body(body.as_bytes());
 
         assert_eq!(input, 81345);
