@@ -1,0 +1,65 @@
+name: Sync Models.dev Metadata
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-models-dev-metadata
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Models.dev catalog and labs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ChatSpeed
+        uses: actions/checkout@v5
+
+      - name: Checkout models.dev
+        uses: actions/checkout@v5
+        with:
+          repository: anomalyco/models.dev
+          ref: dev
+          path: .tmp/models.dev
+          fetch-depth: 1
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build upstream catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .tmp/models.dev
+          bun install --frozen-lockfile
+          bun --cwd packages/web script/build.ts
+          mv packages/web/dist/_catalog.json catalog.json
+
+      - name: Generate metadata snapshot
+        id: generate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_models_dev_metadata.py \
+            --source .tmp/models.dev \
+            --catalog .tmp/models.dev/catalog.json \
+            --output .tmp/models-dev-metadata \
+            --revision "$(git -C .tmp/models.dev rev-parse HEAD)"
+          echo "revision=$(git -C .tmp/models.dev rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to updater-meta branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .tmp/models-dev-metadata
+          publish_branch: updater-meta
+          keep_files: true
+          destination_dir: models-dev
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: "chore(models-dev): sync ${{ steps.generate.outputs.revision }}"
