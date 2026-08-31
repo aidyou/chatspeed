@@ -1,0 +1,76 @@
+{
+  "labs": {
+    "alibaba": {
+      "description": "Alibaba's Qwen lab builds open and hosted multilingual models spanning reasoning, code, vision, audio, and agent workflows."
+    },
+    "anthropic": {
+      "description": "Anthropic's Claude models emphasize reliable, interpretable, steerable AI for coding, analysis, and long-horizon agent work."
+    },
+    "arcee-ai": {
+      "description": "Arcee AI develops open-weight language models focused on efficient reasoning, tool use, and deployable intelligence."
+    },
+    "cohere": {
+      "description": "Cohere focuses on enterprise AI: multilingual Command models, retrieval and RAG, secure workplace agents, and practical coding assistance."
+    },
+    "deepreinforce": {
+      "description": "DeepReinforce builds self-scaffolding Ornith models for coding agents, spanning small dense checkpoints and frontier-scale MoE releases."
+    },
+    "deepseek": {
+      "description": "DeepSeek is an open-model lab known for cost-efficient reasoning systems, visible reasoning APIs, and strong coding and math performance."
+    },
+    "google": {
+      "description": "Google's Gemini and Gemma work pairs frontier multimodal reasoning with long-context infrastructure and open-weight options for developers."
+    },
+    "meta": {
+      "description": "Meta's Llama program pushes open-weight AI, with multilingual and multimodal models designed for customization and broad deployment."
+    },
+    "minimax": {
+      "description": "MiniMax builds agentic models for coding, office work, and multimodal media, with a strong bias toward practical productivity workflows."
+    },
+    "mistral": {
+      "description": "Mistral blends open-weight research with enterprise deployment across efficient chat, coding agents, document intelligence, and multilingual models."
+    },
+    "moonshotai": {
+      "description": "Moonshot AI's Kimi line is tuned for long-context agents, multimodal coding, and high-throughput developer workflows."
+    },
+    "nvidia": {
+      "description": "NVIDIA's Nemotron family brings open weights, training recipes, and accelerated deployment to reasoning, RAG, safety, and multimodal agents."
+    },
+    "openai": {
+      "description": "OpenAI's GPT family sets production defaults for reasoning, coding, multimodal work, and agentic applications."
+    },
+    "perplexity": {
+      "description": "Perplexity's Sonar models make search a first-class model capability for current, citation-backed answers and research agents."
+    },
+    "poolside": {
+      "description": "Poolside builds open-weight foundation models and the systems that refine and improve them."
+    },
+    "sakana": {
+      "description": "Sakana AI turns model routing into a product, exposing multi-agent systems through a single API for research, coding, and hard analysis."
+    },
+    "sarvam": {
+      "description": "Sarvam AI builds India-centered open reasoning models, with multilingual strengths across Indian languages, coding, and enterprise use."
+    },
+    "stepfun": {
+      "description": "StepFun's Step models target fast multimodal agents, pairing visual understanding, search, coding, and tool orchestration."
+    },
+    "tencent": {
+      "description": "Tencent's Hy and Hunyuan work centers on large open MoE models for reasoning, coding, long context, and agent workflows."
+    },
+    "xai": {
+      "description": "xAI's Grok lineup emphasizes tool use, low-hallucination reasoning, coding, and dedicated media APIs under one developer platform."
+    },
+    "xiaomi": {
+      "description": "Xiaomi's MiMo models target coding agents and real-world automation with long-context reasoning, multimodal interaction, and compatible APIs."
+    },
+    "zhipuai": {
+      "description": "Z.ai's GLM line focuses on open agentic engineering: long-horizon coding, terminal tasks, and hybrid reasoning at aggressive cost."
+    }
+  },
+  "source": {
+    "catalogSha256": "c0e8d5de03933a2eb6cd659731a4d7b70a118316a317a4ad3b087ec9aee07041",
+    "generatedAt": "2026-08-31T02:32:57Z",
+    "repository": "https://github.com/anomalyco/models.dev",
+    "revision": "fd02f6fff829f38b4839917ac39d000d2a81125a"
+  }
+}
