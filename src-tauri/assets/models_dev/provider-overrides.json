@@ -1,90 +1,31 @@
 {
   "providers": [
     {
-      "id": "siliconflow-cn",
-      "protocol": "openai",
-      "name": "Siliconflow(硅基流动)",
-      "logo": "https://framerusercontent.com/images/4li2PjWxZJmoGkzXRMJWU1rJmI.svg",
-      "description": "默认的这些模型注册后完全免费使用。硅基流动致力于打造规模化、标准化、高效能 AI Infra 平台，提供高效能、低成本的多品类 AI 模型服务，助力开发者和企业聚焦产品创新。",
-      "api": "https://api.siliconflow.cn/v1",
-      "documentationUrl": "https://docs.siliconflow.cn/cn/userguide/introduction",
-      "modelListUrl": "https://cloud.siliconflow.cn/models",
-      "keyApplyUrl": "https://cloud.siliconflow.cn/account/ak"
+      "id": "siliconflow",
+      "description": "默认的这些模型注册后完全免费使用。硅基流动致力于打造规模化、标准化、高效能 AI Infra 平台，提供高效能、低成本的多品类 AI 模型服务，助力开发者和企业聚焦产品创新。"
     },
     {
       "id": "modelscope",
-      "protocol": "openai",
-      "name": "ModelScope(魔塔)",
-      "logo": "https://g.alicdn.com/sail-web/maas/2.7.13/favicon/128.ico",
-      "description": "绑定阿里云账号后可以免费调用2000次/天，汇聚各领域最先进的机器学习模型，提供模型探索体验、推理、训练、部署和应用的一站式服务。",
-      "api": "https://api-inference.modelscope.cn/v1",
-      "documentationUrl": "https://modelscope.cn/docs/home",
-      "modelListUrl": "https://modelscope.cn/models",
-      "keyApplyUrl": "https://modelscope.cn/my/myaccesstoken"
-    },
-    {
-      "id": "pollinations",
-      "protocol": "openai",
-      "name": "Pollinations",
-      "logo": "https://pollinations.ai/favicon-32x32.png",
-      "description": "Free Open-Source Image and Text Generation. No signups or API keys required. We prioritize your privacy with zero data storage and completely anonymous usage.",
-      "api": "https://text.pollinations.ai/openai",
-      "documentationUrl": "https://github.com/pollinations/pollinations/blob/master/APIDOCS.md",
-      "modelListUrl": "https://text.pollinations.ai/models"
+      "description": "绑定阿里云账号后可以免费调用2000次/天，汇聚各领域最先进的机器学习模型，提供模型探索体验、推理、训练、部署和应用的一站式服务。"
     },
     {
       "id": "openrouter",
-      "protocol": "openai",
-      "name": "Openrouter",
-      "logo": "https://openrouter.ai/favicon.ico",
-      "description": "A unified interface for LLMs. Find the best models & prices for your prompts.",
-      "api": "https://openrouter.ai/api/v1",
-      "documentationUrl": "https://openrouter.ai/docs",
-      "modelListUrl": "https://openrouter.ai/models",
-      "keyApplyUrl": "https://openrouter.ai/keys"
+      "description": "A unified interface for LLMs. Find the best models & prices for your prompts."
     },
     {
       "id": "groq",
       "protocol": "openai",
-      "name": "Groq",
-      "logo": "https://console.groq.com/favicon.ico",
-      "description": "Experience the fastest inference in the world",
       "api": "https://api.groq.com/openai/v1",
-      "documentationUrl": "https://console.groq.com/docs/overview",
-      "modelListUrl": "https://console.groq.com/docs/models",
-      "keyApplyUrl": "https://console.groq.com/keys"
+      "description": "Experience the fastest inference in the world"
     },
     {
       "id": "cloudflare-workers-ai",
-      "protocol": "openai",
-      "name": "Cloudflare",
-      "logo": "https://www.google.com/s2/favicons?domain=cloudflare.com&sz=64",
-      "description": "Workers AI allows you to run AI models in a serverless way, without having to worry about scaling, maintaining, or paying for unused infrastructure.",
       "api": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-      "documentationUrl": "https://developers.cloudflare.com/workers-ai/",
-      "modelListUrl": "https://developers.cloudflare.com/workers-ai/models/",
-      "keyApplyUrl": "https://dash.cloudflare.com/profile/api-tokens"
-    },
-    {
-      "id": "nvidia",
-      "protocol": "openai",
-      "name": "Nvidia",
-      "logo": "https://build.nvidia.com/favicon.ico",
-      "description": "NVIDIA AI platform provides state-of-the-art AI models and tools for developers.",
-      "api": "https://integrate.api.nvidia.com/v1",
-      "documentationUrl": "https://docs.api.nvidia.com/nim/reference/llm-apis",
-      "modelListUrl": "https://build.nvidia.com/models",
-      "keyApplyUrl": "https://build.nvidia.com/settings/api-keys"
+      "description": "Workers AI allows you to run AI models in a serverless way, without having to worry about scaling, maintaining, or paying for unused infrastructure."
     },
     {
       "id": "github-copilot",
-      "protocol": "openai",
-      "name": "Github",
-      "logo": "https://github.githubassets.com/favicons/favicon.png",
-      "description": "A catalog and playground of AI models to help you build AI features and products.",
-      "api": "https://models.inference.ai.azure.com",
-      "modelListUrl": "https://github.com/marketplace/models/",
-      "keyApplyUrl": "https://github.com/settings/personal-access-tokens"
+      "description": "A catalog and playground of AI models to help you build AI features and products."
     },
     {
       "id": "ollama",
@@ -98,28 +39,16 @@
     },
     {
       "id": "google",
-      "protocol": "gemini",
-      "name": "Google Gemini",
-      "logo": "https://www.gstatic.com/lamda/images/favicon_v1_150160cddff7f294ce30.svg",
-      "description": "Get help with writing, planning, learning, and more from Google AI.",
-      "api": "https://generativelanguage.googleapis.com/v1beta",
-      "documentationUrl": "https://ai.google.dev/docs",
-      "modelListUrl": "https://ai.google.dev/models/gemini",
-      "keyApplyUrl": "https://aistudio.google.com/app/apikey"
+      "api": "https://generativelanguage.googleapis.com/v1beta"
     },
     {
       "id": "huggingface",
       "protocol": "huggingface",
-      "name": "HuggingFace",
-      "logo": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
-      "description": "We’re on a journey to advance and democratize artificial intelligence through open source and open science.",
       "api": "https://router.huggingface.co/hf-inference/models",
-      "documentationUrl": "https://huggingface.co/docs",
-      "modelListUrl": "https://huggingface.co/models",
-      "keyApplyUrl": "https://huggingface.co/settings/tokens"
+      "description": "We’re on a journey to advance and democratize artificial intelligence through open source and open science."
     },
     {
-      "id": "alibaba-cn",
+      "id": "aliyun",
       "protocol": "openai",
       "name": "阿里云百炼",
       "logo": "https://img.alicdn.com/tfs/TB1_ZXuNcfpK1RjSZFOXXa6nFXa-32-32.ico",
@@ -142,14 +71,7 @@
     },
     {
       "id": "volcengine",
-      "protocol": "openai",
-      "name": "Volcengine(火山引擎)",
-      "logo": "https://portal.volccdn.com/obj/volcfe/misc/favicon.png",
-      "description": "火山引擎是字节跳动旗下的云服务平台，将字节跳动快速发展过程中积累的增长方法、技术能力和应用工具开放给外部企业，提供云基础、视频与内容分发、数智平台VeDI、人工智能、开发与运维等服务，帮助企业在数字化升级中实现持续增长。",
-      "api": "https://ark.cn-beijing.volces.com/api/v3",
-      "documentationUrl": "https://www.volcengine.com/docs/82347/1182347",
-      "modelListUrl": "https://console.volcengine.com/ark/models",
-      "keyApplyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey?apikey=%7B%7D"
+      "description": "火山引擎是字节跳动旗下的云服务平台，将字节跳动快速发展过程中积累的增长方法、技术能力和应用工具开放给外部企业，提供云基础、视频与内容分发、数智平台VeDI、人工智能、开发与运维等服务，帮助企业在数字化升级中实现持续增长。"
     },
     {
       "id": "tencent-hunyuan",
@@ -174,158 +96,43 @@
       "keyApplyUrl": "https://platform.lingyiwanwu.com/apikeys"
     },
     {
-      "id": "zhipuai",
-      "protocol": "openai",
-      "name": "ChatGLM(智谱AI)",
-      "logo": "https://open.bigmodel.cn/img/icons/favicon-32x32.png",
-      "description": "几行代码接入大模型，极速构建变革性AI体验。",
-      "api": "https://open.bigmodel.cn/api/paas/v4",
-      "documentationUrl": "https://open.bigmodel.cn/dev/welcome",
-      "modelListUrl": "https://open.bigmodel.cn/dev/api#chatglm_turbo",
-      "keyApplyUrl": "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"
-    },
-    {
-      "id": "deepseek",
-      "protocol": "openai",
-      "name": "Deepseek",
-      "logo": "https://www.deepseek.com/favicon.ico",
-      "description": "DeepSeek, unravel the mystery of AGI with curiosity. Answer the essential question with long-termism.",
-      "api": "https://api.deepseek.com/v1",
-      "documentationUrl": "https://api-docs.deepseek.com/",
-      "modelListUrl": "https://api-docs.deepseek.com/quick_start/pricing",
-      "keyApplyUrl": "https://platform.deepseek.com/api_keys"
-    },
-    {
       "id": "openai",
-      "protocol": "openai",
-      "name": "OpenAI",
-      "logo": "https://openai.com/favicon.ico",
-      "description": "We believe our research will eventually lead to artificial general intelligence, a system that can solve human-level problems. Building safe and beneficial AGI is our mission.",
-      "api": "https://api.openai.com/v1",
-      "documentationUrl": "https://platform.openai.com/docs/overview",
-      "modelListUrl": "https://platform.openai.com/docs/models",
-      "keyApplyUrl": "https://platform.openai.com/settings/organization/api-keys"
+      "api": "https://api.openai.com/v1"
     },
     {
       "id": "anthropic",
       "protocol": "claude",
-      "name": "Anthropic (Claude)",
-      "logo": "https://www.anthropic.com/favicon.ico",
-      "description": "Claude is Anthropic's AI assistant built with Constitutional AI, integrating ethical principles directly into the model.",
-      "api": "https://api.anthropic.com/v1",
-      "documentationUrl": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
-      "modelListUrl": "https://docs.anthropic.com/en/api/models-list",
-      "keyApplyUrl": "https://console.anthropic.com/settings/keys"
+      "api": "https://api.anthropic.com/v1"
     },
     {
       "id": "togetherai",
       "protocol": "openai",
-      "name": "Together AI",
-      "logo": "https://www.together.ai/favicon.ico",
-      "description": "Together AI provides access to open-source models via an API compatible with OpenAI, offering over 200 models.",
       "api": "https://api.together.xyz/v1",
-      "documentationUrl": "https://docs.together.ai/docs/quickstart",
-      "modelListUrl": "https://api.together.ai/models",
-      "keyApplyUrl": "https://api.together.ai/settings/api-keys"
+      "description": "Together AI provides access to open-source models via an API compatible with OpenAI, offering over 200 models."
     },
     {
       "id": "cohere",
       "protocol": "openai",
-      "name": "Cohere",
-      "logo": "https://cohere.com/favicon.ico",
-      "description": "Cohere provides powerful language models and AI tools for developers and businesses.",
-      "api": "https://api.cohere.ai/v1",
-      "documentationUrl": "https://docs.cohere.com/docs",
-      "modelListUrl": "https://docs.cohere.com/docs/models",
-      "keyApplyUrl": "https://dashboard.cohere.com/api-keys"
+      "api": "https://api.cohere.ai/v1"
     },
     {
       "id": "perplexity",
       "protocol": "openai",
-      "name": "Perplexity",
-      "logo": "https://perplexity.ai/favicon.ico",
-      "description": "Perplexity AI provides real-time AI-powered, sourced responses with access to current information.",
-      "api": "https://api.perplexity.ai",
-      "documentationUrl": "https://docs.perplexity.ai/docs",
-      "modelListUrl": "https://docs.perplexity.ai/docs/models",
-      "keyApplyUrl": "https://perplexity.ai/settings/api"
+      "api": "https://api.perplexity.ai"
     },
     {
       "id": "xai",
       "protocol": "openai",
-      "name": "xAI (Grok)",
-      "logo": "https://x.ai/favicon.ico",
-      "description": "xAI's Grok models provide advanced AI capabilities with text and vision support.",
-      "api": "https://api.x.ai/v1",
-      "documentationUrl": "https://docs.x.ai/docs/overview",
-      "modelListUrl": "https://docs.x.ai/docs/models-list",
-      "keyApplyUrl": "https://x.ai/settings/api-keys"
+      "api": "https://api.x.ai/v1"
     },
     {
       "id": "mistral",
       "protocol": "openai",
-      "name": "Mistral AI",
-      "logo": "https://mistral.ai/favicon.ico",
-      "description": "French AI company providing the Mistral series of models, including Mistral Large, Mixtral, and other open-source models.",
-      "api": "https://api.mistral.ai/v1",
-      "documentationUrl": "https://docs.mistral.ai/",
-      "modelListUrl": "https://docs.mistral.ai/api/",
-      "keyApplyUrl": "https://console.mistral.ai/api-keys/"
+      "api": "https://api.mistral.ai/v1"
     },
     {
       "id": "fireworks-ai",
-      "protocol": "openai",
-      "name": "Fireworks AI",
-      "logo": "https://fireworks.ai/favicon.ico",
-      "description": "Platform focused on open-source model inference, providing fast and low-cost model deployment and inference services.",
-      "api": "https://api.fireworks.ai/inference/v1",
-      "documentationUrl": "https://docs.fireworks.ai/",
-      "modelListUrl": "https://fireworks.ai/models",
-      "keyApplyUrl": "https://fireworks.ai/api-keys"
-    },
-    {
-      "id": "replicate",
-      "protocol": "openai",
-      "name": "Replicate",
-      "logo": "https://replicate.com/favicon.ico",
-      "description": "Platform providing machine learning model APIs, supporting various AI models including image and text generation.",
-      "api": "https://api.replicate.com/v1",
-      "documentationUrl": "https://replicate.com/docs",
-      "modelListUrl": "https://replicate.com/models",
-      "keyApplyUrl": "https://replicate.com/account/api-tokens"
-    },
-    {
-      "id": "anyscale",
-      "protocol": "openai",
-      "name": "Anyscale",
-      "logo": "https://www.anyscale.com/favicon.ico",
-      "description": "Provides fast and scalable APIs for open-source LLMs, supporting mainstream open-source models like Llama and Mistral.",
-      "api": "https://api.endpoints.anyscale.com/v1",
-      "documentationUrl": "https://docs.anyscale.com/",
-      "modelListUrl": "https://app.endpoints.anyscale.com/models",
-      "keyApplyUrl": "https://app.endpoints.anyscale.com/credentials"
-    },
-    {
-      "id": "stability-ai",
-      "protocol": "openai",
-      "name": "Stability AI",
-      "logo": "https://stability.ai/favicon.ico",
-      "description": "Platform focused on image generation and multimodal AI, providing the Stable Diffusion series of models.",
-      "api": "https://api.stability.ai/v1",
-      "documentationUrl": "https://platform.stability.ai/docs",
-      "modelListUrl": "https://platform.stability.ai/docs/api-reference",
-      "keyApplyUrl": "https://platform.stability.ai/account/api-keys"
-    },
-    {
-      "id": "hyperbolic",
-      "protocol": "openai",
-      "name": "Hyperbolic AI",
-      "logo": "https://hyperbolic.ai/favicon.ico",
-      "description": "Provides access to the latest open-source models at lower costs than traditional cloud services, supporting large models like Llama 3.1 405B.",
-      "api": "https://api.hyperbolic.xyz/v1",
-      "documentationUrl": "https://docs.hyperbolic.xyz/",
-      "modelListUrl": "https://docs.hyperbolic.xyz/docs/models",
-      "keyApplyUrl": "https://app.hyperbolic.xyz/settings"
+      "description": "Platform focused on open-source model inference, providing fast and low-cost model deployment and inference services."
     }
   ]
 }
