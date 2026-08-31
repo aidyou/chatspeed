@@ -15,12 +15,44 @@ const EMBEDDED_CATALOG: &str = include_str!("../../assets/model_catalog/model_ca
 const EMBEDDED_TRANSPORT_CATALOG: &str =
     include_str!("../../assets/model_catalog/transport_catalog.json");
 const EMBEDDED_MODELS_DEV_CATALOG: &str = include_str!("../../assets/models_dev/catalog.json");
+const EMBEDDED_MODELS_DEV_PROVIDERS: &str = include_str!("../../assets/models_dev/providers.json");
 pub const MODELS_DEV_CACHE_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ModelsDevCatalog {
     pub models: HashMap<String, ModelsDevModel>,
     pub providers: HashMap<String, ModelsDevProvider>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDevProviderList {
+    pub providers: Vec<ModelsDevPresetProvider>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDevPresetProvider {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub logo: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub documentation_url: Option<String>,
+    #[serde(default)]
+    pub model_list_url: Option<String>,
+    #[serde(default)]
+    pub key_apply_url: Option<String>,
+    #[serde(default)]
+    pub api: Option<String>,
+    #[serde(default)]
+    pub responses: bool,
+    #[serde(default)]
+    pub model_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -154,6 +186,10 @@ pub fn models_dev_catalog() -> Result<Arc<ModelsDevCatalog>, CatalogError> {
     let catalog = Arc::new(catalog);
     cache.set(catalog.clone());
     Ok(catalog)
+}
+
+pub fn models_dev_preset_providers() -> Result<ModelsDevProviderList, CatalogError> {
+    serde_json::from_str(EMBEDDED_MODELS_DEV_PROVIDERS).map_err(CatalogError::Parse)
 }
 
 pub fn pricing_config_from_model(model: &ModelsDevModel) -> Option<PricingConfig> {
@@ -397,7 +433,9 @@ fn normalize(value: &str) -> String {
 
 fn catalog_model_ids(model_id: &str) -> impl Iterator<Item = String> + '_ {
     let normalized = normalize(model_id);
-    let base = normalized.split_once(':').map_or(normalized.clone(), |(base, _)| base.to_string());
+    let base = normalized
+        .split_once(':')
+        .map_or(normalized.clone(), |(base, _)| base.to_string());
     [normalized, base].into_iter()
 }
 
@@ -525,16 +563,18 @@ pub fn resolve_model_profile_from_catalog(
     models_dev: &ModelsDevCatalog,
     model_id: &str,
 ) -> Result<ResolvedModelProfile, CatalogError> {
+    resolve_model_profile_from_catalog_with_context(models_dev, model_id, None, None)
+}
+
+pub fn resolve_model_profile_from_catalog_with_context(
+    models_dev: &ModelsDevCatalog,
+    model_id: &str,
+    provider_id: Option<&str>,
+    base_url: Option<&str>,
+) -> Result<ResolvedModelProfile, CatalogError> {
     let mut profile =
         resolve_model_profile_with_catalog(&catalog_document()?, model_id, None, None, None)?;
-    let model = catalog_model_ids(model_id).find_map(|candidate| {
-        models_dev.models.get(&candidate).or_else(|| {
-            models_dev
-                .providers
-                .values()
-                .find_map(|provider| provider.models.get(&candidate))
-        })
-    });
+    let model = find_catalog_model(models_dev, model_id, provider_id, base_url);
     if let Some(model) = model {
         profile.family = profile.family.or_else(|| model.family.clone());
         profile.capabilities.reasoning = profile.capabilities.reasoning.or(model.reasoning);
@@ -583,6 +623,71 @@ pub fn resolve_model_profile_from_catalog(
             .or(profile.max_output_tokens);
     }
     Ok(profile)
+}
+
+fn find_catalog_model<'a>(
+    models_dev: &'a ModelsDevCatalog,
+    model_id: &str,
+    provider_id: Option<&str>,
+    base_url: Option<&str>,
+) -> Option<&'a ModelsDevModel> {
+    let candidates: Vec<String> = catalog_model_ids(model_id).collect();
+
+    if let Some(provider_id) = provider_id.map(str::trim).filter(|id| !id.is_empty()) {
+        return models_dev
+            .providers
+            .get(provider_id)
+            .and_then(|provider| find_provider_model(provider, &candidates));
+    }
+
+    if let Some(host) = base_url.and_then(url_host) {
+        let matches: Vec<&ModelsDevModel> = models_dev
+            .providers
+            .values()
+            .filter(|provider| {
+                provider.api.as_deref().and_then(url_host).as_deref() == Some(host.as_str())
+            })
+            .filter_map(|provider| find_provider_model(provider, &candidates))
+            .collect();
+        return unique_model(matches);
+    }
+
+    if let Some(model) = candidates
+        .iter()
+        .find_map(|candidate| models_dev.models.get(candidate))
+    {
+        return Some(model);
+    }
+
+    let matches: Vec<&ModelsDevModel> = models_dev
+        .providers
+        .values()
+        .filter_map(|provider| find_provider_model(provider, &candidates))
+        .collect();
+    unique_model(matches)
+}
+
+fn find_provider_model<'a>(
+    provider: &'a ModelsDevProvider,
+    candidates: &[String],
+) -> Option<&'a ModelsDevModel> {
+    candidates
+        .iter()
+        .find_map(|candidate| provider.models.get(candidate))
+}
+
+fn unique_model<'a>(matches: Vec<&'a ModelsDevModel>) -> Option<&'a ModelsDevModel> {
+    let first = matches.first().copied()?;
+    matches
+        .iter()
+        .all(|model| std::ptr::eq(*model, first))
+        .then_some(first)
+}
+
+fn url_host(value: &str) -> Option<String> {
+    Url::parse(value.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(normalize))
 }
 
 pub fn resolve_transport(
@@ -782,8 +887,47 @@ mod tests {
     }
 
     #[test]
-    fn embedded_catalog_is_valid() {
-        assert!(CATALOG.is_ok());
+    fn provider_context_selects_provider_specific_pricing() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+
+        let openai = resolve_model_profile_from_catalog_with_context(
+            &catalog,
+            "gpt-5.6-sol",
+            Some("openai"),
+            Some("https://api.openai.com/v1"),
+        )
+        .expect("OpenAI profile");
+        let xpersona = resolve_model_profile_from_catalog_with_context(
+            &catalog,
+            "gpt-5.6-sol",
+            Some("xpersona"),
+            Some("https://api.xpersona.ai/v1"),
+        )
+        .expect("xpersona profile");
+
+        assert_eq!(
+            openai
+                .pricing
+                .as_ref()
+                .map(|pricing| (pricing.input_per_million, pricing.output_per_million)),
+            Some((4.0, 20.0))
+        );
+        assert_eq!(
+            xpersona
+                .pricing
+                .as_ref()
+                .map(|pricing| (pricing.input_per_million, pricing.output_per_million)),
+            Some((1.5, 12.0))
+        );
+    }
+
+    #[test]
+    fn ambiguous_model_without_provider_context_has_no_pricing() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+        let profile =
+            resolve_model_profile_from_catalog(&catalog, "gpt-5.6-sol").expect("model profile");
+
+        assert!(profile.pricing.is_none());
     }
 
     #[test]

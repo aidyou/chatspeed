@@ -927,6 +927,9 @@ const editModel = async (id, model) => {
     modelForm.value.name = model.providerName
     modelForm.value.logo = model.logo
     modelForm.value.baseUrl = model.baseUrl
+    modelForm.value.supportsResponsesApi = model.responses === true
+    modelForm.value.modelsDevProviderId = model.providerId
+    modelForm.value.modelsDevModelId = null
     modelForm.value.metadata = {
       ...(modelForm.value.metadata || {}),
       modelsDevProviderId: model.providerId,
@@ -1444,9 +1447,23 @@ watchEffect(async () => {
       proxyServers: modelForm.value.proxyServers
     })
   } else {
-    fetchedProviderModels.value = []
+    loadCatalogProviderModels()
   }
 })
+
+const loadCatalogProviderModels = async () => {
+  const providerId = modelForm.value.modelsDevProviderId
+  if (!providerId) {
+    fetchedProviderModels.value = []
+    return
+  }
+  try {
+    fetchedProviderModels.value = await modelStore.listModelsDevProviderModels(providerId)
+  } catch (error) {
+    console.error('Failed to load catalog provider models:', error)
+    fetchedProviderModels.value = []
+  }
+}
 
 const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metadata) => {
   isLoadingProviderModels.value = true
@@ -1454,6 +1471,9 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
   try {
     fetchedProviderModels.value =
       (await modelStore.listModels(protocol, baseUrl, apiKey, metadata)) || []
+    if (!fetchedProviderModels.value.length) {
+      await loadCatalogProviderModels()
+    }
   } catch (error) {
     const formattedError =
       error instanceof FrontendAppError
@@ -1475,7 +1495,7 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
       console.error('Failed to fetch provider models:', error)
     }
 
-    fetchedProviderModels.value = []
+    await loadCatalogProviderModels()
   } finally {
     isLoadingProviderModels.value = false
   }
@@ -1672,22 +1692,26 @@ const showPresetModels = async () => {
     try {
         const providers = await modelStore.listModelsDevProviders()
         presetModels.value = providers
-          .filter(provider => provider.api && provider.models && Object.keys(provider.models).length)
-          .map(provider => ({
-            id: provider.id,
-            name: provider.name,
-            desc: provider.description || provider.name,
-            logo: getProviderLogo(provider.id, provider.api),
-            documentationUrl: provider.doc,
-            modelListUrl: provider.doc,
-            providerId: provider.id,
-            providerName: provider.name,
-            protocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
-            apiProtocol: provider.npm?.includes('anthropic') ? 'claude' : 'openai',
-            baseUrl: provider.api,
-            models: [],
-            searchName: `${provider.name} ${provider.description || ''}`.toLowerCase()
-          }))
+          .filter(provider => provider.api)
+          .map(provider => {
+            const protocol = provider.protocol || 'openai'
+            return {
+              id: provider.id,
+              name: provider.name,
+              desc: provider.description || provider.name,
+              logo: provider.logo || getProviderLogo(provider.id, provider.api),
+              documentationUrl: provider.documentationUrl,
+              modelListUrl: provider.modelListUrl || provider.documentationUrl,
+              providerId: provider.id,
+              providerName: provider.name,
+              protocol,
+              apiProtocol: protocol,
+              baseUrl: provider.api,
+              responses: provider.responses === true,
+              models: [],
+              searchName: `${provider.name} ${provider.description || ''} ${provider.api || ''}`.toLowerCase()
+            }
+          })
     } catch (error) {
       if (error instanceof FrontendAppError) {
         return showMessage(

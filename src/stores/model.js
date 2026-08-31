@@ -323,6 +323,9 @@ export const useModelStore = defineStore('modelProvider', () => {
 
   const listModelsDevProviders = () => invokeWrapper('list_models_dev_providers', {})
 
+  const listModelsDevProviderModels = providerId =>
+    invokeWrapper('list_models_dev_provider_models', { providerId })
+
   /**
    * Resolve model capabilities and catalog transport facts through Rust.
    * @param {string} modelId - Backend model identifier.
@@ -361,6 +364,7 @@ export const useModelStore = defineStore('modelProvider', () => {
     updateModelProviderOrder,
     listModels,
     listModelsDevProviders,
+    listModelsDevProviderModels,
     resolveModelProfile
   };
 })

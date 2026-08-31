@@ -74,26 +74,15 @@
       "description": "火山引擎是字节跳动旗下的云服务平台，将字节跳动快速发展过程中积累的增长方法、技术能力和应用工具开放给外部企业，提供云基础、视频与内容分发、数智平台VeDI、人工智能、开发与运维等服务，帮助企业在数字化升级中实现持续增长。"
     },
     {
-      "id": "tencent-hunyuan",
+      "id": "tencent",
       "protocol": "openai",
-      "name": "HunYuan(混元)",
+      "name": "腾讯云",
       "logo": "https://cloudcache.tencent-cloud.com/qcloud/favicon.ico",
       "description": "腾讯混元大模型是由腾讯研发的大语言模型，具备跨领域知识和自然语言理解能力，实现基于人机自然语言对话的方式，理解用户指令并执行任务，帮助用户实现人获取信息，知识和灵感。",
       "api": "https://api.hunyuan.cloud.tencent.com/v1",
       "documentationUrl": "https://cloud.tencent.com/document/product/1729/111007",
       "modelListUrl": "https://cloud.tencent.com/document/product/1729/104753",
       "keyApplyUrl": "https://cloud.tencent.com/document/product/1729/111008"
-    },
-    {
-      "id": "yi",
-      "protocol": "openai",
-      "name": "Yi(零一万物)",
-      "logo": "https://01.ai/favicon.ico",
-      "description": "一万物致力于成为一家由技术愿景驱动、拥有卓越中国工程底蕴的创新企业，推动以基座大模型为突破的AI 2.0掀起技术、平台到应用多个层面的革命。",
-      "api": "https://api.lingyiwanwu.com/v1",
-      "documentationUrl": "https://platform.lingyiwanwu.com/docs",
-      "modelListUrl": "https://platform.lingyiwanwu.com/docs#%E6%A8%A1%E5%9E%8B%E4%B8%8E%E8%AE%A1%E8%B4%B9",
-      "keyApplyUrl": "https://platform.lingyiwanwu.com/apikeys"
     },
     {
       "id": "openai",

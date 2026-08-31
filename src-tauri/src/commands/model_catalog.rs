@@ -1,50 +1,76 @@
+use std::str::FromStr;
+
 use serde_json::Value;
 use tauri::State;
 
-use crate::ai::model_catalog::{resolve_model_profile_from_catalog, ModelsDevProvider};
+use crate::ai::model_catalog::{
+    resolve_model_profile_from_catalog_with_context, ModelsDevPresetProvider,
+};
 use crate::ai::model_catalog_updater::ModelsDevCatalogService;
+use crate::ai::traits::chat::ModelDetails;
 use crate::ai::transport::resolve as resolve_transport;
 use crate::ai::util::{
     get_family_from_model_id, is_function_call_supported, is_image_input_supported,
     is_reasoning_supported,
 };
+use crate::ccproxy::ChatProtocol;
 use crate::error::{AppError, Result};
 
-/// Return only providers that can be represented by ChatSpeed's existing protocols.
-/// This command never performs network I/O and never treats arbitrary catalog metadata as wire policy.
+/// Return the generated provider presets embedded with the application.
 #[tauri::command]
 pub fn list_models_dev_providers(
     service: State<'_, ModelsDevCatalogService>,
-) -> Vec<ModelsDevProvider> {
+) -> Vec<ModelsDevPresetProvider> {
+    service.preset_providers().providers.clone()
+}
+
+/// Return catalog models for a provider when its live list-models endpoint is unavailable.
+#[tauri::command]
+pub fn list_models_dev_provider_models(
+    provider_id: String,
+    service: State<'_, ModelsDevCatalogService>,
+) -> Vec<ModelDetails> {
     service
-        .providers()
-        .into_iter()
-        .filter(|provider| {
-            provider.api.as_deref().is_some_and(|api| {
-                let api = api.trim();
-                api.starts_with("https://") || api.starts_with("http://")
-            })
+        .snapshot()
+        .providers
+        .get(&provider_id)
+        .map(|provider| {
+            provider
+                .models
+                .values()
+                .filter_map(|model| {
+                    let protocol = ChatProtocol::from_str("openai").ok()?;
+                    Some(ModelDetails {
+                        id: model.id.clone(),
+                        name: model.name.clone(),
+                        protocol,
+                        max_input_tokens: model
+                            .limit
+                            .as_ref()
+                            .and_then(|limit| limit.input.map(|value| value as u32)),
+                        max_output_tokens: model
+                            .limit
+                            .as_ref()
+                            .and_then(|limit| limit.output.map(|value| value as u32)),
+                        description: None,
+                        last_updated: model
+                            .extra
+                            .get("last_updated")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        family: model.family.clone(),
+                        reasoning: model.reasoning,
+                        function_call: model.tool_call,
+                        image_input: model.modalities.as_ref().map(|modalities| {
+                            modalities.input.iter().any(|input| input == "image")
+                        }),
+                        recommended_temperature: None,
+                        metadata: None,
+                    })
+                })
+                .collect()
         })
-        .filter(|provider| {
-            let npm = provider
-                .npm
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            let api = provider
-                .api
-                .as_deref()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            npm.contains("anthropic")
-                || npm.contains("openai")
-                || api.contains("openai")
-                || api.contains("anthropic")
-                || api.contains("generativelanguage.googleapis.com")
-                || api.contains("googleapis.com")
-        })
-        .filter(|provider| !provider.models.is_empty())
-        .collect()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -65,12 +91,18 @@ pub fn resolve_model_profile(
                 .collect()
         })
     });
-    let mut profile =
-        resolve_model_profile_from_catalog(&service.snapshot(), &model_id).map_err(|error| {
-            AppError::General {
-                message: error.to_string(),
-            }
-        })?;
+    let provider_id = metadata
+        .as_ref()
+        .and_then(|value| value.get("modelsDevProviderId").and_then(Value::as_str));
+    let mut profile = resolve_model_profile_from_catalog_with_context(
+        &service.snapshot(),
+        &model_id,
+        provider_id,
+        base_url.as_deref(),
+    )
+    .map_err(|error| AppError::General {
+        message: error.to_string(),
+    })?;
     let normalized_model_id = model_id.trim().to_ascii_lowercase();
     if profile.family.is_none() {
         profile.family = get_family_from_model_id(&normalized_model_id);
@@ -100,4 +132,25 @@ pub fn resolve_model_profile(
         profile.matched_transport_id = Some(transport_id);
     }
     Ok(profile)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ai::model_catalog::models_dev_preset_providers;
+
+    #[test]
+    fn embedded_provider_presets_include_openrouter() {
+        let providers = models_dev_preset_providers().expect("embedded provider presets");
+        let openrouter = providers
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openrouter")
+            .expect("OpenRouter provider preset");
+
+        assert_eq!(openrouter.protocol.as_deref(), Some("openai"));
+        assert_eq!(
+            openrouter.api.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+    }
 }
