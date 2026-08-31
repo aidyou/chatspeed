@@ -1766,25 +1766,25 @@
       "responses": false
     },
     {
+      "api": "https://api.hunyuan.cloud.tencent.com/v1",
+      "description": "腾讯混元大模型是由腾讯研发的大语言模型，具备跨领域知识和自然语言理解能力，实现基于人机自然语言对话的方式，理解用户指令并执行任务，帮助用户实现人获取信息，知识和灵感。",
+      "documentationUrl": "https://cloud.tencent.com/document/product/1729/111007",
+      "id": "tencent",
+      "keyApplyUrl": "https://cloud.tencent.com/document/product/1729/111008",
+      "logo": "https://cloudcache.tencent-cloud.com/qcloud/favicon.ico",
+      "modelCount": 0,
+      "modelListUrl": "https://cloud.tencent.com/document/product/1729/104753",
+      "name": "腾讯云",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.lkeap.cloud.tencent.com/coding/v3",
       "documentationUrl": "https://cloud.tencent.com/document/product/1772/128947",
       "id": "tencent-coding-plan",
       "logo": "https://models.dev/logos/tencent-coding-plan.svg",
       "modelCount": 8,
       "name": "Tencent Coding Plan (China)",
-      "protocol": "openai",
-      "responses": false
-    },
-    {
-      "api": "https://api.hunyuan.cloud.tencent.com/v1",
-      "description": "腾讯混元大模型是由腾讯研发的大语言模型，具备跨领域知识和自然语言理解能力，实现基于人机自然语言对话的方式，理解用户指令并执行任务，帮助用户实现人获取信息，知识和灵感。",
-      "documentationUrl": "https://cloud.tencent.com/document/product/1729/111007",
-      "id": "tencent-hunyuan",
-      "keyApplyUrl": "https://cloud.tencent.com/document/product/1729/111008",
-      "logo": "https://cloudcache.tencent-cloud.com/qcloud/favicon.ico",
-      "modelCount": 0,
-      "modelListUrl": "https://cloud.tencent.com/document/product/1729/104753",
-      "name": "HunYuan(混元)",
       "protocol": "openai",
       "responses": false
     },
@@ -2095,19 +2095,6 @@
       "responses": false
     },
     {
-      "api": "https://api.lingyiwanwu.com/v1",
-      "description": "一万物致力于成为一家由技术愿景驱动、拥有卓越中国工程底蕴的创新企业，推动以基座大模型为突破的AI 2.0掀起技术、平台到应用多个层面的革命。",
-      "documentationUrl": "https://platform.lingyiwanwu.com/docs",
-      "id": "yi",
-      "keyApplyUrl": "https://platform.lingyiwanwu.com/apikeys",
-      "logo": "https://01.ai/favicon.ico",
-      "modelCount": 0,
-      "modelListUrl": "https://platform.lingyiwanwu.com/docs#%E6%A8%A1%E5%9E%8B%E4%B8%8E%E8%AE%A1%E8%B4%B9",
-      "name": "Yi(零一万物)",
-      "protocol": "openai",
-      "responses": false
-    },
-    {
       "api": "https://api.z.ai/api/paas/v4",
       "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
       "id": "zai",
@@ -2181,7 +2168,7 @@
   ],
   "source": {
     "catalogSha256": "3827ad78a6fcd50567e4712f0c755d1547d721f49091a33ffb500601347a1cb4",
-    "generatedAt": "2026-08-31T06:08:29Z",
+    "generatedAt": "2026-08-31T06:25:41Z",
     "repository": "https://github.com/anomalyco/models.dev",
     "revision": "c00c192726b4059d4fa8f7e5cf4e4140b5993e7a"
   }

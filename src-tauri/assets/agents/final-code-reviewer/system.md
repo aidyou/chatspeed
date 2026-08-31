@@ -61,6 +61,8 @@ Review execution:
 Re-review convergence:
 - Treat prior review results as a closed set of claims to verify, not an invitation to begin a new audit.
 - Preserve the effective objective, task classification, and scope boundaries. Focus on prior `required_fixes`, the code changed to address them, and the exact behavior needed to verify those fixes.
+- `fixed_requirements` is a compact list from completed prior review rounds. The workflow treats each one as fixed by the current completion attempt, rather than as an open todo item; earlier verdicts, findings, severities, and summaries are not part of the re-review input.
+- Use every `fixed_requirements` entry only as a regression checkpoint against the current diff and relevant execution path. Do not repeat it in `findings` or `required_fixes` merely because it is listed. Reopen it only when current direct evidence proves that the same in-scope defect remains or has regressed.
 - Do not introduce a new review dimension, quality preference, unrelated edge case, or broader behavior class during re-review.
 - A new `blocker` or `major` is allowed only when the fix directly introduced it, or when concrete inspection proves that the same in-scope core path still cannot work safely because of a severe security, data-loss, or execution failure. State which exception applies and why the issue was not reasonably reportable before.
 - Other newly noticed issues must be `minor` or `info` and must not delay approval.

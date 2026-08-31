@@ -217,6 +217,16 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionMessages, /hydrateWorkflowSession\(/, 'child hydration must install its event buffer before listener registration')
   assert.match(sessionMessages, /registerListener: handleEvent => listen\(`workflow:\/\/event\/\$\{targetSessionId\}`/, 'child hydration must listen to its own channel')
   assert.match(sessionMessages, /fetchSnapshot: \(\) => invokeWrapper\('get_workflow_snapshot', \{ sessionId: targetSessionId \}\)/, 'child hydration must use the canonical snapshot')
+  assert.match(
+    sessionPane,
+    /const loadEarlierMessagePage = async done => \{[\s\S]*?messageProjection\.revealEarlierMessages\(\)[\s\S]*?workflowStore\.loadEarlierMessages\(\)[\s\S]*?childSession\.loadEarlierMessages\(\)/,
+    'session panes must load a backend page when the projected window has no locally hidden messages'
+  )
+  assert.match(
+    sessionMessages,
+    /messageWindowBeforeId\.value = snapshot\.messageWindowBeforeId \?\? null[\s\S]*?const loadEarlierMessages = async \(\) =>[\s\S]*?invokeWrapper\('get_earlier_workflow_message_page'/,
+    'child session pagination must retain the snapshot cursor and use the regular message page endpoint'
+  )
   assert.match(sessionMessages, /applyEvent,[\s\S]*?isCurrent: \(\) => revision === loadRevision\.value && targetSessionId === sessionId\.value,[\s\S]*?onListenerRegistered: stop =>/, 'the listener must be retained from registration through snapshot replay for the active child session')
   assert.match(sessionPane, /const resolvedIsApprovalSubmitting = \(sessionId, toolCallId\) =>[\s\S]*?childSession\.isApprovalSubmitting\(toolCallId\)/)
   assert.match(sessionMessages, /const approvalSubmissions = ref\(new Set\(\)\)/)

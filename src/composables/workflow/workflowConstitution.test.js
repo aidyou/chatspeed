@@ -409,6 +409,22 @@ assert.match(workflowConstitution, /Auto-approved tools must be visible tools/)
 assert.match(workflowConstitution, /auto-approved tool set must be a subset/)
 assert.match(workflowConstitution, /Shell approval policy remains separate and cumulative/)
 assert.match(workflowConstitution, /workflow-level shell `Allow` rules/)
+assert.match(
+  workflowConstitution,
+  /Message-history paging has one backend path and one projection window/
+)
+assert.match(
+  workflowConstitution,
+  /each rendered session pane must own exactly one message projection instance/
+)
+assert.match(
+  workflowConstitution,
+  /local window expansion and backend page loading are separate, ordered operations within that\s+single history path/
+)
+assert.match(
+  workflowConstitution,
+  /must not merge\s+their meanings, expose the projection-window count as a backend count, or reintroduce a\s+task-segment pagination endpoint\/state into the current UI path/
+)
 
 assert.match(
   workflowInputArea,

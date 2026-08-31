@@ -521,97 +521,51 @@ impl WorkflowExecutor {
             .collect()
     }
 
-    fn bounded_review_text(value: Option<&str>) -> Option<String> {
-        const MAX_CHARS: usize = 2_000;
-        let value = value.map(str::trim).filter(|value| !value.is_empty())?;
-        let mut bounded = value.chars().take(MAX_CHARS).collect::<String>();
-        if value.chars().count() > MAX_CHARS {
-            bounded.push_str("\n...[truncated]");
-        }
-        Some(bounded)
-    }
-
-    fn compact_review_verdict(verdict: &Value) -> Value {
-        const MAX_ITEMS: usize = 12;
-        let findings_total = verdict
-            .get("findings")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0);
-        let required_fixes_total = verdict
-            .get("required_fixes")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0);
-        let findings = verdict
-            .get("findings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .take(MAX_ITEMS)
-            .map(|finding| {
-                json!({
-                    "severity": finding.get("severity").cloned().unwrap_or(Value::Null),
-                    "file": finding.get("file").cloned().unwrap_or(Value::Null),
-                    "detail": Self::bounded_review_text(
-                        finding.get("detail").and_then(Value::as_str)
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        let required_fixes = verdict
-            .get("required_fixes")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .take(MAX_ITEMS)
-            .filter_map(|item| Self::bounded_review_text(Some(item)))
-            .collect::<Vec<_>>();
-        json!({
-            "approved": verdict.get("approved").cloned().unwrap_or(Value::Bool(false)),
-            "summary": Self::bounded_review_text(verdict.get("summary").and_then(Value::as_str)),
-            "findings": findings,
-            "required_fixes": required_fixes,
-            "findings_omitted": findings_total.saturating_sub(findings.len()),
-            "required_fixes_omitted": required_fixes_total.saturating_sub(required_fixes.len())
-        })
-    }
-
-    fn review_payload_previous_results(messages: &[WorkflowMessage]) -> Vec<Value> {
+    fn review_payload_fixed_requirements(messages: &[WorkflowMessage]) -> Vec<String> {
+        const MAX_REQUIREMENT_CHARS: usize = 2_000;
         let mut seen = HashSet::new();
-        let mut results = messages
-            .iter()
-            .rev()
-            .filter_map(|message| {
-                let metadata = message.metadata.as_ref()?;
-                if metadata.get("message_kind").and_then(Value::as_str)
-                    != Some("final_review_feedback")
-                {
-                    return None;
-                }
+        let mut requirements = Vec::new();
 
-                let verdict = Self::compact_review_verdict(metadata.get("review_verdict")?);
-                let summary = Self::bounded_review_text(
-                    metadata.get("review_summary").and_then(Value::as_str),
-                );
-                let fingerprint = serde_json::to_string(&json!({
-                    "summary": summary,
-                    "verdict": verdict
-                }))
-                .unwrap_or_default();
-                if !seen.insert(fingerprint) {
-                    return None;
+        for message in messages.iter().rev() {
+            let Some(metadata) = message.metadata.as_ref() else {
+                continue;
+            };
+            if metadata.get("message_kind").and_then(Value::as_str) != Some("final_review_feedback")
+            {
+                continue;
+            }
+            let Some(required_fixes) = metadata
+                .get("review_verdict")
+                .and_then(|verdict| verdict.get("required_fixes"))
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+
+            for requirement in required_fixes.iter().rev() {
+                let Some(requirement) = requirement
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                let mut characters = requirement.chars();
+                let mut requirement = characters
+                    .by_ref()
+                    .take(MAX_REQUIREMENT_CHARS)
+                    .collect::<String>();
+                if characters.next().is_some() {
+                    requirement.push_str("\n...[truncated]");
                 }
-                Some(json!({
-                    "sub_agent_id": metadata.get("sub_agent_id").cloned().unwrap_or(Value::Null),
-                    "summary": summary,
-                    "verdict": verdict
-                }))
-            })
-            .collect::<Vec<_>>();
-        results.reverse();
-        results
+                if seen.insert(requirement.clone()) {
+                    requirements.push(requirement);
+                }
+            }
+        }
+
+        requirements.reverse();
+        requirements
     }
 
     fn final_review_optional_context_budget(reviewer_context_limit: usize) -> usize {
@@ -623,37 +577,28 @@ impl WorkflowExecutor {
         crate::ccproxy::utils::token_estimator::estimate_tokens(&serialized).ceil() as usize
     }
 
-    fn select_previous_review_results(
+    fn select_fixed_requirements(
         payload: &mut serde_json::Map<String, Value>,
-        previous_results: Vec<Value>,
+        fixed_requirements: Vec<String>,
         token_budget: usize,
     ) -> (usize, usize) {
-        let total = previous_results.len();
+        let total = fixed_requirements.len();
         let mut selected = Vec::new();
-        for result in previous_results.into_iter().rev() {
+        for requirement in fixed_requirements.into_iter().rev() {
             let mut candidate = selected.clone();
-            candidate.push(result);
-            payload.insert(
-                "previous_review_results".to_string(),
-                Value::Array(candidate.clone()),
-            );
+            candidate.push(requirement);
+            payload.insert("fixed_requirements".to_string(), json!(candidate.clone()));
             if !selected.is_empty() && Self::estimated_payload_tokens(payload) > token_budget {
-                payload.insert(
-                    "previous_review_results".to_string(),
-                    Value::Array(selected.clone()),
-                );
+                payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
                 break;
             }
             selected = candidate;
         }
         if selected.is_empty() {
-            payload.remove("previous_review_results");
+            payload.remove("fixed_requirements");
         } else {
             selected.reverse();
-            payload.insert(
-                "previous_review_results".to_string(),
-                Value::Array(selected.clone()),
-            );
+            payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
         }
         (total.saturating_sub(selected.len()), selected.len())
     }
@@ -841,7 +786,7 @@ impl WorkflowExecutor {
             .map(|message| message.message.clone());
         let changed_files = Self::review_payload_changed_files(&task_messages);
         let evidence = Self::build_final_review_evidence(&task_messages);
-        let previous_review_results = Self::review_payload_previous_results(&task_messages);
+        let fixed_requirements = Self::review_payload_fixed_requirements(&task_messages);
         let todo_status =
             self.context
                 .main_store
@@ -921,11 +866,8 @@ impl WorkflowExecutor {
             }
         }
 
-        let (reviews_omitted, reviews_included) = Self::select_previous_review_results(
-            &mut payload,
-            previous_review_results,
-            token_budget,
-        );
+        let (fixed_requirements_omitted, fixed_requirements_included) =
+            Self::select_fixed_requirements(&mut payload, fixed_requirements, token_budget);
 
         if planned_mode && Self::estimated_payload_tokens(&payload) < token_budget {
             if let Some(summary) = latest_compression_summary.as_ref() {
@@ -951,17 +893,17 @@ impl WorkflowExecutor {
         }
 
         let estimated_tokens = Self::estimated_payload_tokens(&payload);
-        if estimated_tokens > token_budget || reviews_omitted > 0 {
+        if estimated_tokens > token_budget || fixed_requirements_omitted > 0 {
             log::debug!(
-                "[Workflow][session={}][phase=final_review_context] Final review context budget decision: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, previous_reviews_included={}, previous_reviews_omitted={}",
+                "[Workflow][session={}][phase=final_review_context] Final review context budget decision: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, fixed_requirements_included={}, fixed_requirements_omitted={}",
                 self.session_id,
                 context_limit,
                 token_budget,
                 estimated_tokens,
                 planned_mode,
                 compression_summary_included,
-                reviews_included,
-                reviews_omitted
+                fixed_requirements_included,
+                fixed_requirements_omitted
             );
         }
         payload.insert(
@@ -971,8 +913,8 @@ impl WorkflowExecutor {
                 "optional_context_token_budget": token_budget,
                 "estimated_payload_tokens_before_budget_metadata": estimated_tokens,
                 "compression_summary_included": compression_summary_included,
-                "previous_review_results_included": reviews_included,
-                "previous_review_results_omitted": reviews_omitted
+                "fixed_requirements_included": fixed_requirements_included,
+                "fixed_requirements_omitted": fixed_requirements_omitted
             }),
         );
         let payload = Value::Object(payload);
@@ -985,7 +927,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
 - `user_messages` is the authoritative chronological current-task input recovered from the durable transcript. Later explicit user instructions override conflicting earlier instructions, approved-plan content, or acceptance criteria; non-conflicting constraints remain applicable.\n\
 - `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan as updated by later user instructions, or structured evidence.\n\
-- `previous_review_results` contains the newest review rounds that fit the context budget; use them only to verify prior required fixes and keep re-review bounded, not to expand the review scope.\n\
+- `fixed_requirements` is the compact, deduplicated list of requirements from completed prior review rounds that fit the context budget. The workflow treats them as fixed by this subsequent completion attempt; prior verdicts, findings, severities, summaries, and reviewer metadata are intentionally omitted.\n\
+- Use `fixed_requirements` only as regression checkpoints for the current diff and relevant execution path. Do not repeat one in `findings` or `required_fixes` merely because it is listed. Reopen it only when current direct evidence proves that the same in-scope defect remains or has regressed.\n\
 - If the work should not be allowed to finish, set `approved` to false and provide only concrete fixes for in-scope blocker or major findings.\n\
 - If no in-scope blocker or major remains, set `approved` to true; minor and info findings must not block approval.\n\
 - Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
@@ -3801,7 +3744,7 @@ mod tests {
     }
 
     #[test]
-    fn review_history_deduplicates_identical_feedback_and_keeps_the_latest_round() {
+    fn review_history_deduplicates_fixed_requirements() {
         let feedback = json!({
             "message_kind": "final_review_feedback",
             "review_summary": "Fix the missing test",
@@ -3829,26 +3772,56 @@ mod tests {
             ),
         ];
 
-        let results = WorkflowExecutor::review_payload_previous_results(&messages);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["sub_agent_id"], json!(null));
-        assert_eq!(results[0]["summary"], "Fix the missing test");
+        let requirements = WorkflowExecutor::review_payload_fixed_requirements(&messages);
+
+        assert_eq!(requirements, vec!["Add the missing test"]);
     }
 
     #[test]
-    fn review_history_budget_keeps_the_newest_rounds_that_fit() {
+    fn review_history_keeps_only_required_fixes() {
+        let feedback = json!({
+            "message_kind": "final_review_feedback",
+            "review_summary": "Fix the rollback boundary",
+            "review_verdict": {
+                "approved": false,
+                "summary": "The rollback is incomplete",
+                "findings": [{"severity": "major", "detail": "This detail must stay out of the review package"}],
+                "required_fixes": ["Restore both files on every failure path", "Cover the failure path with a test"]
+            }
+        });
+        let message = workflow_message(
+            7,
+            "tool",
+            "Earlier feedback",
+            Some("observe"),
+            Some(feedback),
+        );
+        let requirements = WorkflowExecutor::review_payload_fixed_requirements(&[message]);
+
+        assert_eq!(
+            requirements,
+            vec![
+                "Restore both files on every failure path",
+                "Cover the failure path with a test"
+            ]
+        );
+    }
+
+    #[test]
+    fn fixed_requirement_budget_keeps_the_newest_values_that_fit() {
         let mut payload = serde_json::Map::new();
         payload.insert("base".to_string(), json!("base"));
-        let rounds = (1..=3)
-            .map(|round| json!({"round": round, "detail": "x".repeat(200)}))
+        let fixed_requirements = (1..=3)
+            .map(|round| format!("Requirement {round}: {}", "x".repeat(200)))
             .collect::<Vec<_>>();
+        let newest_requirement = fixed_requirements[2].clone();
 
         let (omitted, included) =
-            WorkflowExecutor::select_previous_review_results(&mut payload, rounds, 100);
+            WorkflowExecutor::select_fixed_requirements(&mut payload, fixed_requirements, 100);
 
         assert_eq!(included, 1);
         assert_eq!(omitted, 2);
-        assert_eq!(payload["previous_review_results"][0]["round"], 3);
+        assert_eq!(payload["fixed_requirements"][0], newest_requirement);
         assert!(WorkflowExecutor::estimated_payload_tokens(&payload) <= 100);
     }
 

@@ -12,6 +12,7 @@ import {
   resolveExecutionContextPendingTool,
   upsertExecutionContextPendingTool
 } from '@/stores/workflowApprovalRecovery.js'
+import { mergeWorkflowMessagePages } from './messageProjectionRules.js'
 
 const normalizeSnapshotMessage = (message, sessionId) => {
   const normalized = {
@@ -60,6 +61,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
   const workflow = ref(null)
   const isLoadingMessages = ref(false)
   const hiddenEarlierMessageCount = ref(0)
+  const messageWindowBeforeId = ref(null)
   const toolStreams = ref(new Map())
   const taskCompletionRevision = ref(0)
   const lastTaskCompletion = ref(null)
@@ -223,6 +225,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
             (projected, message) => reconcileWorkflowToolMessages(projected, message),
             []
           )
+          messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null
           hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0
         },
         applyEvent,
@@ -242,12 +245,41 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     }
   }
 
+  const loadEarlierMessages = async () => {
+    const targetSessionId = sessionId.value
+    const beforeMessageId = messageWindowBeforeId.value
+    const requestRevision = loadRevision.value
+    if (!targetSessionId || !beforeMessageId || hiddenEarlierMessageCount.value <= 0) return false
+
+    const page = await invokeWrapper('get_earlier_workflow_message_page', {
+      sessionId: targetSessionId,
+      beforeMessageId
+    })
+    if (
+      targetSessionId !== sessionId.value ||
+      loadRevision.value !== requestRevision ||
+      messageWindowBeforeId.value !== beforeMessageId
+    ) {
+      return false
+    }
+
+    const earlierMessages = (Array.isArray(page?.messages) ? page.messages : []).map(message =>
+      normalizeSnapshotMessage(message, targetSessionId)
+    )
+    messages.value = mergeWorkflowMessagePages(earlierMessages, messages.value)
+    messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId
+    hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0
+    return earlierMessages.length > 0
+  }
+
   watch(sessionId, async () => {
     unlisten?.()
     unlisten = null
     messages.value = []
     workflow.value = null
     toolStreams.value = new Map()
+    messageWindowBeforeId.value = null
+    hiddenEarlierMessageCount.value = 0
     approvalSubmissions.value = new Set()
     if (agentRole.value !== 'child') return
     await hydrateChildSession()
@@ -265,6 +297,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     get taskCompletionRevision() { return taskCompletionRevision.value },
     get lastTaskCompletion() { return lastTaskCompletion.value },
     get hiddenEarlierMessageCount() { return hiddenEarlierMessageCount.value },
+    get messageWindowBeforeId() { return messageWindowBeforeId.value },
     getToolStream: toolCallId => toolStreams.value.get(toolCallId) || []
   })
 
@@ -282,6 +315,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
     markApprovalSubmitted,
     clearApprovalSubmission,
     isApprovalSubmitting,
+    loadEarlierMessages,
     loadSnapshot: hydrateChildSession
   }
 }

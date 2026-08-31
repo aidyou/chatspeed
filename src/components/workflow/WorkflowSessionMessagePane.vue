@@ -209,9 +209,19 @@ const approveAllPending = async payload => {
   }
 }
 
-const loadEarlierMessagePage = done => {
-  messageProjection.revealEarlierMessages()
-  done?.()
+const loadEarlierMessagePage = async done => {
+  try {
+    const expandedLocally = messageProjection.revealEarlierMessages()
+    if (expandedLocally) return
+
+    const loaded =
+      props.agentRole === 'primary'
+        ? await workflowStore.loadEarlierMessages()
+        : await childSession.loadEarlierMessages()
+    if (loaded) messageProjection.revealEarlierMessages()
+  } finally {
+    done?.()
+  }
 }
 
 defineExpose({

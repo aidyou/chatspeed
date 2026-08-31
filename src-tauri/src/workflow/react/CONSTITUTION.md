@@ -654,6 +654,52 @@ When manual clear-context exists as the last rewindable workflow interaction uni
 
 This rule applies only after manual clear-context has been durably persisted as a structured marker.
 
+### 10.12 Message-history paging has one backend path and one projection window
+
+The UI uses one backend history-pagination protocol: a cursor-based, fixed-size message page
+(currently 300 messages). A bounded database look-ahead used to classify page boundaries is an
+implementation detail, not a second page or a task-segment pagination protocol.
+
+The frontend may apply a separate rendering window to messages that are already loaded for
+the session. That window is a projection-performance limit, not durable history state and not
+a second backend pagination system.
+
+The contract is:
+
+- `workflow_messages` and the backend snapshot/page response remain the authority for durable
+  message order and the existence of unloaded history
+- the backend-provided page cursor and hidden-message count describe only durable rows that
+  have not been loaded; the frontend rendering-window count describes only already-loaded rows
+  that are temporarily outside the projection
+- the UI may use both facts to decide whether to show the history action, but must not merge
+  their meanings, expose the projection-window count as a backend count, or reintroduce a
+  task-segment pagination endpoint/state into the current UI path; an old command retained for
+  migration or compatibility must remain outside the main frontend flow
+- each rendered session pane must own exactly one message projection instance; the handler for
+  "show earlier messages" must operate on that same instance that supplies the rendered
+  messages, never on a second parent or helper projection
+- local window expansion and backend page loading are separate, ordered operations within that
+  single history path: expand already loaded messages first; when no loaded messages remain
+  hidden but the backend reports older rows, request the earlier page with the current cursor,
+  merge it, update the cursor/count, and then re-evaluate the projection
+- earlier pages must merge idempotently by persisted message identity, preserve chronological
+  order, and prefer the current/live structured record when a page overlaps an in-flight event
+- primary and child session panes must obey the same pagination contract and must reject stale
+  page responses after a session switch or a newer load revision
+- prepending a page must preserve an off-bottom reader's stable persisted-message anchor; page
+  loading must not reset the reader to the bottom or make live messages move an off-bottom
+  reader unexpectedly
+
+The message-list component may emit a history intent and the completion callback used for
+scroll restoration, but it must not call the store directly or duplicate pagination state.
+
+Any change to this path must cover, at minimum:
+
+1. expansion when history is already loaded locally
+2. backend loading when only unloaded history remains
+3. overlap/idempotency and stale-response rejection
+4. scroll-anchor preservation for an off-bottom reader
+
 ## 11. Command-Layer Discipline
 
 `commands/workflow.rs` is allowed to do orchestration.
