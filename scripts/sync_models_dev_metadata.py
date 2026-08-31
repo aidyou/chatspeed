@@ -87,11 +87,8 @@ def load_overrides(path: Path) -> dict[str, dict[str, Any]]:
         if unknown:
             fail(f"unsupported provider override fields: {', '.join(sorted(unknown))}")
         provider_id = entry.get("id")
-        protocol = entry.get("protocol")
         if not isinstance(provider_id, str) or not provider_id.strip():
             fail("each provider override requires a non-empty id")
-        if not isinstance(protocol, str) or not protocol.strip():
-            fail(f"provider override {provider_id!r} requires a non-empty protocol")
         if provider_id in overrides:
             fail(f"duplicate provider override id: {provider_id}")
         overrides[provider_id] = entry
