@@ -145,7 +145,7 @@ def merge_providers(
 
     return sorted(
         (provider for provider in merged.values() if provider.get("enabled", True)),
-        key=lambda provider: str(provider.get("name", provider["id"])).casefold(),
+        key=lambda provider: str(provider["id"]).casefold(),
     )
 
 
