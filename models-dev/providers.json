@@ -582,7 +582,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 57,
+      "modelCount": 56,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -1225,7 +1225,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 605,
+      "modelCount": 606,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2167,9 +2167,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "3827ad78a6fcd50567e4712f0c755d1547d721f49091a33ffb500601347a1cb4",
-    "generatedAt": "2026-08-31T06:25:41Z",
+    "catalogSha256": "7db9b2d32d6d3d002cc33980866273656da0362d641f82b1cbc2f8a485fb0d6f",
+    "generatedAt": "2026-08-31T09:47:41Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "c00c192726b4059d4fa8f7e5cf4e4140b5993e7a"
+    "revision": "5e4089efba59bc00b784bb2f5640005bcd98bc1c"
   }
 }
