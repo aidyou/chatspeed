@@ -86,6 +86,105 @@ impl LlmProcessor {
             && !thinking.is_some_and(|config| config.r#type.eq_ignore_ascii_case("enabled"))
     }
 
+    /// Collects the complete response independently from the UI/gateway projection.
+    ///
+    /// The ingress channel is intentionally unbounded: the callback must be able to hand off
+    /// every upstream chunk immediately, even when the gateway is slower than the model. The
+    /// accumulator is authoritative; gateway delivery is best-effort and must never cause the
+    /// response to be truncated.
+    async fn collect_stream_chunks(
+        session_id: String,
+        mut rx: mpsc::UnboundedReceiver<Arc<crate::ai::traits::chat::ChatResponse>>,
+        gateway: Arc<dyn Gateway>,
+        reasoning_enabled: bool,
+        allowed_tool_names: HashSet<String>,
+    ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
+        let mut plain_text = String::new();
+        let mut tool_calls_json = String::new();
+        let mut full_reasoning = String::new();
+        let mut final_metadata = None;
+        let mut invalid_tool_call_error = None::<String>;
+        let mut gateway_available = true;
+
+        while let Some(chunk) = rx.recv().await {
+            match chunk.r#type {
+                MessageType::Text => {
+                    // The accumulator is the durable-response source. UI delivery follows it.
+                    plain_text.push_str(&chunk.chunk);
+                    if gateway_available {
+                        if let Err(error) = gateway
+                            .send(
+                                &session_id,
+                                GatewayPayload::Chunk {
+                                    content: chunk.chunk.clone(),
+                                },
+                            )
+                            .await
+                        {
+                            gateway_available = false;
+                            log::warn!(
+                                "[Workflow][session={}][phase=llm][event=stream_projection_failed] {}",
+                                session_id,
+                                error
+                            );
+                        }
+                    }
+                }
+                MessageType::Reasoning => {
+                    if reasoning_enabled {
+                        full_reasoning.push_str(&chunk.chunk);
+                        if gateway_available {
+                            if let Err(error) = gateway
+                                .send(
+                                    &session_id,
+                                    GatewayPayload::ReasoningChunk {
+                                        content: chunk.chunk.clone(),
+                                    },
+                                )
+                                .await
+                            {
+                                gateway_available = false;
+                                log::warn!(
+                                    "[Workflow][session={}][phase=llm][event=reasoning_projection_failed] {}",
+                                    session_id,
+                                    error
+                                );
+                            }
+                        }
+                    }
+                }
+                MessageType::ToolCalls => {
+                    match Self::normalize_and_validate_tool_calls(&chunk.chunk, &allowed_tool_names)
+                    {
+                        Ok(tool_calls_val) => {
+                            tool_calls_json = serde_json::to_string(&tool_calls_val)
+                                .unwrap_or(chunk.chunk.clone());
+                        }
+                        Err(error) => {
+                            invalid_tool_call_error = Some(error);
+                            tool_calls_json.clear();
+                        }
+                    }
+                }
+                MessageType::Finished => {
+                    final_metadata = chunk.metadata.clone();
+                }
+                MessageType::Error => {
+                    return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(error) = invalid_tool_call_error {
+            let mut meta = final_metadata.unwrap_or_else(|| serde_json::json!({}));
+            meta["invalid_tool_call_error"] = serde_json::json!(error);
+            final_metadata = Some(meta);
+        }
+
+        Ok((plain_text, tool_calls_json, full_reasoning, final_metadata))
+    }
+
     async fn await_with_stop<F, T>(
         session_id: &str,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
@@ -441,82 +540,17 @@ impl LlmProcessor {
         let mut last_error = None;
 
         while retry_count <= max_retries {
-            let (tx, mut rx) = mpsc::channel::<Arc<crate::ai::traits::chat::ChatResponse>>(100);
-            let session_id_for_rx = self.session_id.clone();
-            let gateway_for_rx = gateway.clone();
-            let reasoning_enabled_for_rx = self.reasoning;
+            let (tx, rx) = mpsc::unbounded_channel::<Arc<crate::ai::traits::chat::ChatResponse>>();
             let allowed_tool_names: HashSet<String> =
                 tools.iter().map(|tool| tool.name.clone()).collect();
 
-            // Task to process streaming chunks
-            let rx_processor =
-                tokio::spawn(async move {
-                    let mut plain_text = String::new();
-                    let mut tool_calls_json = String::new();
-                    let mut full_reasoning = String::new();
-                    let mut final_metadata = None;
-                    let mut invalid_tool_call_error = None::<String>;
-
-                    while let Some(chunk) = rx.recv().await {
-                        match chunk.r#type {
-                            MessageType::Text => {
-                                gateway_for_rx
-                                    .send(
-                                        &session_id_for_rx,
-                                        GatewayPayload::Chunk {
-                                            content: chunk.chunk.clone(),
-                                        },
-                                    )
-                                    .await?;
-                                plain_text.push_str(&chunk.chunk);
-                            }
-                            MessageType::Reasoning => {
-                                if reasoning_enabled_for_rx {
-                                    gateway_for_rx
-                                        .send(
-                                            &session_id_for_rx,
-                                            GatewayPayload::ReasoningChunk {
-                                                content: chunk.chunk.clone(),
-                                            },
-                                        )
-                                        .await?;
-                                    full_reasoning.push_str(&chunk.chunk);
-                                }
-                            }
-                            MessageType::ToolCalls => {
-                                match Self::normalize_and_validate_tool_calls(
-                                    &chunk.chunk,
-                                    &allowed_tool_names,
-                                ) {
-                                    Ok(tool_calls_val) => {
-                                        tool_calls_json = serde_json::to_string(&tool_calls_val)
-                                            .unwrap_or(chunk.chunk.clone());
-                                    }
-                                    Err(error) => {
-                                        invalid_tool_call_error = Some(error);
-                                        tool_calls_json.clear();
-                                    }
-                                }
-                            }
-                            MessageType::Finished => {
-                                final_metadata = chunk.metadata.clone();
-                            }
-                            MessageType::Error => {
-                                return Err(WorkflowEngineError::General(chunk.chunk.clone()));
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(error) = invalid_tool_call_error {
-                        let mut meta = final_metadata.unwrap_or_else(|| serde_json::json!({}));
-                        meta["invalid_tool_call_error"] = serde_json::json!(error);
-                        final_metadata = Some(meta);
-                    }
-
-                    Ok::<(String, String, String, Option<serde_json::Value>), WorkflowEngineError>(
-                        (plain_text, tool_calls_json, full_reasoning, final_metadata),
-                    )
-                });
+            let rx_processor = tokio::spawn(Self::collect_stream_chunks(
+                self.session_id.clone(),
+                rx,
+                gateway.clone(),
+                self.reasoning,
+                allowed_tool_names,
+            ));
 
             let tx_for_chat = tx.clone();
 
@@ -604,7 +638,12 @@ impl LlmProcessor {
                     ..Default::default()
                 }),
                 move |chunk| {
-                    let _ = tx_for_chat.try_send(chunk);
+                    if let Err(error) = tx_for_chat.send(chunk) {
+                        log::warn!(
+                            "[Workflow][phase=llm][event=stream_ingress_closed] {}",
+                            error
+                        );
+                    }
                 },
             );
             let chat_res = Self::await_with_stop(
@@ -617,7 +656,7 @@ impl LlmProcessor {
             )
             .await?;
 
-            drop(tx); // Close channel
+            drop(tx); // Close the lossless ingress after the adapter finishes emitting chunks.
 
             match chat_res {
                 Ok(_) => {
@@ -1547,7 +1586,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 #[cfg(test)]
 mod tests {
     use super::LlmProcessor;
-    use crate::ai::traits::chat::MCPToolDeclaration;
+    use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType};
     use crate::db::WorkflowMessage;
     use crate::db::{Agent, ThinkingConfig};
     use crate::tools::ToolScope;
@@ -1565,6 +1604,7 @@ mod tests {
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
     #[test]
@@ -1754,6 +1794,128 @@ mod tests {
         ) -> Result<(), WorkflowEngineError> {
             Ok(())
         }
+    }
+
+    struct SlowGateway {
+        delay: std::time::Duration,
+        sent_chunks: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Gateway for SlowGateway {
+        async fn send(
+            &self,
+            _session_id: &str,
+            _payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            self.sent_chunks.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(self.delay).await;
+            Ok(())
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
+
+    struct FailingGateway;
+
+    #[async_trait]
+    impl Gateway for FailingGateway {
+        async fn send(
+            &self,
+            _session_id: &str,
+            _payload: GatewayPayload,
+        ) -> Result<(), WorkflowEngineError> {
+            Err(WorkflowEngineError::Gateway(
+                "test projection failure".to_string(),
+            ))
+        }
+
+        async fn inject_input(
+            &self,
+            _session_id: &str,
+            _input: String,
+        ) -> Result<(), WorkflowEngineError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_collector_keeps_all_chunks_when_gateway_is_slow() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let sent_chunks = Arc::new(AtomicUsize::new(0));
+        let gateway: Arc<dyn Gateway> = Arc::new(SlowGateway {
+            delay: std::time::Duration::from_millis(1),
+            sent_chunks: sent_chunks.clone(),
+        });
+        let chunk_count = 256;
+
+        let mut expected = String::new();
+        for index in 0..chunk_count {
+            let chunk = format!("chunk-{index};");
+            expected.push_str(&chunk);
+            tx.send(ChatResponse::new_with_arc(
+                "slow-gateway-test".to_string(),
+                chunk,
+                MessageType::Text,
+                None,
+                None,
+            ))
+            .expect("lossless ingress should accept every chunk");
+        }
+        drop(tx);
+
+        let (plain_text, _, _, _) = LlmProcessor::collect_stream_chunks(
+            "slow-gateway-test".to_string(),
+            rx,
+            gateway,
+            false,
+            HashSet::new(),
+        )
+        .await
+        .expect("slow projection must not fail response collection");
+
+        assert_eq!(plain_text, expected);
+        assert_eq!(sent_chunks.load(Ordering::Relaxed), chunk_count);
+    }
+
+    #[tokio::test]
+    async fn stream_collector_keeps_text_when_gateway_projection_fails() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(ChatResponse::new_with_arc(
+            "failing-gateway-test".to_string(),
+            "first".to_string(),
+            MessageType::Text,
+            None,
+            None,
+        ))
+        .expect("lossless ingress should accept the first chunk");
+        tx.send(ChatResponse::new_with_arc(
+            "failing-gateway-test".to_string(),
+            "-second".to_string(),
+            MessageType::Text,
+            None,
+            None,
+        ))
+        .expect("lossless ingress should accept the second chunk");
+        drop(tx);
+
+        let (plain_text, _, _, _) = LlmProcessor::collect_stream_chunks(
+            "failing-gateway-test".to_string(),
+            rx,
+            Arc::new(FailingGateway),
+            false,
+            HashSet::new(),
+        )
+        .await
+        .expect("projection failure must not fail response collection");
+
+        assert_eq!(plain_text, "first-second");
     }
 
     #[tokio::test]
