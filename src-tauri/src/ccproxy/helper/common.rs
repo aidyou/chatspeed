@@ -14,6 +14,15 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 
+fn api_key_suffix(api_key: &str) -> &str {
+    api_key
+        .char_indices()
+        .rev()
+        .nth(7)
+        .map(|(index, _)| &api_key[index..])
+        .unwrap_or(api_key)
+}
+
 pub(crate) fn resolve_catalog_adapter(
     model: &str,
     base_url: &str,
@@ -778,7 +787,7 @@ impl ModelResolver {
             &ai_model_detail.name,
             &ai_model_detail.base_url,
             &chat_protocol,
-            &selected_api_key[std::cmp::max(0, selected_api_key.len() - 8)..] // Log last 8 chars for debugging
+            api_key_suffix(&selected_api_key) // Log last 8 characters for debugging
         );
 
         let custom_params = ai_model_detail
@@ -1170,7 +1179,7 @@ pub fn get_msg_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_catalog_adapter, should_forward_header, ModelResolver};
+    use super::{api_key_suffix, resolve_catalog_adapter, should_forward_header, ModelResolver};
     use crate::ccproxy::types::{ChatProtocol, ProxyModel};
     use indexmap::IndexMap;
 
@@ -1204,6 +1213,15 @@ mod tests {
             thinking_adapter: None,
             matched_transport_id: None,
         }
+    }
+
+    #[test]
+    fn api_key_suffix_is_safe_for_empty_short_and_unicode_keys() {
+        assert_eq!(api_key_suffix(""), "");
+        assert_eq!(api_key_suffix("abc"), "abc");
+        assert_eq!(api_key_suffix("12345678"), "12345678");
+        assert_eq!(api_key_suffix("prefix12345678"), "12345678");
+        assert_eq!(api_key_suffix("前缀12345678"), "12345678");
     }
 
     #[test]
