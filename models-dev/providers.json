@@ -25,7 +25,7 @@
       "documentationUrl": "https://docs.abliteration.ai/models",
       "id": "abliteration-ai",
       "logo": "https://models.dev/logos/abliteration-ai.svg",
-      "modelCount": 2,
+      "modelCount": 3,
       "name": "abliteration.ai",
       "protocol": "openai",
       "responses": false
@@ -84,7 +84,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 70,
+      "modelCount": 77,
       "name": "AIHubMix",
       "responses": false
     },
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 238,
+      "modelCount": 240,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -683,7 +683,7 @@
       "documentationUrl": "https://ai.google.dev/gemini-api/docs/models",
       "id": "google",
       "logo": "https://models.dev/logos/google.svg",
-      "modelCount": 39,
+      "modelCount": 38,
       "name": "Google",
       "protocol": "gemini",
       "responses": false
@@ -720,7 +720,7 @@
       "documentationUrl": "https://console.groq.com/docs/models",
       "id": "groq",
       "logo": "https://models.dev/logos/groq.svg",
-      "modelCount": 15,
+      "modelCount": 16,
       "name": "Groq",
       "protocol": "openai",
       "responses": false
@@ -771,7 +771,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 29,
+      "modelCount": 31,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -861,7 +861,7 @@
       "documentationUrl": "https://iteracompute.com/docs.html",
       "id": "iteracompute",
       "logo": "https://models.dev/logos/iteracompute.svg",
-      "modelCount": 1,
+      "modelCount": 2,
       "name": "IteraCompute",
       "protocol": "openai",
       "responses": false
@@ -901,7 +901,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 364,
+      "modelCount": 363,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 191,
+      "modelCount": 180,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 384,
+      "modelCount": 360,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 176,
+      "modelCount": 177,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1225,7 +1225,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 606,
+      "modelCount": 608,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1942,7 +1942,7 @@
       "documentationUrl": "https://vancine.com/docs",
       "id": "vancine",
       "logo": "https://models.dev/logos/vancine.svg",
-      "modelCount": 8,
+      "modelCount": 10,
       "name": "Vancine",
       "protocol": "openai",
       "responses": false
@@ -1959,7 +1959,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 361,
+      "modelCount": 363,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2167,9 +2167,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "7db9b2d32d6d3d002cc33980866273656da0362d641f82b1cbc2f8a485fb0d6f",
-    "generatedAt": "2026-08-31T09:47:41Z",
+    "catalogSha256": "a48fda57faa132539b9f84c6eb11b23655521cb7023fca44a12553ed26935ba6",
+    "generatedAt": "2026-09-01T08:41:08Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "5e4089efba59bc00b784bb2f5640005bcd98bc1c"
+    "revision": "4f19782ea920b900986df7bf108362d191c75a41"
   }
 }
