@@ -186,7 +186,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 120,
+      "modelCount": 123,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -216,7 +216,7 @@
       "documentationUrl": "https://docs.anthropic.com/en/docs/about-claude/models",
       "id": "anthropic",
       "logo": "https://models.dev/logos/anthropic.svg",
-      "modelCount": 13,
+      "modelCount": 14,
       "name": "Anthropic",
       "protocol": "claude",
       "responses": false
@@ -265,7 +265,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure",
       "logo": "https://models.dev/logos/azure.svg",
-      "modelCount": 84,
+      "modelCount": 85,
       "name": "Azure",
       "responses": false
     },
@@ -273,7 +273,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure-cognitive-services",
       "logo": "https://models.dev/logos/azure-cognitive-services.svg",
-      "modelCount": 73,
+      "modelCount": 74,
       "name": "Azure Cognitive Services",
       "responses": false
     },
@@ -463,7 +463,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 56,
+      "modelCount": 57,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -522,7 +522,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 94,
+      "modelCount": 95,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 240,
+      "modelCount": 243,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -692,7 +692,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/models",
       "id": "google-vertex",
       "logo": "https://models.dev/logos/google-vertex.svg",
-      "modelCount": 43,
+      "modelCount": 44,
       "name": "Vertex",
       "responses": false
     },
@@ -700,7 +700,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude",
       "id": "google-vertex-anthropic",
       "logo": "https://models.dev/logos/google-vertex-anthropic.svg",
-      "modelCount": 13,
+      "modelCount": 14,
       "name": "Vertex (Anthropic)",
       "responses": false
     },
@@ -971,7 +971,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 180,
+      "modelCount": 181,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 360,
+      "modelCount": 362,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 177,
+      "modelCount": 178,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1225,7 +1225,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 608,
+      "modelCount": 611,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1359,7 +1359,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 94,
+      "modelCount": 95,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1540,7 +1540,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 140,
+      "modelCount": 142,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -1951,7 +1951,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 100,
+      "modelCount": 101,
       "name": "Venice AI",
       "responses": false
     },
@@ -2167,9 +2167,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "a48fda57faa132539b9f84c6eb11b23655521cb7023fca44a12553ed26935ba6",
-    "generatedAt": "2026-09-01T08:41:08Z",
+    "catalogSha256": "c120f76505986101e1862daefc7ce45fec505542c2270a71bf4742083600f4c4",
+    "generatedAt": "2026-09-02T07:56:18Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "4f19782ea920b900986df7bf108362d191c75a41"
+    "revision": "effc8f9c5a8e56aadf0d2de1e0a2556960e0af7c"
   }
 }
