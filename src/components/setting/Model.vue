@@ -189,7 +189,7 @@
             </div>
             <div class="footer">
               <el-button type="success" round @click="onProviderModelImportShow()" :loading="isLoadingProviderModels"
-                :disabled="isLoadingProviderModels && Object.keys(providerModelToShow).length < 1">
+                :disabled="isLoadingProviderModels || Object.keys(providerModelToShow).length < 1">
                 <cs name="import" />{{ $t('settings.model.import') }}
               </el-button>
               <el-button type="success" round @click="onModelConfig()">
@@ -636,7 +636,7 @@ const isValidHostname = hostname => {
   // Valid IP address must have 4 parts separated by dots
   const ipParts = hostname.split('.')
 
-  if (ipParts.length === 4) {
+  if (ipParts.length === 4 && ipParts.every(part => /^\d+$/.test(part))) {
     // All parts should be numbers between 0-255
     for (const part of ipParts) {
       const num = parseInt(part, 10)
@@ -1440,8 +1440,10 @@ watchEffect(async () => {
 
   const essentialParamsPresentAndDialogVisible = modelDialogVisible.value && protocol && baseUrl
   const canFetch = essentialParamsPresentAndDialogVisible && (apiKey || apiKeyIsOptional)
+  const validUrl = isValidUrl(baseUrl)
+  const shouldFetch = Boolean(canFetch && validUrl)
 
-  if (canFetch && isValidUrl(baseUrl)) {
+  if (shouldFetch) {
     debouncedFetchedProviderModelsFromServer(protocol, baseUrl, apiKey, {
       proxyType: modelForm.value.proxyType,
       proxyServers: modelForm.value.proxyServers
@@ -1451,7 +1453,7 @@ watchEffect(async () => {
   }
 })
 
-const loadCatalogProviderModels = async () => {
+async function loadCatalogProviderModels() {
   const providerId = modelForm.value.modelsDevProviderId
   if (!providerId) {
     fetchedProviderModels.value = []
@@ -1533,7 +1535,9 @@ const providerModelToShow = computed(() => {
   const groupedModels = {}
   modelsToProcess.forEach(model => {
     if (model && typeof model === 'object') {
-      const family = model.family || t('settings.model.ungrouped')
+      const family = model.family === 'deepseek-thinking'
+        ? 'Deepseek'
+        : model.family || t('settings.model.ungrouped')
       if (!groupedModels[family]) {
         groupedModels[family] = []
       }
@@ -1543,7 +1547,6 @@ const providerModelToShow = computed(() => {
       console.warn('Skipping invalid model data during grouping:', model)
     }
   })
-  console.log('groupedModels', groupedModels)
   return groupedModels
 })
 
