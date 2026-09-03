@@ -5175,6 +5175,62 @@ impl WorkflowExecutor {
         })
     }
 
+    fn normalize_legacy_assistant_tool_payload(
+        content: &mut String,
+        metadata: &mut Option<serde_json::Value>,
+    ) {
+        let trimmed = content.trim();
+        if !trimmed.starts_with('{') {
+            return;
+        }
+
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return;
+        };
+        let Some(payload_object) = payload.as_object() else {
+            return;
+        };
+
+        // Legacy models may emit their entire response as a JSON tool payload. Do not inspect
+        // JSON embedded in ordinary assistant Markdown, which can be a user-facing code sample.
+        let tool_calls = if let Some(calls) = payload_object
+            .get("tool_calls")
+            .and_then(serde_json::Value::as_array)
+            .filter(|calls| !calls.is_empty())
+            .filter(|calls| calls.iter().all(serde_json::Value::is_object))
+        {
+            calls.clone()
+        } else if let Some(tool) = payload_object
+            .get("tool")
+            .filter(|tool| tool.is_object())
+        {
+            vec![tool.clone()]
+        } else if payload_object
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+            && payload_object.contains_key("arguments")
+        {
+            vec![payload.clone()]
+        } else {
+            return;
+        };
+
+        if let Some(text) = payload_object
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+        {
+            *content = text.to_string();
+        }
+
+        let mut metadata_object = metadata
+            .take()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::json!({}));
+        metadata_object["tool_calls"] = serde_json::Value::Array(tool_calls);
+        *metadata = Some(metadata_object);
+    }
+
     pub(crate) fn completion_response_without_reasoning(response: &str) -> String {
         match regex::Regex::new(
             r"(?is)<think>.*?</think>|<thought>.*?</thought>|<(?:think|thought)>.*\z",
@@ -7260,59 +7316,9 @@ impl WorkflowExecutor {
             return Ok(false);
         }
 
-        // --- 1. Content Normalization (Handle mixed Text + JSON responses) ---
+        // --- 1. Legacy Assistant Tool-Payload Compatibility ---
         if role == "assistant" {
-            let trimmed = content.trim();
-
-            // Try to find a JSON block if it doesn't start with {
-            let (text_part, json_val) = if trimmed.starts_with('{') {
-                (
-                    None,
-                    serde_json::from_str::<serde_json::Value>(trimmed).ok(),
-                )
-            } else {
-                // Look for the last { ... } block
-                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-                    if start < end {
-                        let text = trimmed[..start].trim().to_string();
-                        let json = trimmed[start..=end].trim();
-                        (
-                            Some(text),
-                            serde_json::from_str::<serde_json::Value>(json).ok(),
-                        )
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                }
-            };
-
-            if let Some(json_msg) = json_val {
-                // Case A: Extraction from JSON structure
-                if let Some(text) = json_msg.get("content").and_then(|v| v.as_str()) {
-                    content = text.to_string();
-                } else if let Some(text) = text_part {
-                    content = text;
-                }
-
-                // Merge tool calls into metadata (Support multiple formats)
-                let mut tool_calls_to_track = Vec::new();
-                if let Some(tool_calls) = json_msg.get("tool_calls").and_then(|v| v.as_array()) {
-                    tool_calls_to_track.extend(tool_calls.clone());
-                } else if let Some(tool) = json_msg.get("tool") {
-                    tool_calls_to_track.push(tool.clone());
-                } else if json_msg.get("name").is_some() {
-                    // Single tool object format
-                    tool_calls_to_track.push(json_msg.clone());
-                }
-
-                if !tool_calls_to_track.is_empty() {
-                    let mut meta_obj = metadata.unwrap_or(serde_json::json!({}));
-                    meta_obj["tool_calls"] = serde_json::json!(tool_calls_to_track);
-                    metadata = Some(meta_obj);
-                }
-            }
+            Self::normalize_legacy_assistant_tool_payload(&mut content, &mut metadata);
         }
 
         // --- 2. Slash Command Auto-Activation (For User Messages) ---
@@ -11340,6 +11346,46 @@ mod recovery_tests {
         assert!(!WorkflowExecutor::response_calls_completion_tool(
             r#"{"tool_calls":[{"function":{"name":"read_file","arguments":"{}"}}]}"#
         ));
+    }
+
+    #[test]
+    fn legacy_tool_payload_normalization_preserves_json_code_fence_and_following_text() {
+        let original = "The build commands share the same script:\n\n```json\n{\n  \"scripts\": {\n    \"build\": \"vite build\"\n  }\n}\n```\n\nUse one package manager consistently.";
+        let mut content = original.to_string();
+        let mut metadata = Some(serde_json::json!({ "tokens": { "completion": 881 } }));
+
+        WorkflowExecutor::normalize_legacy_assistant_tool_payload(&mut content, &mut metadata);
+
+        assert_eq!(content, original);
+        assert_eq!(metadata.as_ref().unwrap()["tokens"]["completion"], 881);
+        assert!(metadata.as_ref().unwrap().get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn legacy_tool_payload_normalization_preserves_content_only_json() {
+        let original = r#"{"content":"This is a JSON example, not a tool call."}"#;
+        let mut content = original.to_string();
+        let mut metadata = None;
+
+        WorkflowExecutor::normalize_legacy_assistant_tool_payload(&mut content, &mut metadata);
+
+        assert_eq!(content, original);
+        assert!(metadata.is_none());
+    }
+
+    #[test]
+    fn legacy_tool_payload_normalization_accepts_whole_response_tool_payload() {
+        let mut content = r#"{"content":"Read the configuration.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}"#.to_string();
+        let mut metadata = Some(serde_json::json!({ "tokens": { "completion": 42 } }));
+
+        WorkflowExecutor::normalize_legacy_assistant_tool_payload(&mut content, &mut metadata);
+
+        assert_eq!(content, "Read the configuration.");
+        assert_eq!(metadata.as_ref().unwrap()["tokens"]["completion"], 42);
+        assert_eq!(
+            metadata.as_ref().unwrap()["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
     }
 
     #[test]
