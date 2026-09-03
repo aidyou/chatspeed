@@ -13,12 +13,21 @@
             </div>
           </el-tooltip>
           <el-tooltip
-            :content="$t('workflow.automation.title')"
+            :content="$t('workflow.automation.createTitle')"
             :hide-after="0"
             :enterable="false"
             placement="bottom">
             <div class="icon-btn upperLayer" @click="openCreateAutomation">
               <cs name="clock" />
+            </div>
+          </el-tooltip>
+          <el-tooltip
+            :content="$t('workflow.newWorkflow')"
+            :hide-after="0"
+            :enterable="false"
+            placement="bottom">
+            <div class="icon-btn upperLayer" @click="createNewWorkflow()">
+              <cs name="new-chat" />
             </div>
           </el-tooltip>
         </div>

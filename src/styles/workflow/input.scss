@@ -675,20 +675,40 @@ footer.input-container {
         font: inherit;
         text-align: left;
 
+        & + .sandbox-option {
+            border-top: 1px solid var(--cs-border-color-lighter);
+        }
+
         &:hover:not(:disabled),
         &.active {
             background: var(--el-color-primary-light-9);
         }
 
         &:disabled {
-            color: var(--cs-text-color-disabled);
             cursor: not-allowed;
+
+            &:not(.is-updating) {
+                color: var(--cs-text-color-disabled);
+            }
         }
     }
 
     .sandbox-option-copy {
+        display: flex;
         flex: 1;
+        flex-direction: column;
+        gap: var(--cs-space-xxs);
         min-width: 0;
+        line-height: 1.4;
+    }
+
+    .sandbox-option-title {
+        font-weight: 600;
+    }
+
+    .sandbox-option-description {
+        color: var(--cs-text-color-secondary);
+        font-size: var(--cs-font-size-sm);
         line-height: 1.4;
     }
 

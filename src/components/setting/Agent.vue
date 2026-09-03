@@ -435,11 +435,28 @@
           <div class="security-group sandbox-config-group">
             <p class="security-tip">{{ $t('settings.agent.sandboxConfigTip') }}</p>
             <el-form-item :label="$t('settings.agent.sandboxExecutionMode')" :label-width="150">
-              <el-select v-model="agentForm.sandboxExecutionMode" style="width: 100%">
-                <el-option :label="$t('settings.agent.sandboxExecutionModeAuto')" value="auto" />
-                <el-option :label="$t('settings.agent.sandboxExecutionModeSandboxOnly')" value="sandbox_only" />
-                <el-option :label="$t('settings.agent.sandboxExecutionModeHostOnly')" value="host_only" />
-              </el-select>
+              <div class="sandbox-execution-mode-list">
+                <button
+                  v-for="option in SANDBOX_EXECUTION_MODE_OPTIONS"
+                  :key="option.value"
+                  type="button"
+                  class="sandbox-execution-mode-option"
+                  :class="{ active: agentForm.sandboxExecutionMode === option.value }"
+                  :aria-pressed="agentForm.sandboxExecutionMode === option.value"
+                  @click="agentForm.sandboxExecutionMode = option.value">
+                  <span class="sandbox-execution-mode-option__copy">
+                    <span class="sandbox-execution-mode-option__title">{{ $t(option.label) }}</span>
+                    <small v-if="option.description" class="sandbox-execution-mode-option__description">
+                      {{ $t(option.description) }}
+                    </small>
+                  </span>
+                  <cs
+                    v-if="agentForm.sandboxExecutionMode === option.value"
+                    name="check"
+                    size="14px"
+                    class="sandbox-execution-mode-option__check" />
+                </button>
+              </div>
             </el-form-item>
             <el-form-item v-if="agentForm.sandboxExecutionMode !== 'host_only'"
               :label="$t('settings.agent.sandboxConfig')" :label-width="150">
@@ -515,6 +532,19 @@ const workflowStore = useWorkflowStore()
 const { agents, availableTools } = storeToRefs(agentStore)
 const ALWAYS_ENABLED_SKILL_NAMES = ['help']
 const SHELL_POLICY_PAGE_SIZE = 50
+const SANDBOX_EXECUTION_MODE_OPTIONS = [
+  {
+    value: 'auto',
+    label: 'settings.agent.sandboxExecutionModeAuto',
+    description: 'settings.agent.sandboxExecutionModeAutoDescription'
+  },
+  {
+    value: 'sandbox_only',
+    label: 'settings.agent.sandboxExecutionModeSandboxOnly',
+    description: 'settings.agent.sandboxExecutionModeSandboxOnlyDescription'
+  },
+  { value: 'host_only', label: 'settings.agent.sandboxExecutionModeHostOnly' }
+]
 const DEFAULT_SHELL_POLICY_GROUPS = [
   {
     id: 'common',
@@ -2457,6 +2487,68 @@ watch(
     margin-bottom: 12px;
     margin-top: -8px;
     line-height: 1.4;
+  }
+
+  .sandbox-execution-mode-list {
+    display: grid;
+    gap: var(--cs-space-xs);
+    width: 100%;
+  }
+
+  .sandbox-execution-mode-option {
+    display: flex;
+    align-items: flex-start;
+    width: 100%;
+    min-height: 42px;
+    gap: var(--cs-space-sm);
+    padding: var(--cs-space-sm);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+    background: var(--cs-bg-color-light);
+    color: var(--cs-text-color-primary);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    transition:
+      background-color 0.16s ease,
+      border-color 0.16s ease;
+
+    &:hover,
+    &:focus-visible {
+      border-color: var(--el-color-primary-light-5);
+      background: var(--el-color-primary-light-9);
+      outline: none;
+    }
+
+    &.active {
+      border-color: var(--cs-color-primary);
+      background: var(--el-color-primary-light-9);
+    }
+
+    &__copy {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: var(--cs-space-xxs);
+      min-width: 0;
+    }
+
+    &__title {
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    &__description {
+      color: var(--cs-text-color-secondary);
+      font-size: var(--cs-font-size-sm);
+      line-height: 1.4;
+    }
+
+    &__check {
+      flex-shrink: 0;
+      margin-top: 2px;
+      color: var(--cs-color-primary);
+    }
   }
 
   .sandbox-profile-section {

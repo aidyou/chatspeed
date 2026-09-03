@@ -649,11 +649,17 @@
                   :key="option.value"
                   type="button"
                   class="sandbox-option"
-                  :class="{ active: sandboxMode === option.value }"
+                  :class="{
+                    active: sandboxMode === option.value,
+                    'is-updating': isUpdatingSandboxConfig
+                  }"
                   :disabled="option.disabled || isUpdatingSandboxConfig"
                   @click="selectSandboxMode(option.value)">
                   <span class="sandbox-option-copy">
-                    <span>{{ $t(option.label) }}</span>
+                    <span class="sandbox-option-title">{{ $t(option.label) }}</span>
+                    <small v-if="option.description" class="sandbox-option-description">
+                      {{ $t(option.description) }}
+                    </small>
                   </span>
                   <cs v-if="sandboxMode === option.value" name="check" size="14px" class="dropdown-check" />
                 </button>
@@ -703,15 +709,6 @@
               </label>
             </el-tooltip>
 
-            <el-tooltip
-              :content="$t('workflow.newWorkflow')"
-              :hide-after="0"
-              :enterable="false"
-              placement="top">
-              <label @click="openCreateWorkflowDialog">
-                <cs name="new-chat" class="small" />
-              </label>
-            </el-tooltip>
           </div>
         </div>
         <div class="icons">
@@ -1314,10 +1311,16 @@ const selectableSandboxSchemes = computed(() => {
 const sandboxModeOptions = computed(() => {
   const hasSandboxConfig = selectableSandboxSchemes.value.length > 0
   return [
-    { value: 'auto', label: 'settings.agent.sandboxExecutionModeAuto', disabled: !hasSandboxConfig },
+    {
+      value: 'auto',
+      label: 'settings.agent.sandboxExecutionModeAuto',
+      description: 'settings.agent.sandboxExecutionModeAutoDescription',
+      disabled: !hasSandboxConfig
+    },
     {
       value: 'sandbox_only',
       label: 'settings.agent.sandboxExecutionModeSandboxOnly',
+      description: 'settings.agent.sandboxExecutionModeSandboxOnlyDescription',
       disabled: !enabledSandboxSchemes.value.length
     },
     { value: 'host_only', label: 'settings.agent.sandboxExecutionModeHostOnly', disabled: false }
