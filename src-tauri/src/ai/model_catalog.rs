@@ -439,6 +439,19 @@ fn catalog_model_ids(model_id: &str) -> impl Iterator<Item = String> + '_ {
     [normalized, base].into_iter()
 }
 
+fn catalog_model_ids_with_short_id(model_id: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = catalog_model_ids(model_id).collect();
+    if let Some((_, short_id)) = model_id.trim().split_once('/') {
+        let short_candidates: Vec<String> = catalog_model_ids(short_id).collect();
+        for candidate in short_candidates {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
 fn matches(patterns: &[String], value: &str) -> bool {
     patterns
         .iter()
@@ -631,13 +644,17 @@ fn find_catalog_model<'a>(
     provider_id: Option<&str>,
     base_url: Option<&str>,
 ) -> Option<&'a ModelsDevModel> {
-    let candidates: Vec<String> = catalog_model_ids(model_id).collect();
+    let exact_candidates: Vec<String> = catalog_model_ids(model_id).collect();
 
     if let Some(provider_id) = provider_id.map(str::trim).filter(|id| !id.is_empty()) {
-        return models_dev
+        if let Some(model) = models_dev
             .providers
-            .get(provider_id)
-            .and_then(|provider| find_provider_model(provider, &candidates));
+            .iter()
+            .find(|(id, _)| normalize(id) == normalize(provider_id))
+            .and_then(|(_, provider)| find_provider_model(provider, &exact_candidates))
+        {
+            return Some(model);
+        }
     }
 
     if let Some(host) = base_url.and_then(url_host) {
@@ -647,24 +664,41 @@ fn find_catalog_model<'a>(
             .filter(|provider| {
                 provider.api.as_deref().and_then(url_host).as_deref() == Some(host.as_str())
             })
-            .filter_map(|provider| find_provider_model(provider, &candidates))
+            .filter_map(|provider| find_provider_model(provider, &exact_candidates))
             .collect();
-        return unique_model(matches);
+        if let Some(model) = unique_model(matches) {
+            return Some(model);
+        }
     }
 
-    if let Some(model) = candidates
+    let fuzzy_candidates = catalog_model_ids_with_short_id(model_id);
+    if let Some(provider_prefix) = model_id
+        .trim()
+        .split_once('/')
+        .map(|(prefix, _)| normalize(prefix))
+        .filter(|prefix| !prefix.is_empty())
+    {
+        if let Some(model) = models_dev
+            .providers
+            .iter()
+            .filter(|(id, _)| normalize(id).starts_with(&provider_prefix))
+            .find_map(|(_, provider)| find_provider_model(provider, &fuzzy_candidates))
+        {
+            return Some(model);
+        }
+    }
+
+    if let Some(model) = fuzzy_candidates
         .iter()
         .find_map(|candidate| models_dev.models.get(candidate))
     {
         return Some(model);
     }
 
-    let matches: Vec<&ModelsDevModel> = models_dev
+    models_dev
         .providers
         .values()
-        .filter_map(|provider| find_provider_model(provider, &candidates))
-        .collect();
-    unique_model(matches)
+        .find_map(|provider| find_provider_model(provider, &fuzzy_candidates))
 }
 
 fn find_provider_model<'a>(
@@ -887,6 +921,52 @@ mod tests {
     }
 
     #[test]
+    fn provider_prefix_fallback_uses_short_id_after_exact_matches_fail() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+        let profile = resolve_model_profile_from_catalog_with_context(
+            &catalog,
+            "ZHIPU/GLM-5.3-Flash",
+            Some("aliyun"),
+            Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        )
+        .expect("model profile");
+
+        assert_eq!(profile.context_size, Some(1_000_000));
+        assert_eq!(profile.max_output_tokens, Some(131_072));
+        assert_eq!(profile.capabilities.reasoning, Some(true));
+        assert_eq!(profile.capabilities.function_call, Some(true));
+    }
+
+    #[test]
+    fn provider_prefix_fallback_is_case_insensitive() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+        let profile = resolve_model_profile_from_catalog_with_context(
+            &catalog,
+            "zHiPu/GlM-5.3-FlAsH",
+            Some("ZHIPUAI"),
+            Some("https://custom.example/v1"),
+        )
+        .expect("model profile");
+
+        assert_eq!(profile.context_size, Some(1_000_000));
+        assert_eq!(profile.max_output_tokens, Some(131_072));
+    }
+
+    #[test]
+    fn exact_provider_match_remains_before_fuzzy_provider_fallback() {
+        let catalog = models_dev_catalog().expect("models.dev catalog");
+        let profile = resolve_model_profile_from_catalog_with_context(
+            &catalog,
+            "glm-5.3-flash",
+            Some("zhipuai"),
+            Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        )
+        .expect("model profile");
+
+        assert_eq!(profile.context_size, Some(1_000_000));
+    }
+
+    #[test]
     fn provider_context_selects_provider_specific_pricing() {
         let catalog = models_dev_catalog().expect("models.dev catalog");
 
@@ -922,12 +1002,12 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_model_without_provider_context_has_no_pricing() {
+    fn model_without_provider_context_falls_back_to_first_matching_provider() {
         let catalog = models_dev_catalog().expect("models.dev catalog");
         let profile =
             resolve_model_profile_from_catalog(&catalog, "gpt-5.6-sol").expect("model profile");
 
-        assert!(profile.pricing.is_none());
+        assert!(profile.pricing.is_some());
     }
 
     #[test]
