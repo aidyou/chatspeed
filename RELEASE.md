@@ -2,6 +2,55 @@
 
 # Release Notes
 
+## [2.0.14]
+
+### 🚀 New Features
+
+- **Model catalog**:
+  - Added a local Models.dev-backed model catalog with capability adapters, official limits, documentation sources, and usage pricing.
+  - Added preset text AI providers with logos and endpoints; the Anthropic preset uses the Claude protocol, and model settings can be prefilled from catalog profiles.
+  - Enriched the catalog with new model families and profiles (including qwen3, hunyuan-hy3, glm-5.2/5.3, kimi-k3, and stepfun-flash-multimodal), plus GPT-5.6 reasoning summaries and gpt-oss reasoning support.
+  - Added a metadata sync workflow to keep provider catalog data up to date, with heuristic fallback when catalog data is unavailable.
+- **Codex-compatible Responses API**:
+  - Responses API requests now mirror the official Codex CLI client surface, including Codex-style headers, `client_metadata`, and stable per-conversation UUID cache identity for prompt-cache affinity.
+  - Added `prompt_cache_key` support with workflow, conversation, and fallback priority tiers.
+  - Models can opt out of the Responses API via a `chatCompletions` preference in model settings.
+- **MCP tool management**:
+  - MCP tool visibility is now driven by the runtime ToolManager, allowing any discovered MCP tool to be selected directly.
+  - Isolated MCP tool configuration with workflow sync, simplified tool call names through an alias registry, and showed MCP tool display and server names in the input area.
+- **Sub-agent approvals**:
+  - Approval requests and resolutions are now bridged between parent and child workflows, with pending approvals restored on reload.
+  - Added a session message pane to view sub-agent activity with a live status badge.
+- **Workflow**:
+  - Authorized directories can now be managed from slash commands.
+  - The final-review card is hydrated from the structured reviewer result, showing reviewer RESULT and COST directly.
+  - Improved the sandbox mode picker and new task button.
+
+### 🪄 Improvements
+
+- **Settings and styling**:
+  - Compacted the agent, model, sandbox, and skill settings UI and copy.
+  - Workflow styles now use design tokens; corrected the automation editor icon and input font size.
+
+### 🐞 Bug Fixes
+
+- **Sub-agent reliability**:
+  - Fixed sub-agent approval handling: approvals arriving while another tool runs are deferred to the wait state, tool messages are reconciled by `tool_call_id`, pending approvals are cleared on terminal states, and bulk approval counts are derived from the canonical pending set.
+  - Centralized sub-agent runtime cleanup so gateway channels and registry entries are released on every terminal path, and refined sub-agent card status display.
+- **Workflow reliability**:
+  - Folded MCP tools now execute after loading; duplicated arguments are stripped from MCP approval previews; home paths are expanded in directory commands.
+  - Kept the reading position stable in the message list window, refined `ask_user` tool-call matching in tail rewind logic, and fixed invisible workflow messages and legacy assistant tool-payload responses.
+  - Improved completion report guidance and argument handling, enforced the todo initialization threshold, persisted failed workflow state on resume/start errors, and skipped forced tool choice in thinking mode (DeepSeek compatibility).
+  - Refined shell output reduction to keep only shorter reductions, with on-demand temp-file read hints and resumable truncated previews.
+- **Model handling**:
+  - Added provider-prefix and short-id fallbacks for model resolution and improved provider model import and catalog-backed model settings.
+- **Proxy and protocol**:
+  - Improved CCProxy token accounting and stream error handling, normalized outbound temperature to two decimals, and added indexes to `ccproxy_stats` in the v4 migration.
+- **Maintenance and security**:
+  - Bumped nanoid to 3.3.18 to address CVE-2026-67213, isolated development logs in `dev_data`, avoided logging long API key suffixes, and removed Windows build warnings.
+
+---
+
 ## [2.0.13]
 
 ### 🚀 New Features
