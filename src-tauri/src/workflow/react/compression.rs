@@ -43,6 +43,40 @@ pub struct CompressionResult {
     pub task_goal_state: Option<TaskGoalState>,
 }
 
+/// One purified history message prepared for the compression renderer.
+/// Carries sanitized reasoning, visible content, assistant tool-call intents,
+/// and tool results as separate fields so the renderer can express each
+/// semantic boundary without re-reading durable metadata.
+#[derive(Debug, Clone)]
+struct CompressionHistoryMessage {
+    role: String,
+    reasoning: Option<String>,
+    content: Option<String>,
+    /// Assistant tool-call intents (role == "assistant").
+    tool_calls: Vec<CompressionToolCall>,
+    /// Tool result bound to its originating call (role == "tool").
+    tool_result: Option<CompressionToolResult>,
+    /// Compact review/failure semantics retained for the compressor prompt.
+    metadata: Value,
+}
+
+/// An assistant tool-call intent extracted from durable metadata.
+#[derive(Debug, Clone)]
+struct CompressionToolCall {
+    id: Option<String>,
+    name: String,
+    args: Option<String>,
+}
+
+/// A tool result with its originating call identity.
+#[derive(Debug, Clone)]
+struct CompressionToolResult {
+    id: Option<String>,
+    name: String,
+    args: Option<String>,
+    body: String,
+}
+
 impl ContextCompressor {
     pub fn new(
         chat_state: Arc<ChatState>,
@@ -92,7 +126,7 @@ impl ContextCompressor {
             Self::incremental_compression_input_messages(messages, last_summary_idx);
 
         // 3. Layer 1: Purification (Filter out noise)
-        let purified_history: Vec<serde_json::Value> = compression_input
+        let purified_history: Vec<CompressionHistoryMessage> = compression_input
             .iter()
             .filter_map(|m| {
                 if Self::should_skip_message_for_compression(m) {
@@ -100,15 +134,16 @@ impl ContextCompressor {
                 }
                 let merged_content = ContextManager::content_for_context_projection(m);
                 let content = Self::sanitize_message_content_for_compression(&merged_content);
-                let keep = Self::should_keep_message_content_for_compression(m, &content);
-                keep.then(|| {
-                    serde_json::json!({
-                        "message_id": m.id,
-                        "role": m.role,
-                        "content": content,
-                        "metadata": Self::compression_metadata(m),
-                    })
-                })
+                let item = Self::build_purified_history_message(m, content);
+                let has_structured_payload = item.reasoning.is_some()
+                    || !item.tool_calls.is_empty()
+                    || item.tool_result.is_some();
+                let keep = Self::should_keep_message_content_for_compression(
+                    m,
+                    item.content.as_deref().unwrap_or(""),
+                    has_structured_payload,
+                );
+                keep.then_some(item)
             })
             .collect();
 
@@ -162,7 +197,7 @@ impl ContextCompressor {
 
     async fn extract_fact_from_history(
         &self,
-        history_json: Vec<serde_json::Value>,
+        history: Vec<CompressionHistoryMessage>,
         completed_tasks: &str,
         review_rounds: &str,
         fact_pack: &str,
@@ -173,7 +208,7 @@ impl ContextCompressor {
         max_output_tokens: u32,
         task_goal_ledger: Option<&TaskGoalLedger>,
     ) -> Result<String, WorkflowEngineError> {
-        let transcript = Self::render_history_as_transcript(&history_json);
+        let transcript = Self::render_history_as_transcript(&history);
         let chat_interface = {
             let mut chats_guard = self.chat_state.chats.lock().await;
             let protocol = crate::ccproxy::ChatProtocol::OpenAI;
@@ -459,8 +494,11 @@ impl ContextCompressor {
     fn should_keep_message_content_for_compression(
         message: &WorkflowMessage,
         content: &str,
+        has_structured_payload: bool,
     ) -> bool {
-        if content.is_empty() {
+        // Messages without visible content stay eligible when they still carry
+        // reasoning or tool structure; state-based filters below keep priority.
+        if content.is_empty() && !has_structured_payload {
             return false;
         }
 
@@ -510,43 +548,227 @@ impl ContextCompressor {
         }
     }
 
-    fn render_history_as_transcript(history_json: &[serde_json::Value]) -> String {
-        history_json
+    fn render_history_as_transcript(history: &[CompressionHistoryMessage]) -> String {
+        let messages = history
             .iter()
-            .filter_map(|message| {
-                let role = message
-                    .get("role")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("unknown");
-                let content = message
-                    .get("content")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("")
-                    .trim();
-                if content.is_empty() {
-                    return None;
-                }
-                let escaped_role = Self::escape_xml_text(role);
-                let escaped_content = Self::escape_xml_text(content);
-                let metadata = message
-                    .get("metadata")
-                    .filter(|metadata| {
-                        !metadata.as_object().is_some_and(|object| object.is_empty())
-                    })
-                    .map(|metadata| {
-                        format!(
-                            "\n<metadata>{}</metadata>",
-                            Self::escape_xml_text(&metadata.to_string())
-                        )
-                    })
-                    .unwrap_or_default();
-                Some(format!(
-                    "<message role=\"{}\">\n{}{}\n</message>",
-                    escaped_role, escaped_content, metadata
-                ))
-            })
+            .filter_map(Self::render_history_message)
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n\n");
+        format!("<messages>\n{messages}\n</messages>")
+    }
+
+    fn render_history_message(message: &CompressionHistoryMessage) -> Option<String> {
+        let reasoning = message
+            .reasoning
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let content = message
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let has_tool_nodes = message.tool_result.is_some() || !message.tool_calls.is_empty();
+        if reasoning.is_none() && content.is_none() && !has_tool_nodes {
+            return None;
+        }
+
+        let mut sections = Vec::new();
+        if let Some(reasoning) = reasoning {
+            sections.push(format!(
+                "<reasoning>{}</reasoning>",
+                Self::escape_xml_text(reasoning)
+            ));
+        }
+        if let Some(content) = content {
+            sections.push(format!(
+                "<content>{}</content>",
+                Self::escape_xml_text(content)
+            ));
+        }
+        if let Some(result) = &message.tool_result {
+            sections.push(Self::render_tool_use(
+                result.id.as_deref(),
+                &result.name,
+                result.args.as_deref(),
+                Some(&result.body),
+            ));
+        }
+        for call in &message.tool_calls {
+            sections.push(Self::render_tool_use(
+                call.id.as_deref(),
+                &call.name,
+                call.args.as_deref(),
+                None,
+            ));
+        }
+        if message
+            .metadata
+            .as_object()
+            .is_some_and(|object| !object.is_empty())
+        {
+            sections.push(format!(
+                "<metadata>{}</metadata>",
+                Self::escape_xml_text(&message.metadata.to_string())
+            ));
+        }
+
+        Some(format!(
+            "<message role=\"{}\">\n{}\n</message>",
+            Self::escape_xml_attribute(&message.role),
+            sections.join("\n")
+        ))
+    }
+
+    fn render_tool_use(
+        id: Option<&str>,
+        name: &str,
+        args: Option<&str>,
+        body: Option<&str>,
+    ) -> String {
+        let mut attributes = String::new();
+        if let Some(id) = id.map(str::trim).filter(|value| !value.is_empty()) {
+            attributes.push_str(&format!(" id=\"{}\"", Self::escape_xml_attribute(id)));
+        }
+        attributes.push_str(&format!(" name=\"{}\"", Self::escape_xml_attribute(name)));
+        if let Some(args) = args.map(str::trim).filter(|value| !value.is_empty()) {
+            attributes.push_str(&format!(" args=\"{}\"", Self::escape_xml_attribute(args)));
+        }
+        match body.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(body) => format!(
+                "<tool_use{attributes}>{}</tool_use>",
+                Self::escape_xml_text(body)
+            ),
+            None => format!("<tool_use{attributes}></tool_use>"),
+        }
+    }
+
+    /// Builds the renderer record for one durable message. The projected content
+    /// is already sanitized; reasoning is sanitized with the same rules. Tool
+    /// structure comes exclusively from durable metadata, with safe degradation
+    /// when legacy records lack tool fields.
+    fn build_purified_history_message(
+        message: &WorkflowMessage,
+        projected_content: String,
+    ) -> CompressionHistoryMessage {
+        let reasoning = message
+            .reasoning
+            .as_deref()
+            .map(|value| Self::sanitize_message_content_for_compression(value))
+            .filter(|value| !value.is_empty());
+        let mut item = CompressionHistoryMessage {
+            role: message.role.clone(),
+            reasoning,
+            content: (!projected_content.is_empty()).then_some(projected_content.clone()),
+            tool_calls: Vec::new(),
+            tool_result: None,
+            metadata: Self::compression_metadata(message),
+        };
+        match message.role.as_str() {
+            "assistant" => {
+                item.tool_calls =
+                    Self::assistant_tool_calls_from_metadata(message.metadata.as_ref());
+            }
+            "tool" => {
+                if let Some(result) =
+                    Self::tool_result_from_metadata(message.metadata.as_ref(), &projected_content)
+                {
+                    // The result body lives inside <tool_use>; keeping plain
+                    // content too would duplicate it.
+                    item.content = None;
+                    item.tool_result = Some(result);
+                }
+            }
+            _ => {}
+        }
+        item
+    }
+
+    fn assistant_tool_calls_from_metadata(metadata: Option<&Value>) -> Vec<CompressionToolCall> {
+        metadata
+            .and_then(|value| value.get("tool_calls"))
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(Self::assistant_tool_call_from_value)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn assistant_tool_call_from_value(call: &Value) -> Option<CompressionToolCall> {
+        let function = call.get("function").unwrap_or(call);
+        let name = function
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let id = call
+            .get("id")
+            .or_else(|| function.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let args = Self::tool_arguments_attribute(
+            function.get("arguments").or_else(|| function.get("input")),
+        );
+        Some(CompressionToolCall {
+            id,
+            name: name.to_string(),
+            args,
+        })
+    }
+
+    fn tool_result_from_metadata(
+        metadata: Option<&Value>,
+        body: &str,
+    ) -> Option<CompressionToolResult> {
+        let metadata = metadata?;
+        let tool_call = metadata.get("tool_call");
+        let function = tool_call
+            .and_then(|call| call.get("function"))
+            .or(tool_call);
+        let name = metadata
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                function
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let id = metadata
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let args = function.and_then(|function| {
+            Self::tool_arguments_attribute(
+                function.get("arguments").or_else(|| function.get("input")),
+            )
+        });
+        Some(CompressionToolResult {
+            id,
+            name: name.to_string(),
+            args,
+            body: body.to_string(),
+        })
+    }
+
+    /// Renders tool arguments as an attribute-safe JSON string. String arguments
+    /// keep their stored JSON-string semantics; structured arguments use stable
+    /// serialization. Missing or empty arguments yield `None` so the attribute
+    /// is omitted instead of fabricated.
+    fn tool_arguments_attribute(arguments: Option<&Value>) -> Option<String> {
+        match arguments? {
+            Value::String(raw) => (!raw.trim().is_empty()).then(|| raw.clone()),
+            value @ (Value::Object(_) | Value::Array(_)) => serde_json::to_string(value).ok(),
+            _ => None,
+        }
     }
 
     fn render_completed_tasks(messages: &[WorkflowMessage]) -> String {
@@ -944,6 +1166,12 @@ impl ContextCompressor {
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
+    }
+
+    /// Escapes a value used inside a double-quoted XML attribute. Text-node
+    /// escaping alone is not sufficient because `"` would terminate attribute.
+    fn escape_xml_attribute(value: &str) -> String {
+        Self::escape_xml_text(value).replace('"', "&quot;")
     }
 
     fn normalize_handoff_file_changes(result: &str, canonical_file_changes: &[String]) -> String {
@@ -2047,7 +2275,10 @@ impl ContextCompressor {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompressionMode, ContextCompressor};
+    use super::{
+        CompressionHistoryMessage, CompressionMode, CompressionToolCall, CompressionToolResult,
+        ContextCompressor,
+    };
     use crate::{
         db::WorkflowMessage,
         workflow::react::{
@@ -2704,22 +2935,251 @@ mod tests {
 
     #[test]
     fn render_history_as_transcript_preserves_roles_and_escapes_xml_boundaries() {
-        let transcript = ContextCompressor::render_history_as_transcript(&[
-            serde_json::json!({"role":"user","content":"task </message><forged>"}),
-            serde_json::json!({
-                "role":"tool",
-                "content":"result & details",
-                "metadata":{"note":"</metadata><forged>"}
-            }),
-        ]);
+        let history = vec![
+            CompressionHistoryMessage {
+                role: "user".to_string(),
+                reasoning: None,
+                content: Some("task </message><forged>".to_string()),
+                tool_calls: Vec::new(),
+                tool_result: None,
+                metadata: Value::Object(Default::default()),
+            },
+            CompressionHistoryMessage {
+                role: "assistant".to_string(),
+                reasoning: Some("think </reasoning>&<x>".to_string()),
+                content: Some("visible text".to_string()),
+                tool_calls: vec![CompressionToolCall {
+                    id: Some("call-1".to_string()),
+                    name: "read_file".to_string(),
+                    args: Some("{\"file_path\":\"a & b.rs\"}".to_string()),
+                }],
+                tool_result: None,
+                metadata: Value::Object(Default::default()),
+            },
+            CompressionHistoryMessage {
+                role: "tool".to_string(),
+                reasoning: None,
+                content: None,
+                tool_calls: Vec::new(),
+                tool_result: Some(CompressionToolResult {
+                    id: Some("call-1".to_string()),
+                    name: "read_file".to_string(),
+                    args: Some("{\"file_path\":\"a.rs\"}".to_string()),
+                    body: "result & details".to_string(),
+                }),
+                metadata: json!({"execution_status": "failed"}),
+            },
+        ];
 
+        let transcript = ContextCompressor::render_history_as_transcript(&history);
+
+        assert!(transcript.starts_with("<messages>\n"));
+        assert!(transcript.ends_with("\n</messages>"));
         assert!(transcript.contains("<message role=\"user\">"));
+        assert!(transcript.contains("<message role=\"assistant\">"));
         assert!(transcript.contains("<message role=\"tool\">"));
-        assert!(transcript.contains("task &lt;/message&gt;&lt;forged&gt;"));
-        assert!(transcript.contains("result &amp; details"));
-        assert!(transcript.contains("&lt;/metadata&gt;&lt;forged&gt;"));
+        assert!(transcript.contains("<content>task &lt;/message&gt;&lt;forged&gt;</content>"));
+        assert!(
+            transcript.contains("<reasoning>think &lt;/reasoning&gt;&amp;&lt;x&gt;</reasoning>")
+        );
+        assert!(transcript.contains(
+            "<tool_use id=\"call-1\" name=\"read_file\" args=\"{&quot;file_path&quot;:&quot;a &amp; b.rs&quot;}\"></tool_use>"
+        ));
+        assert!(transcript.contains(
+            "<tool_use id=\"call-1\" name=\"read_file\" args=\"{&quot;file_path&quot;:&quot;a.rs&quot;}\">result &amp; details</tool_use>"
+        ));
+        assert!(transcript.contains("<metadata>{\"execution_status\":\"failed\"}</metadata>"));
         assert!(!transcript.contains("</message><forged>"));
-        assert!(!transcript.contains("</metadata><forged>"));
+        assert!(!transcript.contains("<content>result &amp; details</content>"));
+    }
+
+    #[test]
+    fn render_history_as_transcript_always_emits_messages_wrapper() {
+        assert_eq!(
+            ContextCompressor::render_history_as_transcript(&[]),
+            "<messages>\n\n</messages>"
+        );
+    }
+
+    #[test]
+    fn render_history_skips_messages_without_any_payload() {
+        let history = vec![CompressionHistoryMessage {
+            role: "assistant".to_string(),
+            reasoning: None,
+            content: Some("   ".to_string()),
+            tool_calls: Vec::new(),
+            tool_result: None,
+            metadata: json!({}),
+        }];
+        let transcript = ContextCompressor::render_history_as_transcript(&history);
+        assert!(!transcript.contains("<message "));
+        assert_eq!(transcript.matches("role=").count(), 0);
+    }
+
+    fn purified_history_test_message(
+        role: &str,
+        content: &str,
+        reasoning: Option<&str>,
+        metadata: Option<Value>,
+    ) -> WorkflowMessage {
+        WorkflowMessage {
+            id: Some(1),
+            session_id: "s".to_string(),
+            role: role.to_string(),
+            message: content.to_string(),
+            reasoning: reasoning.map(str::to_string),
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata,
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn purified_history_keeps_reasoning_only_assistant_message() {
+        let message =
+            purified_history_test_message("assistant", "", Some("internal thought"), None);
+        let item = ContextCompressor::build_purified_history_message(&message, String::new());
+        assert_eq!(item.reasoning.as_deref(), Some("internal thought"));
+        assert!(item.content.is_none());
+        assert!(ContextCompressor::should_keep_message_content_for_compression(&message, "", true));
+    }
+
+    #[test]
+    fn purified_history_extracts_multiple_assistant_tool_calls() {
+        let message = purified_history_test_message(
+            "assistant",
+            "",
+            None,
+            Some(json!({
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "read_file", "arguments": "{\"file_path\":\"a.rs\"}"}},
+                    {"id": "call-2", "function": {"name": "bash", "arguments": {"command": "ls"}}}
+                ]
+            })),
+        );
+        let item = ContextCompressor::build_purified_history_message(&message, String::new());
+        assert_eq!(item.tool_calls.len(), 2);
+        assert_eq!(item.tool_calls[0].id.as_deref(), Some("call-1"));
+        assert_eq!(item.tool_calls[0].name, "read_file");
+        assert_eq!(
+            item.tool_calls[0].args.as_deref(),
+            Some("{\"file_path\":\"a.rs\"}")
+        );
+        assert_eq!(item.tool_calls[1].id.as_deref(), Some("call-2"));
+        assert_eq!(item.tool_calls[1].name, "bash");
+        assert_eq!(
+            item.tool_calls[1].args.as_deref(),
+            Some("{\"command\":\"ls\"}")
+        );
+        assert!(ContextCompressor::should_keep_message_content_for_compression(&message, "", true));
+    }
+
+    #[test]
+    fn purified_history_binds_tool_result_with_name_id_and_args() {
+        let message = purified_history_test_message(
+            "tool",
+            "file body",
+            None,
+            Some(json!({
+                "tool_call_id": "call-1",
+                "tool_name": "read_file",
+                "tool_call": {"id": "call-1", "function": {"name": "read_file", "arguments": "{\"file_path\":\"a.rs\"}"}}
+            })),
+        );
+        let item =
+            ContextCompressor::build_purified_history_message(&message, "file body".to_string());
+        let result = item.tool_result.expect("tool result should be extracted");
+        assert_eq!(result.id.as_deref(), Some("call-1"));
+        assert_eq!(result.name, "read_file");
+        assert_eq!(result.args.as_deref(), Some("{\"file_path\":\"a.rs\"}"));
+        assert_eq!(result.body, "file body");
+        assert!(item.content.is_none());
+    }
+
+    #[test]
+    fn purified_history_tool_result_falls_back_to_tool_call_name() {
+        let message = purified_history_test_message(
+            "tool",
+            "output",
+            None,
+            Some(json!({
+                "tool_call": {"function": {"name": "bash", "arguments": "{\"command\":\"ls\"}"}}
+            })),
+        );
+        let item =
+            ContextCompressor::build_purified_history_message(&message, "output".to_string());
+        let result = item
+            .tool_result
+            .expect("name should fall back to tool_call");
+        assert_eq!(result.name, "bash");
+        assert!(result.id.is_none());
+    }
+
+    #[test]
+    fn purified_history_degrades_tool_result_without_tool_identity() {
+        let message = purified_history_test_message(
+            "tool",
+            "plain output",
+            None,
+            Some(json!({"tool_call_id": "call-9"})),
+        );
+        let item =
+            ContextCompressor::build_purified_history_message(&message, "plain output".to_string());
+        assert!(item.tool_result.is_none());
+        assert_eq!(item.content.as_deref(), Some("plain output"));
+    }
+
+    #[test]
+    fn purified_history_error_tool_result_keeps_failure_metadata() {
+        let mut message = purified_history_test_message(
+            "tool",
+            "boom </tool_use>",
+            None,
+            Some(json!({
+                "tool_call_id": "call-1",
+                "tool_name": "bash",
+                "execution_status": "failed"
+            })),
+        );
+        message.is_error = true;
+        message.error_type = Some("Network".to_string());
+        let item = ContextCompressor::build_purified_history_message(
+            &message,
+            "boom </tool_use>".to_string(),
+        );
+        let result = item.tool_result.expect("failed result should be kept");
+        assert_eq!(result.body, "boom </tool_use>");
+        assert_eq!(
+            item.metadata,
+            json!({"execution_status": "failed", "error_type": "Network"})
+        );
+    }
+
+    #[test]
+    fn compression_keeps_structured_payload_without_visible_content() {
+        let message = purified_history_test_message("assistant", "", Some("thought"), None);
+        assert!(ContextCompressor::should_keep_message_content_for_compression(&message, "", true));
+    }
+
+    #[test]
+    fn compression_pending_approval_filters_even_with_structured_payload() {
+        let message = purified_history_test_message(
+            "tool",
+            "",
+            None,
+            Some(json!({"tool_name": "bash", "approval_status": "pending"})),
+        );
+        assert!(
+            !ContextCompressor::should_keep_message_content_for_compression(&message, "", true)
+        );
     }
 
     #[test]
@@ -3760,7 +4220,8 @@ mod tests {
         assert!(
             !ContextCompressor::should_keep_message_content_for_compression(
                 &message,
-                &message.message
+                &message.message,
+                false
             )
         );
     }
@@ -3793,7 +4254,8 @@ mod tests {
         assert!(
             !ContextCompressor::should_keep_message_content_for_compression(
                 &message,
-                &message.message
+                &message.message,
+                false
             )
         );
     }

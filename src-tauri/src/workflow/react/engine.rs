@@ -531,6 +531,88 @@ impl WorkflowExecutor {
             .or_else(|| Self::phase_runtime_model(agent_config, phase))
     }
 
+    /// Selects the compression model for the current phase. Prefers the utility
+    /// model, but only when its confirmable context capacity covers the phase
+    /// action model's required context bound; otherwise falls back to the
+    /// action model so an oversized compression request can never be sent.
+    fn select_compressor_model(
+        &self,
+        action_provider_id: i64,
+        action_model: &str,
+    ) -> (i64, String) {
+        let phase = &self.policy.phase;
+        let Some(utility) = Self::utility_runtime_model(&self.agent_config, phase) else {
+            return (action_provider_id, action_model.to_string());
+        };
+        let resolved = if utility.context_size.is_some_and(|value| value > 0) {
+            None
+        } else {
+            self.resolve_actual_model_config(utility.id, &utility.model)
+        };
+        let capacity = Self::model_context_capacity(utility, resolved.as_ref());
+        let required_context = Self::effective_context_limit(&self.agent_config, phase);
+        let selection = Self::compression_model_selection(
+            Some(utility),
+            capacity,
+            action_provider_id,
+            action_model,
+            required_context,
+        );
+        if selection.0 != utility.id {
+            log::info!(
+                "[Workflow][session={}][phase=model_sync] Compression model falls back to the phase action model: utility model '{}' context capacity {:?} does not confirmably cover required context {} (phase={:?})",
+                self.session_id,
+                utility.model,
+                capacity,
+                required_context,
+                phase
+            );
+        }
+        selection
+    }
+
+    /// Confirmable input context capacity for a role model: the role config's
+    /// positive `context_size` first, then the provider-side resolved model
+    /// config. `None` means the capacity cannot be confirmed.
+    fn model_context_capacity(
+        role_config: &crate::db::agent::ModelConfig,
+        resolved: Option<&ModelConfig>,
+    ) -> Option<usize> {
+        role_config
+            .context_size
+            .filter(|value| *value > 0)
+            .map(|value| value as usize)
+            .or_else(|| {
+                resolved
+                    .and_then(|config| config.context_size)
+                    .filter(|value| *value > 0)
+                    .map(|value| value as usize)
+            })
+    }
+
+    /// Pure selection rule: use the utility model only when its confirmed
+    /// capacity covers the required context; unknown capacity never qualifies.
+    /// An identical provider/model identity with the action model bypasses the
+    /// gate because both choices are the same model.
+    fn compression_model_selection(
+        utility: Option<&crate::db::agent::ModelConfig>,
+        utility_capacity: Option<usize>,
+        action_provider_id: i64,
+        action_model: &str,
+        required_context: usize,
+    ) -> (i64, String) {
+        let Some(utility) = utility else {
+            return (action_provider_id, action_model.to_string());
+        };
+        if utility.id == action_provider_id && utility.model == action_model {
+            return (utility.id, utility.model.clone());
+        }
+        match utility_capacity {
+            Some(capacity) if capacity >= required_context => (utility.id, utility.model.clone()),
+            _ => (action_provider_id, action_model.to_string()),
+        }
+    }
+
     fn model_thinking_explicitly_disabled(
         model_config: Option<&crate::db::agent::ModelConfig>,
     ) -> bool {
@@ -831,10 +913,10 @@ impl WorkflowExecutor {
             self.intelligence_manager.audit_model_name = model_name.clone();
         }
 
-        self.compressor.provider_id = utility_model.map(|m| m.id).unwrap_or(provider_id);
-        self.compressor.model = utility_model
-            .map(|m| m.model.clone())
-            .unwrap_or_else(|| model_name.clone());
+        let (compressor_provider_id, compressor_model) =
+            self.select_compressor_model(provider_id, &model_name);
+        self.compressor.provider_id = compressor_provider_id;
+        self.compressor.model = compressor_model;
         self.sync_runtime_limits();
 
         log::info!(
@@ -5200,10 +5282,7 @@ impl WorkflowExecutor {
             .filter(|calls| calls.iter().all(serde_json::Value::is_object))
         {
             calls.clone()
-        } else if let Some(tool) = payload_object
-            .get("tool")
-            .filter(|tool| tool.is_object())
-        {
+        } else if let Some(tool) = payload_object.get("tool").filter(|tool| tool.is_object()) {
             vec![tool.clone()]
         } else if payload_object
             .get("name")
@@ -9150,6 +9229,80 @@ mod recovery_tests {
         );
     }
 
+    #[test]
+    fn compression_model_selection_requires_confirmed_utility_capacity() {
+        let utility = |context_size: Option<i32>| crate::db::agent::ModelConfig {
+            id: 22,
+            model: "utility-model".to_string(),
+            temperature: None,
+            thinking: None,
+            function_call: None,
+            context_size,
+            max_tokens: None,
+        };
+
+        // Larger confirmed capacity selects utility.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(
+                Some(&utility(Some(200_000))),
+                Some(200_000),
+                11,
+                "act-model",
+                128_000
+            ),
+            (22, "utility-model".to_string())
+        );
+        // Equal capacity selects utility.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(
+                Some(&utility(Some(128_000))),
+                Some(128_000),
+                11,
+                "act-model",
+                128_000
+            ),
+            (22, "utility-model".to_string())
+        );
+        // Smaller capacity falls back to the action model.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(
+                Some(&utility(Some(64_000))),
+                Some(64_000),
+                11,
+                "act-model",
+                128_000
+            ),
+            (11, "act-model".to_string())
+        );
+        // Unknown capacity never qualifies.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(
+                Some(&utility(None)),
+                None,
+                11,
+                "act-model",
+                128_000
+            ),
+            (11, "act-model".to_string())
+        );
+        // No utility configured keeps the action model.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(None, None, 11, "act-model", 128_000),
+            (11, "act-model".to_string())
+        );
+        // Identical identity with the action model bypasses the gate.
+        assert_eq!(
+            WorkflowExecutor::compression_model_selection(
+                Some(&utility(None)),
+                None,
+                22,
+                "utility-model",
+                128_000
+            ),
+            (22, "utility-model".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn terminal_manual_compression_without_candidate_keeps_terminal_lifecycle() {
         let (_temp_dir, store) = create_test_store();
@@ -9171,7 +9324,9 @@ mod recovery_tests {
                 temperature: None,
                 thinking: None,
                 function_call: None,
-                context_size: None,
+                // Confirmed capacity above the default 128000 required bound so
+                // the utility model passes the compression context gate.
+                context_size: Some(200_000),
                 max_tokens: None,
             }),
             ..Default::default()
@@ -9245,6 +9400,76 @@ mod recovery_tests {
                 .iter()
                 .all(|payload| !matches!(payload, GatewayPayload::State { .. })),
             "terminal-only compression must not publish a lifecycle transition"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_sync_falls_back_to_action_model_when_utility_context_is_too_small() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "compression-gate-fallback";
+        let mut agent = test_agent("compression-gate-agent");
+        agent.models = Some(crate::db::agent::AgentModels {
+            act: Some(crate::db::agent::ModelConfig {
+                id: 11,
+                model: "act-model".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
+            utility: Some(crate::db::agent::ModelConfig {
+                id: 22,
+                model: "utility-model".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                // Confirmed but below the default 128000 required bound.
+                context_size: Some(1_000),
+                max_tokens: None,
+            }),
+            ..Default::default()
+        });
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(32).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+
+        executor.sync_runtime_models_from_agent_config();
+
+        // The compressor must fall back to the phase action model.
+        assert_eq!(executor.compressor.provider_id, 11);
+        assert_eq!(executor.compressor.model, "act-model");
+        // The action model itself must not change.
+        assert_eq!(executor.llm_processor.active_provider_id, 11);
+        assert_eq!(executor.llm_processor.active_model_name, "act-model");
+        // Intelligence utility/approval models keep using the configured utility.
+        assert_eq!(executor.intelligence_manager.utility_provider_id, 22);
+        assert_eq!(
+            executor.intelligence_manager.utility_model_name,
+            "utility-model"
         );
     }
 
