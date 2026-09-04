@@ -3,7 +3,8 @@
     class="messages"
     ref="messagesRef"
     :data-workflow-id="props.currentWorkflowId || null"
-    @scroll.passive="handleScroll">
+    @scroll.passive="handleScroll"
+    @wheel.passive="handleWheel">
     <div v-if="props.isLoading" class="message-skeleton" aria-busy="true">
       <el-skeleton animated>
         <template #template>
@@ -1424,10 +1425,7 @@ let scrollCorrectionFrameId = null
 let observedMessageListWidth = 0
 let scrollScheduled = false
 let componentUnmounted = false
-let lastObservedScrollTop = 0
-let stickToBottomFrameId = null
-let stickToBottomFramesRemaining = 0
-const STICK_TO_BOTTOM_FRAME_LIMIT = 8
+let userScrollIntent = false
 let pendingScrollForce = false
 let pendingScrollFrameBudget = 0
 let userMessageMeasureScheduled = false
@@ -1484,47 +1482,29 @@ const syncReadingScrollAnchor = () => {
   }
 }
 
-const stickToBottomStep = () => {
-  stickToBottomFrameId = null
-  if (componentUnmounted || !shouldAutoScroll.value) return
-  const el = messagesRef.value
-  if (!el) return
-  const target = Math.max(0, el.scrollHeight - el.clientHeight)
-  if (target > el.scrollTop) {
-    el.scrollTop = target
-    lastObservedScrollTop = el.scrollTop
-  }
-  stickToBottomFramesRemaining -= 1
-  if (stickToBottomFramesRemaining > 0 && props.isChatting) {
-    stickToBottomFrameId = requestAnimationFrame(stickToBottomStep)
+const handlePointerDown = event => {
+  if (event.pointerType === 'mouse' && event.button === 0) {
+    userScrollIntent = true
+    shouldAutoScroll.value = false
   }
 }
 
-const startStickToBottomLoop = () => {
-  if (componentUnmounted || !shouldAutoScroll.value || !props.isChatting) return
-  stickToBottomFramesRemaining = STICK_TO_BOTTOM_FRAME_LIMIT
-  if (stickToBottomFrameId === null) {
-    stickToBottomFrameId = requestAnimationFrame(stickToBottomStep)
+const handleWheel = event => {
+  if (event.deltaY < 0) {
+    userScrollIntent = true
+    shouldAutoScroll.value = false
   }
 }
 
 const handleScroll = () => {
   const container = messagesRef.value
   if (!container) return
-  const scrollTop = container.scrollTop
-  const scrollingUp = scrollTop < lastObservedScrollTop
-  lastObservedScrollTop = scrollTop
-  // Any upward user scroll pauses auto-scroll immediately, even within the
-  // bottom threshold; auto-scroll resumes only when the user scrolls back
-  // down to the bottom. This prevents the stream from fighting the user.
-  if (scrollingUp) {
+  const nearBottom = isNearBottom(container)
+  if (nearBottom) {
+    userScrollIntent = false
+    shouldAutoScroll.value = true
+  } else if (userScrollIntent) {
     shouldAutoScroll.value = false
-    stickToBottomFramesRemaining = 0
-  } else {
-    shouldAutoScroll.value = isNearBottom(container)
-    if (shouldAutoScroll.value) {
-      startStickToBottomLoop()
-    }
   }
   syncReadingScrollAnchor()
 }
@@ -1548,7 +1528,6 @@ const restoreScrollPosition = ({ container, anchor, previousScrollTop, previousS
   }
 
   container.scrollTop = nextScrollTop
-  lastObservedScrollTop = container.scrollTop
   return {
     mode,
     nextScrollTop: container.scrollTop,
@@ -1573,7 +1552,6 @@ const restoreReadingScrollAnchor = () => {
   const offsetDelta = currentOffsetTop - anchor.offsetTop
   if (Math.abs(offsetDelta) > 0.5) {
     container.scrollTop += offsetDelta
-    lastObservedScrollTop = container.scrollTop
   }
   return true
 }
@@ -3077,10 +3055,8 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 
       const target = currentEl.scrollHeight - currentEl.clientHeight
       currentEl.scrollTop = Math.max(0, target)
-      lastObservedScrollTop = currentEl.scrollTop
       shouldAutoScroll.value = true
       clearReadingScrollAnchor()
-      startStickToBottomLoop()
 
       if (currentFrameBudget <= 1) return
 
@@ -3097,7 +3073,10 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 }
 
 const scrollToBottom = (force = false) => {
-  if (force) clearReadingScrollAnchor()
+  if (force) {
+    userScrollIntent = false
+    clearReadingScrollAnchor()
+  }
   performScrollToBottom(force)
 }
 
@@ -3142,18 +3121,10 @@ watch(
 )
 
 watch(
-  () => props.isChatting,
-  isChatting => {
-    if (isChatting) startStickToBottomLoop()
-  }
-)
-
-watch(
   () => props.currentWorkflowId,
   () => {
     readingScrollAnchor.value = null
     shouldAutoScroll.value = true
-    lastObservedScrollTop = 0
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()
@@ -3214,10 +3185,6 @@ onBeforeUnmount(() => {
   if (scrollFrameId !== null) {
     cancelAnimationFrame(scrollFrameId)
     scrollFrameId = null
-  }
-  if (stickToBottomFrameId !== null) {
-    cancelAnimationFrame(stickToBottomFrameId)
-    stickToBottomFrameId = null
   }
   if (scrollCorrectionFrameId !== null) {
     cancelAnimationFrame(scrollCorrectionFrameId)
