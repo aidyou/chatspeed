@@ -325,6 +325,7 @@
       "selectAvailableTools": "選擇可用工具",
       "selectDirectory": "選擇目錄",
       "selectMcpToolExposure": "選擇直接展開的 MCP 工具",
+      "selectedSkills": "已選技能",
       "shellDecisionAllow": "允許",
       "shellDecisionDeny": "拒絕",
       "shellDecisionReview": "需審核",

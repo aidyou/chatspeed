@@ -325,6 +325,7 @@
       "selectAvailableTools": "Select Available Tools",
       "selectDirectory": "Select Directory",
       "selectMcpToolExposure": "Select MCP tools to expose directly",
+      "selectedSkills": "Selected Skills",
       "shellDecisionAllow": "Allow",
       "shellDecisionDeny": "Deny",
       "shellDecisionReview": "Review",
