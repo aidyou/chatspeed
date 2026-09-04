@@ -407,6 +407,51 @@ mod tests {
     }
 
     #[test]
+    fn amd_deepseek_v4_removes_invalid_effort_to_disable_thinking() {
+        let mut body = json!({ "reasoning_effort": "unsupported" });
+
+        normalize_request(
+            &mut body,
+            "DeepSeek-V4-Flash",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn amd_qwen38_maps_invalid_effort_to_low() {
+        let mut body = json!({ "reasoning_effort": "unsupported" });
+
+        normalize_request(
+            &mut body,
+            "Qwen3.8-Flash-Next",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert_eq!(body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn amd_leaves_unknown_model_unchanged() {
+        let mut body = json!({
+            "thinking": { "type": "enabled" },
+            "enable_thinking": true,
+            "thinking_budget": 2048,
+            "reasoning_effort": "xhigh",
+        });
+        let original = body.clone();
+
+        normalize_request(
+            &mut body,
+            "unknown-amd-model",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert_eq!(body, original);
+    }
+
+    #[test]
     fn amd_leaves_request_without_thinking_signal_untouched() {
         let mut body = json!({
             "model": "DeepSeek-V4-Flash",
