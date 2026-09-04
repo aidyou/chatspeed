@@ -1424,6 +1424,7 @@ let scrollCorrectionFrameId = null
 let observedMessageListWidth = 0
 let scrollScheduled = false
 let componentUnmounted = false
+let lastObservedScrollTop = 0
 let pendingScrollForce = false
 let pendingScrollFrameBudget = 0
 let userMessageMeasureScheduled = false
@@ -1481,7 +1482,19 @@ const syncReadingScrollAnchor = () => {
 }
 
 const handleScroll = () => {
-  shouldAutoScroll.value = isNearBottom(messagesRef.value)
+  const container = messagesRef.value
+  if (!container) return
+  const scrollTop = container.scrollTop
+  const scrollingUp = scrollTop < lastObservedScrollTop
+  lastObservedScrollTop = scrollTop
+  // Any upward user scroll pauses auto-scroll immediately, even within the
+  // bottom threshold; auto-scroll resumes only when the user scrolls back
+  // down to the bottom. This prevents the stream from fighting the user.
+  if (scrollingUp) {
+    shouldAutoScroll.value = false
+  } else {
+    shouldAutoScroll.value = isNearBottom(container)
+  }
   syncReadingScrollAnchor()
 }
 
@@ -3003,7 +3016,7 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
   if (componentUnmounted) return
   const el = messagesRef.value
   if (!el) return
-  if (!force && !shouldAutoScroll.value && !isNearBottom(el)) return
+  if (!force && !shouldAutoScroll.value) return
 
   pendingScrollForce = pendingScrollForce || force
   pendingScrollFrameBudget = Math.max(pendingScrollFrameBudget, frameBudget)
@@ -3027,10 +3040,11 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
       pendingScrollFrameBudget = 0
 
       if (!currentEl) return
-      if (!currentForce && !shouldAutoScroll.value && !isNearBottom(currentEl)) return
+      if (!currentForce && !shouldAutoScroll.value) return
 
       const target = currentEl.scrollHeight - currentEl.clientHeight
       currentEl.scrollTop = Math.max(0, target)
+      lastObservedScrollTop = currentEl.scrollTop
       shouldAutoScroll.value = true
       clearReadingScrollAnchor()
 
@@ -3098,6 +3112,7 @@ watch(
   () => {
     readingScrollAnchor.value = null
     shouldAutoScroll.value = true
+    lastObservedScrollTop = 0
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()

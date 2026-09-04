@@ -572,15 +572,18 @@ fn validate_row_contract(
                 row,
                 &["final_audit", "skill_enabled", "is_system", "disabled"],
             )?;
-            for field in [
-                "available_tools",
-                "auto_approve",
-                "selected_skills",
-                "mcp_tool_exposure",
-            ] {
+            for field in ["available_tools", "auto_approve", "selected_skills"] {
                 if row.get(field).is_some_and(|value| !value.is_null()) {
                     let _: Vec<String> = parse_json_field(row, field)?;
                 }
+            }
+            // mcp_tool_exposure is an McpToolConfig object (legacy arrays are
+            // accepted by its Deserialize impl for backward compatibility).
+            if row
+                .get("mcp_tool_exposure")
+                .is_some_and(|value| !value.is_null())
+            {
+                let _: super::McpToolConfig = parse_json_field(row, "mcp_tool_exposure")?;
             }
             for field in ["shell_policy", "allowed_paths"] {
                 if row.get(field).is_some_and(|value| !value.is_null()) {
@@ -2426,6 +2429,52 @@ mod tests {
             })
             .unwrap();
         assert_eq!(exposure, r#"["server__MCP__tool"]"#);
+    }
+
+    #[test]
+    fn object_mcp_tool_exposure_exports_and_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_path = directory.path().join("source.sqlite");
+        let destination_path = directory.path().join("destination.sqlite");
+        let package_path = directory.path().join("agents-with-mcp-config.json");
+        let source = super::super::MainStore::new(&source_path).unwrap();
+        let source_runtime = source.db_runtime().unwrap();
+        source_runtime
+            .write_blocking(|connection| {
+                connection.execute(
+                    "INSERT INTO agents (id, name, system_prompt, mcp_tool_exposure) VALUES ('agent', 'Agent', 'system', ?1)",
+                    [r#"{"available":["server__MCP__tool"],"autoApprove":["server__MCP__tool"],"autoExpand":[]}"#],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let export_path = package_path.clone();
+        source_runtime
+            .read_blocking(move |connection| {
+                export_config_package(connection, export_path, [ConfigCategory::Agents])
+            })
+            .unwrap();
+
+        let destination = super::super::MainStore::new(&destination_path).unwrap();
+        let result =
+            import_config_package(&destination, &package_path, [ConfigCategory::Agents]).unwrap();
+        assert_eq!(result.imported_counts.get(&ConfigCategory::Agents), Some(&1));
+        let destination_runtime = destination.db_runtime().unwrap();
+        let exposure: String = destination_runtime
+            .read_blocking(|connection| {
+                connection
+                    .query_row(
+                        "SELECT mcp_tool_exposure FROM agents WHERE id = 'agent'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(StoreError::from)
+            })
+            .unwrap();
+        assert_eq!(
+            exposure,
+            r#"{"available":["server__MCP__tool"],"autoApprove":["server__MCP__tool"],"autoExpand":[]}"#
+        );
     }
 
     #[test]

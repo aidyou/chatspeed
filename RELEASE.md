@@ -2,6 +2,33 @@
 
 # Release Notes
 
+## [2.0.15]
+
+### 🚀 New Features
+
+- **Copy in the Workflow UI**:
+  - Added a copy button to AI message outputs and streaming content that copies the rendered raw Markdown.
+  - Approved `submit_plan` tool titles now show a "Copy Raw Plan" button on hover in the message list and the plan approval dialog; it copies the plan Markdown exactly as rendered when the tool entry is expanded.
+- **AMD Radeon support**:
+  - Added an AMD thinking adapter for `developer.amd.com.cn` endpoints: unsupported `thinking`, `enable_thinking`, and `thinking_budget` fields are stripped before forwarding, and `reasoning_effort` is normalized to the tiers the provider accepts (DeepSeek-V4-Flash: low/high; Qwen3.8-Flash-Next: low/medium).
+  - Registered the adapter in the model catalog and transport catalog by endpoint host, with documented sources.
+
+### 🪄 Improvements
+
+- **Context compression**:
+  - Compression history now uses a structured `<messages>` XML format with separate `<reasoning>`, `<content>`, and `<tool_use>` nodes, preserving assistant tool-call intent and tool result/error identity alongside existing projection and filtering semantics.
+  - The compressor model now prefers the utility model only when its confirmed context capacity covers the current phase action model's required context bound; unknown or insufficient capacity safely falls back to the action model.
+- **Usage summary pricing**:
+  - Terminal usage summaries now report the actual pricing rates, cache rate, and multiplier captured at request time, backfilled from the latest `ccproxy_stats` pricing snapshot per provider and model instead of empty pricing fields.
+
+### 🐞 Bug Fixes
+
+- **Localization**: Added the missing `settings.agent.selectedSkills` key used by the skill selection form label in all supported locales.
+- **Config transfer**: Agent export and import now validate `mcp_tool_exposure` as an `McpToolConfig` object, while legacy array values remain accepted for backward compatibility.
+- **Message list scrolling**: Scrolling up now pauses auto-scroll immediately so streaming output no longer fights the user's reading position; auto-scroll resumes only after scrolling back to the bottom.
+
+---
+
 ## [2.0.14]
 
 ### 🚀 New Features

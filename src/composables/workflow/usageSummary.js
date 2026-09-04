@@ -1,4 +1,11 @@
-const finiteNumber = value => (Number.isFinite(Number(value)) ? Number(value) : null)
+// `Number(null)` is 0, so null/undefined must be handled explicitly to keep
+// optional fields (multiplier, cost, provider id) null instead of zero.
+const finiteNumber = value =>
+  value === null || value === undefined
+    ? null
+    : Number.isFinite(Number(value))
+      ? Number(value)
+      : null
 
 const normalizeTotals = value => {
   if (!value || typeof value !== 'object') return null

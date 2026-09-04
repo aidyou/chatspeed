@@ -78,3 +78,21 @@ test('preserves an explicit zero-token sub-agent summary for the combined UI row
   assert.equal(normalized.hasSubAgents, true)
   assert.equal(normalized.withSubAgents.totalTokens, 0)
 })
+
+test('keeps optional null fields null instead of coercing them to zero', () => {
+  const normalized = normalizeUsageSummary({
+    ...summary,
+    model_breakdowns: [
+      {
+        ...summary.model_breakdowns[0],
+        provider_id: null,
+        multiplier: null,
+        estimated_cost: null
+      }
+    ]
+  })
+  const breakdown = normalized.modelBreakdowns[0]
+  assert.equal(breakdown.providerId, null)
+  assert.equal(breakdown.multiplier, null)
+  assert.equal(breakdown.estimatedCost, null)
+})

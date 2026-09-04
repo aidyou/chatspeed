@@ -1,6 +1,68 @@
-use crate::db::{MainStore, StoreError};
+use std::collections::BTreeMap;
+
+use crate::db::{MainStore, PricingConfig, StoreError};
 use crate::workflow::react::usage::{ModelUsageBreakdown, UsageTotals, WorkflowUsageSummary};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
+
+/// Latest pricing snapshot per (provider_id, backend_model) within one workflow
+/// scope. `ccproxy_stats.pricing_snapshot` stores the PricingConfig used at
+/// request time, so the terminal summary can report the real rates/multiplier.
+fn load_pricing_snapshots(
+    conn: &Connection,
+    session_id: &str,
+    task_run_id: &str,
+) -> Result<BTreeMap<(Option<i64>, String), PricingConfig>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT provider_id, backend_model, pricing_snapshot FROM (
+            SELECT provider_id, backend_model, pricing_snapshot,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY provider_id, backend_model ORDER BY id DESC
+                   ) AS rank_in_group
+            FROM ccproxy_stats
+            WHERE workflow_session_id = ?1 AND workflow_task_run_id = ?2
+         ) WHERE rank_in_group = 1",
+    )?;
+    let rows = statement.query_map(params![session_id, task_run_id], |row| {
+        Ok((
+            row.get::<_, Option<i64>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut snapshots = BTreeMap::new();
+    for row in rows {
+        let (provider_id, backend_model, snapshot) = row?;
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
+        if let Ok(pricing) = serde_json::from_str::<PricingConfig>(&snapshot) {
+            snapshots.insert((provider_id, backend_model), pricing);
+        }
+    }
+    Ok(snapshots)
+}
+
+type PricingFields = (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+);
+
+fn pricing_fields(pricing: Option<&PricingConfig>) -> PricingFields {
+    pricing
+        .map(|pricing| {
+            (
+                Some(pricing.input_per_million),
+                Some(pricing.output_per_million),
+                Some(pricing.cache_per_million),
+                pricing.reasoning_per_million,
+                Some(pricing.multiplier),
+            )
+        })
+        .unwrap_or((None, None, None, None, None))
+}
 
 impl MainStore {
     pub fn summarize_workflow_task_usage(
@@ -21,6 +83,7 @@ impl MainStore {
 
         self.db_runtime()?.read_blocking(move |conn| {
             let read = |session_id: &str, task_run_id: &str| -> Result<Vec<ModelUsageBreakdown>, StoreError> {
+                let snapshots = load_pricing_snapshots(conn, session_id, task_run_id)?;
                 let mut statement = conn.prepare(
                     "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens), SUM(cache_write_tokens), SUM(reasoning_tokens), SUM(audio_input_tokens), SUM(audio_output_tokens), SUM(estimated_cost), CASE WHEN SUM(CASE WHEN pricing_status IS NULL OR pricing_status != 'priced' THEN 1 ELSE 0 END) > 0
                           THEN 'legacy' ELSE 'priced' END
@@ -62,6 +125,13 @@ impl MainStore {
                     } else {
                         persisted_status.unwrap_or_else(|| "legacy".to_string())
                     };
+                    let (
+                        input_per_million,
+                        output_per_million,
+                        cache_per_million,
+                        reasoning_per_million,
+                        multiplier,
+                    ) = pricing_fields(snapshots.get(&(provider_id, backend_model.clone())));
                     Ok(ModelUsageBreakdown {
                         provider_id,
                         backend_model,
@@ -73,11 +143,11 @@ impl MainStore {
                         audio_input_tokens,
                         audio_output_tokens,
                         pricing_status,
-                        input_per_million: None,
-                        output_per_million: None,
-                        cache_per_million: None,
-                        reasoning_per_million: None,
-                        multiplier: None,
+                        input_per_million,
+                        output_per_million,
+                        cache_per_million,
+                        reasoning_per_million,
+                        multiplier,
                         estimated_cost: persisted_cost,
                     })
                 }).collect::<Result<Vec<_>, rusqlite::Error>>().map_err(StoreError::from)
@@ -94,6 +164,9 @@ impl MainStore {
             )?;
             let is_root_task = session_id == root_session_id;
             let combined_breakdowns = if is_root_task {
+                // Root scope covers the root task's own rows plus every child's,
+                // so the combined breakdowns can reuse the same lookup name.
+                let snapshots = load_pricing_snapshots(conn, &root_session_id, &root_task_run_id)?;
                 let mut combined_statement = conn.prepare(
                     "SELECT provider_id, backend_model, SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens), SUM(cache_write_tokens), SUM(reasoning_tokens), SUM(audio_input_tokens), SUM(audio_output_tokens), SUM(estimated_cost), CASE WHEN SUM(CASE WHEN pricing_status IS NULL OR pricing_status != 'priced' THEN 1 ELSE 0 END) > 0
                           THEN 'legacy' ELSE 'priced' END
@@ -135,6 +208,13 @@ impl MainStore {
                     } else {
                         persisted_status.unwrap_or_else(|| "legacy".to_string())
                     };
+                    let (
+                        input_per_million,
+                        output_per_million,
+                        cache_per_million,
+                        reasoning_per_million,
+                        multiplier,
+                    ) = pricing_fields(snapshots.get(&(provider_id, backend_model.clone())));
                     Ok(ModelUsageBreakdown {
                         provider_id,
                         backend_model,
@@ -146,11 +226,11 @@ impl MainStore {
                         audio_input_tokens,
                         audio_output_tokens,
                         pricing_status,
-                        input_per_million: None,
-                        output_per_million: None,
-                        cache_per_million: None,
-                        reasoning_per_million: None,
-                        multiplier: None,
+                        input_per_million,
+                        output_per_million,
+                        cache_per_million,
+                        reasoning_per_million,
+                        multiplier,
                         estimated_cost: persisted_cost,
                     })
                 }).collect::<Result<Vec<_>, rusqlite::Error>>().map_err(StoreError::from)?
@@ -596,5 +676,50 @@ mod tests {
             !current.is_partial,
             "explicitly attributed zero-token children keep the combined summary complete"
         );
+    }
+
+    #[test]
+    fn summary_reports_pricing_rates_from_the_latest_snapshot() {
+        let directory = tempdir().expect("failed to create temp dir");
+        let store =
+            MainStore::new(directory.path().join("pricing.db")).expect("failed to create store");
+        let runtime = store.db_runtime().expect("test runtime should exist");
+        runtime
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO ccproxy_stats (
+                        workflow_session_id, workflow_task_run_id, workflow_segment_id,
+                        root_session_id, root_task_run_id, request_kind,
+                        client_model, backend_model, provider_id, provider, protocol,
+                        tool_compat_mode, status_code, input_tokens, output_tokens, cache_tokens,
+                        estimated_cost, pricing_status, pricing_snapshot
+                     ) VALUES (?1, ?2, 1, ?1, ?2, 'react', 'alias', 'priced-model', 3, 'provider',
+                               'openai', 0, 200, 100, 50, 20, 0.001, 'priced', ?3)",
+                    params![
+                        "pricing-session",
+                        "pricing-session:task:1",
+                        r#"{"inputPerMillion":2.0,"outputPerMillion":8.0,"cachePerMillion":0.2,"multiplier":1.5}"#
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to insert priced stat");
+
+        let usage = store
+            .summarize_workflow_task_usage(
+                "pricing-session",
+                "pricing-session:task:1",
+                "pricing-session",
+                "pricing-session:task:1",
+                "completed",
+                Some(0),
+            )
+            .expect("failed to summarize priced task");
+        assert_eq!(usage.model_breakdowns.len(), 1);
+        let breakdown = &usage.model_breakdowns[0];
+        assert_eq!(breakdown.multiplier, Some(1.5));
+        assert_eq!(breakdown.input_per_million, Some(2.0));
+        assert_eq!(breakdown.output_per_million, Some(8.0));
+        assert_eq!(breakdown.cache_per_million, Some(0.2));
     }
 }
