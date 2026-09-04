@@ -776,8 +776,12 @@ test('tool duration badges use structured backend metadata and preserve the requ
   assert.match(messageList, /\['ask_user', 'submit_plan', 'submit_result', 'skill'\]/)
   assert.match(messageList, /durationMs <= 60_000/)
   assert.match(messageList, /\$\{minutes\}m\$\{seconds\}s/)
-  assert.match(messageList, /getToolExecutionDurationLabel\(message\)[\s\S]*?class="shell-execution-route-badge"[\s\S]*?<cs v-if="message\.isApproved"/)
-  assert.match(workflowEngine, /metadata\["duration_ms"\] = serde_json::json!\(duration_ms\)/)
+  assert.match(messageList, /const approvalStatus = String\(message\?\.metadata\?\.approval_status \|\| ''\)\.toLowerCase\(\)/)
+  assert.match(
+    messageList,
+    /message\.isApproved && !\['ask_user', 'submit_plan'\]\.includes\(getMessageToolName\(message\)\)[\s\S]*?name="check"/
+  )
+  assert.match(workflowEngine, /metadata\["duration_ms"\]\s*=\s*serde_json::json!\(duration_ms\)/)
   assert.match(workflowEngine, /fn should_expose_tool_duration\(tool_name: &str\)/)
 })
 

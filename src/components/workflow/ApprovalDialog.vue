@@ -44,6 +44,7 @@
             :aria-label="$t('common.copy')"
             @click="copyPlanMarkdown">
             <cs name="copy" />
+            <span>{{ $t('common.copy') }}</span>
           </button>
         </div>
         <div v-if="isEditAction" class="diff-view">
@@ -486,6 +487,7 @@ const onReject = () => {
       .plan-details-actions {
         display: flex;
         justify-content: flex-end;
+        gap: var(--cs-space-xs);
         margin-bottom: var(--cs-space-xs);
       }
 
@@ -493,9 +495,11 @@ const onReject = () => {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 26px;
+        gap: var(--cs-space-2xs);
+        width: auto;
+        min-width: 26px;
         height: 26px;
-        padding: 0;
+        padding: 0 var(--cs-space-xs);
         border: 0;
         border-radius: var(--cs-border-radius-sm);
         color: var(--cs-text-color-secondary);

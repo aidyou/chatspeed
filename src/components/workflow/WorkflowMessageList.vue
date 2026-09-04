@@ -248,7 +248,16 @@
                       class="shell-execution-route-badge">
                       {{ getToolExecutionDurationLabel(tool) }}
                     </span>
-                    <cs v-if="tool.isApproved" name="check" size="14px" class="approved-icon" />
+                    <button
+                      v-if="isApprovedSubmitPlan(tool)"
+                      type="button"
+                      class="tool-copy-button"
+                      :title="$t('common.copyRawPlan')"
+                      :aria-label="$t('common.copyRawPlan')"
+                      @click.stop="copyRawPlan(tool)">
+                      <cs name="copy" size="14px" />
+                      <span>{{ $t('common.copy') }}</span>
+                    </button>
                   </div>
                   <div
                     v-if="!isToolMessageExpanded(tool)"
@@ -722,7 +731,21 @@
                     class="shell-execution-route-badge">
                     {{ getToolExecutionDurationLabel(message) }}
                   </span>
-                  <cs v-if="message.isApproved" name="check" size="14px" class="approved-icon" />
+                  <button
+                    v-if="isApprovedSubmitPlan(message)"
+                    type="button"
+                    class="tool-copy-button"
+                    :title="$t('common.copyRawPlan')"
+                    :aria-label="$t('common.copyRawPlan')"
+                    @click.stop="copyRawPlan(message)">
+                    <cs name="copy" size="14px" />
+                    <span>{{ $t('common.copy') }}</span>
+                  </button>
+                  <cs
+                    v-else-if="message.isApproved && !['ask_user', 'submit_plan'].includes(getMessageToolName(message))"
+                    name="check"
+                    size="14px"
+                    class="approved-icon" />
                 </div>
                 <!-- Hide summary when expanded -->
                 <div
@@ -1045,9 +1068,20 @@
                   <MarkdownSimple :content="getErrorAlertContent(message)" />
                 </div>
               </el-alert>
-              <MarkdownSimple
-                v-else-if="!isContextSnapshotMessage(message) && getParsedMessage(message).content"
-                :content="getParsedMessage(message).content" />
+              <div
+                v-else-if="getCopyableAiOutput(message)"
+                class="ai-output-content">
+                <MarkdownSimple :content="getParsedMessage(message).content" />
+                <button
+                  type="button"
+                  class="ai-output-copy-button"
+                  :title="$t('common.copy')"
+                  :aria-label="$t('common.copy')"
+                  @click.stop="copyAiOutput(getCopyableAiOutput(message))">
+                  <cs name="copy" />
+                  <span>{{ $t('common.copy') }}</span>
+                </button>
+              </div>
 
               <!-- Tool Call Indicators SECOND (Only pending ones) -->
               <div v-if="message.pendingToolCalls?.length > 0" class="cli-tool-calls-container">
@@ -1114,9 +1148,22 @@
               </div>
             </div>
             <!-- Streaming Blocks (Optimized rendering) -->
-            <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
-              <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
-              <MarkdownSimple :content="block.content" />
+            <div
+              v-if="hasVisibleWorkflowText(chatState.content)"
+              class="ai-output-content ai-output-content--streaming">
+              <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
+                <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
+                <MarkdownSimple :content="block.content" />
+              </div>
+              <button
+                type="button"
+                class="ai-output-copy-button"
+                :title="$t('common.copy')"
+                :aria-label="$t('common.copy')"
+                @click.stop="copyAiOutput(chatState.content)">
+                <cs name="copy" />
+                <span>{{ $t('common.copy') }}</span>
+              </button>
             </div>
 
             <!-- Retry Countdown... -->
@@ -2405,6 +2452,31 @@ const getFinishTaskLabel = message => {
   return t('workflow.finishTask')
 }
 
+// Copy source mirrors the expanded submit_plan render:
+// <MarkdownSimple :content="removeSystemReminder(message.message)" />
+const getSubmitPlanCopyContent = message =>
+  String(props.removeSystemReminder(message?.message) || '').trim()
+
+const isApprovedSubmitPlan = message => {
+  const approvalStatus = String(message?.metadata?.approval_status || '').toLowerCase()
+  const isApproved = message?.isApproved || approvalStatus === 'approved'
+  return (
+    isApproved &&
+    getMessageToolName(message) === 'submit_plan' &&
+    !!getSubmitPlanCopyContent(message)
+  )
+}
+
+const copyRawPlan = async message => {
+  try {
+    await writeClipboard(getSubmitPlanCopyContent(message))
+    showMessage(t('common.copied'), 'success')
+  } catch (error) {
+    console.error('Failed to copy raw plan:', error)
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+  }
+}
+
 const getFinishTaskUsageSummary = message => {
   if (!message?.isApproved || message?.toolDisplay?.isError) return null
   return normalizeUsageSummary(message?.metadata?.usage_summary)
@@ -2690,6 +2762,21 @@ const getSubAgentResultPreview = message => {
     .replace(/\s+/g, ' ')
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
+}
+
+const getCopyableAiOutput = message => {
+  if (isContextSnapshotMessage(message) || message?.stepType === 'Think') return ''
+  return props.getParsedMessage(message).content
+}
+
+const copyAiOutput = async content => {
+  try {
+    await writeClipboard(String(content ?? ''))
+    showMessage(t('common.copied'), 'success')
+  } catch (error) {
+    console.error('Failed to copy AI output:', error)
+    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+  }
 }
 
 const copySubAgentContent = async content => {
@@ -3089,6 +3176,83 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.ai-output-content {
+  position: relative;
+  padding-bottom: calc(var(--cs-size-xl) + var(--cs-space-xs));
+}
+
+.ai-output-copy-button {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-2xs);
+  width: auto;
+  min-width: var(--cs-size-xl);
+  height: var(--cs-size-xl);
+  padding: 0 var(--cs-space-xs);
+  border: 0;
+  border-radius: var(--cs-border-radius);
+  background: transparent;
+  color: var(--cs-text-color-secondary);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.ai-output-content:hover .ai-output-copy-button,
+.ai-output-content:focus-within .ai-output-copy-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.ai-output-copy-button:hover,
+.ai-output-copy-button:focus-visible {
+  color: var(--cs-text-color-primary);
+  background: var(--cs-hover-bg-color);
+}
+
+.tool-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-2xs);
+  width: auto;
+  min-width: var(--cs-size-lg);
+  height: var(--cs-size-lg);
+  margin-left: var(--cs-space-2xs);
+  padding: 0 var(--cs-space-xs);
+  border: 0;
+  border-radius: var(--cs-border-radius-sm);
+  color: var(--cs-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.title-wrap:hover .tool-copy-button,
+.title-wrap:focus-within .tool-copy-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tool-copy-button:hover,
+.tool-copy-button:focus-visible {
+  color: var(--cs-text-color-primary);
+  background: var(--cs-hover-bg-color);
+}
+
 .context-snapshot-card {
   margin-bottom: 12px;
   border: 1px solid var(--cs-border-color);
