@@ -1,3 +1,4 @@
+mod amd;
 mod claude;
 mod common;
 mod deepseek;
@@ -40,6 +41,7 @@ pub fn normalize_request_with_adapter(
         ThinkingAdapter::Gemini => gemini::normalize_request(body, model, base_url),
         ThinkingAdapter::OpenAi => openai::normalize_request(body, model, base_url),
         ThinkingAdapter::SenseNova => sensenova::normalize_request(body, model, base_url),
+        ThinkingAdapter::Amd => amd::normalize_request(body, model, base_url),
         ThinkingAdapter::Minimax | ThinkingAdapter::NvidiaNim => {
             common::normalize_request(body, model, base_url)
         }
@@ -76,6 +78,8 @@ pub fn normalize_request(body: &mut Value, model: &str, base_url: &str) {
         openai::normalize_request(body, model, base_url);
     } else if sensenova::applies_to(model) {
         sensenova::normalize_request(body, model, base_url);
+    } else if amd::applies_to(base_url) {
+        amd::normalize_request(body, model, base_url);
     } else {
         common::normalize_request(body, model, base_url);
     }
@@ -305,6 +309,118 @@ mod tests {
         );
 
         assert_eq!(body["thinking"]["type"], "adaptive");
+    }
+
+    #[test]
+    fn amd_deepseek_v4_maps_effort_to_two_tiers() {
+        let mut body = json!({
+            "thinking": { "type": "enabled" },
+            "reasoning_effort": "xhigh",
+            "thinking_budget": 2048,
+        });
+
+        normalize_request(
+            &mut body,
+            "DeepSeek-V4-Flash",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("thinking_budget").is_none());
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn amd_deepseek_v4_disables_thinking_by_omitting_effort() {
+        let mut body = json!({
+            "thinking": { "type": "disabled" },
+            "reasoning_effort": "high",
+        });
+
+        normalize_request(
+            &mut body,
+            "DeepSeek-V4-Flash",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn amd_deepseek_v4_enabled_without_effort_defaults_to_high() {
+        let mut body = json!({ "thinking": { "type": "enabled" } });
+
+        normalize_request(
+            &mut body,
+            "DeepSeek-V4-Flash",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn amd_qwen38_maps_high_to_medium() {
+        let mut body = json!({
+            "thinking": { "type": "enabled" },
+            "reasoning_effort": "high",
+        });
+
+        normalize_request(
+            &mut body,
+            "Qwen3.8-Flash-Next",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn amd_qwen38_cannot_disable_thinking_and_falls_back_to_low() {
+        let mut body = json!({ "thinking": { "type": "disabled" } });
+
+        normalize_request(
+            &mut body,
+            "Qwen3.8-Flash-Next",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn amd_qwen38_enabled_without_effort_keeps_provider_default() {
+        let mut body = json!({ "thinking": { "type": "enabled" } });
+
+        normalize_request(
+            &mut body,
+            "Qwen3.8-Flash-Next",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn amd_leaves_request_without_thinking_signal_untouched() {
+        let mut body = json!({
+            "model": "DeepSeek-V4-Flash",
+            "messages": [{ "role": "user", "content": "hi" }],
+        });
+        let original = body.clone();
+
+        normalize_request(
+            &mut body,
+            "DeepSeek-V4-Flash",
+            "https://developer.amd.com.cn/radeon/api/v1/chat/completions",
+        );
+
+        assert_eq!(body, original);
     }
 
     #[test]

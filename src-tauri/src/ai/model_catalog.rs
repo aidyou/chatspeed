@@ -265,6 +265,7 @@ pub enum ThinkingAdapter {
     Mimo,
     Minimax,
     NvidiaNim,
+    Amd,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1095,6 +1096,16 @@ mod tests {
                 "o3-mini",
                 "https://api.openai.com/v1",
                 ThinkingAdapter::OpenAi,
+            ),
+            (
+                "Qwen3.8-Flash-Next",
+                "https://developer.amd.com.cn/radeon/api/v1",
+                ThinkingAdapter::Amd,
+            ),
+            (
+                "DeepSeek-V4-Flash",
+                "https://developer.amd.com.cn/radeon/api/v1",
+                ThinkingAdapter::Amd,
             ),
         ];
         for (model, endpoint, adapter) in cases {

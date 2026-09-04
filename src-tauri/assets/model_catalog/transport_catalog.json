@@ -91,6 +91,13 @@
       "priority": 10,
       "match": {"model": ["mimo-v*", "xiaomi/mimo-v*"]},
       "thinkingAdapter": "mimo"
+    },
+    {
+      "id": "amd-radeon",
+      "priority": 100,
+      "match": {"endpointHost": ["developer.amd.com.cn"]},
+      "thinkingAdapter": "amd",
+      "sources": [{"url": "https://developer.amd.com.cn/radeon/", "verifiedAt": "2026-09-04"}]
     }
   ]
 }
