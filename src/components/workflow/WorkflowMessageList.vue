@@ -1424,8 +1424,10 @@ let scrollFrameId = null
 let scrollCorrectionFrameId = null
 let observedMessageListWidth = 0
 let scrollScheduled = false
+let scrollRequestRevision = 0
 let componentUnmounted = false
 let userScrollIntent = false
+let lastObservedScrollTop = 0
 let pendingScrollForce = false
 let pendingScrollFrameBudget = 0
 let userMessageMeasureScheduled = false
@@ -1482,17 +1484,22 @@ const syncReadingScrollAnchor = () => {
   }
 }
 
-const handlePointerDown = event => {
-  if (event.pointerType === 'mouse' && event.button === 0) {
-    userScrollIntent = true
-    shouldAutoScroll.value = false
-  }
-}
-
 const handleWheel = event => {
   if (event.deltaY < 0) {
     userScrollIntent = true
     shouldAutoScroll.value = false
+    scrollRequestRevision += 1
+    if (scrollFrameId !== null) {
+      cancelAnimationFrame(scrollFrameId)
+      scrollFrameId = null
+    }
+    if (scrollCorrectionFrameId !== null) {
+      cancelAnimationFrame(scrollCorrectionFrameId)
+      scrollCorrectionFrameId = null
+    }
+    scrollScheduled = false
+    pendingScrollForce = false
+    pendingScrollFrameBudget = 0
   }
 }
 
@@ -1500,10 +1507,14 @@ const handleScroll = () => {
   const container = messagesRef.value
   if (!container) return
   const nearBottom = isNearBottom(container)
-  if (nearBottom) {
+  const scrollingDown = container.scrollTop > lastObservedScrollTop
+  lastObservedScrollTop = container.scrollTop
+  if (!userScrollIntent) {
+    shouldAutoScroll.value = nearBottom
+  } else if (nearBottom && scrollingDown) {
     userScrollIntent = false
     shouldAutoScroll.value = true
-  } else if (userScrollIntent) {
+  } else {
     shouldAutoScroll.value = false
   }
   syncReadingScrollAnchor()
@@ -1552,6 +1563,7 @@ const restoreReadingScrollAnchor = () => {
   const offsetDelta = currentOffsetTop - anchor.offsetTop
   if (Math.abs(offsetDelta) > 0.5) {
     container.scrollTop += offsetDelta
+    lastObservedScrollTop = container.scrollTop
   }
   return true
 }
@@ -3033,16 +3045,17 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
   pendingScrollFrameBudget = Math.max(pendingScrollFrameBudget, frameBudget)
   if (scrollScheduled) return
   scrollScheduled = true
+  const requestRevision = scrollRequestRevision
 
   nextTick(() => {
-    if (componentUnmounted) {
+    if (componentUnmounted || requestRevision !== scrollRequestRevision) {
       scrollScheduled = false
       return
     }
     scrollFrameId = requestAnimationFrame(() => {
       scrollScheduled = false
       scrollFrameId = null
-      if (componentUnmounted) return
+      if (componentUnmounted || requestRevision !== scrollRequestRevision) return
 
       const currentEl = messagesRef.value
       const currentForce = pendingScrollForce
@@ -3062,7 +3075,7 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 
       scrollCorrectionFrameId = requestAnimationFrame(() => {
         scrollCorrectionFrameId = null
-        if (componentUnmounted) return
+        if (componentUnmounted || requestRevision !== scrollRequestRevision) return
         const remaining = currentEl.scrollHeight - currentEl.scrollTop - currentEl.clientHeight
         if (remaining > 2) {
           performScrollToBottom(true, currentFrameBudget - 1)
@@ -3075,6 +3088,18 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 const scrollToBottom = (force = false) => {
   if (force) {
     userScrollIntent = false
+    scrollRequestRevision += 1
+    if (scrollFrameId !== null) {
+      cancelAnimationFrame(scrollFrameId)
+      scrollFrameId = null
+    }
+    if (scrollCorrectionFrameId !== null) {
+      cancelAnimationFrame(scrollCorrectionFrameId)
+      scrollCorrectionFrameId = null
+    }
+    scrollScheduled = false
+    pendingScrollForce = false
+    pendingScrollFrameBudget = 0
     clearReadingScrollAnchor()
   }
   performScrollToBottom(force)
@@ -3125,6 +3150,8 @@ watch(
   () => {
     readingScrollAnchor.value = null
     shouldAutoScroll.value = true
+    userScrollIntent = false
+    lastObservedScrollTop = 0
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()
