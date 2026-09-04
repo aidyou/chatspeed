@@ -1425,8 +1425,9 @@ let observedMessageListWidth = 0
 let scrollScheduled = false
 let componentUnmounted = false
 let lastObservedScrollTop = 0
-let expectedProgrammaticScrollTop = -1
 let stickToBottomFrameId = null
+let stickToBottomFramesRemaining = 0
+const STICK_TO_BOTTOM_FRAME_LIMIT = 8
 let pendingScrollForce = false
 let pendingScrollFrameBudget = 0
 let userMessageMeasureScheduled = false
@@ -1488,26 +1489,21 @@ const stickToBottomStep = () => {
   if (componentUnmounted || !shouldAutoScroll.value) return
   const el = messagesRef.value
   if (!el) return
-  const target = el.scrollHeight - el.clientHeight
+  const target = Math.max(0, el.scrollHeight - el.clientHeight)
   if (target > el.scrollTop) {
-    expectedProgrammaticScrollTop = target
     el.scrollTop = target
     lastObservedScrollTop = el.scrollTop
   }
-  // Keep pinning every frame while streaming so newly rendered content never
-  // leaves a visible gap at the bottom, even when it grows between triggers.
-  if (props.isChatting) {
+  stickToBottomFramesRemaining -= 1
+  if (stickToBottomFramesRemaining > 0 && props.isChatting) {
     stickToBottomFrameId = requestAnimationFrame(stickToBottomStep)
   }
 }
 
 const startStickToBottomLoop = () => {
-  if (
-    stickToBottomFrameId === null &&
-    !componentUnmounted &&
-    shouldAutoScroll.value &&
-    props.isChatting
-  ) {
+  if (componentUnmounted || !shouldAutoScroll.value || !props.isChatting) return
+  stickToBottomFramesRemaining = STICK_TO_BOTTOM_FRAME_LIMIT
+  if (stickToBottomFrameId === null) {
     stickToBottomFrameId = requestAnimationFrame(stickToBottomStep)
   }
 }
@@ -1516,14 +1512,6 @@ const handleScroll = () => {
   const container = messagesRef.value
   if (!container) return
   const scrollTop = container.scrollTop
-  if (scrollTop === expectedProgrammaticScrollTop) {
-    // Scroll event produced by our own scroll-to-bottom pinning, not by the
-    // user; keep the current auto-scroll decision untouched.
-    lastObservedScrollTop = scrollTop
-    syncReadingScrollAnchor()
-    return
-  }
-  expectedProgrammaticScrollTop = -1
   const scrollingUp = scrollTop < lastObservedScrollTop
   lastObservedScrollTop = scrollTop
   // Any upward user scroll pauses auto-scroll immediately, even within the
@@ -1531,6 +1519,7 @@ const handleScroll = () => {
   // down to the bottom. This prevents the stream from fighting the user.
   if (scrollingUp) {
     shouldAutoScroll.value = false
+    stickToBottomFramesRemaining = 0
   } else {
     shouldAutoScroll.value = isNearBottom(container)
     if (shouldAutoScroll.value) {
@@ -1559,7 +1548,7 @@ const restoreScrollPosition = ({ container, anchor, previousScrollTop, previousS
   }
 
   container.scrollTop = nextScrollTop
-  expectedProgrammaticScrollTop = container.scrollTop
+  lastObservedScrollTop = container.scrollTop
   return {
     mode,
     nextScrollTop: container.scrollTop,
@@ -1584,7 +1573,7 @@ const restoreReadingScrollAnchor = () => {
   const offsetDelta = currentOffsetTop - anchor.offsetTop
   if (Math.abs(offsetDelta) > 0.5) {
     container.scrollTop += offsetDelta
-    expectedProgrammaticScrollTop = container.scrollTop
+    lastObservedScrollTop = container.scrollTop
   }
   return true
 }
@@ -3088,7 +3077,6 @@ const performScrollToBottom = (force = false, frameBudget = 3) => {
 
       const target = currentEl.scrollHeight - currentEl.clientHeight
       currentEl.scrollTop = Math.max(0, target)
-      expectedProgrammaticScrollTop = currentEl.scrollTop
       lastObservedScrollTop = currentEl.scrollTop
       shouldAutoScroll.value = true
       clearReadingScrollAnchor()
@@ -3166,7 +3154,6 @@ watch(
     readingScrollAnchor.value = null
     shouldAutoScroll.value = true
     lastObservedScrollTop = 0
-    expectedProgrammaticScrollTop = -1
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()

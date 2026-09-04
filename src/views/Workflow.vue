@@ -1498,6 +1498,11 @@ inputComposable.onSendMessage.value = async () => {
     return
   }
 
+  // Sending a new message is an explicit navigation boundary: always leave
+  // history-reading mode before the request starts, regardless of the prior
+  // scroll position.
+  scrollMessageListToBottom(true)
+
   inFlightDraftSessionIds.add(messageTarget.sessionId)
   saveCapturedInputDraft(messageTarget.sessionId, backupMessage, backupAttachments)
 
