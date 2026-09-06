@@ -2349,7 +2349,11 @@ mod tests {
         assert!(env_idx < date_idx);
         assert!(system.contains("<SOURCE_PATH>/tmp/global/AGENTS.md</SOURCE_PATH>"));
         assert!(system.contains("<SOURCE_PATH>/tmp/project/AGENTS.md</SOURCE_PATH>"));
-        assert!(!system.contains("PREVIOUS_CONTEXT_SNAPSHOT"));
+        // The core prompt documents the `<PREVIOUS_CONTEXT_SNAPSHOT>` tag, so assert on
+        // payload-only markers that would appear only if real snapshot/todo content were
+        // baked into the system message instead of being replayed as history messages.
+        assert!(!system.contains("<overall_goal>"));
+        assert!(!system.contains("compressed_until_message_id"));
         assert!(!system.contains("CURRENT_TODO_LIST"));
     }
 
@@ -2501,15 +2505,18 @@ mod tests {
             ),
         ]);
 
-        assert_eq!(history.len(), 2);
+        assert_eq!(history.len(), 3);
         assert_eq!(history[0]["role"], "user");
-        assert!(history[0]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Sub-agent interrupted"));
-        assert_eq!(history[1]["role"], "assistant");
+        assert_eq!(history[0]["content"], "Investigate the issue");
+        // Since position preservation was introduced, the handled interruption keeps its
+        // original position instead of being merged into the adjacent user message. The
+        // invariant under test is that it is NOT re-appended after the assistant reply.
+        assert_eq!(history[1]["role"], "user");
+        let interruption = history[1]["content"].as_str().unwrap_or_default();
+        assert!(interruption.contains("Sub-agent interrupted"));
+        assert_eq!(history[2]["role"], "assistant");
         assert_eq!(
-            history[1]["content"].as_str(),
+            history[2]["content"].as_str(),
             Some("The interrupted investigation is no longer needed.")
         );
     }

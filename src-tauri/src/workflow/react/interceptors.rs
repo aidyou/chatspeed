@@ -3387,10 +3387,8 @@ mod tests {
                 "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试已经验证通过，目前没有已知限制。",
                 "已更新 `src/workflow.rs` 的完成处理逻辑。\n相关测试尚未运行，目前没有已知限制。",
             ),
-            (
-                "`src/workflow.rs` を更新しました。\nテストに合格し、既知の制限はありません。",
-                "`src/workflow.rs` を更新しました。\nテストは実行されていません。既知の制限はありません。",
-            ),
+            // Claim phrases are loaded from the supported interface locales only
+            // (en, zh-Hans, zh-Hant); pairs in removed locales cannot conflict.
         ] {
             let pending = vec![report(earlier_report, 47, 3)];
             assert!(
