@@ -284,7 +284,7 @@ tray:
   assistant: Assistant
   chat: Chat
   mcp: MCP
-  model: Model
+  model: AI Provider
   note: Note
   proxy: Proxy
   proxy_switcher: Proxy Switcher
