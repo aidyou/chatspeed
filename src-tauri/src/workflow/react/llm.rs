@@ -10,7 +10,8 @@ use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::runtime_observation::{
-    render_runtime_observation_for_llm, RuntimeObservationPlacement,
+    is_final_review_feedback_message, render_runtime_observation_for_llm,
+    wrap_user_observation_for_llm, RuntimeObservationPlacement,
 };
 use crate::workflow::react::security::PathGuard;
 use crate::workflow::react::signals::{
@@ -851,7 +852,7 @@ impl LlmProcessor {
         if let Some(reminder) = runtime_reminder.filter(|value| !value.trim().is_empty()) {
             history.push(serde_json::json!({
                 "role": "user",
-                "content": reminder,
+                "content": wrap_user_observation_for_llm("runtime_reminder", &reminder),
             }));
         }
     }
@@ -924,13 +925,24 @@ impl LlmProcessor {
                     None,
                     crate::workflow::react::context::ContextManager::is_compression_summary_message(
                         &m,
-                    ),
+                    ) || is_final_review_feedback_message(m.metadata.as_ref()),
                 )
             };
 
             let role = m.role.clone();
             let has_runtime_observation = runtime_observation_content.is_some();
             let mut content = runtime_observation_content.unwrap_or_else(|| m.message.clone());
+            // User-role messages that bypass the typed observation renderer but are
+            // still runtime-generated get the same envelope so the model can tell
+            // them apart from genuine user input. Approved plans are intentionally
+            // left unwrapped: they are directive content with their own tag set.
+            if !has_runtime_observation && role == "user" {
+                if is_final_review_feedback_message(m.metadata.as_ref()) {
+                    content = wrap_user_observation_for_llm("final_review_feedback", &content);
+                } else if ContextManager::is_compression_summary_message(&m) {
+                    content = wrap_user_observation_for_llm("compression_summary", &content);
+                }
+            }
             let mut reasoning_content = if has_runtime_observation {
                 None
             } else {
@@ -2013,7 +2025,12 @@ mod tests {
 
         assert_eq!(history.len(), 2);
         assert_eq!(history[1]["role"], "user");
-        assert_eq!(history[1]["content"], reminder);
+        assert_eq!(
+            history[1]["content"],
+            format!(
+                "<RUNTIME_OBSERVATION type=\"runtime_reminder\">\n{reminder}\n</RUNTIME_OBSERVATION>"
+            )
+        );
     }
 
     #[test]
@@ -2395,6 +2412,70 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("Internal runtime note"));
+    }
+
+    #[test]
+    fn normalize_history_envelopes_final_review_feedback_as_runtime_observation() {
+        let history = LlmProcessor::normalize_history_messages(vec![
+            message("user", "Fix the bug", None, None),
+            message(
+                "user",
+                "Final review rejected the completion.\nSummary: missing tests",
+                Some("observe"),
+                Some(json!({
+                    "message_kind": "final_review_feedback",
+                    "review_display_state": "final_review_rejected"
+                })),
+            ),
+        ]);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["content"], "Fix the bug");
+        let feedback = history[1]["content"].as_str().unwrap_or_default();
+        assert!(feedback.starts_with("<RUNTIME_OBSERVATION type=\"final_review_feedback\">\n"));
+        assert!(feedback.ends_with("\n</RUNTIME_OBSERVATION>"));
+    }
+
+    #[test]
+    fn normalize_history_envelopes_compression_summary_as_runtime_observation() {
+        let summary = WorkflowMessage {
+            message_kind: "summary".to_string(),
+            message_subtype: Some("compression".to_string()),
+            metadata: Some(json!({ "compressed_until_message_id": 40 })),
+            ..message(
+                "user",
+                "<CONTEXT_HANDOFF_PRECEDENCE>checkpoint note</CONTEXT_HANDOFF_PRECEDENCE>\n\n## Previous Context Snapshot\nstate",
+                None,
+                None,
+            )
+        };
+        let history = LlmProcessor::normalize_history_messages(vec![summary]);
+
+        assert_eq!(history.len(), 1);
+        let content = history[0]["content"].as_str().unwrap_or_default();
+        assert!(content.starts_with("<RUNTIME_OBSERVATION type=\"compression_summary\">\n"));
+        assert!(content.contains("## Previous Context Snapshot"));
+        assert!(content.ends_with("\n</RUNTIME_OBSERVATION>"));
+    }
+
+    #[test]
+    fn append_runtime_reminder_envelopes_the_reminder() {
+        let mut history = Vec::new();
+        LlmProcessor::append_runtime_reminder(
+            &mut history,
+            Some("<SYSTEM_REMINDER>Submit the completion report.</SYSTEM_REMINDER>".to_string()),
+        );
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0]["role"], "user");
+        let content = history[0]["content"].as_str().unwrap_or_default();
+        assert!(content.starts_with("<RUNTIME_OBSERVATION type=\"runtime_reminder\">\n"));
+        assert!(content.contains("<SYSTEM_REMINDER>"));
+        assert!(content.ends_with("\n</RUNTIME_OBSERVATION>"));
+
+        let mut empty = Vec::new();
+        LlmProcessor::append_runtime_reminder(&mut empty, None);
+        assert!(empty.is_empty());
     }
 
     #[test]

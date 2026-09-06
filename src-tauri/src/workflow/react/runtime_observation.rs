@@ -6,6 +6,41 @@ use serde_json::{json, Value};
 
 pub const MESSAGE_KIND_RUNTIME_OBSERVATION: &str = "runtime_observation";
 
+/// Envelope tag marking runtime-generated observations in the LLM-visible history.
+/// Uppercase follows the existing convention for runtime-authored semantic blocks
+/// (`<SYSTEM_REMINDER>`, `<CURRENT_TASK_GOAL>`, `<CONTEXT_HANDOFF_PRECEDENCE>`),
+/// while lowercase tags (`<user_query>`, `<tool_result>`) wrap content payloads.
+pub const RUNTIME_OBSERVATION_TAG: &str = "RUNTIME_OBSERVATION";
+
+/// Type attribute for legacy untyped observations (user role + observe step +
+/// `<SYSTEM_REMINDER>` content persisted by older builds).
+pub const LEGACY_OBSERVATION_TYPE: &str = "legacy_reminder";
+
+/// Wraps runtime-generated observation content so the model can distinguish it
+/// from genuine user input in the replayed history. Idempotent: content that is
+/// already enveloped is returned unchanged.
+pub fn wrap_user_observation_for_llm(observation_type: &str, content: &str) -> String {
+    if content
+        .trim_start()
+        .starts_with(&format!("<{RUNTIME_OBSERVATION_TAG}"))
+    {
+        return content.to_string();
+    }
+    format!(
+        "<{RUNTIME_OBSERVATION_TAG} type=\"{observation_type}\">\n{content}\n</{RUNTIME_OBSERVATION_TAG}>"
+    )
+}
+
+/// Returns true when the metadata marks a final-review rejection feedback
+/// message, which is persisted as a user-role observation without typed
+/// runtime-observation metadata.
+pub fn is_final_review_feedback_message(metadata: Option<&Value>) -> bool {
+    metadata
+        .and_then(|meta| meta.get("message_kind"))
+        .and_then(Value::as_str)
+        == Some("final_review_feedback")
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeObservationType {
@@ -122,6 +157,22 @@ pub fn render_runtime_observation_for_llm(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| message.message.clone());
+    // Envelope user-role observations so the model can tell them apart from
+    // genuine user input. Tool-role observations stay unwrapped: they are
+    // already paired with their tool_call_id in the function-calling history.
+    let content = if message.role == "user" {
+        let observation_type_name = if is_typed {
+            metadata
+                .and_then(|meta| meta.get("observation_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("runtime_observation")
+        } else {
+            LEGACY_OBSERVATION_TYPE
+        };
+        wrap_user_observation_for_llm(observation_type_name, &content)
+    } else {
+        content
+    };
 
     let observation_type = runtime_observation_type(metadata);
     // Function-calling history must retain the result paired with every tool call.
@@ -402,5 +453,120 @@ mod tests {
             .expect("loop-detected tool result should render");
         assert_eq!(rendered.placement, RuntimeObservationPlacement::Preserve);
         assert!(rendered.content.contains("non-empty summary"));
+    }
+
+    #[test]
+    fn user_role_typed_observation_is_enveloped_with_type_attribute() {
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<CURRENT_TASK_GOAL>goal</CURRENT_TASK_GOAL>".to_string(),
+            reasoning: None,
+            message_kind: MESSAGE_KIND_RUNTIME_OBSERVATION.to_string(),
+            message_subtype: Some("current_task_goal".to_string()),
+            segment_id: 1,
+            source_event_type: Some("current_task_goal_snapshot".to_string()),
+            metadata: Some(runtime_observation_metadata(
+                RuntimeObservationType::CurrentTaskGoal,
+                json!({}),
+            )),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("typed user observation should render");
+        assert!(rendered
+            .content
+            .starts_with("<RUNTIME_OBSERVATION type=\"current_task_goal\">\n"));
+        assert!(rendered.content.ends_with("\n</RUNTIME_OBSERVATION>"));
+        assert!(rendered.content.contains("<CURRENT_TASK_GOAL>"));
+    }
+
+    #[test]
+    fn user_role_legacy_observation_is_enveloped_as_legacy_reminder() {
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "user".to_string(),
+            message: "<SYSTEM_REMINDER>Sub-agent interrupted.</SYSTEM_REMINDER>".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: None,
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        };
+
+        let rendered =
+            render_runtime_observation_for_llm(&message).expect("legacy observation should render");
+        assert!(rendered
+            .content
+            .starts_with("<RUNTIME_OBSERVATION type=\"legacy_reminder\">\n"));
+        assert!(rendered.content.contains("<SYSTEM_REMINDER>"));
+    }
+
+    #[test]
+    fn tool_role_observation_is_not_enveloped() {
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::LoopDetected,
+            json!({
+                "tool_call_id": "fc_1",
+                "llm_content": "<SYSTEM_REMINDER>Loop detected.</SYSTEM_REMINDER>"
+            }),
+        );
+        metadata["tool_call_id"] = json!("fc_1");
+        let message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "tool".to_string(),
+            message: "Loop detected".to_string(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(metadata),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 2,
+            is_error: true,
+            error_type: Some("LoopDetected".to_string()),
+            created_at: None,
+        };
+
+        let rendered =
+            render_runtime_observation_for_llm(&message).expect("tool observation should render");
+        assert!(!rendered.content.contains("RUNTIME_OBSERVATION"));
+    }
+
+    #[test]
+    fn wrap_user_observation_for_llm_is_idempotent() {
+        let wrapped = wrap_user_observation_for_llm("runtime_reminder", "note");
+        assert!(wrapped.starts_with("<RUNTIME_OBSERVATION type=\"runtime_reminder\">"));
+        let again = wrap_user_observation_for_llm("runtime_reminder", &wrapped);
+        assert_eq!(wrapped, again);
+    }
+
+    #[test]
+    fn final_review_feedback_metadata_is_detected() {
+        assert!(is_final_review_feedback_message(Some(
+            &json!({"message_kind": "final_review_feedback"})
+        )));
+        assert!(!is_final_review_feedback_message(Some(
+            &json!({"message_kind": "message"})
+        )));
+        assert!(!is_final_review_feedback_message(None));
     }
 }
