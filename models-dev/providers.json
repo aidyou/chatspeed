@@ -463,7 +463,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 58,
+      "modelCount": 59,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 248,
+      "modelCount": 250,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -771,7 +771,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 32,
+      "modelCount": 33,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -1235,7 +1235,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 592,
+      "modelCount": 591,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "58a77cfe29b84cc80021ab4f59a0e62987e7e26e70dbe9a47b7daa512d147bba",
-    "generatedAt": "2026-09-05T07:41:33Z",
+    "catalogSha256": "265c8414dd2b7398f7b9bf4885674cf5579c353df1c040b4cbcf85af6af7ec68",
+    "generatedAt": "2026-09-06T07:55:46Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "f6baae501fb7e6e1715046160b170930fa7c3f0b"
+    "revision": "a37a81c82477fa02c8bcedff27aa76ec640cd508"
   }
 }
