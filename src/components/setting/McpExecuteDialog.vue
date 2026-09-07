@@ -222,7 +222,13 @@ const paramDefs = computed(() => {
   if (!schema || typeof schema !== 'object') return []
   const properties = schema.properties || {}
   const required = Array.isArray(schema.required) ? schema.required : []
-  return Object.entries(properties).map(([key, spec]) => ({
+  return Object.entries(properties)
+    .sort(([aKey], [bKey]) => {
+      const aReq = required.includes(aKey) ? 0 : 1
+      const bReq = required.includes(bKey) ? 0 : 1
+      return aReq - bReq
+    })
+    .map(([key, spec]) => ({
     key,
     type: typeof spec?.type === 'string' ? spec.type : 'string',
     required: required.includes(key),

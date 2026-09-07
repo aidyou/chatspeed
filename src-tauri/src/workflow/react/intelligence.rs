@@ -696,8 +696,19 @@ impl IntelligenceManager {
     }
 
     /// Normalizes a raw language-detection reply into a short language label.
+    /// The chat interface returns a JSON envelope (`{"content": ...,
+    /// "reasoning": ...}`), so the visible reply text must be extracted from
+    /// `content` before label normalization.
     fn sanitize_detected_language(raw: &str) -> String {
-        let first_line = raw
+        let visible = match serde_json::from_str::<serde_json::Value>(raw.trim()) {
+            Ok(value) => value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| raw.to_string()),
+            Err(_) => raw.to_string(),
+        };
+        let first_line = visible
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("");
@@ -749,6 +760,20 @@ mod tests {
         );
         assert_eq!(IntelligenceManager::sanitize_detected_language("  English. "), "English");
         assert_eq!(IntelligenceManager::sanitize_detected_language(""), "");
+    }
+
+    #[test]
+    fn language_sanitizer_parses_chat_json_envelope() {
+        assert_eq!(
+            IntelligenceManager::sanitize_detected_language(r#"{"content":"中文","reasoning":""}"#),
+            "中文"
+        );
+        assert_eq!(
+            IntelligenceManager::sanitize_detected_language(
+                r#"{"reasoning":"thinking","content":" English "}"#
+            ),
+            "English"
+        );
     }
 
     #[test]
