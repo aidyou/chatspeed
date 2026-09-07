@@ -2085,6 +2085,24 @@ watch(
   },
   { immediate: true }
 )
+
+// Ensure contextSize and maxTokens are populated from the selected model
+// whenever a model selection changes (user interaction, init, provider change).
+// Uses a string-based getter to avoid infinite recursion from writing back
+// to the same reactive model object.
+watch(
+  () => allModelRoles.map(role => agentForm.value[role.key + 'Model']?.model).join('\0'),
+  (newVal, oldVal) => {
+    if (newVal === oldVal) return
+    const parts = newVal.split('\0')
+    parts.forEach((modelId, index) => {
+      if (modelId) {
+        applyProviderModelOverrides(allModelRoles[index].key, modelId)
+      }
+    })
+  },
+  { immediate: true }
+)
 </script>
 
 <style lang="scss">
