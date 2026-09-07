@@ -7448,9 +7448,10 @@ impl WorkflowExecutor {
             // new-segment scope note) so detection sees the user's own words.
             let raw_input = ContextManager::strip_system_reminder_blocks(&content);
             let input_budget = self.lite_model_input_token_budget();
+            let segment_id = self.context.current_segment_id;
             match self
                 .intelligence_manager
-                .detect_input_language(&raw_input, input_budget)
+                .detect_input_language(&raw_input, input_budget, segment_id)
                 .await
             {
                 Some(language) => {

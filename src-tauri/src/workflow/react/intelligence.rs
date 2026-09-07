@@ -538,10 +538,12 @@ impl IntelligenceManager {
     /// call. Failed or empty detections are retried with exponential backoff
     /// (3 attempts total); when all attempts fail it returns `None` and the
     /// caller continues without a language directive.
+    /// `segment_id` is the active workflow segment used for usage attribution.
     pub async fn detect_input_language(
         &self,
         user_input: &str,
         max_input_tokens: usize,
+        segment_id: i32,
     ) -> Option<String> {
         const MAX_DETECTION_ATTEMPTS: u32 = 3;
 
@@ -604,7 +606,7 @@ impl IntelligenceManager {
                         workflow_usage_attribution: Some(WorkflowUsageAttribution {
                             workflow_session_id: self.session_id.clone(),
                             workflow_task_run_id: self.workflow_task_run_id.clone(),
-                            workflow_segment_id: 1,
+                            workflow_segment_id: segment_id,
                             root_session_id: self.root_session_id.clone(),
                             root_task_run_id: self.root_task_run_id.clone(),
                             request_kind: "language_detection".to_string(),
