@@ -812,11 +812,18 @@ fn resolve_model_profile_with_catalog(
     _protocol: Option<&str>,
     _metadata: Option<&HashMap<String, String>>,
 ) -> Result<ResolvedModelProfile, CatalogError> {
-    let model = normalize(model_id);
+    // Profile rules describe model-intrinsic capabilities, so vendor-prefixed ids such as
+    // "Qwen/Qwen3.8-Flash-Next" match via their short id; endpoint-specific transport
+    // adaptation stays host-bound and is unaffected by this fallback.
+    let candidates = catalog_model_ids_with_short_id(model_id);
     let mut rules: Vec<&ProfileRule> = catalog
         .profiles
         .iter()
-        .filter(|rule| profile_matches(rule, &model))
+        .filter(|rule| {
+            candidates
+                .iter()
+                .any(|candidate| profile_matches(rule, candidate))
+        })
         .collect();
     rules.sort_by_key(|rule| (rule.priority, &rule.id));
     let mut result = ResolvedModelProfile {
@@ -1062,6 +1069,16 @@ mod tests {
     }
 
     #[test]
+    fn vendor_prefixed_ids_match_profiles_via_short_id() {
+        let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"p","priority":1,"match":{"model":["demo-1"]},"family":"demo"}],"transports":[]}"#;
+        let catalog = parse_catalog(source).expect("catalog");
+        let result = resolve_model_profile_with_catalog(&catalog, "Vendor/Demo-1", None, None, None)
+            .expect("profile");
+        assert_eq!(result.family.as_deref(), Some("demo"));
+        assert_eq!(result.matched_profile_ids, vec!["p".to_string()]);
+    }
+
+    #[test]
     fn same_priority_conflicting_fields_are_rejected() {
         let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"a","priority":1,"match":{"model":["demo"]},"family":"one"},{"id":"b","priority":1,"match":{"model":["demo"]},"family":"two"}],"transports":[]}"#;
         let catalog = parse_catalog(source).expect("catalog");
@@ -1101,6 +1118,11 @@ mod tests {
                 "Qwen3.8-Flash-Next",
                 "https://developer.amd.com.cn/radeon/api/v1",
                 ThinkingAdapter::Amd,
+            ),
+            (
+                "Qwen/Qwen3.8-Flash-Next",
+                "https://api-inference.modelscope.cn/v1",
+                ThinkingAdapter::Qwen,
             ),
             (
                 "DeepSeek-V4-Flash",

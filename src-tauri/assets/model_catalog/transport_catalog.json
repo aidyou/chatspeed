@@ -57,6 +57,12 @@
       "thinkingAdapter": "qwen"
     },
     {
+      "id": "qwen-modelscope",
+      "priority": 100,
+      "match": {"profile": ["qwen-reasoning-family", "qwen-vision-family", "qwen3-thinking-family", "qwen-thinking-default-off-family"], "endpointHost": ["api-inference.modelscope.cn"]},
+      "thinkingAdapter": "qwen"
+    },
+    {
       "id": "hunyuan-official",
       "priority": 100,
       "match": {"profile": ["hunyuan-hy4-preview"], "endpointHost": ["api.hunyuan.cloud.tencent.com", "api.lkeap.cloud.tencent.com", "tokenhub.tencentmaas.com"]},
