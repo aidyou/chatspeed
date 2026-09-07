@@ -1171,6 +1171,7 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
             &mut validated_models.act,
             &mut validated_models.vision,
             &mut validated_models.utility,
+            &mut validated_models.lite,
         ] {
             if let Some(m) = model {
                 if let Some(temp) = m.temperature {
@@ -1592,6 +1593,10 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
             }
             if existing_models.utility.is_none() && default_models.utility.is_some() {
                 existing_models.utility = default_models.utility.clone();
+                models_changed = true;
+            }
+            if existing_models.lite.is_none() && default_models.lite.is_some() {
+                existing_models.lite = default_models.lite.clone();
                 models_changed = true;
             }
             models_changed

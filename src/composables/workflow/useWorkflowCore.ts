@@ -2126,6 +2126,7 @@ export function useWorkflowCore({
                     planModel: configs.plan,
                     actModel: configs.act,
                     utilityModel: configs.utility,
+                    liteModel: configs.lite,
                     visionModel: configs.vision
                 }
 

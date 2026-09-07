@@ -756,7 +756,7 @@ const shouldBackfillSelectedSkills = ref(false)
 const groupedPrimaryAgents = ref([])
 const groupedChildAgents = ref({})
 
-const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }]
+const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }, { key: 'lite' }]
 
 const modelRoles = computed(() => {
   if (agentForm.value.role === AGENT_ROLE.CHILD) {
@@ -840,6 +840,7 @@ const defaultFormData = {
   actModel: defaultAgentModelConfig(),
   visionModel: defaultAgentModelConfig(),
   utilityModel: defaultAgentModelConfig(),
+  liteModel: defaultAgentModelConfig(),
   maxContexts: 128000,
   approvalLevel: 'default'
 }
@@ -879,10 +880,11 @@ const modelModes = reactive({
   plan: 'provider',
   act: 'provider',
   vision: 'provider',
-  utility: 'provider'
+  utility: 'provider',
+  lite: 'provider'
 })
-const proxyGroups = reactive({ plan: '', act: '', vision: '', utility: '' })
-const proxyAliases = reactive({ plan: '', act: '', vision: '', utility: '' })
+const proxyGroups = reactive({ plan: '', act: '', vision: '', utility: '', lite: '' })
+const proxyAliases = reactive({ plan: '', act: '', vision: '', utility: '', lite: '' })
 
 // Computed property: available tools sorted by name, filtered to exclude core management tools
 const sortedAvailableTools = computed(() => {
@@ -1428,6 +1430,7 @@ const normalizeAgentFormForSave = form => {
     normalized.planModel = defaultAgentModelConfig()
     normalized.visionModel = defaultAgentModelConfig()
     normalized.utilityModel = defaultAgentModelConfig()
+    normalized.liteModel = defaultAgentModelConfig()
     normalized.allowedPaths = []
     normalized.shellPolicy = []
     normalized.sandboxExecutionMode = 'host_only'

@@ -706,7 +706,7 @@ fn validate_agent_models(row: &BTreeMap<String, Value>) -> Result<(), StoreError
     let object = value
         .as_object()
         .ok_or_else(|| StoreError::InvalidData("agent models must be an object".into()))?;
-    const ALLOWED: &[&str] = &["plan", "act", "vision", "utility"];
+    const ALLOWED: &[&str] = &["plan", "act", "vision", "utility", "lite"];
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return Err(StoreError::InvalidData(
             "agent models contains an unsupported field".into(),

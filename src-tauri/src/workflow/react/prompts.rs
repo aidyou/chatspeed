@@ -568,6 +568,16 @@ Field rules:
 
 Keep the reason concise and specific. Do not include markdown or extra commentary."#;
 
+/// System prompt for lite-model detection of the user's input language.
+pub const LANGUAGE_DETECTION_SYSTEM_PROMPT: &str = r#"You detect the natural language of a user's message. Reply with ONLY the language's native name, for example: 中文, English, Deutsch, Français, Español, 日本語, 한국어. No explanations, no quotes, no JSON, no punctuation. If the input mixes languages, choose the language of the user's own instructions or question and ignore quoted content, code, file paths, URLs, and identifiers. If the input contains no detectable natural language, reply with English."#;
+
+/// Runtime reminder appended after a segment-opening user input so the agent
+/// replies in the language detected from that input. `{language}` is replaced
+/// with the detected language's native name.
+pub const LANGUAGE_DIRECTIVE_REMINDER_TEMPLATE: &str = r#"<SYSTEM_REMINDER>
+The user's input language was detected as {language}. Communicate with the user in {language} for this conversation segment unless the user explicitly switches to another language in a later message. Keep code, commands, identifiers, file paths, and tool arguments unchanged.
+</SYSTEM_REMINDER>"#;
+
 // =============================================================================
 // PHASE-SPECIFIC PROMPTS
 // =============================================================================

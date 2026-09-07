@@ -124,6 +124,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
         models.plan = None;
         models.vision = None;
         models.utility = None;
+        models.lite = None;
     }
     Ok(())
 }

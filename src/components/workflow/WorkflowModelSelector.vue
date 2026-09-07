@@ -11,6 +11,7 @@
         <el-tab-pane label="PLAN" name="plan"></el-tab-pane>
         <el-tab-pane label="ACT" name="act"></el-tab-pane>
         <el-tab-pane label="UTILITY" name="utility"></el-tab-pane>
+        <el-tab-pane label="LITE" name="lite"></el-tab-pane>
         <el-tab-pane label="VISION" name="vision"></el-tab-pane>
       </el-tabs>
 
@@ -169,12 +170,13 @@ const agentModels = reactive({
   plan: defaultModelConfig(),
   act: defaultModelConfig(),
   utility: defaultModelConfig(),
+  lite: defaultModelConfig(),
   vision: defaultModelConfig()
 })
 
-const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider', vision: 'provider' })
-const proxyGroups = reactive({ plan: '', act: '', utility: '', vision: '' })
-const proxyAliases = reactive({ plan: '', act: '', utility: '', vision: '' })
+const modelModes = reactive({ plan: 'provider', act: 'provider', utility: 'provider', lite: 'provider', vision: 'provider' })
+const proxyGroups = reactive({ plan: '', act: '', utility: '', lite: '', vision: '' })
+const proxyAliases = reactive({ plan: '', act: '', utility: '', lite: '', vision: '' })
 
 const currentModel = computed(() => agentModels[activeTab.value])
 
@@ -327,7 +329,7 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
-  for (const key of ['plan', 'act', 'utility', 'vision']) {
+  for (const key of ['plan', 'act', 'utility', 'lite', 'vision']) {
     result[key].thinking = result[key].thinkingEnabled
       ? {
           type: 'enabled',
@@ -342,8 +344,15 @@ const handleSave = () => {
   if (modelModes.plan === 'proxy') result.plan.id = 0
   if (modelModes.act === 'proxy') result.act.id = 0
   if (modelModes.utility === 'proxy') result.utility.id = 0
+  if (modelModes.lite === 'proxy') result.lite.id = 0
   if (modelModes.vision === 'proxy') result.vision.id = 0
-  
+
+  // Lite stays optional: an unconfigured entry is omitted so the backend can
+  // fall back to the global title model, utility, or the action model.
+  if (!result.lite.id && !result.lite.model) {
+    delete result.lite
+  }
+
   emit('save', result)
   visible.value = false
 }
@@ -353,6 +362,7 @@ const initFromStore = () => {
   agentModels.plan = defaultModelConfig()
   agentModels.act = defaultModelConfig()
   agentModels.utility = defaultModelConfig()
+  agentModels.lite = defaultModelConfig()
   agentModels.vision = defaultModelConfig()
 
   if (props.initialModels) {
@@ -360,6 +370,7 @@ const initFromStore = () => {
     if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
     if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
     if (modelsObj.utility) agentModels.utility = normalizeModelDraft(modelsObj.utility)
+    if (modelsObj.lite) agentModels.lite = normalizeModelDraft(modelsObj.lite)
     if (modelsObj.vision) agentModels.vision = normalizeModelDraft(modelsObj.vision)
   }
 
@@ -376,6 +387,7 @@ const initFromStore = () => {
     if (wfModels.plan) agentModels.plan = normalizeModelDraft(wfModels.plan)
     if (wfModels.act) agentModels.act = normalizeModelDraft(wfModels.act)
     if (wfModels.utility) agentModels.utility = normalizeModelDraft(wfModels.utility)
+    if (wfModels.lite) agentModels.lite = normalizeModelDraft(wfModels.lite)
     if (wfModels.vision) agentModels.vision = normalizeModelDraft(wfModels.vision)
   } else if (!refAgent && workflowStore.workflows.length > 0) {
     // 1b. Fallback to last workflow's agent
@@ -390,6 +402,7 @@ const initFromStore = () => {
       if (modelsObj.plan) agentModels.plan = normalizeModelDraft(modelsObj.plan)
       if (modelsObj.act) agentModels.act = normalizeModelDraft(modelsObj.act)
       if (modelsObj.utility) agentModels.utility = normalizeModelDraft(modelsObj.utility)
+      if (modelsObj.lite) agentModels.lite = normalizeModelDraft(modelsObj.lite)
       if (modelsObj.vision) agentModels.vision = normalizeModelDraft(modelsObj.vision)
     } catch (e) {
       console.error('Failed to parse agent models:', e)
@@ -421,6 +434,7 @@ const initFromStore = () => {
   parseModelField(agentModels.plan, 'plan')
   parseModelField(agentModels.act, 'act')
   parseModelField(agentModels.utility, 'utility')
+  parseModelField(agentModels.lite, 'lite')
   parseModelField(agentModels.vision, 'vision')
 }
 

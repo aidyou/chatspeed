@@ -251,6 +251,7 @@ pub struct AgentModels {
     pub act: Option<ModelConfig>,
     pub vision: Option<ModelConfig>,
     pub utility: Option<ModelConfig>,
+    pub lite: Option<ModelConfig>,
 }
 
 /// Represents an AI agent for ReAct workflows
@@ -401,6 +402,9 @@ impl Agent {
                 }
                 if config_models.utility.is_some() {
                     merged_models.utility = config_models.utility;
+                }
+                if config_models.lite.is_some() {
+                    merged_models.lite = config_models.lite;
                 }
                 self.models = Some(merged_models);
             }

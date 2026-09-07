@@ -20,6 +20,7 @@ import { sendSyncState } from '@/libs/sync';
  * @property {Object} actModel - The model used for acting.
  * @property {Object} visionModel - The model used for image recognition.
  * @property {Object} utilityModel - The model used for workflow utility tasks.
+ * @property {Object} liteModel - The model used for lightweight helper tasks (title generation, language detection).
  * @property {Object} codingModel - The model used for coding tasks.
  * @property {Object} copywritingModel - The model used for writing tasks.
  * @property {Object} browsingModel - The model used for browsing tasks.
@@ -87,7 +88,8 @@ const _transformFromBackend = (backendAgent) => {
     plan: { ...defaultModel },
     act: { ...defaultModel },
     vision: { ...defaultModel },
-    utility: { ...defaultModel }
+    utility: { ...defaultModel },
+    lite: { ...defaultModel }
   };
 
   if (backendAgent.models) {
@@ -103,6 +105,9 @@ const _transformFromBackend = (backendAgent) => {
     }
     if (backendAgent.models.utility) {
       models.utility = { ...defaultModel, ...backendAgent.models.utility };
+    }
+    if (backendAgent.models.lite) {
+      models.lite = { ...defaultModel, ...backendAgent.models.lite };
     }
   }
 
@@ -135,6 +140,7 @@ const _transformFromBackend = (backendAgent) => {
     actModel: models.act,
     visionModel: models.vision,
     utilityModel: models.utility,
+    liteModel: models.lite,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     sandboxExecutionMode: backendAgent.sandbox_execution_mode || 'host_only',
@@ -181,7 +187,8 @@ const _transformToBackend = (frontendAgent) => {
     plan: buildModelConfig(frontendAgent.planModel),
     act: buildModelConfig(frontendAgent.actModel),
     vision: buildModelConfig(frontendAgent.visionModel),
-    utility: buildModelConfig(frontendAgent.utilityModel)
+    utility: buildModelConfig(frontendAgent.utilityModel),
+    lite: buildModelConfig(frontendAgent.liteModel)
   };
 
   const mcpTools = frontendAgent.mcpTools || { available: [], autoApprove: [], autoExpand: [] }

@@ -1,6 +1,7 @@
 use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, MessageType, WorkflowUsageAttribution};
+use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
@@ -9,8 +10,9 @@ use crate::workflow::react::error::WorkflowEngineError;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
-/// IntelligenceManager handles high-level AI decision making tasks
-/// like content summarization and quality auditing.
+/// IntelligenceManager handles lightweight AI helper tasks such as workflow
+/// title generation, smart tool-approval review, and user input language
+/// detection.
 pub struct IntelligenceManager {
     pub session_id: String,
     pub chat_state: Arc<ChatState>,
@@ -18,8 +20,8 @@ pub struct IntelligenceManager {
     pub active_model_name: String,
     pub utility_provider_id: i64,
     pub utility_model_name: String,
-    pub audit_provider_id: i64,
-    pub audit_model_name: String,
+    pub lite_provider_id: i64,
+    pub lite_model_name: String,
     pub approval_provider_id: i64,
     pub approval_model_name: String,
     pub workflow_task_run_id: String,
@@ -227,8 +229,8 @@ impl IntelligenceManager {
         chat_state: Arc<ChatState>,
         active_provider_id: i64,
         active_model_name: String,
-        audit_provider_id: i64,
-        audit_model_name: String,
+        lite_provider_id: i64,
+        lite_model_name: String,
         workflow_task_run_id: String,
         root_session_id: String,
         root_task_run_id: String,
@@ -240,13 +242,26 @@ impl IntelligenceManager {
             active_model_name: active_model_name.clone(),
             utility_provider_id: active_provider_id,
             utility_model_name: active_model_name.clone(),
-            audit_provider_id,
-            audit_model_name,
+            lite_provider_id,
+            lite_model_name,
             approval_provider_id: active_provider_id,
             approval_model_name: active_model_name,
             workflow_task_run_id,
             root_session_id,
             root_task_run_id,
+        }
+    }
+
+    /// Resolves the helper model for lightweight tasks (title generation,
+    /// language detection): dedicated lite model first, then the utility
+    /// model, then the active model.
+    fn lite_model_selection(&self) -> (i64, String) {
+        if !self.lite_model_name.trim().is_empty() {
+            (self.lite_provider_id, self.lite_model_name.clone())
+        } else if !self.utility_model_name.trim().is_empty() {
+            (self.utility_provider_id, self.utility_model_name.clone())
+        } else {
+            (self.active_provider_id, self.active_model_name.clone())
         }
     }
 
@@ -386,28 +401,31 @@ impl IntelligenceManager {
             let gen_model_config: serde_json::Value =
                 store.get_config("conversation_title_gen_model", serde_json::json!({}));
 
-            if gen_model_config.is_object() {
-                let p_id = gen_model_config["id"].as_i64();
-                let m_name = gen_model_config["model"].as_str();
-                if let (Some(provider_id), Some(model_name)) = (p_id, m_name) {
-                    if provider_id > 0 && !model_name.trim().is_empty() {
-                        (provider_id, model_name.to_string())
-                    } else if !self.utility_model_name.trim().is_empty() {
-                        (self.utility_provider_id, self.utility_model_name.clone())
-                    } else {
-                        (self.active_provider_id, self.active_model_name.clone())
+            let global_title_model = if gen_model_config.is_object() {
+                match (
+                    gen_model_config["id"].as_i64(),
+                    gen_model_config["model"].as_str(),
+                ) {
+                    (Some(provider_id), Some(model_name))
+                        if provider_id > 0 && !model_name.trim().is_empty() =>
+                    {
+                        Some((provider_id, model_name.to_string()))
                     }
-                } else if !self.utility_model_name.trim().is_empty() {
-                    (self.utility_provider_id, self.utility_model_name.clone())
-                } else {
-                    (self.active_provider_id, self.active_model_name.clone())
+                    _ => None,
                 }
             } else {
-                if !self.utility_model_name.trim().is_empty() {
-                    (self.utility_provider_id, self.utility_model_name.clone())
-                } else {
-                    (self.active_provider_id, self.active_model_name.clone())
-                }
+                None
+            };
+
+            // Priority: dedicated lite model > global title model > utility >
+            // active. The lite fields are only populated when explicitly
+            // configured, so an empty name means "not configured".
+            if !self.lite_model_name.trim().is_empty() {
+                (self.lite_provider_id, self.lite_model_name.clone())
+            } else if let Some(global) = global_title_model {
+                global
+            } else {
+                self.lite_model_selection()
             }
         };
 
@@ -514,11 +532,222 @@ impl IntelligenceManager {
 
         Ok(final_title)
     }
+
+    /// Detects the natural language of the user's raw input with the lite
+    /// model. This is a one-shot prerequisite step, never repeated per LLM
+    /// call. Failed or empty detections are retried with exponential backoff
+    /// (3 attempts total); when all attempts fail it returns `None` and the
+    /// caller continues without a language directive.
+    pub async fn detect_input_language(
+        &self,
+        user_input: &str,
+        max_input_tokens: usize,
+    ) -> Option<String> {
+        const MAX_DETECTION_ATTEMPTS: u32 = 3;
+
+        let trimmed = user_input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let (provider_id, model_name) = self.lite_model_selection();
+        if model_name.trim().is_empty() {
+            return None;
+        }
+        let bounded_input = Self::truncate_to_token_budget(trimmed, max_input_tokens);
+
+        let messages = vec![
+            serde_json::json!({
+                "role": "system",
+                "content": crate::workflow::react::prompts::LANGUAGE_DETECTION_SYSTEM_PROMPT
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": bounded_input
+            }),
+        ];
+
+        let chat_interface = {
+            let mut chats_guard = self.chat_state.chats.lock().await;
+            chats_guard
+                .entry(crate::ccproxy::ChatProtocol::OpenAI)
+                .or_default()
+                .entry(self.session_id.clone() + "_language_detect")
+                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
+                .clone()
+        };
+
+        let mut last_error: Option<String> = None;
+        for attempt in 1..=MAX_DETECTION_ATTEMPTS {
+            if attempt > 1 {
+                let wait_secs = 2u64.pow(attempt - 1);
+                log::info!(
+                    "[Workflow][session={}][language] Retrying language detection in {}s (attempt {}/{})",
+                    self.session_id,
+                    wait_secs,
+                    attempt,
+                    MAX_DETECTION_ATTEMPTS
+                );
+                sleep(Duration::from_secs(wait_secs)).await;
+            }
+
+            let session_id_detect = format!("{}_language_detect_{}", self.session_id, attempt);
+            match chat_interface
+                .chat(
+                    provider_id,
+                    &model_name,
+                    session_id_detect,
+                    messages.clone(),
+                    None,
+                    Some(ChatMetadata {
+                        stream: Some(false),
+                        workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                            workflow_session_id: self.session_id.clone(),
+                            workflow_task_run_id: self.workflow_task_run_id.clone(),
+                            workflow_segment_id: 1,
+                            root_session_id: self.root_session_id.clone(),
+                            root_task_run_id: self.root_task_run_id.clone(),
+                            request_kind: "language_detection".to_string(),
+                        }),
+                        ..Default::default()
+                    }),
+                    |_| {},
+                )
+                .await
+            {
+                Ok(language) => {
+                    let language = Self::sanitize_detected_language(&language);
+                    if language.is_empty() {
+                        log::warn!(
+                            "[Workflow][session={}][language] Empty language detection result on attempt {}/{}",
+                            self.session_id,
+                            attempt,
+                            MAX_DETECTION_ATTEMPTS
+                        );
+                        continue;
+                    }
+                    return Some(language);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[Workflow][session={}][language] Language detection failed on attempt {}/{}: {}",
+                        self.session_id,
+                        attempt,
+                        MAX_DETECTION_ATTEMPTS,
+                        error
+                    );
+                    last_error = Some(error.to_string());
+                }
+            }
+        }
+
+        log::warn!(
+            "[Workflow][session={}][language] Language detection failed after {} attempts; continuing without a language directive{}",
+            self.session_id,
+            MAX_DETECTION_ATTEMPTS,
+            last_error
+                .map(|error| format!(": {}", error))
+                .unwrap_or_default()
+        );
+        None
+    }
+
+    /// Truncates text to a rough token budget using the shared estimator.
+    /// Keeps the head (2/3) and tail (1/3) of the input so language cues at
+    /// either end survive, and always cuts on char boundaries (CJK-safe).
+    fn truncate_to_token_budget(text: &str, max_tokens: usize) -> String {
+        if max_tokens == 0 || estimate_tokens(text) <= max_tokens as f64 {
+            return text.to_string();
+        }
+
+        let chars: Vec<char> = text.chars().collect();
+        let head_budget = ((max_tokens as f64) * 2.0 / 3.0).max(2.0);
+        let tail_budget = (max_tokens as f64) / 3.0;
+
+        let mut head_end = 0usize;
+        let mut head_tokens = 0.0;
+        for (index, character) in chars.iter().enumerate() {
+            let weight = estimate_tokens(&character.to_string());
+            if head_tokens + weight > head_budget {
+                break;
+            }
+            head_tokens += weight;
+            head_end = index + 1;
+        }
+
+        let mut tail_start = chars.len();
+        let mut tail_tokens = 0.0;
+        for index in (head_end..chars.len()).rev() {
+            let weight = estimate_tokens(&chars[index].to_string());
+            if tail_tokens + weight > tail_budget {
+                break;
+            }
+            tail_tokens += weight;
+            tail_start = index;
+        }
+
+        format!(
+            "{}\n\n[...]\n\n{}",
+            chars[..head_end].iter().collect::<String>(),
+            chars[tail_start..].iter().collect::<String>()
+        )
+    }
+
+    /// Normalizes a raw language-detection reply into a short language label.
+    fn sanitize_detected_language(raw: &str) -> String {
+        let first_line = raw
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+        let trimmed = first_line
+            .trim()
+            .trim_matches(|character: char| {
+                matches!(character, '"' | '\'' | '`' | '*' | '.' | '。')
+            })
+            .trim();
+        trimmed.chars().take(40).collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::IntelligenceManager;
+    use crate::ccproxy::utils::token_estimator::estimate_tokens;
+
+    #[test]
+    fn language_truncation_respects_budget_and_char_boundaries() {
+        let cjk_input = "这是一段很长的中文输入，用于验证截断逻辑。".repeat(500);
+        let truncated = IntelligenceManager::truncate_to_token_budget(&cjk_input, 100);
+
+        // Head + tail budgets plus the small ASCII marker must stay near the cap.
+        assert!(
+            estimate_tokens(&truncated) < 110.0,
+            "truncated input exceeded the token budget: {}",
+            estimate_tokens(&truncated)
+        );
+        assert!(truncated.starts_with("这是一段"));
+        assert!(truncated.ends_with("验证截断逻辑。"));
+        assert!(truncated.contains("[...]"));
+    }
+
+    #[test]
+    fn language_truncation_keeps_short_input_intact() {
+        let short_input = "帮我修复登录 bug";
+        assert_eq!(
+            IntelligenceManager::truncate_to_token_budget(short_input, 8192),
+            short_input
+        );
+    }
+
+    #[test]
+    fn language_sanitizer_extracts_short_label() {
+        assert_eq!(
+            IntelligenceManager::sanitize_detected_language("\"中文\"\nextra"),
+            "中文"
+        );
+        assert_eq!(IntelligenceManager::sanitize_detected_language("  English. "), "English");
+        assert_eq!(IntelligenceManager::sanitize_detected_language(""), "");
+    }
 
     #[test]
     fn smart_approval_requires_valid_low_risk_json() {

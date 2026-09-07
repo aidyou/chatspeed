@@ -1027,16 +1027,23 @@ const getAgentModelConfigs = () => ({
   plan: props.selectedAgent?.planModel,
   act: props.selectedAgent?.actModel,
   utility: props.selectedAgent?.utilityModel,
+  lite: props.selectedAgent?.liteModel,
   vision: props.selectedAgent?.visionModel
 })
 const sourceModelConfigs = computed(() => {
   const models = props.currentWorkflow?.agentConfig?.models || getAgentModelConfigs()
-  return {
+  const configs = {
     plan: cloneModelConfig(models.plan),
     act: cloneModelConfig(models.act),
     utility: cloneModelConfig(models.utility),
     vision: cloneModelConfig(models.vision)
   }
+  // Lite stays optional: only carry a configured entry so an empty draft is
+  // never persisted as an invalid model config.
+  if (models.lite?.id !== undefined && models.lite.id !== '' && models.lite.model) {
+    configs.lite = cloneModelConfig(models.lite)
+  }
+  return configs
 })
 const effectiveModelConfigs = computed(() => modelConfigDraft.value || sourceModelConfigs.value)
 const modelConfigScope = computed(() =>

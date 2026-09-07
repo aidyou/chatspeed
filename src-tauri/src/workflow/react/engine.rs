@@ -520,15 +520,27 @@ impl WorkflowExecutor {
         }
     }
 
+    /// Helper-role fallback chain: dedicated model > utility model > action
+    /// model (with the plan model as the last-resort identity).
     fn utility_runtime_model<'a>(
         agent_config: &'a Agent,
-        phase: &ExecutionPhase,
     ) -> Option<&'a crate::db::agent::ModelConfig> {
         let models = agent_config.models.as_ref()?;
         models
             .utility
             .as_ref()
-            .or_else(|| Self::phase_runtime_model(agent_config, phase))
+            .or(models.act.as_ref())
+            .or(models.plan.as_ref())
+    }
+
+    /// The dedicated lite model role for lightweight helper tasks (title
+    /// generation, language detection). Only an explicitly configured entry is
+    /// returned; fallback to utility/active happens at the call sites so
+    /// callers can distinguish "configured" from "falling back".
+    fn dedicated_lite_model<'a>(
+        agent_config: &'a Agent,
+    ) -> Option<&'a crate::db::agent::ModelConfig> {
+        agent_config.models.as_ref()?.lite.as_ref()
     }
 
     /// Selects the compression model for the current phase. Prefers the utility
@@ -541,7 +553,7 @@ impl WorkflowExecutor {
         action_model: &str,
     ) -> (i64, String) {
         let phase = &self.policy.phase;
-        let Some(utility) = Self::utility_runtime_model(&self.agent_config, phase) else {
+        let Some(utility) = Self::utility_runtime_model(&self.agent_config) else {
             return (action_provider_id, action_model.to_string());
         };
         let resolved = if utility.context_size.is_some_and(|value| value > 0) {
@@ -873,12 +885,8 @@ impl WorkflowExecutor {
 
     fn sync_runtime_models_from_agent_config(&mut self) {
         let selected_model = Self::phase_runtime_model(&self.agent_config, &self.policy.phase);
-        let utility_model = Self::utility_runtime_model(&self.agent_config, &self.policy.phase);
-        let plan_model = self
-            .agent_config
-            .models
-            .as_ref()
-            .and_then(|models| models.plan.as_ref());
+        let utility_model = Self::utility_runtime_model(&self.agent_config);
+        let lite_model = Self::dedicated_lite_model(&self.agent_config);
 
         let model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
         let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
@@ -905,14 +913,10 @@ impl WorkflowExecutor {
         self.intelligence_manager.approval_model_name =
             self.intelligence_manager.utility_model_name.clone();
 
-        if let Some(audit_model) = plan_model.or(selected_model) {
-            self.intelligence_manager.audit_provider_id = audit_model.id;
-            self.intelligence_manager.audit_model_name = audit_model.model.clone();
-        } else {
-            self.intelligence_manager.audit_provider_id = provider_id;
-            self.intelligence_manager.audit_model_name = model_name.clone();
-        }
-
+        self.intelligence_manager.lite_provider_id = lite_model.map(|model| model.id).unwrap_or(0);
+        self.intelligence_manager.lite_model_name = lite_model
+            .map(|model| model.model.clone())
+            .unwrap_or_default();
         let (compressor_provider_id, compressor_model) =
             self.select_compressor_model(provider_id, &model_name);
         self.compressor.provider_id = compressor_provider_id;
@@ -920,15 +924,15 @@ impl WorkflowExecutor {
         self.sync_runtime_limits();
 
         log::info!(
-            "[Workflow][session={}][phase=model_sync] Runtime models synced: phase={:?}, active_provider_id={}, active_model={}, utility_provider_id={}, utility_model={}, audit_provider_id={}, audit_model={}",
+            "[Workflow][session={}][phase=model_sync] Runtime models synced: phase={:?}, active_provider_id={}, active_model={}, utility_provider_id={}, utility_model={}, lite_provider_id={}, lite_model={}",
             self.session_id,
             self.policy.phase,
             self.llm_processor.active_provider_id,
             self.llm_processor.active_model_name,
             self.compressor.provider_id,
             self.compressor.model,
-            self.intelligence_manager.audit_provider_id,
-            self.intelligence_manager.audit_model_name
+            self.intelligence_manager.lite_provider_id,
+            self.intelligence_manager.lite_model_name
         );
     }
 
@@ -1624,19 +1628,18 @@ impl WorkflowExecutor {
 
         // Extract model configs from AgentModels structure
         let act_model_config = agent_config.models.as_ref().and_then(|m| m.act.as_ref());
-        let plan_model_config = agent_config.models.as_ref().and_then(|m| m.plan.as_ref());
 
         let initial_provider_id = act_model_config.map(|m| m.id).unwrap_or(0);
         let initial_model_name = act_model_config
             .map(|m| m.model.clone())
             .unwrap_or_default();
 
-        // 1. Prioritize 'plan' model for IntelligenceManager (Grader/Audit tasks)
-        let (audit_provider_id, audit_model_name) = if let Some(plan_mc) = plan_model_config {
-            (plan_mc.id, plan_mc.model.clone())
-        } else {
-            (initial_provider_id, initial_model_name.clone())
-        };
+        // Lightweight helper tasks (title generation, language detection) use
+        // the dedicated lite model when configured; IntelligenceManager falls
+        // back to the utility/active model at call time otherwise.
+        let (lite_provider_id, lite_model_name) = Self::dedicated_lite_model(&agent_config)
+            .map(|model| (model.id, model.model.clone()))
+            .unwrap_or((0, String::new()));
 
         let child_agents_for_llm = main_store
             .get_delegatable_child_agents(&agent_config.id)
@@ -1692,8 +1695,8 @@ impl WorkflowExecutor {
                 chat_state_clone3,
                 initial_provider_id,
                 initial_model_name.clone(),
-                audit_provider_id,
-                audit_model_name,
+                lite_provider_id,
+                lite_model_name,
                 workflow_task_run_id,
                 root_session_id,
                 root_task_run_id,
@@ -2266,13 +2269,17 @@ impl WorkflowExecutor {
                     "WorkflowExecutor {}: Spawning background task to generate workflow title",
                     self.session_id
                 );
+                let (lite_provider_id, lite_model_name) =
+                    Self::dedicated_lite_model(&self.agent_config)
+                        .map(|model| (model.id, model.model.clone()))
+                        .unwrap_or((0, String::new()));
                 let im = IntelligenceManager::new(
                     self.session_id.clone(),
                     self.chat_state.clone(),
                     self.llm_processor.active_provider_id,
                     self.llm_processor.active_model_name.clone(),
-                    self.llm_processor.active_provider_id,
-                    self.llm_processor.active_model_name.clone(),
+                    lite_provider_id,
+                    lite_model_name,
                     self.llm_processor.workflow_task_run_id.clone(),
                     self.llm_processor.root_session_id.clone(),
                     self.llm_processor.root_task_run_id.clone(),
@@ -7419,6 +7426,55 @@ impl WorkflowExecutor {
             }
         }
 
+        // Blocking one-shot language detection for a fresh conversation scope
+        // (first input of a new session, or first input after a manual
+        // clear-context boundary). The directive must be part of the message
+        // metadata BEFORE persistence so the AI projection is built once with
+        // it; durable history is never modified after the conversation started.
+        if role == "user"
+            && self.subagent_type.is_none()
+            && Self::incoming_user_message_is_task_directive(
+                &content,
+                attached_context.as_deref(),
+                metadata.as_ref(),
+            )
+            && self.next_user_message_needs_language_detection()
+        {
+            log::info!(
+                "[Workflow][session={}][phase=language] Fresh-conversation user input; running blocking one-shot language detection before ReAct",
+                self.session_id
+            );
+            // Strip embedded SYSTEM_REMINDER blocks (e.g. the English
+            // new-segment scope note) so detection sees the user's own words.
+            let raw_input = ContextManager::strip_system_reminder_blocks(&content);
+            let input_budget = self.lite_model_input_token_budget();
+            match self
+                .intelligence_manager
+                .detect_input_language(&raw_input, input_budget)
+                .await
+            {
+                Some(language) => {
+                    log::info!(
+                        "[Workflow][session={}][phase=language] Detected user input language '{}'; persisting language directive with the message",
+                        self.session_id,
+                        language
+                    );
+                    let mut merged_metadata = metadata.take().unwrap_or_else(|| json!({}));
+                    if !merged_metadata.is_object() {
+                        merged_metadata = json!({});
+                    }
+                    merged_metadata["detected_language"] = json!(language);
+                    metadata = Some(merged_metadata);
+                }
+                None => {
+                    log::info!(
+                        "[Workflow][session={}][phase=language] No language detected after retries; continuing without a language directive",
+                        self.session_id
+                    );
+                }
+            }
+        }
+
         let (msg, needs_compression) = self
             .context
             .add_message(
@@ -7537,6 +7593,81 @@ impl WorkflowExecutor {
         }
 
         Ok(())
+    }
+
+    /// A fresh conversation scope (brand-new session, or no user-authored task
+    /// message after the latest manual clear-context boundary) needs the
+    /// one-shot language detection. Later task segments (e.g. after a completed
+    /// task) keep the session language and never re-detect. Evaluated before
+    /// the incoming message is persisted.
+    fn next_user_message_needs_language_detection(&self) -> bool {
+        let messages = &self.context.messages;
+        let mut scope_start = 0usize;
+        for (index, item) in messages.iter().enumerate() {
+            if ContextManager::is_manual_clear_context_message(item) {
+                scope_start = index + 1;
+            }
+        }
+        !messages[scope_start..]
+            .iter()
+            .any(|item| ContextManager::is_user_authored_task_message(item))
+    }
+
+    /// Pre-persistence equivalent of
+    /// `ContextManager::is_effective_task_objective_directive` for the incoming
+    /// message args: a user-authored task directive rather than an ask_user
+    /// answer, tool echo, or runtime observation payload.
+    fn incoming_user_message_is_task_directive(
+        content: &str,
+        attached_context: Option<&str>,
+        metadata: Option<&serde_json::Value>,
+    ) -> bool {
+        let has_content = !ContextManager::strip_system_reminder_blocks(content)
+            .trim()
+            .is_empty()
+            || attached_context.is_some_and(|attached| !attached.trim().is_empty());
+        if !has_content {
+            return false;
+        }
+        !metadata.is_some_and(|metadata| {
+            metadata
+                .get("ask_user_response")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || metadata
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool_call_id| !tool_call_id.trim().is_empty())
+                || metadata.get("runtime_observation").is_some()
+                || metadata.get("review_display_state").is_some()
+                || metadata.get("review_verdict").is_some()
+        })
+    }
+
+    /// Conservative input-token budget for lite-model helper requests: 90% of
+    /// the resolved helper model's confirmable context size (dedicated lite
+    /// model, then the shared helper fallback chain); a small-model default
+    /// when the capacity cannot be confirmed.
+    fn lite_model_input_token_budget(&self) -> usize {
+        const DEFAULT_HELPER_CONTEXT_TOKENS: usize = 8192;
+        let helper_model = Self::dedicated_lite_model(&self.agent_config)
+            .or_else(|| Self::utility_runtime_model(&self.agent_config))
+            .or_else(|| Self::phase_runtime_model(&self.agent_config, &self.policy.phase));
+        let context_size = helper_model
+            .and_then(|model| {
+                model
+                    .context_size
+                    .filter(|value| *value > 0)
+                    .map(|value| value as usize)
+                    .or_else(|| {
+                        self.resolve_actual_model_config(model.id, &model.model)
+                            .and_then(|config| config.context_size)
+                            .filter(|value| *value > 0)
+                            .map(|value| value as usize)
+                    })
+            })
+            .unwrap_or(DEFAULT_HELPER_CONTEXT_TOKENS);
+        (context_size * 9 / 10).max(1)
     }
 
     fn parse_allowed_paths_from_signal(&self, sig_json: &Value) -> Vec<PathBuf> {

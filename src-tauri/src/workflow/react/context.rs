@@ -233,7 +233,7 @@ impl ContextManager {
         compacted
     }
 
-    fn strip_system_reminder_blocks(content: &str) -> String {
+    pub(crate) fn strip_system_reminder_blocks(content: &str) -> String {
         const START: &str = "<SYSTEM_REMINDER>";
         const END: &str = "</SYSTEM_REMINDER>";
 
@@ -250,6 +250,25 @@ impl ContextManager {
         }
         stripped.push_str(remainder);
         stripped
+    }
+
+    /// Reads the durable detected-language marker stored on a
+    /// fresh-conversation user message by the one-shot lite-model detection.
+    pub(crate) fn detected_language_from_metadata(metadata: Option<&Value>) -> Option<String> {
+        metadata?
+            .get("detected_language")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Builds the static language directive appended after the user input in
+    /// the AI projection. Rendered deterministically from durable metadata;
+    /// never re-generated per LLM call.
+    fn language_directive_reminder(language: &str) -> String {
+        crate::workflow::react::prompts::LANGUAGE_DIRECTIVE_REMINDER_TEMPLATE
+            .replace("{language}", language)
     }
 
     pub(crate) fn is_user_authored_task_message(message: &WorkflowMessage) -> bool {
@@ -1711,7 +1730,7 @@ impl ContextManager {
             }
 
             let merged_content = Self::content_for_context_projection(message);
-            let final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
+            let mut final_content = if message.message_subtype.as_deref() == Some("approved_plan") {
                 Self::approved_plan_context_projection(message)
             } else if Self::is_compression_summary_message(message) {
                 Self::compression_summary_context_projection(&merged_content)
@@ -1725,6 +1744,13 @@ impl ContextManager {
             } else {
                 merged_content
             };
+            // Static language directive from the durable detected-language
+            // metadata of the fresh-conversation user input.
+            if let Some(language) = Self::detected_language_from_metadata(message.metadata.as_ref())
+            {
+                final_content.push('\n');
+                final_content.push_str(&Self::language_directive_reminder(&language));
+            }
 
             projected.push(WorkflowAiContextMessage {
                 id: None,
@@ -7254,6 +7280,44 @@ mod tests {
             context.current_approved_plan_since_last_completion(),
             Some("1. do work\n2. verify work".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn detected_language_metadata_statically_appends_language_directive() {
+        let (_dir, store) = setup_store();
+        let session_id = "session-language-directive-test";
+        insert_workflow(&store, session_id);
+
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store.clone(), 4096, tsid_generator);
+
+        let _ = context
+            .add_message(
+                "user".to_string(),
+                "帮我修复登录问题".to_string(),
+                None,
+                None,
+                None,
+                0,
+                false,
+                None,
+                Some(json!({"detected_language": "中文"})),
+            )
+            .await
+            .expect("failed to add user message");
+
+        let llm_messages = context.get_messages_for_llm();
+        let user_message = llm_messages
+            .iter()
+            .find(|message| message.role == "user")
+            .expect("projected user message");
+        assert!(user_message.message.contains("<user_query>"));
+        assert!(user_message.message.contains("帮我修复登录问题"));
+        assert!(user_message
+            .message
+            .contains("The user's input language was detected as 中文"));
+        assert!(user_message.message.contains("<SYSTEM_REMINDER>"));
     }
 
     #[tokio::test]

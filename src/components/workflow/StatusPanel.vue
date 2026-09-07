@@ -629,6 +629,7 @@ const workflowPhase = computed(() =>
 )
 const planModelConfig = computed(() => workflowModels.value.plan || null)
 const visionModelConfig = computed(() => workflowModels.value.vision || null)
+const liteModelConfig = computed(() => workflowModels.value.lite || null)
 const activeWorkModelConfig = computed(() => {
   const models = workflowModels.value
   return workflowPhase.value === 'planning' ? models.plan || models.act : models.act || models.plan
@@ -653,6 +654,13 @@ const utilityModelStatus = computed(() => {
   return null
 })
 const titleModelStatus = computed(() => {
+  if (liteModelConfig.value?.model) {
+    return {
+      config: liteModelConfig.value,
+      source: translateOrFallback('workflow.statusPanel.direct', 'Direct'),
+      sourceClass: 'direct'
+    }
+  }
   const globalConfig = settingStore.settings.conversationTitleGenModel
   if (globalConfig?.id && globalConfig?.model) {
     return {
@@ -713,6 +721,17 @@ const modelStatusRows = computed(() => {
       shortName: fullName,
       source: utilityModelStatus.value.source,
       sourceClass: utilityModelStatus.value.sourceClass
+    })
+  }
+  if (liteModelConfig.value?.model) {
+    const fullName = getModelDisplayName(liteModelConfig.value)
+    rows.push({
+      key: 'lite',
+      label: translateOrFallback('workflow.statusPanel.liteModel', 'Lite'),
+      fullName,
+      shortName: fullName,
+      source: translateOrFallback('workflow.statusPanel.direct', 'Direct'),
+      sourceClass: 'direct'
     })
   }
   if (visionModelConfig.value?.model) {

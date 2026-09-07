@@ -426,6 +426,7 @@ mod tests {
             act: None,
             vision: None,
             utility: None,
+            lite: None,
         };
         let mut existing = Agent::new(
             builtin_agent_db_id("test-child"),
@@ -588,6 +589,7 @@ mod tests {
                         act: None,
                         vision: None,
                         utility: None,
+                        lite: None,
                     }),
                     ..Default::default()
                 },
