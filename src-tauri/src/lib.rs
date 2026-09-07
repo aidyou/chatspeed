@@ -704,48 +704,57 @@ pub async fn run() -> crate::error::Result<()> {
             // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
 
-            if let Ok(catalog_service) = ModelsDevCatalogService::load(
-                app.path().app_data_dir().unwrap_or_default(),
-            ) {
-                app.manage(catalog_service.clone());
-                let catalog_for_refresh = catalog_service;
+            // Load the Models.dev catalog off the startup critical path: it is only used by
+            // the model settings UI, so parsing the multi-MB snapshot must not block setup.
+            {
+                let app_handle = app.handle().clone();
+                let app_data_dir = app.path().app_data_dir().unwrap_or_default();
                 let store_for_catalog = main_store.clone();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        let proxy_type = match store_for_catalog
-                            .get_config("proxy_type", "none".to_string())
-                            .as_str()
-                        {
-                            "http" => {
-                                let server = store_for_catalog
-                                    .get_config("proxy_server", String::new());
-                                let username = store_for_catalog
-                                    .get_config("proxy_username", String::new());
-                                let password = store_for_catalog
-                                    .get_config("proxy_password", String::new());
-                                crate::ai::network::ProxyType::Http(
-                                    server,
-                                    Some(username),
-                                    Some(password),
-                                )
-                            }
-                            "system" => crate::ai::network::ProxyType::System,
-                            _ => crate::ai::network::ProxyType::None,
-                        };
-                        if let Err(error) = catalog_for_refresh.refresh(proxy_type).await {
-                            log::warn!("Models.dev catalog refresh failed; keeping last known snapshot: {}", error);
+                tauri::async_runtime::spawn_blocking(move || {
+                    let catalog_service = match ModelsDevCatalogService::load(&app_data_dir) {
+                        Ok(service) => service,
+                        Err(error) => {
+                            log::error!("Failed to initialize Models.dev catalog service: {}", error);
+                            return;
                         }
-                        // Refresh failures are retried on a bounded hourly cadence; successful
-                        // refreshes are gated by the service's persisted 24-hour timestamp.
-                        tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
-                    }
+                    };
+                    app_handle.manage(catalog_service.clone());
+                    let catalog_for_refresh = catalog_service;
+                    tauri::async_runtime::spawn(async move {
+                        loop {
+                            let proxy_type = match store_for_catalog
+                                .get_config("proxy_type", "none".to_string())
+                                .as_str()
+                            {
+                                "http" => {
+                                    let server = store_for_catalog
+                                        .get_config("proxy_server", String::new());
+                                    let username = store_for_catalog
+                                        .get_config("proxy_username", String::new());
+                                    let password = store_for_catalog
+                                        .get_config("proxy_password", String::new());
+                                    crate::ai::network::ProxyType::Http(
+                                        server,
+                                        Some(username),
+                                        Some(password),
+                                    )
+                                }
+                                "system" => crate::ai::network::ProxyType::System,
+                                _ => crate::ai::network::ProxyType::None,
+                            };
+                            if let Err(error) = catalog_for_refresh.refresh(proxy_type).await {
+                                log::warn!("Models.dev catalog refresh failed; keeping last known snapshot: {}", error);
+                            }
+                            // Refresh failures are retried on a bounded hourly cadence; successful
+                            // refreshes are gated by the service's persisted 24-hour timestamp.
+                            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+                        }
+                    });
                 });
-            } else {
-                log::error!("Failed to initialize Models.dev catalog service");
             }
 
             if let Err(e) =
-                builtin_agents::sync_builtin_agents_if_needed(&app.handle(), main_store.clone())
+                builtin_agents::sync_builtin_agents_if_needed(main_store.clone())
             {
                 log::error!("Failed to synchronize built-in agents: {}", e);
             }

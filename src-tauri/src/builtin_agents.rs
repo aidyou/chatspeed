@@ -1,15 +1,12 @@
 //! Built-in agent synchronization from bundled assets.
 
-use crate::constants::CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION;
 use crate::db::agent::{AgentModels, ShellPolicyRule};
 use crate::db::{Agent, MainStore};
 use crate::tools::MCP_TOOL_NAME_SPLIT;
 use serde::Deserialize;
-use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::AppHandle;
 
 const BUILTIN_AGENT_ID_PREFIX: &str = "builtin:";
 const BUILTIN_AGENTS_DIR: &str = "agents";
@@ -617,12 +614,7 @@ mod tests {
     }
 }
 
-pub fn sync_builtin_agents_if_needed(
-    app: &AppHandle,
-    main_store: Arc<MainStore>,
-) -> Result<(), String> {
-    let current_app_version = app.package_info().version.to_string();
-
+pub fn sync_builtin_agents_if_needed(main_store: Arc<MainStore>) -> Result<(), String> {
     let builtin_agents_root = match resolve_builtin_agents_root() {
         Some(path) => path,
         None => {
@@ -645,17 +637,10 @@ pub fn sync_builtin_agents_if_needed(
     for definition in &definitions {
         sync_single_builtin_agent(&store, definition, default_shell_policy.as_ref())?;
     }
-    store
-        .set_config(
-            CFG_BUILTIN_AGENTS_LAST_SYNCED_APP_VERSION,
-            &json!(current_app_version),
-        )
-        .map_err(|e| e.to_string())?;
 
     log::info!(
-        "Builtin agents synchronized from {:?} for app version {}",
-        builtin_agents_root,
-        current_app_version
+        "Builtin agents synchronized from {:?}",
+        builtin_agents_root
     );
     Ok(())
 }
