@@ -1503,10 +1503,29 @@ const onModelIdChange = key => {
   agentForm.value[key + 'Model'].model = ''
 }
 
-const applyProviderModelOverrides = (key, modelId) => {
-  if (!modelId || modelModes[key] !== 'provider') return
+// Resolve the first real backend model behind a proxy alias. A proxy alias maps
+// to an ordered list of upstream targets; we use the first one to derive params.
+const getProxyTargetModel = (group, alias) => {
+  if (!group || !alias) return null
+  const target = settingStore.settings.chatCompletionProxy?.[group]?.[alias]?.[0]
+  if (!target?.id || !target?.model) return null
+  return modelStore.getModelProviderById(target.id)?.models?.find(model => model.id === target.model) || null
+}
 
-  const selected = getModelList(key).find(model => model.id === modelId)
+const resolveSelectedModel = (key, modelId) => {
+  if (!modelId) return null
+  if (modelModes[key] === 'provider') {
+    return getModelList(key).find(model => model.id === modelId) || null
+  }
+  if (modelModes[key] === 'proxy') {
+    const [group, ...rest] = modelId.split('@')
+    return getProxyTargetModel(group, rest.join('@'))
+  }
+  return null
+}
+
+const applyProviderModelOverrides = (key, modelId) => {
+  const selected = resolveSelectedModel(key, modelId)
   if (!selected) return
 
   const currentModel = agentForm.value[key + 'Model']
@@ -1529,10 +1548,7 @@ const onProviderModelChange = (key, value) => {
 }
 
 const supportsThinking = key => {
-  if (modelModes[key] !== 'provider') return !!agentForm.value[key + 'Model']?.thinkingEnabled
-  const selected = getModelList(key).find(
-    model => model.id === agentForm.value[key + 'Model']?.model
-  )
+  const selected = resolveSelectedModel(key, agentForm.value[key + 'Model']?.model)
   return !!selected?.reasoning || !!agentForm.value[key + 'Model']?.thinkingEnabled
 }
 
