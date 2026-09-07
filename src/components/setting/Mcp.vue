@@ -55,6 +55,18 @@
               </el-tooltip>
 
               <el-tooltip
+                v-if="server.status === 'running'"
+                :content="$t('settings.mcp.execute')"
+                placement="top"
+                :hide-after="0"
+                :enterable="false"
+                transition="none">
+                <span class="icon" @click="openExecuteDialog(server)">
+                  <cs name="skill-terminal1" size="16px" color="secondary" />
+                </span>
+              </el-tooltip>
+
+              <el-tooltip
                 :content="$t('settings.mcp.restart')"
                 placement="top"
                 :hide-after="0"
@@ -349,6 +361,9 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- MCP tool executor dialog -->
+    <McpExecuteDialog v-model="executeDialogVisible" :server="executeDialogServer" />
   </div>
 </template>
 
@@ -358,11 +373,20 @@ import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
 import { openUrl } from '@/libs/util'
 import { ElMessageBox, ElTooltip } from 'element-plus'
+import McpExecuteDialog from './McpExecuteDialog.vue'
 
 import { showMessage, showMessageBox } from '@/libs/util'
 
 const { t } = useI18n()
 const mcpStore = useMcpStore()
+
+const executeDialogVisible = ref(false)
+const executeDialogServer = ref(null)
+
+const openExecuteDialog = server => {
+  executeDialogServer.value = server
+  executeDialogVisible.value = true
+}
 
 const serverFormRef = ref(null)
 const activeTabName = ref('formEditor') // Changed from activeTab to activeTabName

@@ -586,6 +586,23 @@
       "enableFailed": "Failed to enable MCP server \"{name}\": {error}",
       "enableServer": "Enable MCP Server",
       "enableSuccess": "MCP server \"{name}\" has been enabled.",
+      "execute": "Execute",
+      "executeDialog": {
+        "executeSuccess": "Tool executed successfully",
+        "noParams": "This tool takes no parameters",
+        "noResult": "No result yet. Select a server and a tool, fill in the parameters, then click Run.",
+        "params": "Parameters",
+        "paramsRequired": "Please fill in all required parameters",
+        "result": "Result",
+        "run": "Run",
+        "selectServer": "Select MCP server",
+        "selectServerFirst": "Please select an MCP server first",
+        "selectTool": "Select MCP tool",
+        "selectToolFirst": "Please select a tool first",
+        "server": "MCP Server",
+        "title": "Execute MCP Tool",
+        "tool": "MCP Tool"
+      },
       "fetchToolsFailed": "Failed to fetch tools: {error}",
       "form": {
         "args": "Arguments",

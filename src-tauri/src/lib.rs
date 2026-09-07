@@ -288,6 +288,7 @@ pub async fn run() -> crate::error::Result<()> {
             refresh_mcp_server,
             get_mcp_server_tools,
             update_mcp_tool_status,
+            run_mcp_tool,
             // proxy group
             proxy_group_list,
             proxy_group_add,

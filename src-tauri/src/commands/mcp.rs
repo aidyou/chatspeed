@@ -818,3 +818,75 @@ pub async fn update_mcp_tool_status(
 
     Ok(mcp)
 }
+
+/// Invoke an MCP tool with the given arguments (manual execution / testing).
+///
+/// # Arguments
+/// - `main_store` - The state of the main application store, automatically injected by Tauri.
+/// - `chat_state` - The state of the chat system, automatically injected by Tauri.
+/// - `id` - The ID of the MCP server.
+/// - `tool_name` - The name of the tool to invoke on the MCP server.
+/// - `arguments` - A JSON object of arguments to pass to the tool.
+///
+/// # Returns
+/// * `Result<serde_json::Value, String>` - The raw result returned by the MCP server,
+///   or an error message.
+///
+/// # Example
+///
+/// ```js
+/// // Call from frontend:
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// const result = await invoke('run_mcp_tool', {
+///   id: 1,
+///   toolName: 'read_file',
+///   arguments: { path: '/tmp/test.txt' }
+/// });
+/// console.log('MCP tool result:', result);
+/// ```
+#[tauri::command]
+pub async fn run_mcp_tool(
+    main_store: State<'_, Arc<MainStore>>,
+    chat_state: State<'_, Arc<ChatState>>,
+    id: i64,
+    tool_name: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let mcp_name = {
+        let store_guard = &*main_store;
+        let mcp = store_guard.config.get_mcp_by_id(id)?;
+        mcp.name.clone()
+    };
+
+    let tool_manager = chat_state.tool_manager.clone();
+
+    // The server must be registered (running) to be callable.
+    let client = tool_manager
+        .get_mcp_server(&mcp_name)
+        .await
+        .map_err(|e| AppError::Mcp(McpError::NotFound(e.to_string())))?;
+
+    // Verify the tool exists and is not disabled before invoking it.
+    let tools = tool_manager
+        .get_mcp_server_tools(&mcp_name)
+        .await
+        .map_err(|e| AppError::Mcp(McpError::NotFound(e.to_string())))?;
+    let declaration = tools
+        .iter()
+        .find(|declaration| declaration.name == tool_name)
+        .ok_or_else(|| AppError::Mcp(McpError::ServerToolNotFound(tool_name.to_string())))?;
+    if declaration.disabled {
+        return Err(AppError::Mcp(McpError::General(format!(
+            "MCP tool '{}' on server '{}' is disabled",
+            tool_name, mcp_name
+        ))));
+    }
+
+    let result = client
+        .call(tool_name, arguments)
+        .await
+        .map_err(AppError::Mcp)?;
+
+    Ok(result)
+}

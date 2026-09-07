@@ -38,7 +38,7 @@ import { sendSyncState } from '@/libs/sync.js';
  * @typedef {Object} MCPToolDeclaration
  * @property {string} name - Name of the tool
  * @property {string} description - Description of the tool
- * @property {Object} input_schema - JSON schema for the tool's input
+ * @property {Object} inputSchema - JSON schema for the tool's input (camelCase due to serde rename_all)
  */
 
 const label = getCurrentWebviewWindow().label
@@ -280,6 +280,29 @@ export const useMcpStore = defineStore('mcp', () => {
   };
 
   /**
+   * Invokes an MCP tool on a running server with the given arguments.
+   * @param {number} serverId - The ID of the MCP server.
+   * @param {string} toolName - The name of the tool to invoke.
+   * @param {Object} toolArguments - The JSON arguments object to pass to the tool.
+   * @returns {Promise<Object>} The raw result returned by the MCP server.
+   */
+  const runMcpTool = async (serverId, toolName, toolArguments) => {
+    loading.value = true;
+    error.value = null;
+    try {
+      return await invokeWrapper('run_mcp_tool', {
+        id: serverId,
+        toolName: toolName,
+        arguments: toolArguments
+      });
+    } catch (err) {
+      await _handleError(err);
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  /**
    * Toggles the disabled status of a specific tool for a server by updating the server's configuration.
    * This function modifies the server's `config.disabled_tools` array and calls the backend
    * to persist the change. It does NOT directly modify the `serverTools` cache, which
@@ -498,6 +521,7 @@ export const useMcpStore = defineStore('mcp', () => {
     restartMcpServer,
     refreshMcpTools,
     fetchMcpServerTools,
+    runMcpTool,
     toggleDisableTool,
     handleSyncStateUpdate,
     serverUiStates,

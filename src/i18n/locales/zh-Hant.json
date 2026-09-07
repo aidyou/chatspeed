@@ -586,6 +586,23 @@
       "enableFailed": "啟用 MCP 伺服器「{name}」失敗：{error}",
       "enableServer": "啟用 MCP 伺服器",
       "enableSuccess": "MCP 伺服器「{name}」已啟用。",
+      "execute": "執行",
+      "executeDialog": {
+        "executeSuccess": "工具執行成功",
+        "noParams": "此工具無需參數",
+        "noResult": "暫無結果。請選擇伺服器與工具，填寫參數後點擊執行。",
+        "params": "參數",
+        "paramsRequired": "請填寫所有必填參數",
+        "result": "結果",
+        "run": "執行",
+        "selectServer": "選擇 MCP 伺服器",
+        "selectServerFirst": "請先選擇 MCP 伺服器",
+        "selectTool": "選擇 MCP 工具",
+        "selectToolFirst": "請先選擇工具",
+        "server": "MCP 伺服器",
+        "title": "執行 MCP 工具",
+        "tool": "MCP 工具"
+      },
       "fetchToolsFailed": "取得工具失敗：{error}",
       "form": {
         "args": "參數",
