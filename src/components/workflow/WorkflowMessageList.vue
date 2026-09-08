@@ -3,8 +3,8 @@
     class="messages"
     ref="messagesRef"
     :data-workflow-id="props.currentWorkflowId || null"
-    @scroll.passive="handleScroll"
-    @wheel.passive="handleWheel">
+    @scroll.passive="scrollController.onScroll"
+    @wheel.passive="scrollController.onWheel">
     <div v-if="props.isLoading" class="message-skeleton" aria-busy="true">
       <el-skeleton animated>
         <template #template>
@@ -1244,6 +1244,7 @@
 
 <script setup>
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useWorkflowMessageScroll } from '@/composables/workflow/useWorkflowMessageScroll'
 import { useI18n } from 'vue-i18n'
 import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
@@ -1415,183 +1416,29 @@ const askUserDrafts = ref({})
 const approvedSubmissionIds = ref(new Set())
 const userMessageOverflowMap = ref({})
 const userMessageCollapsedHeightMap = ref({})
-const AUTO_SCROLL_THRESHOLD = 64
-const shouldAutoScroll = ref(true)
-const readingScrollAnchor = ref(null)
 let userMessageResizeObserver = null
 let messageContentResizeObserver = null
-let scrollFrameId = null
-let scrollCorrectionFrameId = null
 let observedMessageListWidth = 0
-let scrollScheduled = false
-let scrollRequestRevision = 0
 let componentUnmounted = false
-let userScrollIntent = false
-let lastObservedScrollTop = 0
-let pendingScrollForce = false
-let pendingScrollFrameBudget = 0
 let userMessageMeasureScheduled = false
 let userMessageMeasureFrameId = null
 
-const isNearBottom = el => {
-  if (!el) return true
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= AUTO_SCROLL_THRESHOLD
-}
+const scrollController = useWorkflowMessageScroll({
+  containerRef: messagesRef,
+  onWindowAnchorChange: anchorId => emit('message-window-anchor-change', anchorId)
+})
 
 const canRemoveQueuedMessage = item => item?.removable !== false
-
-const clearReadingScrollAnchor = () => {
-  if (!readingScrollAnchor.value) return
-  readingScrollAnchor.value = null
-  emit('message-window-anchor-change', '')
-}
-
-const captureScrollAnchor = container => {
-  if (!container) return null
-
-  const containerRect = container.getBoundingClientRect()
-  const anchorTop = containerRect.top
-  const messageElements = Array.from(
-    container.querySelectorAll('.message[data-message-id]')
-  ).filter(element => element.getBoundingClientRect().bottom > anchorTop + 1)
-  const anchorElement = messageElements.find(
-    element => !!element.getAttribute('data-window-anchor-id')
-  )
-  if (!anchorElement) return null
-
-  const rect = anchorElement.getBoundingClientRect()
-  return {
-    id: anchorElement.getAttribute('data-message-id') || '',
-    windowAnchorId: anchorElement.getAttribute('data-window-anchor-id') || '',
-    offsetTop: rect.top - containerRect.top
-  }
-}
-
-const syncReadingScrollAnchor = () => {
-  const container = messagesRef.value
-  if (!container || isNearBottom(container)) {
-    clearReadingScrollAnchor()
-    return
-  }
-
-  const anchor = captureScrollAnchor(container)
-  if (!anchor) return
-
-  const previousWindowAnchorId = readingScrollAnchor.value?.windowAnchorId || ''
-  readingScrollAnchor.value = anchor
-  if (anchor.windowAnchorId && anchor.windowAnchorId !== previousWindowAnchorId) {
-    emit('message-window-anchor-change', anchor.windowAnchorId)
-  }
-}
-
-const handleWheel = event => {
-  if (event.deltaY < 0) {
-    userScrollIntent = true
-    shouldAutoScroll.value = false
-    scrollRequestRevision += 1
-    if (scrollFrameId !== null) {
-      cancelAnimationFrame(scrollFrameId)
-      scrollFrameId = null
-    }
-    if (scrollCorrectionFrameId !== null) {
-      cancelAnimationFrame(scrollCorrectionFrameId)
-      scrollCorrectionFrameId = null
-    }
-    scrollScheduled = false
-    pendingScrollForce = false
-    pendingScrollFrameBudget = 0
-  }
-}
-
-const handleScroll = () => {
-  const container = messagesRef.value
-  if (!container) return
-  const nearBottom = isNearBottom(container)
-  const scrollingDown = container.scrollTop > lastObservedScrollTop
-  lastObservedScrollTop = container.scrollTop
-  if (!userScrollIntent) {
-    shouldAutoScroll.value = nearBottom
-  } else if (nearBottom && scrollingDown) {
-    userScrollIntent = false
-    shouldAutoScroll.value = true
-  } else {
-    shouldAutoScroll.value = false
-  }
-  syncReadingScrollAnchor()
-}
-
-const restoreScrollPosition = ({ container, anchor, previousScrollTop, previousScrollHeight }) => {
-  if (!container) return { mode: 'no_container', heightDelta: 0 }
-
-  const containerRect = container.getBoundingClientRect()
-  let mode = 'height_delta'
-  let nextScrollTop = previousScrollTop + (container.scrollHeight - previousScrollHeight)
-
-  if (anchor?.id) {
-    const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]')).find(
-      element => element.getAttribute('data-message-id') === anchor.id
-    )
-    if (anchorElement) {
-      const currentOffsetTop = anchorElement.getBoundingClientRect().top - containerRect.top
-      nextScrollTop = previousScrollTop + (currentOffsetTop - anchor.offsetTop)
-      mode = 'message_anchor'
-    }
-  }
-
-  container.scrollTop = nextScrollTop
-  return {
-    mode,
-    nextScrollTop: container.scrollTop,
-    nextScrollHeight: container.scrollHeight,
-    heightDelta: container.scrollHeight - previousScrollHeight,
-    anchorId: anchor?.id || null
-  }
-}
-
-const restoreReadingScrollAnchor = () => {
-  const container = messagesRef.value
-  const anchor = readingScrollAnchor.value
-  if (!container || !anchor?.id || isNearBottom(container)) return false
-
-  const containerRect = container.getBoundingClientRect()
-  const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]')).find(
-    element => element.getAttribute('data-message-id') === anchor.id
-  )
-  if (!anchorElement) return false
-
-  const currentOffsetTop = anchorElement.getBoundingClientRect().top - containerRect.top
-  const offsetDelta = currentOffsetTop - anchor.offsetTop
-  if (Math.abs(offsetDelta) > 0.5) {
-    container.scrollTop += offsetDelta
-    lastObservedScrollTop = container.scrollTop
-  }
-  return true
-}
 
 const revealEarlierMessages = () => {
   if (props.hiddenEarlierMessageCount <= 0) return
 
-  const container = messagesRef.value
-  const previousScrollHeight = container?.scrollHeight || 0
-  const previousScrollTop = container?.scrollTop || 0
-  const scrollAnchor = captureScrollAnchor(container)
-
+  scrollController.beforeContentChange()
   emit('reveal-earlier-messages', () => {
-    nextTick(() => {
-      nextTick(() => {
-        if (container) {
-          restoreScrollPosition({
-            container,
-            anchor: scrollAnchor,
-            previousScrollTop,
-            previousScrollHeight
-          })
-          syncReadingScrollAnchor()
-        }
-      })
-    })
+    scrollController.requestContentChange()
   })
 }
+
 
 const isManualClearContextMessage = isWorkflowManualClearContextMessage
 const isContextSnapshotMessage = isWorkflowContextSnapshotMessage
@@ -3035,75 +2882,7 @@ const submitAskUserResponse = message => {
   })
 }
 
-const performScrollToBottom = (force = false, frameBudget = 3) => {
-  if (componentUnmounted) return
-  const el = messagesRef.value
-  if (!el) return
-  if (!force && !shouldAutoScroll.value) return
-
-  pendingScrollForce = pendingScrollForce || force
-  pendingScrollFrameBudget = Math.max(pendingScrollFrameBudget, frameBudget)
-  if (scrollScheduled) return
-  scrollScheduled = true
-  const requestRevision = scrollRequestRevision
-
-  nextTick(() => {
-    if (componentUnmounted || requestRevision !== scrollRequestRevision) {
-      scrollScheduled = false
-      return
-    }
-    scrollFrameId = requestAnimationFrame(() => {
-      scrollScheduled = false
-      scrollFrameId = null
-      if (componentUnmounted || requestRevision !== scrollRequestRevision) return
-
-      const currentEl = messagesRef.value
-      const currentForce = pendingScrollForce
-      const currentFrameBudget = pendingScrollFrameBudget
-      pendingScrollForce = false
-      pendingScrollFrameBudget = 0
-
-      if (!currentEl) return
-      if (!currentForce && !shouldAutoScroll.value) return
-
-      const target = currentEl.scrollHeight - currentEl.clientHeight
-      currentEl.scrollTop = Math.max(0, target)
-      shouldAutoScroll.value = true
-      clearReadingScrollAnchor()
-
-      if (currentFrameBudget <= 1) return
-
-      scrollCorrectionFrameId = requestAnimationFrame(() => {
-        scrollCorrectionFrameId = null
-        if (componentUnmounted || requestRevision !== scrollRequestRevision) return
-        const remaining = currentEl.scrollHeight - currentEl.scrollTop - currentEl.clientHeight
-        if (remaining > 2) {
-          performScrollToBottom(true, currentFrameBudget - 1)
-        }
-      })
-    })
-  })
-}
-
-const scrollToBottom = (force = false) => {
-  if (force) {
-    userScrollIntent = false
-    scrollRequestRevision += 1
-    if (scrollFrameId !== null) {
-      cancelAnimationFrame(scrollFrameId)
-      scrollFrameId = null
-    }
-    if (scrollCorrectionFrameId !== null) {
-      cancelAnimationFrame(scrollCorrectionFrameId)
-      scrollCorrectionFrameId = null
-    }
-    scrollScheduled = false
-    pendingScrollForce = false
-    pendingScrollFrameBudget = 0
-    clearReadingScrollAnchor()
-  }
-  performScrollToBottom(force)
-}
+const scrollToBottom = force => scrollController.scrollToBottom(force)
 
 const streamingLayoutState = computed(() => {
   const blocks = Array.isArray(props.chatState?.blocks) ? props.chatState.blocks : []
@@ -3121,37 +2900,32 @@ const streamingLayoutState = computed(() => {
 watch(
   [visibleMessages, collapsedMessages],
   () => {
-    if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
-      performScrollToBottom()
-    } else {
-      nextTick(() => restoreReadingScrollAnchor())
-    }
+    scrollController.beforeContentChange()
     scheduleMeasureUserMessageOverflow()
-    syncMessageContentResizeObserver()
+    nextTick(() => {
+      syncMessageContentResizeObserver()
+      scrollController.requestContentChange()
+    })
   },
-  { flush: 'post', immediate: true }
+  { flush: 'pre', immediate: true }
 )
 
 watch(
   streamingLayoutState,
   () => {
-    if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
-      performScrollToBottom()
-    } else {
-      nextTick(() => restoreReadingScrollAnchor())
-    }
-    syncMessageContentResizeObserver()
+    scrollController.beforeContentChange()
+    nextTick(() => {
+      syncMessageContentResizeObserver()
+      scrollController.requestContentChange()
+    })
   },
-  { flush: 'post' }
+  { flush: 'pre' }
 )
 
 watch(
   () => props.currentWorkflowId,
   () => {
-    readingScrollAnchor.value = null
-    shouldAutoScroll.value = true
-    userScrollIntent = false
-    lastObservedScrollTop = 0
+    scrollController.reset()
     userMessageOverflowMap.value = {}
     userMessageCollapsedHeightMap.value = {}
     scheduleMeasureUserMessageOverflow()
@@ -3170,11 +2944,7 @@ onMounted(() => {
   componentUnmounted = false
   if (typeof ResizeObserver !== 'undefined') {
     messageContentResizeObserver = new ResizeObserver(() => {
-      if (shouldAutoScroll.value || isNearBottom(messagesRef.value)) {
-        performScrollToBottom()
-      } else {
-        restoreReadingScrollAnchor()
-      }
+      scrollController.onContentResize()
     })
     userMessageResizeObserver = new ResizeObserver(entries => {
       const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0
@@ -3196,7 +2966,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   componentUnmounted = true
-  scrollScheduled = false
   userMessageMeasureScheduled = false
   if (userMessageResizeObserver) {
     userMessageResizeObserver.disconnect()
@@ -3209,18 +2978,11 @@ onBeforeUnmount(() => {
   if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
     window.removeEventListener('resize', scheduleMeasureUserMessageOverflow)
   }
-  if (scrollFrameId !== null) {
-    cancelAnimationFrame(scrollFrameId)
-    scrollFrameId = null
-  }
-  if (scrollCorrectionFrameId !== null) {
-    cancelAnimationFrame(scrollCorrectionFrameId)
-    scrollCorrectionFrameId = null
-  }
   if (userMessageMeasureFrameId !== null) {
     cancelAnimationFrame(userMessageMeasureFrameId)
     userMessageMeasureFrameId = null
   }
+  scrollController.dispose()
 })
 
 defineExpose({

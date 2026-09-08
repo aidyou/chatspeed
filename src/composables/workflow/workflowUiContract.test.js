@@ -639,18 +639,18 @@ test('off-bottom readers preserve a message window anchor while new messages ren
   )
   assert.match(
     messageList,
-    /const syncReadingScrollAnchor = \(\) => \{[\s\S]*?emit\('message-window-anchor-change', anchor\.windowAnchorId\)/,
-    'scrolling away from the bottom must report the first readable persisted message'
+    /scrollController\.onScroll[\s\S]*?scrollController\.onWheel/,
+    'message scrolling must use one centralized scroll controller'
   )
   assert.match(
     messageList,
-    /const restoreReadingScrollAnchor = \(\) => \{[\s\S]*?container\.scrollTop \+= offsetDelta/,
-    'message updates must restore the anchored message to its previous viewport offset'
+    /scrollController\.onContentResize\(\)/,
+    'content resize must be delegated to the centralized scroll controller'
   )
-  assert.match(
+  assert.doesNotMatch(
     messageList,
-    /messageContentResizeObserver = new ResizeObserver\(\(\) => \{[\s\S]*?restoreReadingScrollAnchor\(\)/,
-    'asynchronous message height changes must also preserve the reader anchor'
+    /const (?:handleScroll|handleWheel|performScrollToBottom|restoreReadingScrollAnchor|restoreScrollPosition)\s*=|container\.scrollTop\s*[+]?=/,
+    'the component must not keep independent scroll mutation or restoration paths'
   )
   assert.doesNotMatch(
     messageList,
