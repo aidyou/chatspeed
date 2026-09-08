@@ -35,7 +35,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
   let pendingExplicitBottom = false
   let internalScrollTarget = null
   let readingAnchor = null
-  let lastObservedScrollTop = 0
   let lastWindowAnchorId = ''
   let revision = 0
 
@@ -57,9 +56,9 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     if (!container) return null
 
     const containerRect = container.getBoundingClientRect()
-    const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]')).find(
-      element => element.getBoundingClientRect().bottom > containerRect.top + 1
-    )
+    const anchorElement = Array.from(container.querySelectorAll('.message[data-message-id]'))
+      .filter(element => element.getBoundingClientRect().bottom > containerRect.top + 1)
+      .find(element => Boolean(element.getAttribute('data-window-anchor-id')))
     if (!anchorElement) return null
 
     const rect = anchorElement.getBoundingClientRect()
@@ -116,6 +115,7 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     }
     reconcileScheduled = false
     settleFrameBudget = 0
+    internalScrollTarget = null
   }
 
   const clampScrollTop = (container, value) => {
@@ -132,7 +132,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
 
     internalScrollTarget = target
     container.scrollTop = target
-    lastObservedScrollTop = container.scrollTop
     return true
   }
 
@@ -266,7 +265,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
       internalScrollTarget !== null && Math.abs(currentScrollTop - internalScrollTarget) <= 1
     if (isInternalScroll) {
       internalScrollTarget = null
-      lastObservedScrollTop = currentScrollTop
       return
     }
 
@@ -274,7 +272,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     pendingSnapshot = null
     pendingExplicitBottom = false
     internalScrollTarget = null
-    lastObservedScrollTop = currentScrollTop
     if (isNearBottom(container)) {
       mode.value = 'following'
       clearReadingAnchor()
@@ -308,7 +305,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     internalScrollTarget = null
     mode.value = 'following'
     clearReadingAnchor()
-    lastObservedScrollTop = 0
   }
 
   const dispose = () => {
@@ -328,8 +324,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     onWheel,
     scrollToBottom,
     reset,
-    dispose,
-    prepareContentChange: beforeContentChange,
-    isNearBottom
+    dispose
   }
 }

@@ -81,16 +81,92 @@ test('scrollbar dragging cancels pending automatic scrolling', async () => {
   assert.equal(controller.mode.value, 'reading')
   controller.dispose()
 })
-test('does not let a delayed internal scroll event switch reading mode', async () => {
-  const container = createContainer({ scrollTop: 100, scrollHeight: 1000 })
-  const containerRef = ref(container)
-  const controller = useWorkflowMessageScroll({ containerRef })
+test('prefers a visible message with a window anchor id', () => {
+  const events = []
+  const anchoredMessage = {
+    getAttribute: name =>
+      ({
+        'data-message-id': 'message-2',
+        'data-window-anchor-id': 'window-message-2'
+      })[name] || null,
+    getBoundingClientRect: () => ({ top: 80, bottom: 140 })
+  }
+  const unanchoredMessage = {
+    getAttribute: name =>
+      ({ 'data-message-id': 'message-1', 'data-window-anchor-id': null })[name] || null,
+    getBoundingClientRect: () => ({ top: 20, bottom: 80 })
+  }
+  const nextAnchoredMessage = {
+    getAttribute: name =>
+      ({
+        'data-message-id': 'message-3',
+        'data-window-anchor-id': 'window-message-3'
+      })[name] || null,
+    getBoundingClientRect: () => ({ top: 80, bottom: 140 })
+  }
+  const messages = [anchoredMessage]
+  const container = createContainer({ scrollTop: 100 })
+  container.querySelectorAll = () => messages
+  const controller = useWorkflowMessageScroll({
+    containerRef: ref(container),
+    onWindowAnchorChange: anchorId => events.push(anchorId)
+  })
 
-  controller.scrollToBottom(true)
-  await waitForReconcile()
-  assert.equal(container.scrollTop, 600)
-
+  controller.onWheel({ deltaY: -100 })
+  messages.splice(0, messages.length, unanchoredMessage)
   controller.onScroll()
-  assert.equal(controller.mode.value, 'following')
+  assert.deepEqual(events, ['window-message-2'])
+
+  messages.splice(0, messages.length, unanchoredMessage, nextAnchoredMessage)
+  controller.onScroll()
+
+  assert.deepEqual(events, ['window-message-2', 'window-message-3'])
   controller.dispose()
+})
+
+test('cancelling scheduled scrolling clears its internal target', async () => {
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame
+  const originalCancelAnimationFrame = globalThis.cancelAnimationFrame
+  const pendingFrames = new Map()
+  let nextFrameId = 0
+
+  globalThis.requestAnimationFrame = callback => {
+    const frameId = ++nextFrameId
+    pendingFrames.set(frameId, callback)
+    return frameId
+  }
+  globalThis.cancelAnimationFrame = frameId => pendingFrames.delete(frameId)
+
+  try {
+    const container = createContainer({ scrollTop: 100 })
+    const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+    controller.scrollToBottom(true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(pendingFrames.size, 1)
+
+    const reconcileFrame = pendingFrames.values().next().value
+    pendingFrames.delete(1)
+    reconcileFrame()
+    assert.equal(container.scrollTop, 600)
+    assert.equal(pendingFrames.size, 1)
+
+    controller.onWheel({ deltaY: -100 })
+    container.scrollHeight = 1300
+    controller.onScroll()
+
+    assert.equal(controller.mode.value, 'reading')
+    controller.dispose()
+  } finally {
+    if (originalRequestAnimationFrame) {
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame
+    } else {
+      delete globalThis.requestAnimationFrame
+    }
+    if (originalCancelAnimationFrame) {
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame
+    } else {
+      delete globalThis.cancelAnimationFrame
+    }
+  }
 })
