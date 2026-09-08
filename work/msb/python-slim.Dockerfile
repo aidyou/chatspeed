@@ -20,7 +20,8 @@ RUN if [ "$USE_CN_MIRRORS" = "1" ]; then \
         pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 --shell /bin/bash sandbox \
-    && install -d -o sandbox -g sandbox /workspace
+    && install -d -o sandbox -g sandbox /workspace \
+    && PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 pip install -i https://mirrors.aliyun.com/pypi/simple/ xlrd
 
 ENV PATH="/home/sandbox/.local/bin:${PATH}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
