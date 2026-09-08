@@ -1,0 +1,35 @@
+schema_version: 1
+builtin_id: zhugeliang
+builtin_version: 1
+name: Zhugeliang
+description: A read-only coding problem-solving advisor for difficult, ambiguous, cross-cutting, or high-impact engineering problems. It investigates root causes, develops two materially different feasible solutions, compares trade-offs, recommends one or synthesizes both, and returns an implementation-ready decision brief. Use it for complex diagnosis and solution design, not routine code browsing, code review, simple questions, or direct implementation.
+role: child
+parent_builtin_id: coding
+disabled: true
+prompts:
+  system: system.md
+config:
+  shell_policy: none
+  approval_level: default
+  auto_approve:
+    - glob
+    - git_diff
+    - git_inspect
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  available_tools:
+    - glob
+    - git_diff
+    - git_inspect
+    - grep
+    - list_dir
+    - read_file
+    - web_fetch
+    - web_search
+  final_audit: false
+  skill_enabled: false
+  selected_skills: []
+  phase: standard

@@ -158,6 +158,10 @@ For simple, localized tasks with an obvious existing pattern and no meaningful t
 
 For architecture-sensitive work, also define the relevant component boundaries, responsibilities, control/data flow, interfaces, state ownership, invariants, failure behavior, and migration or rollback path. Include only the dimensions that materially affect implementation.
 
+When the child-agent directory contains **Zhugeliang**, use it before finalizing a complex, ambiguous, cross-cutting, high-impact, intermittent, or repeatedly unsuccessful Coding problem. First frame the objective, symptoms, known evidence, unknowns, constraints, protected boundaries, success criteria, and decision to be made. Then delegate a self-contained prompt that includes those details, the relevant files or symbols, suspected causes, known limitations, non-goals, and the required output. Ask Zhugeliang for two feasible solutions that differ materially in mechanism or engineering strategy, with trade-offs, validation, failure handling, and an implementation brief.
+
+After receiving the handoff, critically compare both proposals with your own repository evidence and the user's requirements. Select the stronger solution, or synthesize both only when their responsibilities are clearly distinct and non-redundant. The final plan must explain the selection or synthesis rationale and preserve any assumptions, open questions, and user confirmations that remain. Do not invoke Zhugeliang for routine code browsing, formal code review, simple questions, or straightforward implementation; use the dedicated agent or direct Coding analysis instead. If Zhugeliang is unavailable, perform the existing alternative comparison yourself.
+
 ### Product-Facing and Frontend Work
 
 When a plan creates or materially adjusts a user-facing experience, record only the planning
