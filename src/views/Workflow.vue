@@ -38,9 +38,9 @@
           class="workflow-titlebar-center-content">
           <div
             v-if="displayAllowedPathTitle"
-            class="workflow-titlebar-primary-path"
-            :title="displayAllowedPathTitle">
-            {{ displayAllowedPathTitle }}
+            class="workflow-titlebar-primary-path upperLayer"
+            @click="onTitlebarPrimaryPathClick">
+              <cs name="ext-folder" /> {{ displayAllowedPathTitle }}
           </div>
           <div
             v-if="shouldShowTodayCostStats"
@@ -2223,6 +2223,14 @@ const displayAllowedPathTitle = computed(() => {
   return displayAllowedPath.value || ''
 })
 
+const onTitlebarPrimaryPathClick = () => {
+  // The authorized paths tab is only rendered in the expanded sidebar.
+  if (sidebarCollapsed.value) {
+    onToggleSidebar()
+  }
+  workflowSidebarActiveTab.value = 'files'
+}
+
 const onDeleteLastMessage = async () => {
   const sessionId = currentWorkflowId.value
   if (!canDeleteLastMessage.value || !sessionId) return
@@ -2810,6 +2818,7 @@ onBeforeUnmount(() => {
   font-size: var(--cs-font-size-sm);
   font-weight: 500;
   color: var(--cs-text-color-primary);
+  cursor: pointer;
 }
 
 .workflow-titlebar-today-cost {
