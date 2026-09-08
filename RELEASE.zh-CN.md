@@ -2,6 +2,38 @@
 
 # 发布日志
 
+## [2.0.16]
+
+### 🚀 新功能
+
+- **Zhugeliang 顾问子 Agent**：
+  - 新增只读的 Zhugeliang 子 Agent，用于诊断疑难编码问题并对比解决方案策略，已接入 Coding 智能体的规划与执行指引。
+- **MCP 工具执行器**：
+  - 新增 MCP 工具执行对话框：通过新的 `run_mcp_tool` 命令在设置页调用 MCP 工具，参数按工具输入 Schema 动态渲染；仅对运行中的服务器显示执行按钮。
+- **Workflow**：
+  - 点击标题栏主路径现在会展开侧边栏（若已折叠）并切换到 Files 标签页，方便直接访问授权路径。
+  - 新增专用的 lite 模型角色，用于标题生成和一次性的用户输入语言检测，可在 Agent/Workflow 模型配置中选择。
+  - 送入模型的运行时观察事件现在包裹在 `<RUNTIME_OBSERVATION>` 信封中，模型可据此区分真实用户输入与运行时内容；系统提示词同时明确"英文运行时内容不代表语言信号"。
+
+### 🪄 改进
+
+- **性能与维护**：
+  - Models.dev 模型目录改为异步加载，多 MB 的目录快照不再阻塞应用启动；移除未使用的内置 Agent 版本同步键。
+  - 托盘模型标签更名为 "AI Provider"；新增开发用 Docker Compose 配置、为 python-slim 镜像补充 `xlrd` 依赖，并移除 `chatspeed-docs` 子模块。
+
+### 🐞 修复
+
+- **模型处理**：
+  - 带供应商前缀的模型（如 ModelScope 的 `Qwen/Qwen3.8-Flash-Next`）现在可通过短 ID 回退匹配；新增 ModelScope qwen 传输规则以解析 qwen 思考适配器，避免 `reasoning_effort` 与 `thinking_budget` 冲突。
+  - 模型选择变化时正确应用模型覆盖：代理别名解析到第一个真实后端模型并填充 contextSize、maxTokens、thinking 和 temperature，初始化时同样生效。
+- **Workflow**：
+  - 消息列表滚动处理集中化：保留窗口锚点、清除过期滚动目标，用户滚动时立即取消待执行的自动跟随滚动，在消息裁剪、流式输出、窗口缩放与拖拽滚动条时保持阅读位置稳定。
+  - 语言检测现在会解析聊天 JSON 信封提取可见内容，并加强系统提示词；clear-context 后的检测用量归属到当前 segment；MCP 执行对话框参数按必填优先排序；修复 overlay 高度与圆角；i18n 键重新排序。
+- **依赖**：
+  - @xmldom/xmldom 升级至 0.8.15。
+
+---
+
 ## [2.0.15]
 
 ### 🚀 新功能

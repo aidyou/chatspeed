@@ -2,6 +2,38 @@
 
 # Release Notes
 
+## [2.0.16]
+
+### 🚀 New Features
+
+- **Zhugeliang advisor sub-agent**:
+  - Added a read-only Zhugeliang child agent that diagnoses difficult coding problems and compares solution strategies, wired into the Coding agent's planning and execution guidance.
+- **MCP tool executor**:
+  - Added an MCP tool executor dialog: a new `run_mcp_tool` command invokes MCP tools from the settings page, with parameters rendered dynamically from the tool input schema; the execute button is shown on running servers only.
+- **Workflow**:
+  - Clicking the primary path in the titlebar now expands the sidebar (if collapsed) and switches to the Files tab, providing direct access to authorized paths.
+  - Added a dedicated lite model role for title generation and one-shot user-input language detection, selectable in agent/workflow model configuration.
+  - Runtime-generated observations delivered to the model are now wrapped in a `<RUNTIME_OBSERVATION>` envelope so the model can distinguish them from genuine user input; the system prompt now also clarifies that English runtime content is not a language signal.
+
+### 🪄 Improvements
+
+- **Performance and maintenance**:
+  - The Models.dev catalog now loads asynchronously so the multi-MB catalog snapshot no longer blocks application startup; removed an unused built-in agent version-sync key.
+  - Renamed the tray model label to "AI Provider"; added a dev Docker Compose setup, added the `xlrd` dependency to the python-slim image, and removed the `chatspeed-docs` submodule.
+
+### 🐞 Bug Fixes
+
+- **Model handling**:
+  - Vendor-prefixed models (e.g. ModelScope's `Qwen/Qwen3.8-Flash-Next`) now resolve through the short-id fallback, and a new ModelScope qwen transport rule resolves the qwen thinking adapter, preventing the `reasoning_effort` + `thinking_budget` conflict.
+  - Model overrides are now applied when the selection changes: proxy aliases resolve to the first real backend model and populate contextSize, maxTokens, thinking, and temperature, including on initialization.
+- **Workflow**:
+  - Centralized message list scroll handling: window anchors are preserved and stale scroll targets cleared, and user scrolling immediately cancels pending auto-follow scrolls, keeping the reading position stable during message trimming, streaming, resizing, and scrollbar dragging.
+  - Language detection now parses the chat JSON envelope for visible content with a strengthened system prompt; usage after clear-context is attributed to the current segment; the MCP executor dialog sorts required parameters first; overlay height and border-radius are fixed; i18n keys are re-sorted.
+- **Dependencies**:
+  - Bumped @xmldom/xmldom to 0.8.15.
+
+---
+
 ## [2.0.15]
 
 ### 🚀 New Features
