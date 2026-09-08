@@ -56,8 +56,12 @@ build_and_load() {
   printf '==> Exporting %s from Docker\n' "$image_ref"
   docker save --output "$archive" "$image_ref"
 
-  printf '==> Loading %s into msb\n' "$image_ref"
-  msb image load --input "$archive" --tag "$image_ref"
+  if command -v msb >/dev/null 2>&1; then
+    printf '==> Loading %s into msb\n' "$image_ref"
+    msb image load --input "$archive" --tag "$image_ref"
+  else
+    printf '==> Info: msb command not found; skipping image load into msb\n'
+  fi
 
   rm -rf "$temp_dir"
 }
@@ -92,7 +96,6 @@ main() {
   done
 
   require_command docker
-  require_command msb
 
   if ! docker buildx version >/dev/null 2>&1; then
     printf 'Error: Docker Buildx is required to build and load images.\n' >&2
@@ -123,7 +126,11 @@ main() {
     build_and_load "$dockerfile" "$use_cn_mirrors"
   done
 
-  printf '\nDone. View imported images with: msb image list\n'
+  if command -v msb >/dev/null 2>&1; then
+    printf '\nDone. View imported images with: msb image list\n'
+  else
+    printf '\nDone. msb command not found; images were built and exported but not imported into msb.\n'
+  fi
 }
 
 main "$@"
