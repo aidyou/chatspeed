@@ -443,7 +443,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 109,
+      "modelCount": 105,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -613,7 +613,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 20,
+      "modelCount": 21,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -663,7 +663,7 @@
       "documentationUrl": "https://docs.gitlab.com/user/duo_agent_platform/",
       "id": "gitlab",
       "logo": "https://models.dev/logos/gitlab.svg",
-      "modelCount": 24,
+      "modelCount": 25,
       "name": "GitLab Duo",
       "responses": false
     },
@@ -901,7 +901,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 369,
+      "modelCount": 367,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1235,7 +1235,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 592,
+      "modelCount": 593,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1400,7 +1400,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 360,
+      "modelCount": 358,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1502,7 +1502,7 @@
       "documentationUrl": "https://docs.privatemode.ai/api/overview",
       "id": "privatemode-ai",
       "logo": "https://models.dev/logos/privatemode-ai.svg",
-      "modelCount": 7,
+      "modelCount": 9,
       "name": "Privatemode AI",
       "protocol": "openai",
       "responses": false
@@ -1978,7 +1978,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 23,
+      "modelCount": 27,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "948284e604468ff8f46dd108dca26d09fa80cbac18c50092932bd397f57e78d9",
-    "generatedAt": "2026-09-07T08:20:56Z",
+    "catalogSha256": "9c5d19be115601c232e4149a4a4749eb60963d26c08ca6c1adfaf211244bd2a3",
+    "generatedAt": "2026-09-08T08:07:03Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "1b1108add293255437dcb94aae4a1b12469368d3"
+    "revision": "fe0f84b1c8197b52148148d61e49ca6f02c8d78a"
   }
 }
