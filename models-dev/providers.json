@@ -463,7 +463,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 58,
+      "modelCount": 59,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 258,
+      "modelCount": 259,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -709,7 +709,7 @@
       "documentationUrl": "https://docs.greenpt.ai",
       "id": "greenpt",
       "logo": "https://models.dev/logos/greenpt.svg",
-      "modelCount": 37,
+      "modelCount": 39,
       "name": "GreenPT",
       "protocol": "openai",
       "responses": false
@@ -1235,7 +1235,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 589,
+      "modelCount": 591,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1245,7 +1245,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 37,
+      "modelCount": 32,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1379,7 +1379,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 35,
+      "modelCount": 36,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1961,7 +1961,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 105,
+      "modelCount": 106,
       "name": "Venice AI",
       "responses": false
     },
@@ -1969,7 +1969,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 373,
+      "modelCount": 372,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "30fd383b6d65938e42788e22881071d395778f1235397b4af8a8735279ae1f09",
-    "generatedAt": "2026-09-09T08:11:05Z",
+    "catalogSha256": "a367f804fc7725b7fe7ea1a35b183ac63e217db552029294b8ac44be27c10dac",
+    "generatedAt": "2026-09-10T08:09:54Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "bc9d45a9dc11aaef8f9c6abfe2c2fc428eda7e44"
+    "revision": "69bbc21a6de5d47144d9e0991b2859450940a092"
   }
 }
