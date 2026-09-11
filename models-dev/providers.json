@@ -35,7 +35,7 @@
       "documentationUrl": "https://above.dev/docs",
       "id": "above",
       "logo": "https://models.dev/logos/above.svg",
-      "modelCount": 9,
+      "modelCount": 8,
       "name": "above.dev",
       "protocol": "openai",
       "responses": false
@@ -186,7 +186,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 153,
+      "modelCount": 161,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -335,7 +335,7 @@
       "documentationUrl": "https://bothub.ru/models",
       "id": "bothub",
       "logo": "https://models.dev/logos/bothub.svg",
-      "modelCount": 2,
+      "modelCount": 7,
       "name": "Bothub",
       "protocol": "openai",
       "responses": false
@@ -502,7 +502,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 63,
+      "modelCount": 67,
       "name": "Deep Infra",
       "responses": false
     },
@@ -512,7 +512,7 @@
       "documentationUrl": "https://api-docs.deepseek.com/quick_start/pricing",
       "id": "deepseek",
       "logo": "https://models.dev/logos/deepseek.svg",
-      "modelCount": 3,
+      "modelCount": 4,
       "name": "DeepSeek",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 259,
+      "modelCount": 260,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -582,7 +582,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 58,
+      "modelCount": 59,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -613,7 +613,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 21,
+      "modelCount": 23,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -692,7 +692,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/models",
       "id": "google-vertex",
       "logo": "https://models.dev/logos/google-vertex.svg",
-      "modelCount": 45,
+      "modelCount": 51,
       "name": "Vertex",
       "responses": false
     },
@@ -761,7 +761,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 73,
+      "modelCount": 77,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -771,7 +771,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 33,
+      "modelCount": 34,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -801,7 +801,7 @@
       "documentationUrl": "https://platform.inceptionlabs.ai/docs",
       "id": "inception",
       "logo": "https://models.dev/logos/inception.svg",
-      "modelCount": 2,
+      "modelCount": 3,
       "name": "Inception",
       "protocol": "openai",
       "responses": false
@@ -901,7 +901,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 367,
+      "modelCount": 370,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 372,
+      "modelCount": 375,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 181,
+      "modelCount": 187,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1235,7 +1235,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 591,
+      "modelCount": 585,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1326,7 +1326,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 115,
+      "modelCount": 143,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1400,7 +1400,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 358,
+      "modelCount": 361,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1471,7 +1471,7 @@
       "documentationUrl": "https://agent.pioneer.ai/llms.txt",
       "id": "pioneer",
       "logo": "https://models.dev/logos/pioneer.svg",
-      "modelCount": 103,
+      "modelCount": 105,
       "name": "Pioneer",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1550,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 153,
+      "modelCount": 154,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -1598,7 +1598,7 @@
       "documentationUrl": "https://help.sap.com/docs/sap-ai-core",
       "id": "sap-ai-core",
       "logo": "https://models.dev/logos/sap-ai-core.svg",
-      "modelCount": 48,
+      "modelCount": 49,
       "name": "SAP AI Core",
       "responses": false
     },
@@ -1628,7 +1628,7 @@
       "documentationUrl": "https://www.scnet.cn/ac/openapi/doc/2.0/moduleapi/plans/token-plan.html",
       "id": "scnet-token-plan",
       "logo": "https://models.dev/logos/scnet-token-plan.svg",
-      "modelCount": 20,
+      "modelCount": 18,
       "name": "SCNet Token Plan",
       "protocol": "openai",
       "responses": false
@@ -1961,7 +1961,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 106,
+      "modelCount": 107,
       "name": "Venice AI",
       "responses": false
     },
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "a367f804fc7725b7fe7ea1a35b183ac63e217db552029294b8ac44be27c10dac",
-    "generatedAt": "2026-09-10T08:09:54Z",
+    "catalogSha256": "dfe582c1b5b2c2755106b2b17cbdbccf02a95e49b1d2b22b7d19309d72ee989d",
+    "generatedAt": "2026-09-11T08:05:47Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "69bbc21a6de5d47144d9e0991b2859450940a092"
+    "revision": "5347558d217d95e6d9ca23fb62f8e3b9ce291efe"
   }
 }
