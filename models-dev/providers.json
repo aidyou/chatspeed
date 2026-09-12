@@ -84,7 +84,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 77,
+      "modelCount": 78,
       "name": "AIHubMix",
       "responses": false
     },
@@ -305,7 +305,7 @@
       "documentationUrl": "https://docs.baseten.co/inference/model-apis/overview",
       "id": "baseten",
       "logo": "https://models.dev/logos/baseten.svg",
-      "modelCount": 22,
+      "modelCount": 23,
       "name": "Baseten",
       "protocol": "openai",
       "responses": false
@@ -335,7 +335,7 @@
       "documentationUrl": "https://bothub.ru/models",
       "id": "bothub",
       "logo": "https://models.dev/logos/bothub.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "Bothub",
       "protocol": "openai",
       "responses": false
@@ -383,7 +383,7 @@
       "documentationUrl": "https://docs.cline.bot/getting-started/clinepass",
       "id": "cline-pass",
       "logo": "https://models.dev/logos/cline-pass.svg",
-      "modelCount": 14,
+      "modelCount": 15,
       "name": "ClinePass",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 260,
+      "modelCount": 279,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -582,7 +582,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 59,
+      "modelCount": 60,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -709,7 +709,7 @@
       "documentationUrl": "https://docs.greenpt.ai",
       "id": "greenpt",
       "logo": "https://models.dev/logos/greenpt.svg",
-      "modelCount": 39,
+      "modelCount": 40,
       "name": "GreenPT",
       "protocol": "openai",
       "responses": false
@@ -901,7 +901,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 370,
+      "modelCount": 375,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 186,
+      "modelCount": 188,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 375,
+      "modelCount": 377,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1235,7 +1235,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 585,
+      "modelCount": 594,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1348,7 +1348,7 @@
       "documentationUrl": "https://docs.ollama.com/cloud",
       "id": "ollama-cloud",
       "logo": "https://models.dev/logos/ollama-cloud.svg",
-      "modelCount": 22,
+      "modelCount": 23,
       "name": "Ollama Cloud",
       "protocol": "openai",
       "responses": false
@@ -1400,7 +1400,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 361,
+      "modelCount": 367,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1471,7 +1471,7 @@
       "documentationUrl": "https://agent.pioneer.ai/llms.txt",
       "id": "pioneer",
       "logo": "https://models.dev/logos/pioneer.svg",
-      "modelCount": 105,
+      "modelCount": 112,
       "name": "Pioneer",
       "protocol": "openai",
       "responses": false
@@ -1999,7 +1999,7 @@
       "documentationUrl": "https://www.volcengine.com/docs/82379/1928261",
       "id": "volcengine-coding-plan",
       "logo": "https://models.dev/logos/volcengine-coding-plan.svg",
-      "modelCount": 8,
+      "modelCount": 10,
       "name": "Volcengine Ark Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "dfe582c1b5b2c2755106b2b17cbdbccf02a95e49b1d2b22b7d19309d72ee989d",
-    "generatedAt": "2026-09-11T08:05:47Z",
+    "catalogSha256": "5d694a574cdabef3f2ee38096ed4472e5e75c1b8d375abbd74d8ef829e13f4b3",
+    "generatedAt": "2026-09-12T07:56:29Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "5347558d217d95e6d9ca23fb62f8e3b9ce291efe"
+    "revision": "373f7a90cc4c0494233d7c17767b284ac07de1ee"
   }
 }
