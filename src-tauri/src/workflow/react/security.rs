@@ -30,7 +30,13 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
 pub fn is_user_skill_path(path: &Path) -> bool {
-    dirs::home_dir().is_some_and(|home| path.starts_with(home.join(".chatspeed").join("skills")))
+    dirs::home_dir().is_some_and(|home| is_user_skill_path_for_home(path, &home))
+}
+
+fn is_user_skill_path_for_home(path: &Path, home: &Path) -> bool {
+    let user_skill_root = PathGuard::resolve_physical_path(&home.join(".chatspeed").join("skills"));
+    let physical_path = PathGuard::resolve_physical_path(path);
+    physical_path.starts_with(user_skill_root)
 }
 
 pub fn is_workspace_noise_name(name: &str) -> bool {
@@ -527,6 +533,24 @@ mod tests {
         assert!(guard
             .validate(&user_skills.join("old_skill.py"), false, true, true)
             .is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn user_skill_path_matches_canonicalized_home() {
+        use std::os::unix::fs::symlink;
+
+        let real_home = tempdir().unwrap();
+        let skill_root = real_home.path().join(".chatspeed").join("skills");
+        fs::create_dir_all(&skill_root).unwrap();
+        let linked_home = real_home.path().with_extension("-linked");
+        symlink(real_home.path(), &linked_home).unwrap();
+
+        assert!(is_user_skill_path_for_home(&skill_root, &linked_home));
+        assert!(is_user_skill_path_for_home(
+            &skill_root.join("installed-skill/SKILL.md"),
+            &linked_home
+        ));
     }
 
     #[test]

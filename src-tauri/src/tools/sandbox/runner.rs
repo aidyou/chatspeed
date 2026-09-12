@@ -3,6 +3,7 @@ use super::types::{
     ShellExecutionPlan, WorkspaceAccess,
 };
 use crate::tools::ToolError;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -23,6 +24,30 @@ pub fn sandbox_command_for_plan(
     command.args(iter);
     configure_child_stdio(&mut command);
     Ok(Some(command))
+}
+
+fn sandbox_home_for_plan(plan: &ShellExecutionPlan) -> Option<&Path> {
+    let skills_mount = plan.mounts.iter().find(|mount| {
+        mount.access == WorkspaceAccess::ReadWrite
+            && Path::new(&mount.host_path).ends_with(".chatspeed/skills")
+    })?;
+    Path::new(&skills_mount.guest_path).parent()
+}
+
+fn command_with_sandbox_home(plan: &ShellExecutionPlan, original_command: &str) -> String {
+    let Some(sandbox_home) = sandbox_home_for_plan(plan) else {
+        return original_command.to_string();
+    };
+    format!(
+        "export CHATSPEED_HOME={} && {}",
+        shell_quote(sandbox_home),
+        original_command
+    )
+}
+
+fn shell_quote(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 pub fn sandbox_instance_name(plan: &ShellExecutionPlan) -> String {
@@ -128,12 +153,13 @@ fn build_msb_argv(
         if let Some(workdir) = plan.workdir.as_deref() {
             argv.extend(["--workdir".to_string(), workdir.to_string()]);
         }
+        let command = command_with_sandbox_home(plan, original_command);
         argv.extend([
             instance_name.to_string(),
             "--".to_string(),
             "sh".to_string(),
             "-lc".to_string(),
-            original_command.to_string(),
+            command,
         ]);
         return Ok(argv);
     }
@@ -193,12 +219,13 @@ fn build_msb_argv(
     if let Some(workdir) = plan.workdir.as_deref() {
         argv.extend(["--workdir".to_string(), workdir.to_string()]);
     }
+    let command = command_with_sandbox_home(plan, original_command);
     argv.extend([
         image.to_string(),
         "--".to_string(),
         "sh".to_string(),
         "-lc".to_string(),
-        original_command.to_string(),
+        command,
     ]);
     Ok(argv)
 }
@@ -212,11 +239,12 @@ fn build_docker_argv(
         if let Some(workdir) = plan.workdir.as_deref() {
             argv.extend(["--workdir".to_string(), workdir.to_string()]);
         }
+        let command = command_with_sandbox_home(plan, original_command);
         argv.extend([
             instance_name.to_string(),
             "sh".to_string(),
             "-lc".to_string(),
-            original_command.to_string(),
+            command,
         ]);
         return Ok(argv);
     }
@@ -281,11 +309,12 @@ fn build_docker_argv(
     if let Some(workdir) = plan.workdir.as_deref() {
         argv.extend(["--workdir".to_string(), workdir.to_string()]);
     }
+    let command = command_with_sandbox_home(plan, original_command);
     argv.extend([
         image.to_string(),
         "sh".to_string(),
         "-lc".to_string(),
-        original_command.to_string(),
+        command,
     ]);
     Ok(argv)
 }
@@ -304,6 +333,7 @@ mod tests {
         SandboxMountPlan, SandboxNetworkPolicy, SandboxResourceLimits, SandboxRuntime,
         ShellExecutionPlanStatus, ShellExecutionRiskFloor,
     };
+    use std::path::PathBuf;
 
     fn plan(backend: ShellExecutionBackendKind) -> ShellExecutionPlan {
         ShellExecutionPlan {
@@ -599,6 +629,43 @@ mod tests {
             ]
         );
         assert!(sandbox_cleanup_argv_for_plan(&msb_plan).is_none());
+    }
+
+    #[test]
+    fn sandbox_home_for_plan_uses_guest_mount_root() {
+        let mut plan = plan(ShellExecutionBackendKind::Docker);
+        plan.mounts = vec![SandboxMountPlan {
+            host_path: "/host/.chatspeed/skills".to_string(),
+            guest_path: "/guest/.chatspeed/skills".to_string(),
+            access: WorkspaceAccess::ReadWrite,
+        }];
+
+        assert_eq!(
+            sandbox_home_for_plan(&plan).map(Path::to_path_buf),
+            Some(PathBuf::from("/guest/.chatspeed"))
+        );
+        assert_eq!(
+            command_with_sandbox_home(&plan, "python install.py"),
+            "export CHATSPEED_HOME='/guest/.chatspeed' && python install.py"
+        );
+    }
+
+    #[test]
+    fn sandbox_home_is_not_injected_for_read_only_or_unrelated_mounts() {
+        let mut plan = plan(ShellExecutionBackendKind::Docker);
+        plan.mounts = vec![SandboxMountPlan {
+            host_path: "/host/.chatspeed/skills".to_string(),
+            guest_path: "/guest/.chatspeed/skills".to_string(),
+            access: WorkspaceAccess::ReadOnly,
+        }];
+        assert_eq!(sandbox_home_for_plan(&plan), None);
+
+        plan.mounts = vec![SandboxMountPlan {
+            host_path: "/host/project".to_string(),
+            guest_path: "/guest/project".to_string(),
+            access: WorkspaceAccess::ReadWrite,
+        }];
+        assert_eq!(sandbox_home_for_plan(&plan), None);
     }
 
     #[test]
