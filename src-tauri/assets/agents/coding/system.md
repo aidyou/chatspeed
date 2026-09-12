@@ -350,6 +350,39 @@ Before completion, run all necessary feasible tests and state which results were
 - If a code path or required file is unavailable, record the exact boundary and
   use the core workflow's user-question or blocked outcome instead of guessing past it.
 
+# Classified Completion Self-Review
+
+Before completion, self-review only the files changed by the current task and the directly
+connected contracts or execution paths needed to prove the requested behavior. Untouched,
+unrelated code and pre-existing defects are not self-review targets. Crossing into another
+module or layer requires a concrete call, data-flow, state, or public-contract connection to the
+current change.
+
+Classify the actual change and apply only the review dimensions that fit:
+
+- Documentation, comments, copy, or localization: check the user's requested meaning and format,
+  spelling, grammar, translation quality, terminology, links or examples when applicable, and
+  consistency with nearby content. Do not apply executable-code, backend, persistence,
+  concurrency, or security checklists unless the edited material makes a factual claim that
+  requires a narrow implementation check.
+- Frontend markup, styling, or interaction: prioritize the user's explicit requirements. When
+  visual direction is not specified, check fit with the current project and nearby page,
+  responsive behavior, relevant interaction states, accessibility, and accidental visual
+  regressions. Inspect backend code only when the frontend change modifies or depends on a
+  concrete API, IPC, event, or serialized-data contract.
+- Executable source such as JavaScript, TypeScript, PHP, Go, Python, or Rust: ensure changed code
+  has no syntax, type, compile, lint, or directly relevant runtime errors using the narrowest
+  available check. Review the changed logic and its directly affected callers, callees, error
+  behavior, and regression risk; do not audit unrelated language modules merely because they
+  exist in the repository.
+- Cross-boundary, stateful, persistence, filesystem, process, network, security, concurrency, or
+  lifecycle changes: inspect only the boundaries the diff actually introduces or modifies,
+  including the directly relevant failure and recovery paths.
+
+Confirm that the task's own edits did not introduce a new bug or regression. Do not turn
+self-review into repository-wide auditing, speculative hardening, optional refactoring, or fixes
+for unrelated existing issues.
+
 # Coding Completion Evidence
 
 Before handing completion to the core workflow, verify the coding-specific evidence:

@@ -314,6 +314,17 @@ impl WorkflowExecutor {
             .and_then(Self::normalize_review_file_path)
     }
 
+    fn is_excluded_review_path(path: &str) -> bool {
+        let mut components = path.trim_start_matches('/').split('/');
+        let is_absolute_tmp = path.starts_with('/')
+            && components
+                .clone()
+                .next()
+                .is_some_and(|component| component == "tmp");
+        is_absolute_tmp
+            || components.any(|component| matches!(component, ".cs" | ".tmp" | ".codegraph"))
+    }
+
     fn review_payload_changed_files(messages: &[WorkflowMessage]) -> Vec<Value> {
         let mut files = BTreeMap::<String, Value>::new();
         for message in messages {
@@ -338,23 +349,20 @@ impl WorkflowExecutor {
             let Some(path) = Self::review_file_path(details) else {
                 continue;
             };
+            if Self::is_excluded_review_path(&path) {
+                continue;
+            }
             let entry = files.entry(path.clone()).or_insert_with(|| {
                 json!({
                     "path": path,
                     "operations": Vec::<String>::new(),
                     "change_types": Vec::<String>::new(),
-                    "successful_call_count": 0,
                     "first_message_id": message.id,
                     "last_message_id": message.id,
                     "line_ranges": Vec::<Value>::new(),
-                    "summaries": Vec::<String>::new(),
                 })
             });
 
-            entry["successful_call_count"] = json!(entry["successful_call_count"]
-                .as_u64()
-                .unwrap_or(0)
-                .saturating_add(1));
             if entry["first_message_id"].is_null() && message.id.is_some() {
                 entry["first_message_id"] = json!(message.id);
             }
@@ -410,24 +418,13 @@ impl WorkflowExecutor {
                     "end_line": end_line
                 });
                 if let Some(line_ranges) = entry["line_ranges"].as_array_mut() {
-                    if !line_ranges.contains(&line_range) {
+                    if let Some(existing) = line_ranges.first_mut() {
+                        let existing_start = existing["start_line"].as_u64().unwrap_or(start_line);
+                        let existing_end = existing["end_line"].as_u64().unwrap_or(end_line);
+                        existing["start_line"] = json!(existing_start.min(start_line));
+                        existing["end_line"] = json!(existing_end.max(end_line));
+                    } else {
                         line_ranges.push(line_range);
-                    }
-                }
-            }
-
-            if let Some(summary) = metadata
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                if let Some(summaries) = entry["summaries"].as_array_mut() {
-                    if !summaries
-                        .iter()
-                        .any(|value| value.as_str() == Some(summary))
-                    {
-                        summaries.push(json!(summary));
                     }
                 }
             }
@@ -523,49 +520,67 @@ impl WorkflowExecutor {
 
     fn review_payload_fixed_requirements(messages: &[WorkflowMessage]) -> Vec<String> {
         const MAX_REQUIREMENT_CHARS: usize = 2_000;
+        let Some(message) = messages.iter().rev().find(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("message_kind"))
+                .and_then(Value::as_str)
+                == Some("final_review_feedback")
+        }) else {
+            return Vec::new();
+        };
+        let Some(required_fixes) = message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("review_verdict"))
+            .and_then(|verdict| verdict.get("required_fixes"))
+            .and_then(Value::as_array)
+        else {
+            return Vec::new();
+        };
+
         let mut seen = HashSet::new();
         let mut requirements = Vec::new();
-
-        for message in messages.iter().rev() {
-            let Some(metadata) = message.metadata.as_ref() else {
-                continue;
-            };
-            if metadata.get("message_kind").and_then(Value::as_str) != Some("final_review_feedback")
-            {
-                continue;
-            }
-            let Some(required_fixes) = metadata
-                .get("review_verdict")
-                .and_then(|verdict| verdict.get("required_fixes"))
-                .and_then(Value::as_array)
+        for requirement in required_fixes {
+            let Some(requirement) = requirement
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
             else {
                 continue;
             };
-
-            for requirement in required_fixes.iter().rev() {
-                let Some(requirement) = requirement
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                else {
-                    continue;
-                };
-                let mut characters = requirement.chars();
-                let mut requirement = characters
-                    .by_ref()
-                    .take(MAX_REQUIREMENT_CHARS)
-                    .collect::<String>();
-                if characters.next().is_some() {
-                    requirement.push_str("\n...[truncated]");
-                }
-                if seen.insert(requirement.clone()) {
-                    requirements.push(requirement);
-                }
+            let mut characters = requirement.chars();
+            let mut requirement = characters
+                .by_ref()
+                .take(MAX_REQUIREMENT_CHARS)
+                .collect::<String>();
+            if characters.next().is_some() {
+                requirement.push_str("\n...[truncated]");
+            }
+            if seen.insert(requirement.clone()) {
+                requirements.push(requirement);
             }
         }
-
-        requirements.reverse();
         requirements
+    }
+
+    fn latest_final_review_feedback_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        messages.iter().rposition(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("message_kind"))
+                .and_then(Value::as_str)
+                == Some("final_review_feedback")
+        })
+    }
+
+    fn review_delta_messages(messages: &[WorkflowMessage]) -> (Vec<WorkflowMessage>, Option<i64>) {
+        let Some(index) = Self::latest_final_review_feedback_index(messages) else {
+            return (messages.to_vec(), None);
+        };
+        (messages[index + 1..].to_vec(), messages[index].id)
     }
 
     fn final_review_optional_context_budget(reviewer_context_limit: usize) -> usize {
@@ -580,27 +595,14 @@ impl WorkflowExecutor {
     fn select_fixed_requirements(
         payload: &mut serde_json::Map<String, Value>,
         fixed_requirements: Vec<String>,
-        token_budget: usize,
-    ) -> (usize, usize) {
-        let total = fixed_requirements.len();
-        let mut selected = Vec::new();
-        for requirement in fixed_requirements.into_iter().rev() {
-            let mut candidate = selected.clone();
-            candidate.push(requirement);
-            payload.insert("fixed_requirements".to_string(), json!(candidate.clone()));
-            if !selected.is_empty() && Self::estimated_payload_tokens(payload) > token_budget {
-                payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
-                break;
-            }
-            selected = candidate;
-        }
-        if selected.is_empty() {
+    ) -> usize {
+        let count = fixed_requirements.len();
+        if fixed_requirements.is_empty() {
             payload.remove("fixed_requirements");
         } else {
-            selected.reverse();
-            payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
+            payload.insert("fixed_requirements".to_string(), json!(fixed_requirements));
         }
-        (total.saturating_sub(selected.len()), selected.len())
+        count
     }
 
     fn structured_tool_arguments(metadata: &Value) -> Option<Value> {
@@ -697,17 +699,20 @@ impl WorkflowExecutor {
 
             if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE) {
                 let details = metadata.get("details");
-                mutation_ledger.push(json!({
-                    "message_id": message.id,
-                    "tool_name": tool_name,
-                    "status": execution_status,
-                    "path": details
-                        .and_then(Self::review_file_path)
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                    "summary": summary,
-                    "details": Self::review_mutation_details(details)
-                }));
+                let path = details.and_then(Self::review_file_path);
+                if path
+                    .as_deref()
+                    .map_or(true, |path| !Self::is_excluded_review_path(path))
+                {
+                    mutation_ledger.push(json!({
+                        "message_id": message.id,
+                        "tool_name": tool_name,
+                        "status": execution_status,
+                        "path": path.map(Value::String).unwrap_or(Value::Null),
+                        "summary": summary,
+                        "details": Self::review_mutation_details(details)
+                    }));
+                }
             }
 
             let arguments = Self::structured_tool_arguments(metadata);
@@ -785,7 +790,9 @@ impl WorkflowExecutor {
             })
             .map(|message| message.message.clone());
         let changed_files = Self::review_payload_changed_files(&task_messages);
-        let evidence = Self::build_final_review_evidence(&task_messages);
+        let (review_evidence_messages, review_baseline_message_id) =
+            Self::review_delta_messages(&task_messages);
+        let evidence = Self::build_final_review_evidence(&review_evidence_messages);
         let fixed_requirements = Self::review_payload_fixed_requirements(&task_messages);
         let todo_status =
             self.context
@@ -830,10 +837,25 @@ impl WorkflowExecutor {
         );
         payload.insert("changed_files".to_string(), json!(changed_files));
         payload.insert(
+            "review_scope".to_string(),
+            json!({
+                "mode": if review_baseline_message_id.is_some() {
+                    "re_review"
+                } else {
+                    "initial_review"
+                },
+                "evidence_baseline_message_id": review_baseline_message_id,
+                "evidence_message_count": review_evidence_messages.len(),
+                "history_policy": "Only the latest rejected review's required fixes are replayed; prior review ledgers are not replayed."
+            }),
+        );
+        payload.insert(
             "changed_files_source".to_string(),
             json!({
                 "kind": "successful_structured_file_tool_calls",
                 "scope": "durable_current_task_transcript",
+                "identity": "one entry per normalized product file path",
+                "excluded_paths": ["/tmp/**", "**/.cs/**", "**/.tmp/**", "**/.codegraph/**"],
                 "included_tools": [TOOL_EDIT_FILE, TOOL_WRITE_FILE],
                 "included_statuses": ["completed"],
                 "limitations": "Git status/diff remains authoritative for current workspace changes made through shell commands, generators, MCP tools, deletions, renames, or other non-file-tool paths."
@@ -866,8 +888,8 @@ impl WorkflowExecutor {
             }
         }
 
-        let (fixed_requirements_omitted, fixed_requirements_included) =
-            Self::select_fixed_requirements(&mut payload, fixed_requirements, token_budget);
+        let fixed_requirements_included =
+            Self::select_fixed_requirements(&mut payload, fixed_requirements);
 
         if planned_mode && Self::estimated_payload_tokens(&payload) < token_budget {
             if let Some(summary) = latest_compression_summary.as_ref() {
@@ -893,17 +915,16 @@ impl WorkflowExecutor {
         }
 
         let estimated_tokens = Self::estimated_payload_tokens(&payload);
-        if estimated_tokens > token_budget || fixed_requirements_omitted > 0 {
+        if estimated_tokens > token_budget {
             log::debug!(
-                "[Workflow][session={}][phase=final_review_context] Final review context budget decision: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, fixed_requirements_included={}, fixed_requirements_omitted={}",
+                "[Workflow][session={}][phase=final_review_context] Final review context exceeds optional context budget: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, fixed_requirements_included={}",
                 self.session_id,
                 context_limit,
                 token_budget,
                 estimated_tokens,
                 planned_mode,
                 compression_summary_included,
-                fixed_requirements_included,
-                fixed_requirements_omitted
+                fixed_requirements_included
             );
         }
         payload.insert(
@@ -913,8 +934,7 @@ impl WorkflowExecutor {
                 "optional_context_token_budget": token_budget,
                 "estimated_payload_tokens_before_budget_metadata": estimated_tokens,
                 "compression_summary_included": compression_summary_included,
-                "fixed_requirements_included": fixed_requirements_included,
-                "fixed_requirements_omitted": fixed_requirements_omitted
+                "fixed_requirements_included": fixed_requirements_included
             }),
         );
         let payload = Value::Object(payload);
@@ -927,8 +947,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
 - `user_messages` is the authoritative chronological current-task input recovered from the durable transcript. Later explicit user instructions override conflicting earlier instructions, approved-plan content, or acceptance criteria; non-conflicting constraints remain applicable.\n\
 - `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan as updated by later user instructions, or structured evidence.\n\
-- `fixed_requirements` is the compact, deduplicated list of requirements from completed prior review rounds that fit the context budget. The workflow treats them as fixed by this subsequent completion attempt; prior verdicts, findings, severities, summaries, and reviewer metadata are intentionally omitted.\n\
-- Use `fixed_requirements` only as regression checkpoints for the current diff and relevant execution path. Do not repeat one in `findings` or `required_fixes` merely because it is listed. Reopen it only when current direct evidence proves that the same in-scope defect remains or has regressed.\n\
+- `fixed_requirements` contains only the bounded, deduplicated required fixes from the latest rejected review. It is a compact re-review checkpoint, not a replay of all prior review verdicts or ledgers; earlier review results must not be reconstructed from it.\n\
+- `review_scope.mode` identifies whether this is the initial review or a re-review. In a re-review, `mutation_ledger`, `verification_ledger`, and `failed_actions` contain only evidence after `evidence_baseline_message_id`; use the full unique `changed_files` manifest for scope, then inspect the directly affected paths. A real, in-scope blocker or major must still be reported even if it was present before the latest fix or is discovered during re-review.\n\
 - If the work should not be allowed to finish, set `approved` to false and provide only concrete fixes for in-scope blocker or major findings.\n\
 - If no in-scope blocker or major remains, set `approved` to true; minor and info findings must not block approval.\n\
 - Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
@@ -3742,37 +3762,59 @@ mod tests {
     }
 
     #[test]
-    fn review_history_deduplicates_fixed_requirements() {
-        let feedback = json!({
-            "message_kind": "final_review_feedback",
-            "review_summary": "Fix the missing test",
-            "review_verdict": {
-                "approved": false,
-                "summary": "A focused regression test is required",
-                "findings": [],
-                "required_fixes": ["Add the missing test"]
-            }
-        });
+    fn latest_review_feedback_is_the_only_replayed_requirement_set() {
         let messages = vec![
             workflow_message(
                 1,
-                "tool",
-                "Earlier feedback",
+                "user",
+                "old feedback",
                 Some("observe"),
-                Some(feedback.clone()),
+                Some(json!({
+                    "message_kind": "final_review_feedback",
+                    "review_verdict": {"required_fixes": ["old fix"]}
+                })),
             ),
             workflow_message(
                 2,
-                "tool",
-                "Latest feedback",
+                "user",
+                "new feedback",
                 Some("observe"),
-                Some(feedback),
+                Some(json!({
+                    "message_kind": "final_review_feedback",
+                    "review_verdict": {"required_fixes": ["new fix"]}
+                })),
             ),
         ];
 
-        let requirements = WorkflowExecutor::review_payload_fixed_requirements(&messages);
+        assert_eq!(
+            WorkflowExecutor::review_payload_fixed_requirements(&messages),
+            vec!["new fix"]
+        );
+    }
 
-        assert_eq!(requirements, vec!["Add the missing test"]);
+    #[test]
+    fn review_delta_starts_after_latest_feedback() {
+        let messages = vec![
+            workflow_message(1, "tool", "old", Some("observe"), None),
+            workflow_message(
+                2,
+                "user",
+                "feedback",
+                Some("observe"),
+                Some(json!({"message_kind": "final_review_feedback"})),
+            ),
+            workflow_message(3, "tool", "new", Some("observe"), None),
+        ];
+
+        let (delta, baseline_id) = WorkflowExecutor::review_delta_messages(&messages);
+        assert_eq!(baseline_id, Some(2));
+        assert_eq!(
+            delta
+                .iter()
+                .filter_map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]
@@ -3807,20 +3849,16 @@ mod tests {
 
     #[test]
     fn fixed_requirement_budget_keeps_the_newest_values_that_fit() {
-        let mut payload = serde_json::Map::new();
-        payload.insert("base".to_string(), json!("base"));
         let fixed_requirements = (1..=3)
             .map(|round| format!("Requirement {round}: {}", "x".repeat(200)))
             .collect::<Vec<_>>();
-        let newest_requirement = fixed_requirements[2].clone();
 
-        let (omitted, included) =
-            WorkflowExecutor::select_fixed_requirements(&mut payload, fixed_requirements, 100);
+        let mut payload = serde_json::Map::new();
+        let included =
+            WorkflowExecutor::select_fixed_requirements(&mut payload, fixed_requirements);
 
-        assert_eq!(included, 1);
-        assert_eq!(omitted, 2);
-        assert_eq!(payload["fixed_requirements"][0], newest_requirement);
-        assert!(WorkflowExecutor::estimated_payload_tokens(&payload) <= 100);
+        assert_eq!(included, 3);
+        assert_eq!(payload["fixed_requirements"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -3957,7 +3995,6 @@ mod tests {
         assert_eq!(changed_files.len(), 2);
         assert_eq!(changed_files[0]["path"], "config/app.toml");
         assert_eq!(changed_files[0]["change_types"], json!(["overwritten"]));
-        assert_eq!(changed_files[0]["successful_call_count"], 1);
         assert_eq!(changed_files[1]["path"], "src/feature.rs");
         assert_eq!(
             changed_files[1]["operations"],
@@ -3967,17 +4004,55 @@ mod tests {
             changed_files[1]["change_types"],
             json!(["created", "edited"])
         );
-        assert_eq!(changed_files[1]["successful_call_count"], 2);
         assert_eq!(changed_files[1]["first_message_id"], 41);
         assert_eq!(changed_files[1]["last_message_id"], 42);
         assert_eq!(
             changed_files[1]["line_ranges"],
             json!([{"start_line": 10, "end_line": 11}])
         );
+    }
+
+    #[test]
+    fn changed_files_use_unique_paths_and_exclude_workspace_artifacts() {
+        let messages = [
+            (51, "src/feature.rs", 10, "one"),
+            (52, "./src/feature.rs", 20, "two"),
+            (53, "/tmp/generated.rs", 30, "tmp"),
+            (54, ".cs/handoffs/review.txt", 40, "cs"),
+            (55, "project/.tmp/cache.rs", 50, "tmp dir"),
+            (56, "project/.codegraph/index.json", 60, "codegraph"),
+        ]
+        .into_iter()
+        .map(|(id, path, start_line, text)| {
+            tool_message(
+                id,
+                "edited",
+                false,
+                json!({
+                    "tool_name": TOOL_EDIT_FILE,
+                    "execution_status": "completed",
+                    "details": {
+                        "display_path": path,
+                        "start_line": start_line,
+                        "new_string": text
+                    }
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
+
+        let changed_files = WorkflowExecutor::review_payload_changed_files(&messages);
+
+        assert_eq!(changed_files.len(), 1);
+        assert_eq!(changed_files[0]["path"], "src/feature.rs");
         assert_eq!(
-            changed_files[1]["summaries"],
-            json!(["Created feature", "Updated feature"])
+            changed_files[0]["line_ranges"],
+            json!([{"start_line": 10, "end_line": 20}])
         );
+        assert!(!changed_files[0]
+            .to_string()
+            .contains("successful_call_count"));
+        assert!(!changed_files[0].to_string().contains("summaries"));
     }
 
     #[test]
