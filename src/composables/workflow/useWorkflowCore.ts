@@ -502,6 +502,49 @@ export function useWorkflowCore({
         }
     }
 
+    const consumeFinalAuditMode = async (sessionId) => {
+        if (!sessionId) return
+
+        const isCurrentSession = currentWorkflowId.value === sessionId
+        const workflow = workflows.value.find((item) => item.id === sessionId)
+        const workflowConfig =
+            typeof workflow?.agentConfig === 'string'
+                ? (() => {
+                      try {
+                          return JSON.parse(workflow.agentConfig)
+                      } catch {
+                          return {}
+                      }
+                  })()
+                : workflow?.agentConfig || {}
+        const isEnabled = isCurrentSession
+            ? finalAuditMode.value === 'on' || workflowConfig.finalAudit === true
+            : workflowConfig.finalAudit === true
+        if (!isEnabled) return
+
+        try {
+            await invokeWrapper('update_workflow_final_audit', {
+                sessionId,
+                finalAudit: false
+            })
+
+            if (isCurrentSession && currentWorkflowId.value === sessionId) {
+                isSyncingWorkflowConfig.value = true
+                try {
+                    finalAuditMode.value = 'off'
+                } finally {
+                    isSyncingWorkflowConfig.value = false
+                }
+            }
+            applyWorkflowConfigToLocalStore(
+                { finalAudit: false, finalReviewMode: 'off' },
+                sessionId
+            )
+        } catch (error) {
+            console.warn('[Workflow] Failed to consume final audit mode:', error)
+        }
+    }
+
     const updateWorkflowPersonality = async (personality) => {
         const sessionId = currentWorkflowId.value
         if (!sessionId) return
@@ -1037,6 +1080,9 @@ export function useWorkflowCore({
                         })
                         // Play completion sound when background workflow successfully completes
                         if (statusLower === WORKFLOW_STATUSES.COMPLETED) {
+                            consumeFinalAuditMode(sessionId).catch((error) => {
+                                console.warn('[Workflow] Failed to consume completed final audit mode:', error)
+                            })
                             playCompletionSound()
                         }
                         const cleanup = backgroundStateListeners.get(sessionId)
@@ -1153,6 +1199,9 @@ export function useWorkflowCore({
                         })
                         // Play completion sound when workflow successfully completes
                         if ((payload.state || '').toLowerCase() === WORKFLOW_STATUSES.COMPLETED) {
+                            consumeFinalAuditMode(sessionId).catch((error) => {
+                                console.warn('[Workflow] Failed to consume completed final audit mode:', error)
+                            })
                             playCompletionSound()
                         }
                     }

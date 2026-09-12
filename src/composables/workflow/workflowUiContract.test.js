@@ -533,6 +533,33 @@ test('auto-compression starts disabled until explicitly enabled', async () => {
   assert.match(workflowCore, /autoCompressEnabled\.value = config\.autoCompress \?\? false/)
 })
 
+test('final audit is consumed only after successful workflow completion', async () => {
+  const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+  const activeStateHandlerStart = workflowCore.indexOf("if (payload.type === 'state')")
+  const activeStateHandlerEnd = workflowCore.indexOf("} else if (payload.type === 'chunk')", activeStateHandlerStart)
+  const activeStateHandler = workflowCore.slice(activeStateHandlerStart, activeStateHandlerEnd)
+
+  assert.match(
+    workflowCore,
+    /const consumeFinalAuditMode = async \(sessionId\) =>[\s\S]*?update_workflow_final_audit[\s\S]*?finalAudit: false/
+  )
+  assert.match(
+    activeStateHandler,
+    /if \(\(payload\.state \|\| ''\)\.toLowerCase\(\) === WORKFLOW_STATUSES\.COMPLETED\) \{[\s\S]*?consumeFinalAuditMode\(sessionId\)/,
+    'the active workflow must consume final audit only after completed'
+  )
+  assert.equal(
+    (activeStateHandler.match(/consumeFinalAuditMode\(sessionId\)/g) || []).length,
+    1,
+    'the active workflow must have one final-audit consumption path'
+  )
+  assert.match(
+    activeStateHandler,
+    /if \(\(payload\.state \|\| ''\)\.toLowerCase\(\) === WORKFLOW_STATUSES\.COMPLETED\) \{[\s\S]*?consumeFinalAuditMode\(sessionId\)/,
+    'failed, cancelled, and error terminal states must keep final audit enabled'
+  )
+})
+
 test('execution style popover uses a DOM reference and preserves Agent-scoped choices', async () => {
   const [inputArea, workflowView, workflowCore] = await Promise.all([
     readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
