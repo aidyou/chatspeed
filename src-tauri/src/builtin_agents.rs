@@ -638,9 +638,6 @@ pub fn sync_builtin_agents_if_needed(main_store: Arc<MainStore>) -> Result<(), S
         sync_single_builtin_agent(&store, definition, default_shell_policy.as_ref())?;
     }
 
-    log::info!(
-        "Builtin agents synchronized from {:?}",
-        builtin_agents_root
-    );
+    log::info!("Builtin agents synchronized from {:?}", builtin_agents_root);
     Ok(())
 }

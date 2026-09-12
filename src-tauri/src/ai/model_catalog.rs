@@ -1072,8 +1072,9 @@ mod tests {
     fn vendor_prefixed_ids_match_profiles_via_short_id() {
         let source = r#"{"version":1,"defaults":{"capabilities":{}},"profiles":[{"id":"p","priority":1,"match":{"model":["demo-1"]},"family":"demo"}],"transports":[]}"#;
         let catalog = parse_catalog(source).expect("catalog");
-        let result = resolve_model_profile_with_catalog(&catalog, "Vendor/Demo-1", None, None, None)
-            .expect("profile");
+        let result =
+            resolve_model_profile_with_catalog(&catalog, "Vendor/Demo-1", None, None, None)
+                .expect("profile");
         assert_eq!(result.family.as_deref(), Some("demo"));
         assert_eq!(result.matched_profile_ids, vec!["p".to_string()]);
     }

@@ -758,7 +758,10 @@ mod tests {
             IntelligenceManager::sanitize_detected_language("\"中文\"\nextra"),
             "中文"
         );
-        assert_eq!(IntelligenceManager::sanitize_detected_language("  English. "), "English");
+        assert_eq!(
+            IntelligenceManager::sanitize_detected_language("  English. "),
+            "English"
+        );
         assert_eq!(IntelligenceManager::sanitize_detected_language(""), "");
     }
 

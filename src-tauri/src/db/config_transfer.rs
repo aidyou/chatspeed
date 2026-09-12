@@ -2458,7 +2458,10 @@ mod tests {
         let destination = super::super::MainStore::new(&destination_path).unwrap();
         let result =
             import_config_package(&destination, &package_path, [ConfigCategory::Agents]).unwrap();
-        assert_eq!(result.imported_counts.get(&ConfigCategory::Agents), Some(&1));
+        assert_eq!(
+            result.imported_counts.get(&ConfigCategory::Agents),
+            Some(&1)
+        );
         let destination_runtime = destination.db_runtime().unwrap();
         let exposure: String = destination_runtime
             .read_blocking(|connection| {

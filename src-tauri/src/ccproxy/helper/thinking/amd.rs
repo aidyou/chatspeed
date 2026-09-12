@@ -27,9 +27,7 @@ fn is_deepseek_v4(model: &str) -> bool {
 }
 
 fn is_qwen38_flash(model: &str) -> bool {
-    model
-        .trim()
-        .eq_ignore_ascii_case("qwen3.8-flash-next")
+    model.trim().eq_ignore_ascii_case("qwen3.8-flash-next")
 }
 
 fn is_supported_model(model: &str) -> bool {
