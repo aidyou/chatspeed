@@ -343,7 +343,7 @@
                         </div>
                       </div>
                     </div>
-                    <MarkdownSimple
+                    <MarkdownSimple v-link
                       v-else-if="
                         shouldShowToolRawContent(tool) &&
                         tool.toolDisplay?.displayType === 'markdown' &&
@@ -467,12 +467,12 @@
                         class="hljs"
                         v-html="getHighlightedBashCommand(tool)"></code></pre>
                       </div>
-                      <MarkdownSimple
+                      <MarkdownSimple v-link
                         v-if="
                           shouldShowExplorationToolRawContent(tool) && tool.displayType === 'diff'
                         "
                         :content="getDiffMarkdown(removeSystemReminder(tool.message))" />
-                      <MarkdownSimple
+                      <MarkdownSimple v-link
                         v-else-if="
                           shouldShowExplorationToolRawContent(tool) &&
                           tool.displayType === 'markdown' &&
@@ -609,7 +609,7 @@
                       </div>
                     </div>
                     <div v-if="isSubAgentTaskExpanded(message)" class="sub-agent-card__task-body">
-                      <MarkdownSimple :content="message.subAgentCard.taskMarkdown" />
+                      <MarkdownSimple v-link :content="message.subAgentCard.taskMarkdown" />
                     </div>
                   </div>
 
@@ -647,7 +647,7 @@
                     <div
                       v-if="isSubAgentResultExpanded(message)"
                       class="sub-agent-card__result-body">
-                      <MarkdownSimple :content="message.subAgentCard.resultMarkdown" />
+                      <MarkdownSimple v-link :content="message.subAgentCard.resultMarkdown" />
                     </div>
                   </div>
 
@@ -941,7 +941,7 @@
                       </div>
                     </template>
                   </div>
-                  <MarkdownSimple
+                  <MarkdownSimple v-link
                     v-else-if="
                       !isApprovalPending(message) &&
                       shouldShowToolRawContent(message) &&
@@ -1011,7 +1011,7 @@
                     :class="{ expanded: isContextSnapshotExpanded(message) }" />
                 </div>
                 <div v-if="isContextSnapshotExpanded(message)" class="context-snapshot-card__body">
-                  <MarkdownSimple :content="formatContextSnapshotForDisplay(message)" />
+                  <MarkdownSimple v-link :content="formatContextSnapshotForDisplay(message)" />
                 </div>
               </div>
 
@@ -1066,13 +1066,13 @@
                 class="workflow-error-alert">
                 <template #title>{{ getErrorAlertTitle(message) }}</template>
                 <div class="workflow-error-alert__body">
-                  <MarkdownSimple :content="getErrorAlertContent(message)" />
+                  <MarkdownSimple v-link :content="getErrorAlertContent(message)" />
                 </div>
               </el-alert>
               <div
                 v-else-if="getCopyableAiOutput(message)"
                 class="ai-output-content">
-                <MarkdownSimple :content="getParsedMessage(message).content" />
+                <MarkdownSimple v-link :content="getParsedMessage(message).content" />
                 <button
                   type="button"
                   class="ai-output-copy-button"
@@ -1106,7 +1106,7 @@
                   <div
                     v-if="call.toolName === 'complete_workflow' && call.completionSummary"
                     class="finish-task-summary markdown-body">
-                    <MarkdownSimple :content="call.completionSummary" />
+                    <MarkdownSimple v-link :content="call.completionSummary" />
                   </div>
                 </div>
               </div>
@@ -1154,7 +1154,7 @@
               class="ai-output-content ai-output-content--streaming">
               <div v-for="(block, bIdx) in chatState.blocks" :key="bIdx">
                 <!-- Output all blocks from the parser (paragraph, code, math, etc.) -->
-                <MarkdownSimple :content="block.content" />
+                <MarkdownSimple v-link :content="block.content" />
               </div>
               <button
                 type="button"
@@ -2336,7 +2336,7 @@ const getFinishTaskLabel = message => {
 }
 
 // Copy source mirrors the expanded submit_plan render:
-// <MarkdownSimple :content="removeSystemReminder(message.message)" />
+// <MarkdownSimple v-link :content="removeSystemReminder(message.message)" />
 const getSubmitPlanCopyContent = message =>
   String(props.removeSystemReminder(message?.message) || '').trim()
 

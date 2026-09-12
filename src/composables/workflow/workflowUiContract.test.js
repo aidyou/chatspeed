@@ -834,6 +834,17 @@ test('persisted awaiting-user status restores answer controls when an older snap
   )
 })
 
+test('workflow markdown links use the default browser opener', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+  const markdownInstances = messageList.match(/<MarkdownSimple\b[^>]*>/g) || []
+
+  assert.ok(markdownInstances.length > 0, 'the workflow message list must render MarkdownSimple content')
+  assert.ok(
+    markdownInstances.every(instance => /\bv-link\b/.test(instance)),
+    'every workflow MarkdownSimple instance must open links through the default browser'
+  )
+})
+
 test('tool activity grouping keeps only explicit independent segments as boundaries', async () => {
   const [messageList, workflowMessages, projectionRules] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
