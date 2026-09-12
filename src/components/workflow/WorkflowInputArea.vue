@@ -1281,13 +1281,13 @@ watch(
 const availableApprovalTools = computed(() => {
   const allowedSet = new Set(
     workflowAvailableToolIds.value.filter(
-      toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_load'
+      toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_expand' && toolId !== 'mcp_tool_load'
     )
   )
 
   return agentAvailableTools.value
     .filter(tool => allowedSet.has(tool.id))
-    .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_load')
+    .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_expand' && tool.id !== 'mcp_tool_load')
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 const canAddShellPolicyItem = computed(() =>

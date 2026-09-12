@@ -424,8 +424,10 @@ fn add_loaded_mcp_tool_to_turn_tools(
 
     for declaration in messages.iter().filter_map(|message| {
         (message.get("role").and_then(Value::as_str) == Some("tool")
-            && message.get("name").and_then(Value::as_str)
-                == Some(crate::tools::TOOL_MCP_TOOL_LOAD))
+            && message
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(crate::tools::is_mcp_tool_expand_tool))
         .then(|| {
             message
                 .get("structured_content")
@@ -877,7 +879,7 @@ async fn global_message_processor_loop(
                                     )
                                 ),
                             });
-                            if t_name_clone == crate::tools::TOOL_MCP_TOOL_LOAD {
+                            if crate::tools::is_mcp_tool_expand_tool(&t_name_clone) {
                                 if let Some(structured_content) = tool_execution_actual_result
                                     .get("structured_content")
                                     .cloned()

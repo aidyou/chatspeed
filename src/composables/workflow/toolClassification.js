@@ -14,7 +14,8 @@ export const WORKFLOW_SUB_AGENT_TOOL_NAMES = Object.freeze([
 ])
 
 export const WORKFLOW_MCP_TOOL_NAME_SEPARATOR = '__mcp__'
-export const WORKFLOW_MCP_LOADER_TOOL_NAME = 'mcp_tool_load'
+export const WORKFLOW_MCP_LOADER_TOOL_NAME = 'mcp_tool_expand'
+export const WORKFLOW_MCP_LEGACY_LOADER_TOOL_NAME = 'mcp_tool_load'
 
 const TODO_TOOL_NAMES = new Set(WORKFLOW_TODO_TOOL_NAMES)
 const SUB_AGENT_TOOL_NAMES = new Set(WORKFLOW_SUB_AGENT_TOOL_NAMES)
@@ -31,6 +32,7 @@ export const isWorkflowMcpTool = (toolName, category = null) => {
   const normalized = normalizeToolName(toolName)
   return (
     normalized === WORKFLOW_MCP_LOADER_TOOL_NAME ||
+    normalized === WORKFLOW_MCP_LEGACY_LOADER_TOOL_NAME ||
     normalized.includes(WORKFLOW_MCP_TOOL_NAME_SEPARATOR)
   )
 }

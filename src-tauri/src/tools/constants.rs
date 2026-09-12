@@ -34,7 +34,13 @@ pub const TOOL_ASK_USER: &str = "ask_user";
 pub const TOOL_COMPLETE_WORKFLOW: &str = "complete_workflow";
 pub const TOOL_SUBMIT_RESULT: &str = "submit_result";
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
-pub const TOOL_MCP_TOOL_LOAD: &str = "mcp_tool_load";
+pub const TOOL_MCP_TOOL_EXPAND: &str = "mcp_tool_expand";
+/// Legacy workflow/chat tool name accepted for replay and compatibility.
+pub const TOOL_MCP_TOOL_LOAD_LEGACY: &str = "mcp_tool_load";
+
+pub fn is_mcp_tool_expand_tool(name: &str) -> bool {
+    matches!(name, TOOL_MCP_TOOL_EXPAND | TOOL_MCP_TOOL_LOAD_LEGACY)
+}
 pub const TOOL_READ_HISTORY_MESSAGE: &str = "read_history_message";
 
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";

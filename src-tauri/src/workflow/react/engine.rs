@@ -17,7 +17,7 @@ use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
+    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_EXPAND, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
     TOOL_PLAN_WRITE_NOTE, TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
@@ -706,11 +706,17 @@ impl WorkflowExecutor {
     }
 
     fn mcp_tool_exposure_set(&self) -> HashSet<String> {
-        let mut exposed: HashSet<String> = self
-            .mcp_tool_config()
-            .map(|config| config.auto_expand.into_iter().collect())
+        Self::mcp_tool_exposure_set_for_config(self.mcp_tool_config(), &self.loaded_mcp_tools)
+    }
+
+    fn mcp_tool_exposure_set_for_config(
+        config: Option<crate::db::McpToolConfig>,
+        loaded_mcp_tools: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut exposed: HashSet<String> = config
+            .map(|config| config.available.into_iter().collect())
             .unwrap_or_default();
-        exposed.extend(self.loaded_mcp_tools.iter().cloned());
+        exposed.extend(loaded_mcp_tools.iter().cloned());
         exposed
     }
 
@@ -745,7 +751,7 @@ impl WorkflowExecutor {
         Self::is_mcp_tool_allowed_by_config(configured_tools.as_ref(), tool_name)
     }
 
-    fn should_register_mcp_tool_loader(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
+    fn should_register_mcp_tool_expander(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
         mcp_tool_count > 0 && folded_tool_count > 0
     }
 
@@ -2368,7 +2374,8 @@ impl WorkflowExecutor {
             let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
                 is_core_workflow_builtin_tool(name)
                     || tools.contains(name)
-                    || (name == TOOL_MCP_TOOL_LOAD && configured_mcp_tools.is_some())
+                    || (crate::tools::is_mcp_tool_expand_tool(name)
+                        && configured_mcp_tools.is_some())
             });
 
             scope_allowed && config_allowed
@@ -2614,8 +2621,8 @@ impl WorkflowExecutor {
             }
         }
 
-        // 7. MCP tools. Configured tools are exposed directly with full schemas; all
-        // remaining MCP tools keep the existing folded discovery path.
+        // 7. MCP tools. User-enabled tools are exposed directly with full schemas. MCP tools
+        // outside the workflow allowlist keep the folded discovery path.
         if self
             .policy
             .allowed_categories
@@ -2654,12 +2661,12 @@ impl WorkflowExecutor {
                 .filter(|tool| !exposed_mcp_tools.contains(&tool.canonical_name))
                 .map(|tool| tool.canonical_name.clone())
                 .collect::<HashSet<_>>();
-            if Self::should_register_mcp_tool_loader(
+            if Self::should_register_mcp_tool_expander(
                 allowed_mcp_tools.len(),
                 folded_mcp_tools.len(),
-            ) && is_allowed(TOOL_MCP_TOOL_LOAD)
+            ) && is_allowed(TOOL_MCP_TOOL_EXPAND)
             {
-                tm.register_tool(Arc::new(McpToolLoad {
+                tm.register_tool(Arc::new(McpToolExpand {
                     tool_manager: self.global_tool_manager.clone(),
                     allowed_tools: Some(
                         allowed_mcp_tools
@@ -6388,7 +6395,7 @@ impl WorkflowExecutor {
         tool_call: &serde_json::Value,
         result: Result<serde_json::Value, crate::tools::ToolError>,
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
-        if name == crate::tools::TOOL_MCP_TOOL_LOAD && result.is_ok() {
+        if crate::tools::is_mcp_tool_expand_tool(name) && result.is_ok() {
             if let Some(requested_tool_name) = args.get("tool_name").and_then(Value::as_str) {
                 if let Some(canonical_tool_name) = self
                     .global_tool_manager
@@ -7785,7 +7792,7 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         if !self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
             self.llm_processor.mcp_tool_summaries.clear();
-            self.llm_processor.mcp_tool_loader_available = false;
+            self.llm_processor.mcp_tool_expander_available = false;
             return Ok(());
         }
 
@@ -7829,7 +7836,7 @@ impl WorkflowExecutor {
             .into_iter()
             .map(|tool| tool.declaration.name)
             .collect::<Vec<_>>();
-        let had_loader = self.tool_manager.has_tool(TOOL_MCP_TOOL_LOAD).await;
+        let had_expander = self.tool_manager.has_tool(TOOL_MCP_TOOL_EXPAND).await;
         let had_summary_names = self
             .llm_processor
             .mcp_tool_summaries
@@ -7837,12 +7844,12 @@ impl WorkflowExecutor {
             .map(|tool| tool.name.clone())
             .collect::<Vec<_>>();
         let summaries_changed = had_summary_names != expected_folded_names;
-        let should_have_loader = Self::should_register_mcp_tool_loader(
+        let should_have_expander = Self::should_register_mcp_tool_expander(
             available_mcp_tools.len(),
             expected_folded_names.len(),
         );
         let registrations_changed = registered_mcp_names != expected_exposed_names
-            || had_loader != should_have_loader
+            || had_expander != should_have_expander
             || summaries_changed;
 
         if summaries_changed {
@@ -7854,7 +7861,7 @@ impl WorkflowExecutor {
             );
         }
         self.llm_processor.mcp_tool_summaries = refreshed_summaries;
-        self.llm_processor.mcp_tool_loader_available = should_have_loader;
+        self.llm_processor.mcp_tool_expander_available = should_have_expander;
 
         if rebuild_if_loader_missing && registrations_changed {
             log::info!(
@@ -11246,9 +11253,31 @@ mod recovery_tests {
             malformed_allowlist.as_ref(),
             "server__MCP__direct"
         ));
-        assert!(WorkflowExecutor::should_register_mcp_tool_loader(2, 1));
-        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(2, 0));
-        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(0, 0));
+        assert!(WorkflowExecutor::should_register_mcp_tool_expander(2, 1));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_expander(2, 0));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_expander(0, 0));
+    }
+
+    #[test]
+    fn available_mcp_tools_are_direct_and_not_folded() {
+        let available = [
+            "server__MCP__direct".to_string(),
+            "server__MCP__expanded".to_string(),
+        ];
+        let config = crate::db::McpToolConfig {
+            available: available.to_vec(),
+            auto_approve: vec![available[0].clone()],
+            auto_expand: vec![available[1].clone()],
+        };
+        let exposed =
+            WorkflowExecutor::mcp_tool_exposure_set_for_config(Some(config), &HashSet::new());
+        let folded = available
+            .iter()
+            .filter(|tool| !exposed.contains(*tool))
+            .collect::<Vec<_>>();
+
+        assert_eq!(exposed.len(), 2);
+        assert!(folded.is_empty());
     }
 
     #[test]

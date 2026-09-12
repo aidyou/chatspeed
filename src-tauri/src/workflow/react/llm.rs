@@ -55,7 +55,7 @@ pub struct LlmProcessor {
     pub active_model_name: String,
     pub reasoning: bool,
     pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
-    pub mcp_tool_loader_available: bool,
+    pub mcp_tool_expander_available: bool,
     pub workflow_task_run_id: String,
     pub root_session_id: String,
     pub root_task_run_id: String,
@@ -509,7 +509,7 @@ impl LlmProcessor {
             active_model_name,
             reasoning,
             mcp_tool_summaries,
-            mcp_tool_loader_available: false,
+            mcp_tool_expander_available: false,
             workflow_task_run_id,
             root_session_id,
             root_task_run_id,
@@ -1367,7 +1367,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
         let skills_enabled = self.agent_config.skill_enabled.unwrap_or(true);
 
         // MCP tools (before skills)
-        if self.mcp_tool_loader_available && !self.mcp_tool_summaries.is_empty() {
+        if self.mcp_tool_expander_available && !self.mcp_tool_summaries.is_empty() {
             reminders.push_str("## AVAILABLE MCP TOOLS:\n");
             let mut tools: Vec<_> = self.mcp_tool_summaries.iter().collect();
             tools.sort_by(|left, right| Self::stable_name_cmp(&left.name, &right.name));
@@ -1378,7 +1378,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                     tool.description.replace("\n", " ")
                 ));
             }
-            reminders.push_str("<SYSTEM_REMINDER>Folded MCP tools are discoverable capabilities, similar to skills: only their names and descriptions are shown here, so they are not callable until loaded. When you need one, call `mcp_tool_load` exactly once with its listed public name, then treat the returned full definition as authoritative and call that MCP tool directly as your very next tool action using the returned public name and input schema. Loading the definition is not execution and does not satisfy the request; do not stop or call another unrelated tool after loading. Do not load the same tool again while the same unchanged definition is still visible in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again before calling the tool. MCP tools already present in the API tool list include their full definitions and must be called directly without `mcp_tool_load`; if that definition is no longer present in a later context, or has been updated and needs reloading, load it again.</SYSTEM_REMINDER>\n\n");
+            reminders.push_str("<SYSTEM_REMINDER>Folded MCP tools are discoverable capabilities, similar to skills: only their names and descriptions are shown here, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name, then treat the returned full definition as authoritative and call that MCP tool directly as your very next tool action using the returned public name and input schema. Loading the definition is not execution and does not satisfy the request; do not stop or call another unrelated tool after loading. Do not load the same tool again while the same unchanged definition is still visible in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again before calling the tool. MCP tools already present in the API tool list include their full definitions and must be called directly without `mcp_tool_expand`; if that definition is no longer present in a later context, or has been updated and needs reloading, load it again.</SYSTEM_REMINDER>\n\n");
         }
 
         // Skills
@@ -2040,7 +2040,7 @@ mod tests {
             active_model_name: "test-model".to_string(),
             reasoning: true,
             mcp_tool_summaries: Vec::new(),
-            mcp_tool_loader_available: false,
+            mcp_tool_expander_available: false,
             workflow_task_run_id: "test-session:task:1".to_string(),
             root_session_id: "test-session".to_string(),
             root_task_run_id: "test-session:task:1".to_string(),
@@ -2254,7 +2254,7 @@ mod tests {
     #[test]
     fn build_extend_tools_prompt_sorts_mcp_and_skills_stably() {
         let mut processor = test_llm_processor();
-        processor.mcp_tool_loader_available = true;
+        processor.mcp_tool_expander_available = true;
         processor.mcp_tool_summaries = vec![
             MCPToolDeclaration {
                 name: "zeta_tool".into(),

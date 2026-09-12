@@ -1,8 +1,8 @@
-//! MCP Tool Loader
+//! MCP Tool Expander
 //!
-//! This module provides on-demand loading of MCP tool schemas.
+//! This module provides on-demand expansion of MCP tool schemas.
 //! Instead of injecting all MCP tool schemas into the context upfront,
-//! only tool descriptions are shown, and the full schema is loaded when needed.
+//! only tool descriptions are shown, and the full schema is expanded when needed.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -15,23 +15,23 @@ use crate::tools::{
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// MCP Tool Loader
+/// MCP Tool Expander
 ///
 /// Loads detailed parameter schemas for MCP tools on demand.
 /// This reduces context token usage by not including full schemas upfront.
-pub struct McpToolLoad {
+pub struct McpToolExpand {
     pub tool_manager: Arc<ToolManager>,
     pub allowed_tools: Option<HashSet<String>>,
 }
 
 #[async_trait]
-impl ToolDefinition for McpToolLoad {
+impl ToolDefinition for McpToolExpand {
     fn name(&self) -> &str {
-        crate::tools::TOOL_MCP_TOOL_LOAD
+        crate::tools::TOOL_MCP_TOOL_EXPAND
     }
 
     fn description(&self) -> &str {
-        "Load the complete definition of one folded MCP tool, including its authoritative public name and detailed input schema. This only loads the definition; it does NOT execute the MCP tool. For a tool listed under AVAILABLE MCP TOOLS, call this exactly once immediately before using that tool, then call the returned MCP tool directly as your next tool action using the returned schema. Do not call mcp_tool_load again while the same unchanged definition is still visible in the current context; if the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again. Do not use this for an MCP tool whose full schema is already in the API tool list."
+        "MCP tools listed in the workflow configuration are already callable with their full definitions. For a folded MCP tool, provide its public name to expand it before calling that tool directly. This only loads the definition; it does NOT execute the MCP tool."
     }
 
     fn category(&self) -> ToolCategory {
@@ -93,7 +93,7 @@ impl ToolDefinition for McpToolLoad {
             serde_json::to_string_pretty(&declaration).unwrap_or_else(|_| declaration.name.clone());
         Ok(ToolCallResult::success(
             Some(format!(
-                "Loaded the complete definition for folded MCP tool '{}'. This lookup did not execute the MCP tool. Call '{}' directly in your next tool action using this authoritative declaration; do not call mcp_tool_load again while this definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\nFull MCP tool definition:\n{}",
+                "Loaded the complete definition for folded MCP tool '{}'. This lookup did not execute the MCP tool. Call '{}' directly in your next tool action using this authoritative declaration; do not call mcp_tool_expand again while this definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\nFull MCP tool definition:\n{}",
                 tool_name, declaration.name, declaration_json
             )),
             Some(serde_json::to_value(declaration).unwrap_or_default()),
@@ -107,21 +107,21 @@ mod tests {
 
     #[test]
     fn description_requires_immediate_direct_execution_after_loading() {
-        let loader = McpToolLoad {
+        let loader = McpToolExpand {
             tool_manager: Arc::new(ToolManager::new()),
             allowed_tools: None,
         };
         let description = loader.description();
 
+        assert_eq!(loader.name(), crate::tools::TOOL_MCP_TOOL_EXPAND);
+        assert!(!loader.description().contains("mcp_tool_load"));
+        assert!(description.contains("full definitions"));
+        assert!(description.contains("folded MCP tool"));
         assert!(description.contains("does NOT execute the MCP tool"));
-        assert!(description.contains("next tool action"));
-        assert!(description.contains("while the same unchanged definition is still visible"));
-        assert!(description.contains("definition has been updated"));
-        assert!(description.contains("new work segment starts"));
     }
     #[tokio::test]
     async fn rejects_mcp_tool_outside_allowed_list() {
-        let loader = McpToolLoad {
+        let loader = McpToolExpand {
             tool_manager: Arc::new(ToolManager::new()),
             allowed_tools: Some(HashSet::from(["server__MCP__allowed".to_string()])),
         };

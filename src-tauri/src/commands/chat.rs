@@ -122,7 +122,7 @@ fn prepare_messages_with_system_context(
     // Add MCP tool summaries (descriptions only)
     if !mcp_summaries.is_empty() {
         system_content.push_str("\n\n## AVAILABLE MCP TOOLS\n");
-        system_content.push_str("The following MCP tools are folded discovery entries, similar to skills: only their names and descriptions are shown, so they are not callable until loaded. When you need one, call `mcp_tool_load` exactly once with its listed public name. This only loads the definition; it does not execute the MCP tool or satisfy the request. After it returns, call the returned MCP tool directly as your very next tool action using the returned public name and input schema. Do not load the same tool again while its definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\n");
+        system_content.push_str("The following MCP tools are folded discovery entries, similar to skills: only their names and descriptions are shown, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name. This only loads the definition; it does not execute the MCP tool or satisfy the request. After it returns, call the returned MCP tool directly as your very next tool action using the returned public name and input schema. Do not load the same tool again while its definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\n");
         for tool in mcp_summaries {
             system_content.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
         }
@@ -430,12 +430,12 @@ pub async fn chat_completion(
     if mcp_enabled.unwrap_or(false) {
         if !chat_state
             .tool_manager
-            .has_tool(crate::tools::TOOL_MCP_TOOL_LOAD)
+            .has_tool(crate::tools::TOOL_MCP_TOOL_EXPAND)
             .await
         {
             chat_state
                 .tool_manager
-                .register_tool(Arc::new(crate::tools::McpToolLoad {
+                .register_tool(Arc::new(crate::tools::McpToolExpand {
                     tool_manager: chat_state.tool_manager.clone(),
                     allowed_tools: None,
                 }))
@@ -464,7 +464,7 @@ pub async fn chat_completion(
         if mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
                 !mcp_tool_names.contains(&tool.name)
-                    || tool.name == crate::tools::TOOL_MCP_TOOL_LOAD
+                    || tool.name == crate::tools::TOOL_MCP_TOOL_EXPAND
             });
         }
         // When MCP is disabled, remove MCP declarations using structured ToolManager metadata.

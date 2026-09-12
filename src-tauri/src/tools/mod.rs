@@ -26,7 +26,7 @@ pub use git_diff::GitDiff;
 pub use git_inspect::GitInspect;
 pub use history::ReadHistoryMessage;
 pub use interaction::*;
-pub use mcp_loader::McpToolLoad;
+pub use mcp_loader::McpToolExpand;
 pub use sandbox::*;
 pub use search::*;
 pub use shell::*;

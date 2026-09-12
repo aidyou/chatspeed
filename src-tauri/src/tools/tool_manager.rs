@@ -144,7 +144,8 @@ fn reserved_mcp_aliases() -> HashSet<String> {
         crate::tools::TOOL_COMPLETE_WORKFLOW,
         crate::tools::TOOL_SUBMIT_RESULT,
         crate::tools::TOOL_SUBMIT_PLAN,
-        crate::tools::TOOL_MCP_TOOL_LOAD,
+        crate::tools::TOOL_MCP_TOOL_EXPAND,
+        crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY,
         crate::tools::TOOL_READ_HISTORY_MESSAGE,
     ]
     .into_iter()
@@ -552,6 +553,18 @@ impl ToolManager {
     }
 
     pub async fn resolve_tool_name(&self, name: &str) -> String {
+        let name = if name == crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY
+            && self
+                .tools
+                .read()
+                .await
+                .contains_key(crate::tools::TOOL_MCP_TOOL_EXPAND)
+        {
+            crate::tools::TOOL_MCP_TOOL_EXPAND
+        } else {
+            name
+        };
+
         if self.tools.read().await.contains_key(name) {
             return name.to_string();
         }
@@ -1454,17 +1467,17 @@ mod tests {
             .await
             .is_none());
 
-        let loader = crate::tools::McpToolLoad {
+        let loader = crate::tools::McpToolExpand {
             tool_manager: manager.clone(),
             allowed_tools: Some(HashSet::from(["beta__MCP__search".to_string()])),
         };
         let loaded = loader
             .call(json!({ "tool_name": "search" }))
             .await
-            .expect("public MCP alias must resolve through mcp_tool_load");
+            .expect("public MCP alias must resolve through mcp_tool_expand");
         let declaration = loaded
             .structured_content
-            .expect("mcp_tool_load must return a declaration");
+            .expect("mcp_tool_expand must return a declaration");
         assert_eq!(declaration["name"], "search");
         assert!(loaded
             .content
@@ -1473,6 +1486,29 @@ mod tests {
         assert!(loaded.content.as_deref().is_some_and(|content| {
             content.contains("Call 'search' directly in your next tool action")
         }));
+    }
+
+    #[tokio::test]
+    async fn legacy_mcp_expander_name_resolves_to_new_name() {
+        let manager = Arc::new(ToolManager::new());
+        manager
+            .register_tool(Arc::new(crate::tools::McpToolExpand {
+                tool_manager: manager.clone(),
+                allowed_tools: None,
+            }))
+            .await
+            .expect("MCP expander should register");
+
+        assert!(
+            manager
+                .has_tool(crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY)
+                .await
+        );
+        let tool = manager
+            .get_tool(crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY)
+            .await
+            .expect("legacy MCP expander name should resolve");
+        assert_eq!(tool.name(), crate::tools::TOOL_MCP_TOOL_EXPAND);
     }
 
     #[tokio::test]

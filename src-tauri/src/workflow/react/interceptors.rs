@@ -2122,7 +2122,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
 
         // MCP tool schema loading is a built-in discovery step and should not require approval.
-        if name == crate::tools::TOOL_MCP_TOOL_LOAD {
+        if crate::tools::is_mcp_tool_expand_tool(name) {
             return false;
         }
 

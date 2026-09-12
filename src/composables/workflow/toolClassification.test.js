@@ -15,7 +15,7 @@ for (const toolName of ['sub_agent_run', 'sub_agent_output', 'sub_agent_stop']) 
   assert.equal(getWorkflowToolFamily(toolName), 'task')
 }
 
-for (const toolName of ['server__MCP__search', 'SERVER__mcp__WRITE', 'mcp_tool_load']) {
+for (const toolName of ['server__MCP__search', 'SERVER__mcp__WRITE', 'mcp_tool_expand', 'mcp_tool_load']) {
   assert.equal(isWorkflowMcpTool(toolName), true, `${toolName} must be classified as MCP`)
 }
 
