@@ -171,7 +171,13 @@ impl LlmProcessor {
                     final_metadata = chunk.metadata.clone();
                 }
                 MessageType::Error => {
-                    return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                    // The chat Result carries the authoritative typed error. Do not downgrade
+                    // the same upstream error into a second General(String) error here.
+                    log::warn!(
+                        "[Workflow][session={}][phase=llm][event=non_authoritative_error_chunk] {}",
+                        session_id,
+                        chunk.chunk
+                    );
                 }
                 _ => {}
             }
@@ -787,7 +793,8 @@ impl LlmProcessor {
                     }
 
                     let should_retry = match &e {
-                        AiError::ApiRequestFailed { status_code, .. } => {
+                        AiError::ApiRequestFailed { status_code, .. }
+                        | AiError::RawApiRequestFailed { status_code, .. } => {
                             // Do NOT retry on auth/not-found errors.
                             // Some providers return transient upstream/runtime issues as HTTP 400,
                             // so 400 must still get bounded retries instead of crashing the workflow.
@@ -1855,6 +1862,34 @@ mod tests {
         ) -> Result<(), WorkflowEngineError> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn stream_collector_does_not_downgrade_error_chunks() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let raw_error = r#"{"error":{"message":"quota exhausted"}}"#;
+        tx.send(ChatResponse::new_with_arc(
+            "raw-error-test".to_string(),
+            raw_error.to_string(),
+            MessageType::Error,
+            None,
+            Some(crate::ai::traits::chat::FinishReason::Error),
+        ))
+        .expect("error chunk should enter lossless ingress");
+        drop(tx);
+
+        let result = LlmProcessor::collect_stream_chunks(
+            "raw-error-test".to_string(),
+            rx,
+            Arc::new(NoopGateway),
+            false,
+            HashSet::new(),
+        )
+        .await
+        .expect("non-authoritative error chunk must not fail collection");
+
+        assert_eq!(result.0, "");
+        assert_eq!(result.3, None);
     }
 
     #[tokio::test]

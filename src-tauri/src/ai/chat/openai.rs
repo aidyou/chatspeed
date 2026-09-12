@@ -41,11 +41,46 @@ pub(crate) fn parse_responses_non_stream_tool_call_for_test(
     openai_responses::parse_non_stream_tool_call_for_test(response)
 }
 
+fn api_error_details(response: &crate::ai::network::ApiResponse) -> String {
+    response
+        .raw_error_body
+        .clone()
+        .or_else(|| {
+            serde_json::from_str::<crate::ai::network::ResponseError>(&response.content)
+                .ok()
+                .map(|error_payload| error_payload.message)
+        })
+        .unwrap_or_else(|| response.content.clone())
+}
+
+fn api_request_error(response: &crate::ai::network::ApiResponse, provider: String) -> AiError {
+    AiError::RawApiRequestFailed {
+        status_code: response.status_code,
+        provider,
+        details: api_error_details(response),
+    }
+}
+
 /// A standardized error structure for streaming to the frontend.
 #[derive(Serialize)]
 struct JsonErrorPayload<'a> {
     status: u16,
     message: &'a str,
+}
+
+fn chat_error_payload(response: &crate::ai::network::ApiResponse) -> String {
+    response
+        .raw_error_body
+        .clone()
+        .unwrap_or_else(|| response.content.clone())
+}
+
+fn chat_error_metadata(metadata: &ChatMetadata, status_code: u16) -> Option<Value> {
+    let mut value = metadata.to_value().unwrap_or_else(|| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("upstream_status_code".to_string(), json!(status_code));
+    }
+    Some(value)
 }
 
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
@@ -1135,13 +1170,42 @@ fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'s
 #[cfg(test)]
 mod tests {
     use super::{
-        build_prompt_cache_key, extract_inline_reasoning_content,
-        extract_reasoning_from_openai_message, responses_reasoning_summary,
-        sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
-        InlineThinkStreamState, OpenAIChat,
+        api_error_details, api_request_error, build_prompt_cache_key,
+        extract_inline_reasoning_content, extract_reasoning_from_openai_message,
+        responses_reasoning_summary, sanitize_reasoning_content, should_emit_reasoning_chunk,
+        EmptyHtmlCommentStreamState, InlineThinkStreamState, OpenAIChat,
     };
+    use crate::ai::error::AiError;
+    use crate::ai::network::{ApiResponse, ResponseError};
     use crate::db::ModelConfig;
     use serde_json::json;
+
+    #[test]
+    fn api_request_error_prefers_raw_upstream_body_for_chat_and_workflow() {
+        let raw_body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted"}}"#;
+        let response = ApiResponse {
+            content: serde_json::to_string(&ResponseError::new(
+                Some(429),
+                Some("quota_exceeded".to_string()),
+                "quota exhausted".to_string(),
+            ))
+            .unwrap(),
+            raw_error_body: Some(raw_body.to_string()),
+            is_error: true,
+            status_code: 429,
+            raw_response: None,
+        };
+
+        assert_eq!(api_error_details(&response), raw_body);
+        assert!(matches!(
+            api_request_error(&response, "provider".to_string()),
+            AiError::RawApiRequestFailed {
+                status_code: 429,
+                details,
+                ..
+            } if details == raw_body
+        ));
+    }
 
     #[test]
     fn endpoint_decision_preserves_chat_and_compat_fallbacks() {
@@ -1919,33 +1983,15 @@ impl AiChatTrait for OpenAIChat {
         })?;
 
         if response.is_error {
+            let err = api_request_error(&response, model_detail.name.clone());
             let status_code = response.status_code;
-
-            let details = if let Ok(error_payload) =
-                serde_json::from_str::<crate::ai::network::ResponseError>(&response.content)
-            {
-                error_payload.message
-            } else {
-                response.content.clone()
-            };
-
-            let err = AiError::ApiRequestFailed {
-                status_code,
-                provider: model_detail.name.clone(),
-                details,
-            };
-
-            let error_payload = JsonErrorPayload {
-                status: status_code,
-                message: &err.to_string(),
-            };
-            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+            let chunk = chat_error_payload(&response);
 
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                merged_metadata.to_value(),
+                chat_error_metadata(&merged_metadata, status_code),
                 Some(FinishReason::Error),
             ));
             return Err(err);

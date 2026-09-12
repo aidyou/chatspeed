@@ -412,6 +412,39 @@ fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Resu
     Ok(())
 }
 
+fn workflow_error_message(error: &crate::workflow::react::error::WorkflowEngineError) -> String {
+    match error {
+        crate::workflow::react::error::WorkflowEngineError::Ai(
+            crate::ai::error::AiError::RawApiRequestFailed { details, .. },
+        ) => details.clone(),
+        _ => error.to_string(),
+    }
+}
+
+fn is_raw_upstream_workflow_error(
+    error: &crate::workflow::react::error::WorkflowEngineError,
+) -> bool {
+    matches!(
+        error,
+        crate::workflow::react::error::WorkflowEngineError::Ai(
+            crate::ai::error::AiError::RawApiRequestFailed { .. }
+        )
+    )
+}
+
+fn format_workflow_terminal_error(
+    error: &crate::workflow::react::error::WorkflowEngineError,
+) -> String {
+    if is_raw_upstream_workflow_error(error) {
+        workflow_error_message(error)
+    } else {
+        format!(
+            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
+            workflow_error_message(error)
+        )
+    }
+}
+
 fn persist_failed_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
     store
         .update_workflow_status(session_id, &WorkflowState::Error.to_string())
@@ -3523,10 +3556,7 @@ async fn try_resume_completed_live_session(
                     crate::workflow::react::types::GatewayPayload::Message {
                         message_id: None,
                         role: "assistant".to_string(),
-                        content: format!(
-                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
-                            e
-                        ),
+                        content: format_workflow_terminal_error(&e),
                         reasoning: None,
                         step_type: None,
                         step_index: 0,
@@ -4286,10 +4316,7 @@ pub async fn workflow_start(
                     crate::workflow::react::types::GatewayPayload::Message {
                         message_id: None,
                         role: "assistant".to_string(),
-                        content: format!(
-                            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
-                            e
-                        ),
+                        content: format_workflow_terminal_error(&e),
                         reasoning: None,
                         step_type: None,
                         step_index: 0,
@@ -6161,6 +6188,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn raw_upstream_workflow_errors_are_not_wrapped_again() {
+        let raw_body = r#"{"error":{"message":"quota exhausted"}}"#;
+        let error = crate::workflow::react::error::WorkflowEngineError::Ai(
+            crate::ai::error::AiError::RawApiRequestFailed {
+                status_code: 429,
+                provider: "provider".to_string(),
+                details: raw_body.to_string(),
+            },
+        );
+
+        assert_eq!(format_workflow_terminal_error(&error), raw_body);
+        assert!(!format_workflow_terminal_error(&error).contains("Critical Error:"));
+    }
+
+    #[test]
+    fn non_raw_workflow_errors_keep_terminal_context() {
+        let error = crate::workflow::react::error::WorkflowEngineError::General(
+            "engine failure".to_string(),
+        );
+
+        let message = format_workflow_terminal_error(&error);
+        assert!(message.starts_with("Critical Error: "));
+        assert!(message.contains("engine failure"));
+    }
     #[test]
     fn workflow_auto_compression_defaults_to_disabled() {
         assert!(!workflow_auto_compress_enabled(&json!({})));

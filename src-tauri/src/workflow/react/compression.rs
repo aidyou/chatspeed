@@ -536,7 +536,8 @@ impl ContextCompressor {
 
     fn should_retry_compression_error(error: &AiError) -> bool {
         match error {
-            AiError::ApiRequestFailed { status_code, .. } => {
+            AiError::ApiRequestFailed { status_code, .. }
+            | AiError::RawApiRequestFailed { status_code, .. } => {
                 *status_code == 408 || *status_code == 429 || *status_code >= 500
             }
             AiError::InitFailed(_)

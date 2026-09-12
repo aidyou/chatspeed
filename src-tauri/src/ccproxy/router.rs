@@ -90,7 +90,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::errors::CCProxyError;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
-    auth::authenticate_request,
+    auth::{authenticate_request, is_trusted_internal_request},
     handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
     handle_responses,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
@@ -988,20 +988,6 @@ pub async fn routes(
 // ----------------------------------------------------------------------------
 
 /// Middleware for authenticating requests.
-fn is_trusted_internal_request(headers: &HeaderMap) -> bool {
-    headers
-        .get("x-cs-internal-request")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == "true")
-        && headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|token| {
-                token.trim() == crate::constants::INTERNAL_CCPROXY_API_KEY.read().as_str()
-            })
-}
-
 fn strip_untrusted_workflow_attribution_headers(headers: &mut HeaderMap) {
     for header in [
         "x-cs-workflow-session-id",
@@ -1024,8 +1010,8 @@ async fn authenticate_request_middleware(
     is_local: bool,
 ) -> Result<Response, Response> {
     let path = req.uri().path().to_string();
-    let is_trusted_internal_request = is_trusted_internal_request(&headers);
-    if !is_trusted_internal_request {
+    let trusted_internal_request = is_trusted_internal_request(&headers);
+    if !trusted_internal_request {
         strip_untrusted_workflow_attribution_headers(req.headers_mut());
     }
     match authenticate_request(

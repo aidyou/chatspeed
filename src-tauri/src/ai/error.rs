@@ -12,6 +12,13 @@ pub enum AiError {
         details: String,
     },
 
+    #[error("{details}")]
+    RawApiRequestFailed {
+        status_code: u16,
+        provider: String,
+        details: String,
+    },
+
     #[error("{0}")]
     InitFailed(String),
 

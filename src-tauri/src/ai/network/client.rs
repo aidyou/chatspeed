@@ -246,14 +246,16 @@ impl DefaultApiClient {
 
                 (message, Some(error_type))
             } else {
-                (error_text, None)
+                (error_text.clone(), None)
             };
 
-        Ok(ApiResponse::error(ResponseError::new(
+        let mut response = ApiResponse::error(ResponseError::new(
             Some(status_code),
             error_type,
             error_message,
-        )))
+        ));
+        response.raw_error_body = Some(error_text);
+        Ok(response)
     }
 }
 
@@ -386,5 +388,70 @@ impl ApiClient for DefaultApiClient {
             .await
             .map_err(|e| t!("network.request_failed", error = e.to_string()).to_string())?;
         self.process_response(response, false).await // GET requests are typically not streamed for list_models
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{routing::post, Router};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn error_response_keeps_parsed_fallback_and_raw_body() {
+        let app = Router::new().route(
+            "/error",
+            post(|| async {
+                (
+                    axum::http::StatusCode::TOO_MANY_REQUESTS,
+                    [("content-type", "application/json")],
+                    axum::Json(json!({
+                        "error": {
+                            "type": "quota_exceeded",
+                            "message": "upstream quota exhausted"
+                        }
+                    })),
+                )
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        let client = DefaultApiClient::new(ErrorFormat::OpenAI);
+        let response = client
+            .post_request(
+                &ApiConfig::new(
+                    Some(format!("http://{address}")),
+                    None,
+                    ProxyType::None,
+                    None,
+                ),
+                "/error",
+                json!({}),
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert!(response.is_error);
+        assert_eq!(response.status_code, 429);
+        assert_eq!(
+            serde_json::from_str::<Value>(&response.content).unwrap(),
+            json!({
+                "status_code": 429,
+                "error_type": "quota_exceeded",
+                "message": "upstream quota exhausted"
+            })
+        );
+        assert_eq!(
+            response.raw_error_body.as_deref(),
+            Some("{\"error\":{\"message\":\"upstream quota exhausted\",\"type\":\"quota_exceeded\"}}")
+        );
+        server.abort();
     }
 }

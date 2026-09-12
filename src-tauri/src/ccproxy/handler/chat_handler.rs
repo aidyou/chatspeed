@@ -421,6 +421,19 @@ pub(crate) async fn execute_unified_chat_request(
             error_body_str
         );
 
+        if crate::ccproxy::auth::is_trusted_internal_request(&client_headers) {
+            let filtered_headers =
+                crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
+            let mut response = Response::builder()
+                .status(status_code)
+                .body(Body::from(error_body_bytes))
+                .map_err(|e| {
+                    CCProxyError::InternalError(format!("Failed to build response: {}", e))
+                })?;
+            *response.headers_mut() = filtered_headers;
+            return log_client_response(response, &client_protocol, log_org_to_file).await;
+        }
+
         let mut unified_error = crate::ccproxy::adapter::error::normalize_backend_error(
             &proxy_model.chat_protocol,
             status_code,
@@ -821,6 +834,83 @@ mod usage_attribution_tests {
             headers.insert(name, value.parse().unwrap());
         }
         headers
+    }
+
+    fn internal_headers() -> HeaderMap {
+        let mut headers = attribution_headers();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn ccproxy_unified_internal_error_preserves_upstream_status_body_and_headers() {
+        let app = Router::new().route(
+            "/chat/completions",
+            post(|| async {
+                let body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted"}}"#;
+                axum::response::Response::builder()
+                    .status(http::StatusCode::TOO_MANY_REQUESTS)
+                    .header("content-type", "application/json")
+                    .header("x-request-id", "upstream-request")
+                    .header("content-length", body.len().to_string())
+                    .body(Body::from(body))
+                    .unwrap()
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("ccproxy-error.db")).unwrap());
+        let mut request = UnifiedRequest::default();
+        request.model = "alias".to_string();
+
+        let response = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            internal_headers(),
+            request,
+            "alias".to_string(),
+            proxy_model(format!("http://{address}")),
+            false,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store,
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get("x-request-id").unwrap(),
+            "upstream-request"
+        );
+        assert!(!response.headers().contains_key("content-length"));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            body,
+            &b"{\"error\":{\"type\":\"quota_exceeded\",\"message\":\"quota exhausted\"}}"[..]
+        );
+        server.abort();
     }
 
     #[tokio::test]
