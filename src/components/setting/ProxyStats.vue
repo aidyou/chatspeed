@@ -136,33 +136,50 @@
               <el-table-column
                 prop="provider"
                 :label="$t('settings.proxy.stats.provider')"
-                width="110"
-                show-overflow-tooltip />
-              <el-table-column min-width="160" show-overflow-tooltip>
+                min-width="130"
+                show-overflow-tooltip>
                 <template #header>
-                  <span
-                    style="cursor: pointer; user-select: none"
-                    @click="toggleModelColumn"
-                    :title="
-                      modelColumnMode === 'backend'
-                        ? $t('settings.proxy.stats.clientModel')
-                        : $t('settings.proxy.stats.backendModel')
-                    ">
-                    {{
-                      modelColumnMode === 'backend'
-                        ? $t('settings.proxy.stats.backendModel')
-                        : $t('settings.proxy.stats.clientModel')
-                    }}
-                  </span>
-                  <cs name="switch-line" size="var(--cs-font-size-sm)" />
-                </template>
-                <template #default="scope">
-                  <span style="color: var(--cs-color-primary); font-weight: bold">{{
-                    modelColumnMode === 'backend' ? scope.row.backendModel : scope.row.clientModel
-                  }}</span>
+                  <div class="provider-column-header">
+                    <span>{{ $t('settings.proxy.stats.provider') }}</span>
+                    <el-dropdown trigger="click" @command="toggleProviderColumn">
+                      <el-button link size="small" class="column-settings-button">
+                        <cs name="setting" size="14px" />
+                      </el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item
+                            v-for="column in providerColumnOptions"
+                            :key="column.key"
+                            :command="column.key"
+                            :disabled="column.key === 'provider'">
+                            <span class="column-check">
+                              <cs
+                                v-if="visibleProviderColumns.has(column.key)"
+                                name="check"
+                                size="14px" />
+                            </span>
+                            {{ $t(column.labelKey) }}
+                          </el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </div>
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('backendModel')"
+                prop="backendModel"
+                :label="$t('settings.proxy.stats.backendModel')"
+                min-width="160"
+                show-overflow-tooltip />
+              <el-table-column
+                v-if="visibleProviderColumns.has('clientModel')"
+                prop="clientModel"
+                :label="$t('settings.proxy.stats.clientModel')"
+                min-width="160"
+                show-overflow-tooltip />
+              <el-table-column
+                v-if="visibleProviderColumns.has('estimatedCost')"
                 :label="$t('settings.proxy.stats.estimatedCost')"
                 width="140"
                 sortable
@@ -172,6 +189,15 @@
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('totalTokens')"
+                :label="$t('settings.proxy.stats.totalTokens')"
+                width="130"
+                sortable
+                :sort-method="(a, b) => getTotalTokens(a) - getTotalTokens(b)">
+                <template #default="scope">{{ formatTokens(getTotalTokens(scope.row)) }}</template>
+              </el-table-column>
+              <el-table-column
+                v-if="visibleProviderColumns.has('inputTokens')"
                 :label="$t('settings.proxy.stats.inputTokens')"
                 width="120"
                 sortable
@@ -179,6 +205,7 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('outputTokens')"
                 :label="$t('settings.proxy.stats.outputTokens')"
                 width="140"
                 sortable
@@ -188,6 +215,7 @@
                 }}</template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('cacheTokens')"
                 :label="$t('settings.proxy.stats.cacheTokens')"
                 width="140"
                 sortable
@@ -195,6 +223,7 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('reasoningTokens')"
                 :label="$t('settings.proxy.stats.reasoningTokens')"
                 width="140"
                 sortable
@@ -202,6 +231,7 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalReasoningTokens) }}</template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('cacheWriteTokens')"
                 :label="$t('settings.proxy.stats.cacheWriteTokens')"
                 width="140"
                 sortable
@@ -209,6 +239,7 @@
                 <template #default="scope">{{ formatTokens(scope.row.totalCacheWriteTokens) }}</template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('cacheHitRate')"
                 :label="$t('settings.proxy.stats.cacheHitRate')"
                 width="140"
                 sortable
@@ -226,6 +257,7 @@
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('costPerMillionTokens')"
                 :label="$t('settings.proxy.stats.costPerMillionTokens')"
                 width="120"
                 sortable
@@ -237,11 +269,13 @@
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('requestCount')"
                 prop="requestCount"
                 :label="$t('settings.proxy.stats.requests')"
                 width="120"
                 sortable />
               <el-table-column
+                v-if="visibleProviderColumns.has('errorCount')"
                 :label="$t('settings.proxy.stats.errors')"
                 width="120"
                 sortable
@@ -263,6 +297,7 @@
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('protocol')"
                 prop="protocol"
                 :label="$t('settings.proxy.stats.protocol')"
                 width="110">
@@ -279,6 +314,7 @@
                 </template>
               </el-table-column>
               <el-table-column
+                v-if="visibleProviderColumns.has('toolCompatMode')"
                 :label="$t('settings.proxy.stats.toolCompat')"
                 width="150"
                 align="center">
@@ -296,7 +332,10 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="date" :label="$t('settings.proxy.stats.date')" min-width="120" />
+      <el-table-column
+        prop="date"
+        :label="$t('settings.proxy.stats.date')"
+        min-width="120" />
       <!-- <el-table-column
         prop="providerCount"
         :label="$t('settings.proxy.stats.providers')"
@@ -313,19 +352,13 @@
         </template>
       </el-table-column>
       <el-table-column
-        prop="totalRequestCount"
-        :label="$t('settings.proxy.stats.requests')"
-        width="120" />
-      <el-table-column :label="$t('settings.proxy.stats.inputTokens')" min-width="120">
-        <template #default="scope">{{ formatTokens(scope.row.totalInputTokens) }}</template>
+        :label="$t('settings.proxy.stats.totalTokens')"
+        min-width="130"
+        sortable
+        :sort-method="(a, b) => getTotalTokens(a) - getTotalTokens(b)">
+        <template #default="scope">{{ formatTokens(getTotalTokens(scope.row)) }}</template>
       </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.outputTokens')" min-width="130">
-        <template #default="scope">{{ formatTokens(scope.row.totalOutputTokens) }}</template>
-      </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.cacheTokens')" min-width="100">
-        <template #default="scope">{{ formatTokens(scope.row.totalCacheTokens) }}</template>
-      </el-table-column>
-      <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" min-width="110">
+      <el-table-column :label="$t('settings.proxy.stats.cacheHitRate')" min-width="120">
         <template #default="scope">
           {{
             formatPercent(
@@ -334,6 +367,10 @@
           }}
         </template>
       </el-table-column>
+      <el-table-column
+        prop="totalRequestCount"
+        :label="$t('settings.proxy.stats.requests')"
+        width="120" />
       <!-- <el-table-column prop="errorCount" :label="$t('settings.proxy.stats.errors')" width="100" /> -->
     </el-table>
 
@@ -462,7 +499,69 @@ const { t } = useI18n()
 const modelStore = useModelStore()
 
 const STORAGE_KEY_AUTO_REFRESH = 'ccproxy_stats_auto_refresh'
+const STORAGE_KEY_PROVIDER_COLUMNS = 'ccproxy_stats_provider_columns'
 const MAX_AUTO_REFRESH_DAYS = 30
+
+const DEFAULT_PROVIDER_COLUMNS = [
+  'provider',
+  'backendModel',
+  'estimatedCost',
+  'totalTokens',
+  'cacheHitRate',
+  'costPerMillionTokens',
+  'requestCount',
+  'errorCount'
+]
+
+const PROVIDER_COLUMN_OPTIONS = [
+  { key: 'provider', labelKey: 'settings.proxy.stats.provider' },
+  { key: 'backendModel', labelKey: 'settings.proxy.stats.backendModel' },
+  { key: 'clientModel', labelKey: 'settings.proxy.stats.clientModel' },
+  { key: 'estimatedCost', labelKey: 'settings.proxy.stats.estimatedCost' },
+  { key: 'totalTokens', labelKey: 'settings.proxy.stats.totalTokens' },
+  { key: 'cacheHitRate', labelKey: 'settings.proxy.stats.cacheHitRate' },
+  { key: 'costPerMillionTokens', labelKey: 'settings.proxy.stats.costPerMillionTokens' },
+  { key: 'requestCount', labelKey: 'settings.proxy.stats.requests' },
+  { key: 'errorCount', labelKey: 'settings.proxy.stats.errors' },
+  { key: 'inputTokens', labelKey: 'settings.proxy.stats.inputTokens' },
+  { key: 'outputTokens', labelKey: 'settings.proxy.stats.outputTokens' },
+  { key: 'cacheTokens', labelKey: 'settings.proxy.stats.cacheTokens' },
+  { key: 'reasoningTokens', labelKey: 'settings.proxy.stats.reasoningTokens' },
+  { key: 'cacheWriteTokens', labelKey: 'settings.proxy.stats.cacheWriteTokens' },
+  { key: 'protocol', labelKey: 'settings.proxy.stats.protocol' },
+  { key: 'toolCompatMode', labelKey: 'settings.proxy.stats.toolCompat' }
+]
+
+const providerColumnOptions = PROVIDER_COLUMN_OPTIONS
+
+const loadProviderColumns = () => {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY_PROVIDER_COLUMNS) || 'null')
+    if (!Array.isArray(stored)) return new Set(DEFAULT_PROVIDER_COLUMNS)
+    const validKeys = new Set(PROVIDER_COLUMN_OPTIONS.map(column => column.key))
+    return new Set(['provider', ...stored.filter(key => validKeys.has(key))])
+  } catch {
+    return new Set(DEFAULT_PROVIDER_COLUMNS)
+  }
+}
+
+const visibleProviderColumns = ref(loadProviderColumns())
+
+const persistProviderColumns = () => {
+  localStorage.setItem(
+    STORAGE_KEY_PROVIDER_COLUMNS,
+    JSON.stringify([...visibleProviderColumns.value])
+  )
+}
+
+const toggleProviderColumn = columnKey => {
+  if (columnKey === 'provider') return
+  const columns = new Set(visibleProviderColumns.value)
+  if (columns.has(columnKey)) columns.delete(columnKey)
+  else columns.add(columnKey)
+  visibleProviderColumns.value = columns
+  persistProviderColumns()
+}
 
 const loading = ref(false)
 const selectedDays = ref(0)
@@ -479,11 +578,6 @@ const providerStatsRaw = ref({})
 const providerLoading = ref({})
 const expandedDates = ref(new Set())
 const pricingMaps = ref(buildPricingMaps(modelStore.providers))
-
-const modelColumnMode = ref('backend') // 'backend' | 'client'
-const toggleModelColumn = () => {
-  modelColumnMode.value = modelColumnMode.value === 'backend' ? 'client' : 'backend'
-}
 
 const errorDialogVisible = ref(false)
 const errorLoading = ref(false)
@@ -620,6 +714,9 @@ const formatNumber = val => {
   }
   return num.toLocaleString()
 }
+
+const getTotalTokens = row =>
+  Number(row?.totalInputTokens || 0) + Number(row?.totalOutputTokens || 0)
 
 const estimateRowCost = row => {
   if (row.estimatedCost !== undefined && row.estimatedCost !== null) {
@@ -762,18 +859,15 @@ const enrichProviderRows = rows =>
     estimatedCost: estimateRowCost(row)
   }))
 
-const buildProviderAggregationKey = row => {
-  const activeModel =
-    modelColumnMode.value === 'backend' ? row.backendModel || '-' : row.clientModel || '-'
-
-  return [
+const buildProviderAggregationKey = row =>
+  [
     row.providerId ?? '',
     row.provider || '-',
-    activeModel,
+    row.backendModel || '-',
+    row.clientModel || '-',
     row.protocol || '-',
     row.toolCompatMode ?? 0
   ].join('::')
-}
 
 const regroupProviderRows = rows => {
   const grouped = new Map()
@@ -789,14 +883,14 @@ const regroupProviderRows = rows => {
         totalInputTokens: Number(row.totalInputTokens || 0),
         totalOutputTokens: Number(row.totalOutputTokens || 0),
         totalCacheTokens: Number(row.totalCacheTokens || 0),
-    totalCacheWriteTokens: Number(row.totalCacheWriteTokens || 0),
-    totalReasoningTokens: Number(row.totalReasoningTokens || 0),
-    totalAudioInputTokens: Number(row.totalAudioInputTokens || 0),
-    totalAudioOutputTokens: Number(row.totalAudioOutputTokens || 0),
+        totalCacheWriteTokens: Number(row.totalCacheWriteTokens || 0),
+        totalReasoningTokens: Number(row.totalReasoningTokens || 0),
+        totalAudioInputTokens: Number(row.totalAudioInputTokens || 0),
+        totalAudioOutputTokens: Number(row.totalAudioOutputTokens || 0),
         errorCount: Number(row.errorCount || 0),
         estimatedCost: Number(row.estimatedCost || 0),
-        errorFilterClientModel: modelColumnMode.value === 'client' ? row.clientModel : null,
-        errorFilterBackendModel: modelColumnMode.value === 'backend' ? row.backendModel : null
+        errorFilterClientModel: row.clientModel,
+        errorFilterBackendModel: row.backendModel
       })
       continue
     }
@@ -1514,10 +1608,6 @@ watch(autoRefreshEnabled, val => {
   }
 })
 
-watch(modelColumnMode, () => {
-  rebuildProviderStats()
-})
-
 watch(activeTrendTab, async (tabName, previousTabName) => {
   destroyTrendChart(previousTabName)
   await nextTick()
@@ -1785,6 +1875,26 @@ onUnmounted(() => {
 .rank-bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+
+.provider-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cs-space-xs);
+}
+
+.column-settings-button {
+  padding: 0;
+  color: var(--cs-text-color-secondary);
+}
+
+.column-check {
+  display: inline-block;
+  width: 16px;
+  margin-right: 4px;
+  color: var(--cs-color-primary);
+  font-weight: 600;
 }
 
 .expand-detail {
