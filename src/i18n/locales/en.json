@@ -1422,6 +1422,8 @@
     "historyTab": "Conversation",
     "installedSkillsGroup": "Installed Skills",
     "newWorkflow": "New Task",
+    "sidebarNavigation": "Workflow navigation",
+    "taskTab": "Tasks",
     "newWorkflowDialog": {
       "defaultDescription": "Create a task with the selected agent's default configuration.",
       "defaultTitle": "Use agent defaults",

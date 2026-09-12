@@ -1422,6 +1422,8 @@
     "historyTab": "對話",
     "installedSkillsGroup": "已安裝 Skills",
     "newWorkflow": "新增任務",
+    "sidebarNavigation": "工作流程導覽",
+    "taskTab": "任務",
     "newWorkflowDialog": {
       "defaultDescription": "使用目前選取智能體的預設設定建立。",
       "defaultTitle": "使用智能體預設設定",

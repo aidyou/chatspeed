@@ -147,7 +147,38 @@
     </Titlebar>
 
     <div class="workflow-main">
+      <nav class="workflow-side-rail" :aria-label="$t('workflow.sidebarNavigation')">
+        <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
+          <button
+            class="workflow-side-rail__item"
+            :class="{ active: workflowSidebarActiveTab === 'history' }"
+            type="button"
+            @click="openWorkflowSidebarTab('history')">
+            <cs name="skill-plan3" />
+          </button>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
+          <button
+            class="workflow-side-rail__item"
+            :class="{ active: workflowSidebarActiveTab === 'automation' }"
+            type="button"
+            @click="openWorkflowSidebarTab('automation')">
+            <cs name="clock" />
+          </button>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
+          <button
+            class="workflow-side-rail__item workflow-side-rail__terminal"
+            :class="{ blinking: terminal.hasSessions && !terminal.visible }"
+            type="button"
+            @click="terminal.open">
+            <cs name="bash" />
+          </button>
+        </el-tooltip>
+      </nav>
+
       <WorkflowSidebar
+        v-if="!sidebarCollapsed"
         :workflows="filteredWorkflows"
         :current-workflow-id="currentWorkflowId"
         :reset-primary-root-filter-token="sidebarRootFilterResetToken"
@@ -2222,6 +2253,11 @@ const displayAllowedPathTitle = computed(() => {
   if (!currentPaths.value?.length) return ''
   return displayAllowedPath.value || ''
 })
+
+const openWorkflowSidebarTab = tab => {
+  workflowSidebarActiveTab.value = tab
+  if (sidebarCollapsed.value) onToggleSidebar()
+}
 
 const onTitlebarPrimaryPathClick = () => {
   // The authorized paths tab is only rendered in the expanded sidebar.

@@ -1422,9 +1422,10 @@
     "historyTab": "会话",
     "installedSkillsGroup": "已安装 Skills",
     "newWorkflow": "新建任务",
+    "sidebarNavigation": "工作流导航",
+    "taskTab": "任务",
     "newWorkflowDialog": {
       "defaultDescription": "使用当前选择的智能体默认配置创建。",
-      "defaultTitle": "使用智能体默认配置",
       "description": "选择新任务要使用的配置。",
       "inheritDescription": "复用当前任务的智能体、授权目录和任务偏好。",
       "inheritTitle": "继承当前任务配置",

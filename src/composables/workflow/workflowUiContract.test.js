@@ -123,7 +123,20 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
-console.log('workflow UI contract tests passed')
+test('workflow uses a persistent navigation rail beside the collapsible task list', async () => {
+  const [workflowView, sidebar] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSidebar.vue', 'utf8')
+  ])
+
+  assert.match(workflowView, /<nav class="workflow-side-rail"[^>]*workflow\.sidebarNavigation/)
+  assert.match(workflowView, /<el-tooltip :content="\$t\('workflow\.taskTab'\)"[^>]*>\s*<button\s+class="workflow-side-rail__item"/)
+  assert.match(workflowView, /@click="openWorkflowSidebarTab\('history'\)"/)
+  assert.match(workflowView, /@click="openWorkflowSidebarTab\('automation'\)"/)
+  assert.match(workflowView, /<WorkflowSidebar\s+v-if="!sidebarCollapsed"/)
+  assert.match(sidebar, /<el-tab-pane :label="\$t\('workflow\.taskTab'\)" name="history">/)
+  assert.match(sidebar, /@reorder-paths="\$emit\('reorder-paths-from-tree', \$event\)"/)
+})
 
 test('authorized root drag sorting stays on the existing structured allowed-path update path', async () => {
   const [fileTree, sidebar, workflowView, workflowPaths, workflowStore, workflowCommand, pathGuard, engine] =

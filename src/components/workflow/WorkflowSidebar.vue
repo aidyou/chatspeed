@@ -1,25 +1,10 @@
 <template>
-  <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }" class="sidebar"
+  <el-aside
+    :width="sidebarWidth"
+    :class="{ collapsed: sidebarCollapsed, dragging: isDragging }"
+    class="sidebar"
     :style="sidebarStyle">
     <div v-if="sidebarCollapsed" class="sidebar-compact">
-      <div class="compact-sidebar-tabs">
-        <el-tooltip :content="$t('workflow.historyTab')" placement="right" :hide-after="0" :enterable="false">
-          <div
-            class="compact-sidebar-tab"
-            :class="{ active: compactSidebarTab === 'history' }"
-            @click="activeSidebarTab = 'history'">
-            <cs name="skill-plan3" size="var(--cs-font-size-lg)" />
-          </div>
-        </el-tooltip>
-        <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
-          <div
-            class="compact-sidebar-tab"
-            :class="{ active: compactSidebarTab === 'automation' }"
-            @click="activeSidebarTab = 'automation'">
-            <cs name="clock" size="var(--cs-font-size-lg)" />
-          </div>
-        </el-tooltip>
-      </div>
 
       <div v-if="compactSidebarTab === 'history'" class="compact-sidebar-list compact-workflow-list">
         <div v-if="compactActiveWorkflows.length" class="compact-sidebar-group">
@@ -162,7 +147,7 @@
 
     <div v-else class="sidebar-tabs-container">
       <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
-        <el-tab-pane :label="$t('workflow.historyTab')" name="history">
+        <el-tab-pane :label="$t('workflow.taskTab')" name="history">
           <div class="sidebar-header">
             <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
               <template #prefix>
