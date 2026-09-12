@@ -6,7 +6,45 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 const MINIMUM_INITIAL_TODO_COUNT: usize = 3;
+const TODO_DESCRIPTION_PREVIEW_CHARS: usize = 300;
 
+fn format_todo_list_for_llm(list: &[Value]) -> String {
+    if list.is_empty() {
+        return "Todo list is empty.".to_string();
+    }
+
+    list.iter()
+        .map(|item| {
+            let id = item["id"].as_str().unwrap_or("?");
+            let subject = item["subject"].as_str().unwrap_or("Untitled");
+            let status = item["status"].as_str().unwrap_or("?");
+            let description = if matches!(status, "pending" | "in_progress") {
+                item["description"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        format!(
+                            " description={}",
+                            value
+                                .chars()
+                                .take(TODO_DESCRIPTION_PREVIEW_CHARS)
+                                .collect::<String>()
+                                .replace(['\r', '\n'], " ")
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            format!(
+                "- id={} status={} subject={}{}",
+                id, status, subject, description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn format_todo_list_summary(list: &[Value]) -> String {
     if list.is_empty() {
         "You currently don't have a todo list.".to_string()
@@ -225,6 +263,10 @@ impl ToolDefinition for TodoCreateTool {
             created_ids.push(new_id);
         }
 
+        let llm_content = format!(
+            "Current todo list with details:\n{}\nUse todo_get for the complete description of one task.",
+            format_todo_list_for_llm(&list)
+        );
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         let created_count = created_ids.len();
         let content = format!(
@@ -239,7 +281,8 @@ impl ToolDefinition for TodoCreateTool {
                 "status": "created",
                 "mode": mode,
                 "created_count": created_count,
-                "created_ids": created_ids
+                "created_ids": created_ids,
+                "llm_content": llm_content
             })),
         ))
     }
@@ -308,14 +351,20 @@ impl ToolDefinition for TodoListTool {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let llm_output = format!(
+            "Current todo list with details:\n{}\nUse todo_get for the complete description of one task.",
+            format_todo_list_for_llm(&list)
+        );
         let count = list.len();
-        Ok(ToolCallResult::success(
-            Some(output),
-            Some(json!({
+        Ok(ToolCallResult {
+            content: Some(output),
+            structured_content: Some(json!({
                 "items": list,
-                "count": count
+                "count": count,
+                "llm_content": llm_output
             })),
-        ))
+            is_error: Some(false),
+        })
     }
 }
 
@@ -503,6 +552,35 @@ mod tests {
         assert!(reminder.contains("does not bypass"));
     }
 
+    #[test]
+    fn format_todo_list_for_llm_preserves_active_descriptions_only() {
+        let list = vec![
+            json!({
+                "id": "1",
+                "subject": "Short task",
+                "status": "pending",
+                "description": "Keep the complete requirement"
+            }),
+            json!({
+                "id": "2",
+                "subject": "Active task",
+                "status": "in_progress",
+                "description": "Verify the implementation"
+            }),
+            json!({
+                "id": "3",
+                "subject": "Finished task",
+                "status": "completed",
+                "description": "Do not repeat completed detail"
+            }),
+        ];
+
+        let rendered = format_todo_list_for_llm(&list);
+        assert!(rendered.contains("description=Keep the complete requirement"));
+        assert!(rendered.contains("description=Verify the implementation"));
+        assert!(!rendered.contains("Do not repeat completed detail"));
+    }
+
     async fn create_initial_todos(create_tool: &TodoCreateTool) {
         create_tool
             .call(json!({
@@ -578,6 +656,17 @@ mod tests {
         };
         let res = list_tool.call(json!({})).await.unwrap();
         assert!(res.content.unwrap().contains("[pending] Task 1 (ID: 1)"));
+
+        // The UI-facing text remains compact while the structured LLM projection keeps details.
+        let list_result = list_tool.call(json!({})).await.unwrap();
+        let llm_content = list_result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("llm_content"))
+            .and_then(Value::as_str)
+            .expect("todo list should provide an LLM detail projection");
+        assert!(llm_content.contains("description=First"));
+        assert!(!list_result.content.unwrap().contains("description=First"));
 
         // 3. Test Update
         let update_tool = TodoUpdateTool {

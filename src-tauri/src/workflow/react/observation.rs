@@ -155,7 +155,7 @@ impl ObservationReinforcer {
 
         match result {
             Ok(val) => {
-                let llm_content_override = val
+                let mut llm_content_override = val
                     .get("structured_content")
                     .and_then(|structured| structured.get("llm_content"))
                     .and_then(|value| value.as_str())
@@ -199,6 +199,13 @@ impl ObservationReinforcer {
                             list_str.push_str(&format!("{}. {} ({})\n", i + 1, subject, status));
                         }
                         raw_res = list_str;
+                        if let Some(llm_content) = val
+                            .get("structured_content")
+                            .and_then(|structured| structured.get("llm_content"))
+                            .and_then(Value::as_str)
+                        {
+                            llm_content_override = Some(llm_content.to_string());
+                        }
                     }
                 } else if tool_name == TOOL_TODO_UPDATE {
                     if let Some(todos) = extra_context.and_then(|v| v.as_array().cloned()) {
@@ -1159,6 +1166,44 @@ mod tests {
         fs::remove_file(physical_path).unwrap();
     }
 
+    #[test]
+    fn reinforce_todo_create_keeps_details_in_llm_projection_only() {
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_TODO_CREATE,
+                "arguments": {"mode":"replace"}
+            }
+        });
+        let todos = json!([
+            {
+                "id":"1",
+                "subject":"Short task",
+                "status":"pending",
+                "description":"Preserve the complete requirement"
+            }
+        ]);
+        let result = json!({
+            "content":"Successfully created 1 todo item(s)",
+            "structured_content": {
+                "llm_content":"Current todo list with details:\n- id=1 status=pending subject=Short task description=Preserve the complete requirement"
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(result),
+            Some(todos),
+            None,
+        );
+
+        assert!(!reinforced
+            .content
+            .contains("Preserve the complete requirement"));
+        assert!(reinforced
+            .llm_content
+            .as_deref()
+            .is_some_and(|content| content.contains("Preserve the complete requirement")));
+    }
     #[test]
     fn reinforce_terminal_todos_requires_atomic_completion_submission() {
         let tool_call = json!({

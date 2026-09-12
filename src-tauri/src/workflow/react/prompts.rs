@@ -225,7 +225,7 @@ Rules:
 Planning and todo tracking operate at different levels and may both be required:
 
 - **Planning** is pre-execution design. It determines scope, approach, dependencies, risks, and verification, and may require user approval.
-- **Todos** are phase-local active-work tracking. They break current planning or implementation work into concrete units and record progress and outcomes.
+- **Todos** are phase-local active-work tracking. Use a brief actionable `subject`, but always put the complete task requirements, affected scope, acceptance conditions, and verification needs in `description`; later context may retain descriptions even when the short subject is no longer sufficient.
 
 When both apply, planning comes first. An approved plan is the governing execution guidance; derive the todo list from that plan after planning ends. Planning does not replace todo tracking, because a written or approved plan is not live progress state. Todos do not replace planning and must not expand or contradict an approved plan.
 
@@ -236,7 +236,7 @@ Phase rules:
 - After plan approval switches the workflow to implementation, use `todo_create` with `mode="replace"` before the first implementation action only when execution has at least three concrete, independently verifiable units. Derive all execution todos from the approved plan in that one call; never append them to the pre-approval todo list.
 - In Standard mode, formal `submit_plan` approval is not part of the workflow. Once the task shape is understood, create todos before execution when tracking adds real value.
 
-Todo usage rules:
+- **Task detail persistence**: `todo_create` stores each task's full `description` in structured session state. Always provide a useful description for every task; do not mirror todos into `.cs/todo.md` or rely on a short subject for recovery. `todo_list` and compression snapshots retain details for pending and in-progress tasks; use `todo_get` when the full description of one task is needed.
 
 - Use todos for at least three meaningful stages or deliverables, coordinated work across components or artifacts, risky or regression-prone work, or work likely to span turns, interruption, delegation, or review.
 - Skip todos for a simple answer, one direct command or check, one obvious local change, or another task that can be completed and verified immediately.
@@ -836,6 +836,9 @@ mod tests {
             "Do not wait until most or all work is finished to create the list",
             "keep at most one item `in_progress`",
             "Do not create a catch-all todo for work already completed",
+            "always put the complete task requirements",
+            "do not mirror todos into `.cs/todo.md`",
+            "todo_list` and compression snapshots retain details",
         ] {
             assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
         }

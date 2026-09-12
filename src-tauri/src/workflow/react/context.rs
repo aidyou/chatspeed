@@ -858,13 +858,17 @@ impl ContextManager {
                     .get("status")
                     .and_then(|value| value.as_str())
                     .unwrap_or("unknown");
-                let description = if status == "in_progress" {
+                let description = if matches!(status, "pending" | "in_progress") {
                     todo.get("description")
                         .and_then(|value| value.as_str())
                         .map(|value| {
                             format!(
                                 " description={}",
-                                value.chars().take(300).collect::<String>()
+                                value
+                                    .chars()
+                                    .take(300)
+                                    .collect::<String>()
+                                    .replace(['\r', '\n'], " ")
                             )
                         })
                         .unwrap_or_default()
@@ -2876,6 +2880,7 @@ mod tests {
         );
         assert!(todo_snapshot_content.contains("<SYSTEM_REMINDER>"));
         assert!(todo_snapshot_content.contains("subject=Persist first snapshot"));
+        assert!(todo_snapshot_content.contains("description=captured before compression"));
 
         let llm_messages = context.get_messages_for_llm();
         let summary_index = llm_messages
