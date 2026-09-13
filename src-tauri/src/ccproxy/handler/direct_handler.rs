@@ -170,6 +170,38 @@ pub async fn handle_direct_forward(
                 "Request failed before receiving a response: {}",
                 error
             ));
+            crate::ccproxy::helper::stat_guard::record_error_stat(
+                main_store_arc.as_ref(),
+                CcproxyStat {
+                    id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: model_name.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: provider_name.clone(),
+                    protocol: chat_protocol_for_stat.to_string(),
+                    tool_compat_mode: 0,
+                    status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    error_message: Some(error.to_string()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    audio_input_tokens: 0,
+                    audio_output_tokens: 0,
+                    estimated_cost: None,
+                    pricing_status: Some("unpriced".to_string()),
+                    pricing_snapshot: None,
+                    request_at: None,
+                }
+                .with_workflow_attribution(&client_headers),
+            );
             return Err(error);
         }
     };
@@ -210,6 +242,39 @@ pub async fn handle_direct_forward(
             &full_url,
             status_code,
             error_msg
+        );
+
+        crate::ccproxy::helper::stat_guard::record_error_stat(
+            main_store_arc.as_ref(),
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: model_name.clone(),
+                provider_id: Some(proxy_model.provider_id),
+                provider: provider_name.clone(),
+                protocol: chat_protocol_for_stat.to_string(),
+                tool_compat_mode: 0,
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(error_msg.clone()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
         );
 
         return Ok(response);

@@ -178,6 +178,37 @@ pub async fn handle_embedding(
     let status_code = response.status();
     if !status_code.is_success() {
         let error_body = response.text().await.unwrap_or_default();
+        let error_message = error_body.clone();
+        if let Err(error) = store_arc.record_ccproxy_stat(CcproxyStat {
+            id: None,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+            client_model: proxy_alias,
+            backend_model: proxy_model.model.clone(),
+            provider_id: Some(proxy_model.provider_id),
+            provider: proxy_model.provider.clone(),
+            protocol: chat_protocol.to_string(),
+            tool_compat_mode: 0,
+            status_code: status_code.as_u16() as i32,
+            error_message: Some(error_message),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
+            estimated_cost: None,
+            pricing_status: Some("unpriced".to_string()),
+            pricing_snapshot: None,
+            request_at: None,
+        }) {
+            log::error!("Failed to enqueue CCProxy embedding error statistic: {error}");
+        }
         return Err(CCProxyError::InternalError(format!(
             "Backend returned error ({}): {}",
             status_code, error_body

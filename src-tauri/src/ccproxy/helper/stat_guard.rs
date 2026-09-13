@@ -40,6 +40,10 @@ pub fn finalize_pricing(
         .unwrap_or((None, Some("unpriced".to_string()), None))
 }
 
+pub fn record_error_stat(store: &MainStore, stat: CcproxyStat) {
+    let _ = store.record_ccproxy_stat(stat);
+}
+
 /// This handles both normal completion and premature termination (e.g., client disconnect).
 pub struct StreamStatGuard {
     pub log_recorder: Arc<Mutex<StreamLogRecorder>>,
@@ -94,6 +98,8 @@ impl Drop for StreamStatGuard {
             audio_output,
             has_output,
             stream_failed,
+            stream_status_code,
+            error_message,
         ) = {
             if let Ok(recorder) = self.log_recorder.lock() {
                 (
@@ -106,13 +112,55 @@ impl Drop for StreamStatGuard {
                     recorder.audio_output_tokens,
                     recorder.has_content || recorder.has_thinking || recorder.has_tool_calls,
                     recorder.stream_failed,
+                    recorder.stream_status_code,
+                    recorder.error_message.clone(),
                 )
             } else {
-                (None, None, None, None, None, None, None, false, true)
+                (
+                    None, None, None, None, None, None, None, false, true, 502, None,
+                )
             }
         };
 
-        if stream_failed || !has_output {
+        if stream_failed {
+            let _ = self.main_store.record_ccproxy_stat(CcproxyStat {
+                id: None,
+                workflow_session_id: self.workflow_session_id.clone(),
+                workflow_task_run_id: self.workflow_task_run_id.clone(),
+                workflow_segment_id: self.workflow_segment_id,
+                root_session_id: self.root_session_id.clone(),
+                root_task_run_id: self.root_task_run_id.clone(),
+                request_kind: self.request_kind.clone(),
+                client_model: self.client_model.clone(),
+                backend_model: self.backend_model.clone(),
+                provider_id: Some(self.provider_id),
+                provider: self.provider.clone(),
+                protocol: self.protocol.clone(),
+                tool_compat_mode: if self.tool_compat_mode { 1 } else { 0 },
+                status_code: if stream_status_code == 0 {
+                    502
+                } else {
+                    i32::from(stream_status_code)
+                },
+                error_message: Some(
+                    error_message.unwrap_or_else(|| "Backend stream failed".to_string()),
+                ),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            });
+            return;
+        }
+
+        if !has_output {
             return;
         }
 

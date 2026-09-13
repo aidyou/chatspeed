@@ -382,6 +382,39 @@ pub(crate) async fn execute_unified_chat_request(
                 log::info!(target: "ccproxy_upstream_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
             }
 
+            crate::ccproxy::helper::stat_guard::record_error_stat(
+                main_store_arc.as_ref(),
+                CcproxyStat {
+                    id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: proxy_model.model.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: proxy_model.provider.clone(),
+                    protocol: client_protocol.to_string(),
+                    tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                    status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    error_message: Some(message.clone()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    audio_input_tokens: 0,
+                    audio_output_tokens: 0,
+                    estimated_cost: None,
+                    pricing_status: Some("unpriced".to_string()),
+                    pricing_snapshot: None,
+                    request_at: None,
+                }
+                .with_workflow_attribution(&client_headers),
+            );
+
             let response = output_adapter.adapt_error_response(UnifiedErrorResponse {
                 status_code: http::StatusCode::BAD_GATEWAY.as_u16(),
                 message,
@@ -419,6 +452,39 @@ pub(crate) async fn execute_unified_chat_request(
             &full_url,
             status_code,
             error_body_str
+        );
+
+        crate::ccproxy::helper::stat_guard::record_error_stat(
+            main_store_arc.as_ref(),
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider_id: Some(proxy_model.provider_id),
+                provider: proxy_model.provider.clone(),
+                protocol: client_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(error_body_str.to_string()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
         );
 
         if crate::ccproxy::auth::is_trusted_internal_request(&client_headers) {
