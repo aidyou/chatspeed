@@ -141,7 +141,11 @@
                 <template #header>
                   <div class="provider-column-header">
                     <span>{{ $t('settings.proxy.stats.provider') }}</span>
-                    <el-dropdown trigger="click" @command="toggleProviderColumn">
+                    <el-dropdown
+                      trigger="click"
+                      :hide-on-click="false"
+                      popper-class="provider-column-dropdown"
+                      @command="toggleProviderColumn">
                       <el-button link size="small" class="column-settings-button">
                         <cs name="setting" size="14px" />
                       </el-button>
@@ -154,11 +158,10 @@
                             :disabled="column.key === 'provider'">
                             <span class="column-check">
                               <cs
-                                v-if="visibleProviderColumns.has(column.key)"
-                                name="check"
+                                :name="visibleProviderColumns.has(column.key) ? 'check-circle' : 'uncheck'"
                                 size="14px" />
                             </span>
-                            {{ $t(column.labelKey) }}
+                            <span class="column-label">{{ $t(column.labelKey) }}</span>
                           </el-dropdown-item>
                         </el-dropdown-menu>
                       </template>
@@ -1889,12 +1892,32 @@ onUnmounted(() => {
   color: var(--cs-text-color-secondary);
 }
 
+:global(.provider-column-dropdown .el-dropdown-menu) {
+  max-height: min(60vh, 360px);
+  overflow-y: auto;
+}
+
+:global(.provider-column-dropdown .el-dropdown-menu .el-dropdown-menu__item) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 34px;
+  line-height: 1.4;
+}
+
 .column-check {
-  display: inline-block;
-  width: 16px;
-  margin-right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  margin-right: 6px;
   color: var(--cs-color-primary);
-  font-weight: 600;
+  line-height: 1;
+}
+
+.column-label {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .expand-detail {

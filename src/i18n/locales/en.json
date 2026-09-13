@@ -882,6 +882,7 @@
         "cacheTokens": "Cache Tokens",
         "cacheWriteTokens": "Cache Write Tokens",
         "reasoningTokens": "Reasoning Tokens",
+        "cacheHitRate": "Cache hit",
 
         "clientModel": "Model Alias",
         "count": "Count",
