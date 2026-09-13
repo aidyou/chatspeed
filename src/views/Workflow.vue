@@ -151,7 +151,7 @@
         <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
           <button
             class="workflow-side-rail__item"
-            :class="{ active: workflowSidebarActiveTab === 'history' }"
+            :class="{ active: workflowSidebarNavigationTab === 'history' }"
             type="button"
             @click="openWorkflowSidebarTab('history')">
             <cs name="skill-plan3" />
@@ -160,7 +160,7 @@
         <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
           <button
             class="workflow-side-rail__item"
-            :class="{ active: workflowSidebarActiveTab === 'automation' }"
+            :class="{ active: workflowSidebarNavigationTab === 'automation' }"
             type="button"
             @click="openWorkflowSidebarTab('automation')">
             <cs name="clock" />
@@ -178,7 +178,6 @@
       </nav>
 
       <WorkflowSidebar
-        v-if="!sidebarCollapsed"
         :workflows="filteredWorkflows"
         :current-workflow-id="currentWorkflowId"
         :reset-primary-root-filter-token="sidebarRootFilterResetToken"
@@ -188,9 +187,9 @@
         :current-paths="currentPaths"
         :can-switch-workflow="canSwitchWorkflow"
         :is-dragging="isDragging"
-        :terminal-minimized="terminal.hasSessions && !terminal.visible"
         :automations="workflowAutomationStore.automations"
         :selected-automation-id="workflowAutomationStore.selectedAutomationId"
+        :navigation-tab="workflowSidebarNavigationTab"
         v-model:active-tab="workflowSidebarActiveTab"
         @select-workflow="onSelectWorkflowFromHistory"
         @select-automation="onSelectAutomation"
@@ -204,8 +203,7 @@
         @reorder-paths-from-tree="onReorderPathsFromTree"
         @insert-path-reference="insertPathReference"
         @open-editor-file="codeEditor.openFile"
-        @toggle-sidebar="onToggleSidebar"
-        @open-terminal="terminal.open" />
+        @toggle-sidebar="onToggleSidebar" />
 
       <!-- Resize Handle -->
       <div
@@ -449,6 +447,7 @@ const imageAttachments = ref([])
 const defaultImageRecognitionPrompt = ref('')
 const automationDrawerVisible = ref(false)
 const workflowSidebarActiveTab = ref('history')
+const workflowSidebarNavigationTab = ref('history')
 const activeSubAgentSessionId = ref('')
 const activeSubAgentParentSessionId = ref('')
 const lastHistoryWorkflowId = ref(null)
@@ -2255,8 +2254,10 @@ const displayAllowedPathTitle = computed(() => {
 })
 
 const openWorkflowSidebarTab = tab => {
-  workflowSidebarActiveTab.value = tab
-  if (sidebarCollapsed.value) onToggleSidebar()
+  if (tab === 'history' || tab === 'automation') {
+    workflowSidebarNavigationTab.value = tab
+    workflowSidebarActiveTab.value = tab
+  }
 }
 
 const onTitlebarPrimaryPathClick = () => {
@@ -2517,6 +2518,10 @@ const resolveInitialWorkflowId = () => {
 watch(
   () => workflowSidebarActiveTab.value,
   async tab => {
+    if (tab === 'history' || tab === 'automation') {
+      workflowSidebarNavigationTab.value = tab
+    }
+
     if (tab === 'automation') {
       const automationId =
         workflowAutomationStore.selectedAutomationId || resolveInitialAutomationId()

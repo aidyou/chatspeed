@@ -713,10 +713,22 @@ impl WorkflowExecutor {
         config: Option<crate::db::McpToolConfig>,
         loaded_mcp_tools: &HashSet<String>,
     ) -> HashSet<String> {
-        let mut exposed: HashSet<String> = config
-            .map(|config| config.available.into_iter().collect())
-            .unwrap_or_default();
-        exposed.extend(loaded_mcp_tools.iter().cloned());
+        let Some(config) = config else {
+            return loaded_mcp_tools.clone();
+        };
+
+        let available = config.available.into_iter().collect::<HashSet<_>>();
+        let mut exposed = config
+            .auto_expand
+            .into_iter()
+            .filter(|tool| available.contains(tool))
+            .collect::<HashSet<_>>();
+        exposed.extend(
+            loaded_mcp_tools
+                .iter()
+                .filter(|tool| available.contains(*tool))
+                .cloned(),
+        );
         exposed
     }
 
@@ -11259,25 +11271,27 @@ mod recovery_tests {
     }
 
     #[test]
-    fn available_mcp_tools_are_direct_and_not_folded() {
+    fn mcp_tool_exposure_uses_auto_expand_and_loaded_tools_within_available() {
         let available = [
             "server__MCP__direct".to_string(),
             "server__MCP__expanded".to_string(),
+            "server__MCP__loaded".to_string(),
         ];
         let config = crate::db::McpToolConfig {
             available: available.to_vec(),
             auto_approve: vec![available[0].clone()],
             auto_expand: vec![available[1].clone()],
         };
-        let exposed =
-            WorkflowExecutor::mcp_tool_exposure_set_for_config(Some(config), &HashSet::new());
-        let folded = available
-            .iter()
-            .filter(|tool| !exposed.contains(*tool))
-            .collect::<Vec<_>>();
+        let loaded = HashSet::from([available[2].clone(), "server__MCP__revoked".to_string()]);
 
-        assert_eq!(exposed.len(), 2);
-        assert!(folded.is_empty());
+        let exposed = WorkflowExecutor::mcp_tool_exposure_set_for_config(Some(config), &loaded);
+
+        assert_eq!(
+            exposed,
+            HashSet::from([available[1].clone(), available[2].clone()])
+        );
+        assert!(!exposed.contains(&available[0]));
+        assert!(!exposed.contains("server__MCP__revoked"));
     }
 
     #[test]

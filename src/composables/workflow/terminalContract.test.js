@@ -20,13 +20,15 @@ test('workflow terminal stays isolated from the workflow runtime and is workflow
   assert.match(runtime, /struct WorkflowManager/)
 })
 
-test('workflow sidebar presents the terminal entry in expanded and compact modes', async () => {
-  const sidebar = await read('src/components/workflow/WorkflowSidebar.vue')
-  assert.match(sidebar, /compact-terminal-entry/)
-  assert.match(sidebar, /expanded-terminal-entry/)
-  assert.match(sidebar, /name="bash"/)
-  assert.match(sidebar, /terminalMinimized/)
-  assert.match(sidebar, /open-terminal/)
+test('workflow terminal is exposed only from the persistent navigation rail', async () => {
+  const [sidebar, workflow] = await Promise.all([
+    read('src/components/workflow/WorkflowSidebar.vue'),
+    read('src/views/Workflow.vue')
+  ])
+  assert.doesNotMatch(sidebar, /compact-terminal-entry|expanded-terminal-entry|terminalMinimized|open-terminal/)
+  assert.match(workflow, /class="workflow-side-rail__item workflow-side-rail__terminal"/)
+  assert.match(workflow, /@click="terminal\.open"/)
+  assert.match(workflow, /<WorkflowSidebar\s+:workflows="filteredWorkflows"/)
 })
 
 test('terminal panel exposes independent tab and lifecycle controls', async () => {
