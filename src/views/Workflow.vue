@@ -146,64 +146,81 @@
       </template>
     </Titlebar>
 
-    <div class="workflow-main">
-      <nav class="workflow-side-rail" :aria-label="$t('workflow.sidebarNavigation')">
-        <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
-          <button
-            class="workflow-side-rail__item"
-            :class="{ active: workflowSidebarNavigationTab === 'history' }"
-            type="button"
-            @click="openWorkflowSidebarTab('history')">
-            <cs name="skill-plan3" />
-          </button>
-        </el-tooltip>
-        <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
-          <button
-            class="workflow-side-rail__item"
-            :class="{ active: workflowSidebarNavigationTab === 'automation' }"
-            type="button"
-            @click="openWorkflowSidebarTab('automation')">
-            <cs name="clock" />
-          </button>
-        </el-tooltip>
-        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
-          <button
-            class="workflow-side-rail__item workflow-side-rail__terminal"
-            :class="{ blinking: terminal.hasSessions && !terminal.visible }"
-            type="button"
-            @click="terminal.open">
-            <cs name="bash" />
-          </button>
-        </el-tooltip>
-      </nav>
+    <div class="workflow-main" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+      <div class="workflow-sidebar-region">
+        <nav class="workflow-side-rail" :aria-label="$t('workflow.sidebarNavigation')">
+          <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
+            <button
+              class="workflow-side-rail__item"
+              :class="{ active: workflowSidebarNavigationTab === 'history' }"
+              type="button"
+              @click="openWorkflowSidebarTab('history')">
+              <cs name="skill-plan3" />
+            </button>
+          </el-tooltip>
+          <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
+            <button
+              class="workflow-side-rail__item"
+              :class="{ active: workflowSidebarNavigationTab === 'automation' }"
+              type="button"
+              @click="openWorkflowSidebarTab('automation')">
+              <cs name="clock" />
+            </button>
+          </el-tooltip>
+          <el-tooltip :content="$t('workflow.terminal.title')" v-if="!sidebarCollapsed" placement="right" :hide-after="0" :enterable="false">
+            <button
+              class="workflow-side-rail__item workflow-side-rail__terminal"
+              :class="{ blinking: terminal.hasSessions && !terminal.visible }"
+              type="button"
+              @click="terminal.open">
+              <cs name="bash" />
+            </button>
+          </el-tooltip>
+        </nav>
 
-      <WorkflowSidebar
-        :workflows="filteredWorkflows"
-        :current-workflow-id="currentWorkflowId"
-        :reset-primary-root-filter-token="sidebarRootFilterResetToken"
-        :sidebar-collapsed="sidebarCollapsed"
-        :sidebar-width="sidebarWidth"
-        :sidebar-style="sidebarStyle"
-        :current-paths="currentPaths"
-        :can-switch-workflow="canSwitchWorkflow"
-        :is-dragging="isDragging"
-        :automations="workflowAutomationStore.automations"
-        :selected-automation-id="workflowAutomationStore.selectedAutomationId"
-        :navigation-tab="workflowSidebarNavigationTab"
-        v-model:active-tab="workflowSidebarActiveTab"
-        @select-workflow="onSelectWorkflowFromHistory"
-        @select-automation="onSelectAutomation"
-        @create-automation="openCreateAutomation"
-        @edit-automation="onEditAutomation"
-        @delete-automation="onDeleteAutomation"
-        @edit-workflow="onEditWorkflow"
-        @delete-workflow="onDeleteWorkflow"
-        @add-path-from-tree="onAddPathFromTree"
-        @remove-path-from-tree="onRemovePathFromTree"
-        @reorder-paths-from-tree="onReorderPathsFromTree"
-        @insert-path-reference="insertPathReference"
-        @open-editor-file="codeEditor.openFile"
-        @toggle-sidebar="onToggleSidebar" />
+        <WorkflowSidebar
+          :workflows="filteredWorkflows"
+          :current-workflow-id="currentWorkflowId"
+          :reset-primary-root-filter-token="sidebarRootFilterResetToken"
+          :sidebar-collapsed="sidebarCollapsed"
+          :sidebar-width="sidebarWidth"
+          :sidebar-style="sidebarStyle"
+          :current-paths="currentPaths"
+          :can-switch-workflow="canSwitchWorkflow"
+          :is-dragging="isDragging"
+          :automations="workflowAutomationStore.automations"
+          :selected-automation-id="workflowAutomationStore.selectedAutomationId"
+          :navigation-tab="workflowSidebarNavigationTab"
+          v-model:active-tab="workflowSidebarActiveTab"
+          @select-workflow="onSelectWorkflowFromHistory"
+          @select-automation="onSelectAutomation"
+          @create-automation="openCreateAutomation"
+          @edit-automation="onEditAutomation"
+          @delete-automation="onDeleteAutomation"
+          @edit-workflow="onEditWorkflow"
+          @delete-workflow="onDeleteWorkflow"
+          @add-path-from-tree="onAddPathFromTree"
+          @remove-path-from-tree="onRemovePathFromTree"
+          @reorder-paths-from-tree="onReorderPathsFromTree"
+          @insert-path-reference="insertPathReference"
+          @open-editor-file="codeEditor.openFile"
+          @toggle-sidebar="onToggleSidebar" />
+        <div v-if="sidebarCollapsed" class="workflow-sidebar-collapsed-terminal">
+          <el-tooltip
+            :content="$t('workflow.terminal.title')"
+            placement="right"
+            :hide-after="0"
+            :enterable="false">
+            <button
+              class="workflow-side-rail__item"
+              :class="{ blinking: terminal.hasSessions && !terminal.visible }"
+              type="button"
+              @click="terminal.open">
+              <cs name="bash" />
+            </button>
+          </el-tooltip>
+        </div>
+      </div>
 
       <!-- Resize Handle -->
       <div
