@@ -45,6 +45,16 @@ impl ShellExecutionResolver {
             } else {
                 super::types::WorkspaceAccess::ReadOnly
             };
+            if access == super::types::WorkspaceAccess::ReadWrite && !root.exists() {
+                if let Err(error) = std::fs::create_dir_all(root) {
+                    log::warn!(
+                        "[Sandbox] Failed to create writable skill root {:?}: {}",
+                        root,
+                        error
+                    );
+                    continue;
+                }
+            }
             push_mount(&mut mounts, root, access);
         }
         let temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
@@ -803,6 +813,38 @@ mod tests {
         assert!(plan.mounts.iter().any(|mount| {
             mount.host_path == physical_temp_root.to_string_lossy()
                 && mount.guest_path == crate::libs::ai_temp::AI_TEMP_ROOT
+                && mount.access == WorkspaceAccess::ReadWrite
+        }));
+    }
+
+    #[test]
+    fn complete_sandbox_mounts_creates_missing_writable_skill_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let skills_parent = tempfile::tempdir().unwrap();
+        let user_skills = skills_parent.path().join(".chatspeed").join("skills");
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::complete_sandbox_mounts(
+            ShellExecutionResolver::resolve(
+                "tool-missing-skills",
+                "echo hi",
+                Some(&config(ShellExecutionMode::Auto)),
+                &status,
+                Some(workspace.path()),
+            ),
+            &ShellSandboxMountContext {
+                authorized_roots: vec![workspace.path().to_path_buf()],
+                skill_roots: vec![user_skills.clone()],
+                writable_skill_roots: vec![user_skills.clone()],
+            },
+        );
+
+        assert!(user_skills.is_dir());
+        assert!(plan.mounts.iter().any(|mount| {
+            mount.host_path == user_skills.to_string_lossy()
+                && mount.guest_path == user_skills.to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadWrite
         }));
     }

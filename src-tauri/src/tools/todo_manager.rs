@@ -85,6 +85,21 @@ fn next_todo_id(list: &[Value]) -> Result<String, ToolError> {
     Ok(next_id.to_string())
 }
 
+fn validate_todo_description(task: &Value, index: usize) -> Result<(), ToolError> {
+    let has_description = task
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty());
+    if has_description {
+        return Ok(());
+    }
+
+    Err(ToolError::InvalidParams(format!(
+        "task {} description must be a non-empty string",
+        index + 1
+    )))
+}
+
 /// Helper to get and set todo list in DB
 async fn get_db_todo_list(
     store: &Arc<MainStore>,
@@ -232,6 +247,10 @@ impl ToolDefinition for TodoCreateTool {
                 "Either 'tasks' array or 'subject' and 'description' must be provided".to_string(),
             ));
         };
+
+        for (index, task) in tasks_to_create.iter().enumerate() {
+            validate_todo_description(task, index)?;
+        }
 
         let mut list = if mode == "replace" {
             Vec::new()
@@ -636,6 +655,59 @@ mod tests {
         }
 
         (temp_dir, store_arc, session_id)
+    }
+
+    #[tokio::test]
+    async fn test_todo_create_rejects_missing_or_blank_descriptions() {
+        let (_temp_dir, store, session_id) = setup_test_db().await;
+        let create_tool = TodoCreateTool {
+            session_id,
+            main_store: store,
+        };
+
+        for tasks in [
+            json!([
+                { "subject": "Task 1" },
+                { "subject": "Task 2", "description": "Second" },
+                { "subject": "Task 3", "description": "Third" }
+            ]),
+            json!([
+                { "subject": "Task 1", "description": "   \n\t" },
+                { "subject": "Task 2", "description": "Second" },
+                { "subject": "Task 3", "description": "Third" }
+            ]),
+        ] {
+            let error = create_tool
+                .call(json!({ "mode": "replace", "tasks": tasks }))
+                .await
+                .expect_err("todo descriptions must be non-empty");
+            assert!(matches!(error, ToolError::InvalidParams(_)));
+            assert!(error
+                .to_string()
+                .contains("task 1 description must be a non-empty string"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_todo_create_single_task_requires_description() {
+        let (_temp_dir, store, session_id) = setup_test_db().await;
+        let create_tool = TodoCreateTool {
+            session_id,
+            main_store: store,
+        };
+
+        let error = create_tool
+            .call(json!({
+                "mode": "append",
+                "subject": "Follow-up task"
+            }))
+            .await
+            .expect_err("single todo tasks must include a description");
+
+        assert!(matches!(error, ToolError::InvalidParams(_)));
+        assert!(error
+            .to_string()
+            .contains("task 1 description must be a non-empty string"));
     }
 
     #[tokio::test]
