@@ -5,6 +5,24 @@
     class="sidebar"
     :style="sidebarStyle">
     <div v-if="sidebarCollapsed" class="sidebar-compact">
+      <div class="compact-sidebar-tabs">
+        <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
+          <div
+            class="compact-sidebar-tab"
+            :class="{ active: compactSidebarTab === 'history' }"
+            @click="selectCompactSidebarTab('history')">
+            <cs name="skill-plan3" size="var(--cs-font-size-lg)" />
+          </div>
+        </el-tooltip>
+        <el-tooltip :content="$t('workflow.automation.title')" placement="right" :hide-after="0" :enterable="false">
+          <div
+            class="compact-sidebar-tab"
+            :class="{ active: compactSidebarTab === 'automation' }"
+            @click="selectCompactSidebarTab('automation')">
+            <cs name="clock" size="var(--cs-font-size-lg)" />
+          </div>
+        </el-tooltip>
+      </div>
 
       <div v-if="compactSidebarTab === 'history'" class="compact-sidebar-list compact-workflow-list">
         <div v-if="compactActiveWorkflows.length" class="compact-sidebar-group">
@@ -136,6 +154,15 @@
             </el-tooltip>
           </div>
         </template>
+      </div>
+
+      <div
+        class="workflow-terminal-entry compact-terminal-entry"
+        :class="{ blinking: terminalMinimized }"
+        @click="$emit('open-terminal')">
+        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
+          <cs name="bash" size="var(--cs-font-size-lg)" />
+        </el-tooltip>
       </div>
     </div>
 
@@ -350,6 +377,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  terminalMinimized: {
+    type: Boolean,
+    default: false
+  },
   automations: {
     type: Array,
     default: () => []
@@ -382,7 +413,9 @@ const emit = defineEmits([
   'remove-path-from-tree',
   'reorder-paths-from-tree',
   'insert-path-reference',
-  'open-editor-file'
+  'open-editor-file',
+  'open-terminal',
+  'update:navigationTab'
 ])
 
 const activeSidebarTab = computed({
@@ -392,6 +425,11 @@ const activeSidebarTab = computed({
 const compactSidebarTab = computed(() =>
   props.navigationTab === 'automation' ? 'automation' : 'history'
 )
+const selectCompactSidebarTab = tab => {
+  if (tab !== 'history' && tab !== 'automation') return
+  hideCompactWorkflowTooltip()
+  emit('update:navigationTab', tab)
+}
 const isHistoryTabVisible = computed(() => props.navigationTab === 'history')
 const isAutomationTabVisible = computed(() => props.navigationTab === 'automation')
 const searchQuery = ref('')

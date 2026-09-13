@@ -100,45 +100,20 @@
       .workflow-sidebar-region {
         flex-direction: column;
         align-items: stretch;
+        width: 50px;
         height: 100%;
         min-width: 0;
         overflow-x: hidden;
-      }
-
-      .workflow-sidebar-region > .workflow-side-rail {
-        flex: 0 0 auto;
-        box-sizing: border-box;
-        width: 50px;
-        padding-bottom: var(--cs-space-sm);
-        border-right: 0;
-        border-bottom: 1px solid var(--cs-border-color);
-      }
-
-      .workflow-sidebar-region > .workflow-sidebar-collapsed-terminal {
-        display: flex;
-        flex: 0 0 auto;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
-        width: 50px;
-        height: 50px;
-        margin-top: auto;
-        padding-top: var(--cs-space-sm);
-        overflow: hidden;
-        border-top: 1px solid var(--cs-border-color);
-        border-radius: 0;
-        background: var(--cs-bg-color);
-        color: var(--cs-text-color-secondary);
-      }
-
-      .workflow-sidebar-region > .workflow-sidebar-collapsed-terminal.blinking .cs {
-        animation: workflow-terminal-blink 1s ease-in-out infinite;
+        background: var(--cs-bg-color-deep);
       }
 
       .workflow-sidebar-region > .sidebar.collapsed {
-        flex: 1 1 auto;
+        // Height fills the column, width stays locked at 50px (no slide).
+        flex: 0 1 auto;
         width: 50px;
-        height: auto;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
       }
     }
 

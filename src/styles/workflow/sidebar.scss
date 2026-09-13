@@ -42,7 +42,7 @@
         top: 50%;
         left: 0;
         width: 3px;
-        height: 18px;
+        height: 16px;
         border-radius: 0 var(--cs-border-radius-sm) var(--cs-border-radius-sm) 0;
         background-color: var(--el-color-primary);
         content: '';
@@ -66,27 +66,39 @@
   flex: 0 0 auto;
   flex-direction: column;
   height: 100%;
-  transition: width 0.3s ease;
   min-width: 0;
-
-  &.dragging {
-    transition: none;
-  }
 
   &.collapsed {
     width: 50px;
+    // A fixed flex basis keeps the collapsed rail at 50px even while the
+    // aside width prop is still settling, so nothing slides right-to-left.
+    flex: 0 0 50px;
     box-sizing: border-box;
+    overflow: hidden;
 
     .sidebar-compact {
-      width: 50px;
+      width: 100%;
       box-sizing: border-box;
+      display: flex;
+      flex: 1 1 auto;
       flex-direction: column;
       min-width: 0;
       min-height: 0;
-      height: 100%;
+      height: auto;
       overflow: hidden;
-      background: var(--cs-bg-color);
+      background: var(--cs-bg-color-deep);
       border-left: 1px solid transparent;
+    }
+
+    .compact-sidebar-tabs {
+      display: flex;
+      flex: 0 0 auto;
+      flex-direction: column;
+      align-items: center;
+      box-sizing: border-box;
+      gap: var(--cs-space-xs);
+      padding: var(--cs-space-sm) 0;
+      border-bottom: 1px solid var(--cs-border-color);
     }
 
     .compact-sidebar-tab,
@@ -95,6 +107,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
       box-sizing: border-box;
       width: 36px;
       height: 36px;
@@ -139,6 +152,23 @@
       padding: var(--cs-space-sm) 0;
       overflow-x: hidden;
       overflow-y: auto;
+      // A thin scrollbar keeps the 36px rail items inside the 50px column
+      // instead of forcing a horizontal scrollbar.
+      scrollbar-width: thin;
+
+      // Only the conversation list (running + recent) fades in when the rail
+      // collapses; the tab buttons and terminal entry stay static.
+      animation: compact-sidebar-list-fade 0.18s ease 0.12s both;
+
+      &::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        border-radius: var(--cs-border-radius-sm);
+        background-color: var(--cs-border-color);
+      }
+
       border-top: 0;
     }
 
@@ -228,6 +258,35 @@
       &.interrupted {
         background-color: var(--cs-color-violet);
       }
+    }
+
+    .workflow-terminal-entry {
+      flex-shrink: 0;
+      color: var(--cs-text-color-secondary);
+      cursor: pointer;
+      transition:
+        color 0.2s ease,
+        background-color 0.2s ease;
+
+      &:hover {
+        color: var(--cs-text-color-primary);
+        background-color: var(--cs-hover-bg-color);
+      }
+
+      &.blinking .cs {
+        animation: workflow-terminal-blink 1s ease-in-out infinite;
+      }
+    }
+
+    .compact-terminal-entry {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 48px;
+      margin-top: auto;
+      border-top: 1px solid var(--cs-border-color);
     }
   }
 

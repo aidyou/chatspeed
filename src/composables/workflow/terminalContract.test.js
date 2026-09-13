@@ -20,13 +20,17 @@ test('workflow terminal stays isolated from the workflow runtime and is workflow
   assert.match(runtime, /struct WorkflowManager/)
 })
 
-test('workflow terminal is exposed only from the persistent navigation rail', async () => {
+test('workflow terminal is exposed from the navigation rail and the collapsed compact rail', async () => {
   const [sidebar, workflow] = await Promise.all([
     read('src/components/workflow/WorkflowSidebar.vue'),
     read('src/views/Workflow.vue')
   ])
-  assert.doesNotMatch(sidebar, /compact-terminal-entry|expanded-terminal-entry|terminalMinimized|open-terminal/)
+  assert.match(sidebar, /class="workflow-terminal-entry compact-terminal-entry"/)
+  assert.match(sidebar, /@click="\$emit\('open-terminal'\)"/)
+  assert.doesNotMatch(sidebar, /expanded-terminal-entry|terminal-minimized=\(/)
   assert.match(workflow, /class="workflow-side-rail__item workflow-side-rail__terminal"/)
+  assert.match(workflow, /:terminal-minimized="terminal\.hasSessions && !terminal\.visible"/)
+  assert.match(workflow, /@open-terminal="terminal\.open"/)
   assert.match(workflow, /@click="terminal\.open"/)
   assert.match(workflow, /<WorkflowSidebar\s+:workflows="filteredWorkflows"/)
 })
