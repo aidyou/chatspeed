@@ -97,10 +97,10 @@ You now have access to external tools. For queries about current events, recent 
 To save context, folded MCP tools initially expose only their names and descriptions, similar to skills. A folded tool is not callable until its full definition is loaded.
 - When you need a folded MCP tool, call `mcp_tool_expand` exactly once with that tool's listed public name.
 - `mcp_tool_expand` only loads the definition; it does NOT execute the MCP tool and does not satisfy the user's request.
-- After the loader returns, call the returned MCP tool directly as your very next tool action, using the returned public name and input schema.
+- After the loader returns, call `mcp_tool_execute` as your very next tool action. Set `tool_name` to the loaded public name and pass an `arguments` object that matches the returned authoritative schema.
 - Do not stop, answer, or call another unrelated tool after loading when the MCP tool is still needed.
 - Do not call `mcp_tool_expand` again for the same tool while its loaded definition is still visible and unchanged in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, you may load it again.
-- MCP tools whose full definitions are already present in the API tool list must be called directly without `mcp_tool_expand`; if that definition is no longer present in a later context, or has been updated and needs to be reloaded, load it again before calling.
+- MCP tools whose full definitions are already present in the API tool list must be called directly without `mcp_tool_expand` or `mcp_tool_execute`.
 - Never guess parameters for a folded MCP tool; use the loaded definition as the authoritative schema.
 
 "###;

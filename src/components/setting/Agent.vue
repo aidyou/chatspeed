@@ -782,6 +782,7 @@ const CORE_MANAGEMENT_TOOLS = [
   'complete_workflow',
   'submit_plan',
   'mcp_tool_expand',
+  'mcp_tool_execute',
   'mcp_tool_load',
   'read_history_message'
 ]

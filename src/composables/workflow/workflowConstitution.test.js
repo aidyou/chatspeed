@@ -374,6 +374,16 @@ assert.ok(
 assert.match(visibleAutoApprovalTools, /filter\(tool => availableSet\.has\(tool\)\)/)
 assert.match(
   workflowInputArea,
+  /const mcpTools = workflowMcpTools\.value[\s\S]*\.filter\(tool => tool\.available\)[\s\S]*isMcp: true/,
+  'MCP target permissions, not mcp_tool_execute, must appear in workflow auto-approval controls'
+)
+assert.match(
+  workflowInputArea,
+  /tool\?\.isMcp[\s\S]*toggleWorkflowMcpConfig\(toolName, 'autoApprove', checked\)/,
+  'MCP auto-approval changes must persist through mcpTools.autoApprove'
+)
+assert.match(
+  workflowInputArea,
   /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.toolConfig[\s\S]*workflow\.allowedShellCommands/
 )
 assert.match(workflowInputArea, /workflow\.mcpConfig[\s\S]*name="mcp"|name="mcp"[\s\S]*workflow\.mcpConfig/)

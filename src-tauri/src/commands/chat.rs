@@ -122,7 +122,7 @@ fn prepare_messages_with_system_context(
     // Add MCP tool summaries (descriptions only)
     if !mcp_summaries.is_empty() {
         system_content.push_str("\n\n## AVAILABLE MCP TOOLS\n");
-        system_content.push_str("The following MCP tools are folded discovery entries, similar to skills: only their names and descriptions are shown, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name. This only loads the definition; it does not execute the MCP tool or satisfy the request. After it returns, call the returned MCP tool directly as your very next tool action using the returned public name and input schema. Do not load the same tool again while its definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\n");
+        system_content.push_str("The following MCP tools are folded discovery entries, similar to skills: only their names and descriptions are shown, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name. This only loads the definition; it does not execute the MCP tool or satisfy the request. After it returns, call `mcp_tool_execute` as your very next tool action with the same `tool_name` and an `arguments` object matching the returned authoritative schema. Do not load the same tool again while its definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\n");
         for tool in mcp_summaries {
             system_content.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
         }
@@ -425,9 +425,22 @@ pub async fn chat_completion(
 
     let tools_enabled_in_metadata = final_metadata.tools_enabled.unwrap_or(true);
 
-    // Register MCP loader tool if MCP is enabled
-    // Only register if it doesn't already exist (to avoid duplicate registration error)
+    // Register stable MCP control tools if MCP is enabled. Folded target tools are executed
+    // through mcp_tool_execute; the dispatcher itself has no target permission semantics.
     if mcp_enabled.unwrap_or(false) {
+        if !chat_state
+            .tool_manager
+            .has_tool(crate::tools::TOOL_MCP_TOOL_EXECUTE)
+            .await
+        {
+            chat_state
+                .tool_manager
+                .register_tool(Arc::new(crate::tools::McpToolExecute {
+                    tool_manager: chat_state.tool_manager.clone(),
+                    allowed_tools: None,
+                }))
+                .await?;
+        }
         if !chat_state
             .tool_manager
             .has_tool(crate::tools::TOOL_MCP_TOOL_EXPAND)
@@ -460,16 +473,22 @@ pub async fn chat_completion(
             .into_iter()
             .map(|tool| tool.declaration.name)
             .collect::<std::collections::HashSet<_>>();
-        // When MCP is enabled, fold MCP schemas into summaries but retain the loader.
+        // When MCP is enabled, fold target schemas into summaries but retain the stable control
+        // tools needed to expand and execute them.
         if mcp_enabled.unwrap_or(false) {
             available_tools.retain(|tool| {
                 !mcp_tool_names.contains(&tool.name)
                     || tool.name == crate::tools::TOOL_MCP_TOOL_EXPAND
+                    || tool.name == crate::tools::TOOL_MCP_TOOL_EXECUTE
             });
         }
         // When MCP is disabled, remove MCP declarations using structured ToolManager metadata.
         if !mcp_enabled.unwrap_or(false) {
-            available_tools.retain(|tool| !mcp_tool_names.contains(&tool.name));
+            available_tools.retain(|tool| {
+                !mcp_tool_names.contains(&tool.name)
+                    && tool.name != crate::tools::TOOL_MCP_TOOL_EXPAND
+                    && tool.name != crate::tools::TOOL_MCP_TOOL_EXECUTE
+            });
         }
         Some(available_tools)
     } else {
@@ -606,7 +625,32 @@ pub fn detect_language(text: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::prepare_messages_with_system_context;
+    use crate::ai::traits::chat::MCPToolDeclaration;
     use crate::commands::constants::URL_REGEX;
+    use serde_json::json;
+
+    #[test]
+    fn folded_mcp_prompt_uses_stable_executor_after_expand() {
+        let messages = prepare_messages_with_system_context(
+            vec![json!({ "role": "user", "content": "test" })],
+            true,
+            vec![MCPToolDeclaration {
+                name: "browser_click".to_string(),
+                description: "Click an element".to_string(),
+                input_schema: json!({}),
+                output_schema: None,
+                disabled: false,
+                scope: None,
+            }],
+        );
+        let system_prompt = messages[0]["content"]
+            .as_str()
+            .expect("system prompt must be text");
+
+        assert!(system_prompt.contains("call `mcp_tool_execute` as your very next tool action"));
+        assert!(!system_prompt.contains("call the returned MCP tool directly"));
+    }
 
     #[test]
     fn test_url_regex() {

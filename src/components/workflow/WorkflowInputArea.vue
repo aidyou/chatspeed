@@ -353,7 +353,7 @@
                         <el-tab-pane :label="`${$t('workflow.toolConfig')} (${autoApprovedTools.length})`" name="autoApprove">
                           <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
                             <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
-                              <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
+                              <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool, checked)">
                                 <span class="checkbox-label-wrap">
                                   <code class="tool-name">{{ tool.id }}</code>
                                   <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
@@ -1293,16 +1293,28 @@ watch(
   }
 )
 const availableApprovalTools = computed(() => {
-  const allowedSet = new Set(
+  const nativeAllowedSet = new Set(
     workflowAvailableToolIds.value.filter(
-      toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_expand' && toolId !== 'mcp_tool_load'
+      toolId => toolId && !String(toolId).includes(MCP_TOOL_NAME_SEPARATOR)
     )
   )
 
-  return agentAvailableTools.value
-    .filter(tool => allowedSet.has(tool.id))
-    .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_expand' && tool.id !== 'mcp_tool_load')
-    .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
+  const nativeTools = agentAvailableTools.value
+    .filter(tool => nativeAllowedSet.has(tool.id))
+    .filter(
+      tool =>
+        tool.id !== 'bash' &&
+        tool.id !== 'mcp_tool_expand' &&
+        tool.id !== 'mcp_tool_execute' &&
+        tool.id !== 'mcp_tool_load'
+    )
+    .map(tool => ({ ...tool, isMcp: false }))
+
+  const mcpTools = workflowMcpTools.value
+    .filter(tool => tool.available)
+    .map(tool => ({ ...tool, isMcp: true }))
+
+  return [...nativeTools, ...mcpTools].sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 const canAddShellPolicyItem = computed(() =>
   Boolean(props.currentWorkflowId && newShellCommandPattern.value.trim())
@@ -1494,8 +1506,14 @@ const toggleWorkflowMcpConfig = async (toolId, key, checked) => {
   }
 }
 
-const toggleAutoApprovedTool = async (toolName, checked) => {
+const toggleAutoApprovedTool = async (tool, checked) => {
   if (!props.currentWorkflowId) return
+  const toolName = typeof tool === 'string' ? tool : tool.id
+
+  if (typeof tool === 'object' && tool?.isMcp) {
+    await toggleWorkflowMcpConfig(toolName, 'autoApprove', checked)
+    return
+  }
 
   const currentAutoApprove = Array.isArray(props.currentWorkflow?.agentConfig?.autoApprove)
     ? props.currentWorkflow.agentConfig.autoApprove

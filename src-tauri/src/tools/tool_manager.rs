@@ -69,12 +69,12 @@ pub trait ToolDefinition: Send + Sync {
 
 /// A wrapper that adapts an MCP tool to the ToolDefinition trait.
 /// This allows MCP tools to be registered and called just like native tools.
-pub struct McpToolWrapper {
-    pub server_name: String,
-    pub tool_decl: MCPToolDeclaration,
-    pub client: Arc<dyn McpClient>,
-    pub canonical_name: String,
-    pub public_name: String,
+pub(crate) struct McpToolWrapper {
+    pub(crate) server_name: String,
+    pub(crate) tool_decl: MCPToolDeclaration,
+    pub(crate) client: Arc<dyn McpClient>,
+    pub(crate) canonical_name: String,
+    pub(crate) public_name: String,
 }
 
 #[derive(Default)]
@@ -145,6 +145,7 @@ fn reserved_mcp_aliases() -> HashSet<String> {
         crate::tools::TOOL_SUBMIT_RESULT,
         crate::tools::TOOL_SUBMIT_PLAN,
         crate::tools::TOOL_MCP_TOOL_EXPAND,
+        crate::tools::TOOL_MCP_TOOL_EXECUTE,
         crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY,
         crate::tools::TOOL_READ_HISTORY_MESSAGE,
     ]
@@ -550,6 +551,55 @@ impl ToolManager {
             self.rebuild_mcp_wrappers().await;
         }
         Ok(())
+    }
+
+    /// Copies an MCP wrapper from another manager without rebuilding it from this manager's MCP
+    /// server cache. Session-local workflow managers use this for model-visible autoExpand tools.
+    pub(crate) async fn register_mcp_tool_wrapper(
+        &self,
+        tool: Arc<dyn ToolDefinition>,
+    ) -> Result<(), ToolError> {
+        if tool.category() != ToolCategory::Mcp {
+            return Err(ToolError::InvalidParams(
+                "register_mcp_tool_wrapper requires an MCP tool".to_string(),
+            ));
+        }
+        self.register_tool(tool).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn register_test_mcp_tool(
+        &self,
+        server_name: &str,
+        public_name: &str,
+        input_schema: Value,
+    ) -> Result<String, ToolError> {
+        let canonical_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, public_name);
+        self.register_mcp_tool_wrapper(Arc::new(McpToolWrapper {
+            server_name: server_name.to_string(),
+            tool_decl: MCPToolDeclaration {
+                name: public_name.to_string(),
+                description: format!("Test MCP tool {}", public_name),
+                input_schema,
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                StdioClient::new(McpServerConfig {
+                    name: server_name.to_string(),
+                    protocol_type: McpProtocolType::Stdio,
+                    command: Some("ls".to_string()),
+                    args: Some(vec!["-la".to_string()]),
+                    ..Default::default()
+                })
+                .map_err(|error| ToolError::Initialization(error.to_string()))?,
+            ),
+            canonical_name: canonical_name.clone(),
+            public_name: public_name.to_string(),
+        }))
+        .await?;
+        Ok(canonical_name)
     }
 
     pub async fn resolve_tool_name(&self, name: &str) -> String {
@@ -1484,7 +1534,7 @@ mod tests {
             .as_deref()
             .is_some_and(|content| content.contains("Full MCP tool definition:")));
         assert!(loaded.content.as_deref().is_some_and(|content| {
-            content.contains("Call 'search' directly in your next tool action")
+            content.contains("Call `mcp_tool_execute` in your next tool action")
         }));
     }
 
@@ -1559,6 +1609,103 @@ mod tests {
         assert!(names.contains("wf_only"));
         assert!(names.contains("chat_only"));
         assert!(names.contains("both"));
+    }
+
+    #[tokio::test]
+    async fn native_registration_after_a_copied_mcp_wrapper_removes_the_wrapper() {
+        let manager = ToolManager::new();
+        let wrapper = Arc::new(McpToolWrapper {
+            server_name: "test_server".into(),
+            tool_decl: MCPToolDeclaration {
+                name: "copied_tool".into(),
+                description: "Copied MCP tool".into(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: "test_server".into(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .expect("test client"),
+            ),
+            canonical_name: "test_server__MCP__copied_tool".into(),
+            public_name: "copied_tool".into(),
+        });
+
+        manager
+            .register_mcp_tool_wrapper(wrapper)
+            .await
+            .expect("copied wrapper must register");
+        assert!(manager.has_tool("copied_tool").await);
+
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "native_after_mcp".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("native tool must register");
+
+        assert!(manager.has_tool("native_after_mcp").await);
+        assert!(
+            !manager.has_tool("copied_tool").await,
+            "native registration rebuilds from the local MCP cache and removes copied wrappers"
+        );
+    }
+
+    #[tokio::test]
+    async fn copied_mcp_wrapper_registered_last_remains_model_visible() {
+        let manager = ToolManager::new();
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "native_before_mcp".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("native tool must register");
+        let wrapper = Arc::new(McpToolWrapper {
+            server_name: "test_server".into(),
+            tool_decl: MCPToolDeclaration {
+                name: "visible_tool".into(),
+                description: "Visible MCP tool".into(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: "test_server".into(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .expect("test client"),
+            ),
+            canonical_name: "test_server__MCP__visible_tool".into(),
+            public_name: "visible_tool".into(),
+        });
+        manager
+            .register_mcp_tool_wrapper(wrapper)
+            .await
+            .expect("copied wrapper must register last");
+
+        let names = manager
+            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .await
+            .expect("tool declarations")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        assert!(names.contains("native_before_mcp"));
+        assert!(names.contains("visible_tool"));
     }
 
     #[tokio::test]
