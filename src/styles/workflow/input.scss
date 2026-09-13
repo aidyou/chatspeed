@@ -872,6 +872,14 @@ footer.input-container {
     }
 }
 
+// Tooltip for the MCP tool name inside the MCP configuration popover.
+// The popper is teleported to the body, so it needs a global rule.
+.mcp-tool-tooltip {
+    max-width: 420px;
+    line-height: 1.4;
+    word-break: break-all;
+}
+
 // Badge styling for the trigger button
 .auto-approve-badge {
     position: relative;

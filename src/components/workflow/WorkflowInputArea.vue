@@ -274,12 +274,19 @@
                       </div>
                       <div v-if="workflowMcpTools.length > 0" class="mcp-config-panel__content checkbox-list">
                         <div v-for="tool in workflowMcpTools" :key="tool.id" class="mcp-config-panel__row">
-                          <span class="checkbox-label-wrap">
-                            <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
-                            <span v-if="getMcpToolServerName(tool)" class="tool-server">
-                              {{ getMcpToolServerName(tool) }}
+                          <el-tooltip
+                            placement="top"
+                            :content="getMcpToolTooltip(tool)"
+                            :show-after="200"
+                            :enterable="false"
+                            popper-class="mcp-tool-tooltip">
+                            <span class="checkbox-label-wrap">
+                              <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
+                              <span v-if="getMcpToolServerName(tool)" class="tool-server">
+                                {{ getMcpToolServerName(tool) }}
+                              </span>
                             </span>
-                          </span>
+                          </el-tooltip>
                           <el-switch
                             size="small"
                             :model-value="tool.available"
@@ -1171,6 +1178,13 @@ const getMcpToolServerName = tool => {
   const id = String(tool?.id || '').trim()
   const separatorIndex = id.indexOf(MCP_TOOL_NAME_SEPARATOR)
   return separatorIndex > 0 ? id.slice(0, separatorIndex) : ''
+}
+
+// Full "server · tool" label revealed when the row text is truncated by ellipsis.
+const getMcpToolTooltip = tool => {
+  const name = getMcpToolDisplayName(tool)
+  const server = getMcpToolServerName(tool)
+  return server ? `${server} · ${name}` : name
 }
 
 const agentAvailableTools = computed(() => {
@@ -2232,7 +2246,7 @@ defineExpose({
   top: 0;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  grid-template-columns: minmax(0, 1fr) 80px repeat(2, 88px);
   align-items: center;
   gap: var(--cs-space-xs);
   padding: var(--cs-space-xs) 0;
@@ -2259,7 +2273,7 @@ defineExpose({
 
 .mcp-config-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  grid-template-columns: minmax(0, 1fr) 80px repeat(2, 88px);
   align-items: center;
   gap: var(--cs-space-xs);
   min-height: 42px;
