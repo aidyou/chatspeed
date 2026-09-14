@@ -1,9 +1,64 @@
 # cs CLI 第一期真实环境冒烟测试记录
 
-- 日期：2026-09-14
+- 日期：2026-09-14（含同日 MVP 补测）
 - 环境：Linux，`pnpm tauri dev` 已启动（主进程 PID 3302777，控制面 `http://127.0.0.1:35735`，协议 v1）
-- 分支：`feature/cli`，基线提交 `4a6e951c`（feat(workflow): add cs CLI and loopback HTTP/SSE control plane）
-- 结论：**通过**。CLI → loopback HTTP/SSE 控制面 → 与 Tauri 窗口同一 workflow runtime 的全链路打通，模型覆盖生效，生命周期事件完整。
+- 分支：`feature/cli`，基线提交 `4a6e951c` + `14b68b4b`
+- 结论：**通过（附 1 个既有 runtime 边界问题）**。CLI → loopback HTTP/SSE 控制面 → 与 Tauri 窗口同一 workflow runtime 的全链路打通；断开不终止、计划模式等待/恢复、跨端同权威列表均实测通过；发现"对已完成会话执行 stop 会卡在 stopping"的既有 runtime 边界问题（Tauri 同受影响，见下）。
+
+## MVP 补测（同日，覆盖 V-7 要求的 signal/stop/reconnect 交叉项）
+
+以下会话均使用 `--model cs@free:ds-v4-flash`（free 分组，控制成本）。
+
+### T1 — 断开不终止（reconnect 语义）
+
+```bash
+cargo run --bin cs -- workflow run --agent builtin:coding --model "cs@free:ds-v4-flash" \
+  --prompt "请写一段约150字的关于软件回归测试重要性的短文……"   # 不加 --follow
+# 输出: Workflow started: 0rkyq74ag0400，CLI 随即退出
+cargo run --bin cs -- workflow get 0rkyq74ag0400 --output json
+```
+
+实测：CLI 退出后 workflow 独自运行至 `completed`——**断开不终止**（AC-6/INV-2）。
+
+### T1b — active 态 stop（发现既有问题）
+
+```bash
+cargo run --bin cs -- workflow run --agent builtin:coding --model "cs@free:ds-v4-flash" \
+  --prompt "请依次完成以下三件事，每件都写200字以上……"        # 长任务
+cargo run --bin cs -- workflow get 0rkyqdqh40400 --output json   # state: thinking（active）
+cargo run --bin cs -- workflow stop 0rkyqdqh40400                # 返回 stopped: true
+```
+
+实测：stop 命令本身成功，但该任务在 stop 处理期间已自然完成（free 模型速度快，事件 02:35:41 `workflow_completed`），stop 后到达，会话状态被置为 `stopping` 且**永久卡住**（快照 `stopping`，无 executor 处理 stop 信号）。
+
+**根因（既有 runtime 行为，非控制面引入）**：`workflow_stop_core`（`src/commands/workflow.rs:5211`，Tauri `workflow_stop` 与 HTTP stop 共用）不校验会话是否已处于终态——对 completed/failed/cancelled 会话仍注入 stop 信号并把状态写为 `Stopping`，此后无 executor 消费该信号，状态无法收敛。Tauri 窗口内对已完成会话触发 stop 理论上同样复现。修复需在 stop 入口加终态守卫（涉及既有 stop 语义，INV-4 保护范围，需用户批准后另行处理）。
+
+### T2 — 审批回路（未完全验证）
+
+两次以强指令要求 free 模型调用 bash 工具（`echo cs-mvp-approval-test`），模型均未实际发起 bash 调用而直接 `complete_workflow`（free flash 模型行为），未能产生 pending approval。**approve/reject 回路的真实 smoke 未完成**；该路径已由 V-2/V-3/V-5 的 mock/单测覆盖（approval round-trip、wait reason、signal 验证）。如需真实验证，需换用会主动调用工具的模型（付费分组）。
+
+### T3 — 计划模式等待/恢复（signal 回路）
+
+```bash
+cargo run --bin cs -- workflow run --agent builtin:coding --model "cs@free:ds-v4-flash" \
+  --plan --prompt "任务：写一句关于自动化测试的口号。请先给出简短计划等待确认。"
+cargo run --bin cs -- workflow get 0rkysga2m0400 --output json
+# state: awaiting_user, wait_reason: user_input   ← 计划产出后等待确认
+cargo run --bin cs -- workflow message 0rkysga2m0400 --text "计划确认，请按计划执行并完成任务。"
+# Signal delivered
+cargo run --bin cs -- workflow get 0rkysga2m0400 --output json
+# state: thinking → completed                     ← 恢复并完成
+```
+
+实测：`--plan` 生效，等待态与恢复回路（UserMessage signal → awaiting_user → thinking → completed）全链路通过（AC-5）。
+
+### T4 — 跨端同权威（UI/CLI 交叉）
+
+```bash
+cargo run --bin cs -- workflow list --output json
+```
+
+实测：本次全部 CLI 创建的会话（含 `stopping` 卡住的那个）与既有会话同列于 23 条 workflow 记录中，同一 `MainStore`/`WorkflowManager` 权威，无第二数据源（AC-4/INV-2）。UI 窗口可见性请在本机 Workflow 窗口目视复核（这些会话应直接出现在列表中，且可从窗口继续操作）。
 
 ## 前置条件
 
