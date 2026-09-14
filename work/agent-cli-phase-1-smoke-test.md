@@ -45,6 +45,13 @@ cargo run --bin cs -- workflow stop 0rkyqdqh40400                # 返回 stoppe
 - `cs workflow approve <session> --tool-call-id <id>` → `approval_resolved(approved)` → `tool_started` ✅ 审批协议回路端到端打通
 - **遗留**：批准后 python 命令执行挂起（`tool_started` 后 4 分钟无 `tool_completed`，会话回到 `awaiting_approval` 但无新 `approval_requested` 事件）。该环节位于 shell/sandbox 执行层（会话 `sandboxExecutionMode: auto`），非 CLI 控制面问题；待排查 microsandbox 环境或 auto 模式的二次确认行为。
 
+**挂起根因（用户定位）**：msb 沙箱缺少 python 配置的镜像，导致沙箱执行无限等待。用户已将沙箱重新配置为 docker + 基础镜像。
+
+**修复后复验（会话 0rkzz7q3g0400）**：
+- 审批回路完整闭环：`approval_requested` → CLI approve → `approval_resolved` → `tool_started` → 1 秒内 `tool_failed`（快速失败，不再挂起）→ 模型自动重试并再次请求审批 ✅
+- 挂起期间引擎阻塞导致 `workflow get/events` 超时的现象随根因消除
+- **新残留（沙箱配置，非 CLI 问题）**：docker 模式下报 `Denied (ProfileUnavailable)`——scheme 中无匹配 python3 命令的 profile 且未启用通用（catch-all）profile。需在沙箱 scheme 配置中为 python3 添加 command_patterns 或启用通用 profile。重试会话已 stop 清理。
+
 ### T3 — 计划模式等待/恢复（signal 回路）
 
 ```bash
