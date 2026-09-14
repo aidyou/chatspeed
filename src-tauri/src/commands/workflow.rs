@@ -1199,6 +1199,21 @@ fn build_agent_config_from_agent(
 
 fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     let mut inherited_config = AgentConfig::from_json(inherited)?;
+
+    // AgentConfig::from_json normalizes a missing tool list into an explicit
+    // empty restriction. A partial inherited config (e.g. the CLI --model
+    // shortcut, which only carries models.act) must not shrink the Agent's
+    // tool set, so restore "no preference" when the key is absent from the
+    // raw JSON. Full configs inherited from an existing workflow always carry
+    // availableTools and are unaffected.
+    let has_available_tools_key = serde_json::from_str::<serde_json::Value>(inherited)
+        .ok()
+        .and_then(|value| value.get("availableTools").map(|_| ()))
+        .is_some();
+    if !has_available_tools_key {
+        inherited_config.available_tools = None;
+    }
+
     inherited_config.sync_legacy_final_audit_flag();
 
     if let Some(models) = &inherited_config.models {
@@ -8420,6 +8435,89 @@ mod tests {
         assert_eq!(persisted.final_audit, Some(false));
         assert_eq!(persisted.final_review_mode.as_deref(), Some("off"));
         assert_eq!(persisted.approval_level, Some("smart".to_string()));
+    }
+
+    #[test]
+    fn partial_inherited_config_keeps_agent_tool_capabilities() {
+        // The CLI --model shortcut synthesizes a minimal inherited config that
+        // only carries models.act. AgentConfig::from_json normalizes a missing
+        // tool list into an explicit empty restriction, which must not shrink
+        // the Agent's built-in tool capabilities (built-in tool scope comes
+        // from the Agent config; skills/MCP come from user installation and
+        // preferences).
+        let mut agent = Agent::new(
+            "agent-test".to_string(),
+            "Agent Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "You are a test agent.".to_string(),
+            None,
+            None,
+            Some(
+                serde_json::to_string(&vec![
+                    crate::tools::TOOL_BASH.to_string(),
+                    crate::tools::TOOL_READ_FILE.to_string(),
+                ])
+                .expect("serialize available tools"),
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let request = CreateWorkflowRequest {
+            user_query: Some("test".to_string()),
+            agent_id: agent.id.clone(),
+            allowed_paths: None,
+            auto_approve_plan: None,
+            final_audit: None,
+            inherited_agent_config: Some(
+                r#"{"models":{"act":{"id":0,"model":"test-model"}}}"#.to_string(),
+            ),
+        };
+
+        let config = build_workflow_config_for_request(&agent, &request);
+
+        assert_eq!(
+            config.available_tools,
+            Some(vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ])
+        );
+        assert_eq!(
+            config.models.and_then(|models| models.act).map(|m| m.model),
+            Some("test-model".to_string())
+        );
+
+        // An inherited config that explicitly carries availableTools still
+        // intersects with the Agent's capabilities.
+        agent.available_tools = Some(
+            serde_json::to_string(&vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ])
+            .expect("serialize available tools"),
+        );
+        let request = CreateWorkflowRequest {
+            inherited_agent_config: Some(r#"{"availableTools":["read_file"]}"#.to_string()),
+            ..request
+        };
+        let config = build_workflow_config_for_request(&agent, &request);
+        assert_eq!(
+            config.available_tools,
+            Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+        );
     }
 
     #[tokio::test]

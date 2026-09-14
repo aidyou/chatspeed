@@ -35,9 +35,15 @@ cargo run --bin cs -- workflow stop 0rkyqdqh40400                # 返回 stoppe
 
 **修复（已实施，提交见 git log）**：`workflow_stop_core` 入口新增终态守卫 `is_terminal_workflow_status`（`completed`/`error`/`cancelled` 直接返回成功，不注入信号、不改状态），并附单测 `terminal_workflow_statuses_skip_stop`（同时断言所有非终态 stop 仍可用，符合 CONSTITUTION.md §5.3）。守卫带结构化日志（§13）。**真机复验待办**：dev 应用重启后执行 `cs workflow stop <已完成session>`，确认状态保持 `completed` 不再变为 `stopping`。既有卡住的 `0rkyqdqh40400` 记录保留原状。
 
-### T2 — 审批回路（未完全验证）
+### T2 — 审批回路（协议回路已验证，命令执行层待查）
 
-两次以强指令要求 free 模型调用 bash 工具（`echo cs-mvp-approval-test`），模型均未实际发起 bash 调用而直接 `complete_workflow`（free flash 模型行为），未能产生 pending approval。**approve/reject 回路的真实 smoke 未完成**；该路径已由 V-2/V-3/V-5 的 mock/单测覆盖（approval round-trip、wait reason、signal 验证）。后续改用 python 工具触发审批（python 不在 auto_approve 列表），并建议通过 `--allowed-path` 传入授权目录（如 `.cs/tmp-cli-smoke`）以排除无授权目录对文件类工具的干扰；待 dev 应用恢复后执行。
+**重要根因修复（提交见 git log）**：早期 CLI 会话 `availableTools` 全为空的根因不是模型行为——CLI `--model` 合成的最小继承配置经 `AgentConfig::from_json` 规范化后 `availableTools` 变为显式空列表，`merge_inherited_workflow_config` 交集后清空了 agent 的全部内置工具（界面表现为所有工具未勾选）。修复：`validated_inherited_agent_config` 对缺失 `availableTools` 键的继承配置恢复"无偏好"语义；内置工具能力范围回归 agent 配置，skills/MCP 仍走用户安装+偏好。附回归测试 `partial_inherited_config_keeps_agent_tool_capabilities`。
+
+**修复后真机验证（会话 0rkzdyhkr0400，python 审批路径）**：
+- 工具集恢复 9 个（含 bash）✅
+- bash 执行 `python3 -c 'print(123)'` 触发 `awaiting_approval`（`approval_kind: shell_command`）✅ —— python 解释器命令确需审批，符合预期
+- `cs workflow approve <session> --tool-call-id <id>` → `approval_resolved(approved)` → `tool_started` ✅ 审批协议回路端到端打通
+- **遗留**：批准后 python 命令执行挂起（`tool_started` 后 4 分钟无 `tool_completed`，会话回到 `awaiting_approval` 但无新 `approval_requested` 事件）。该环节位于 shell/sandbox 执行层（会话 `sandboxExecutionMode: auto`），非 CLI 控制面问题；待排查 microsandbox 环境或 auto 模式的二次确认行为。
 
 ### T3 — 计划模式等待/恢复（signal 回路）
 
