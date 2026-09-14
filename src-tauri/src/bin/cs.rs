@@ -9,18 +9,22 @@ rust_i18n::i18n!("i18n", fallback = "en");
 
 #[path = "cs/args.rs"]
 mod args;
+#[path = "cs/artifact.rs"]
+mod artifact;
 #[path = "cs/client.rs"]
 mod client;
 #[path = "cs/discovery.rs"]
 mod discovery;
 #[path = "cs/error.rs"]
 mod error;
+#[path = "cs/experiment.rs"]
+mod experiment;
 #[path = "cs/output.rs"]
 mod output;
 #[path = "cs/sse.rs"]
 mod sse;
 
-use args::{AgentCommand, Cli, Command, OutputFormat, WorkflowCommand};
+use args::{AgentCommand, Cli, Command, ExperimentCommand, OutputFormat, WorkflowCommand};
 use clap::Parser as _;
 use client::ControlPlaneClient;
 use discovery::ControlPlaneDiscovery;
@@ -49,6 +53,20 @@ async fn main() {
 }
 
 async fn run(cli: &Cli) -> Result<(), CliError> {
+    // Offline experiment commands run before discovery loading so they work
+    // without a running main process, discovery file, database or network.
+    if let Command::Experiment { command } = &cli.command {
+        match command {
+            ExperimentCommand::Inspect { artifact_dir } => {
+                return experiment::inspect(cli, artifact_dir)
+            }
+            ExperimentCommand::Replay { artifact_dir } => {
+                return experiment::replay(cli, artifact_dir)
+            }
+            ExperimentCommand::Capture { .. } => {}
+        }
+    }
+
     let discovery = discovery::load_discovery(cli.discovery_file.as_deref())?;
     let client = ControlPlaneClient::new(&discovery)?;
 
@@ -56,6 +74,14 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Doctor => doctor(cli, &discovery, &client).await,
         Command::Agent { command } => run_agent_command(cli, &client, command).await,
         Command::Workflow { command } => run_workflow_command(cli, &client, command).await,
+        Command::Experiment { command } => match command {
+            ExperimentCommand::Capture {
+                session_id,
+                artifact_dir,
+            } => experiment::capture(cli, &client, session_id, artifact_dir).await,
+            // Inspect/replay are handled above before discovery loading.
+            ExperimentCommand::Inspect { .. } | ExperimentCommand::Replay { .. } => Ok(()),
+        },
     }
 }
 

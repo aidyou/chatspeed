@@ -86,6 +86,34 @@ pub enum Command {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
+    /// Capture, inspect and replay workflow run artifacts.
+    Experiment {
+        #[command(subcommand)]
+        command: ExperimentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExperimentCommand {
+    /// Capture an existing workflow session into an artifact directory
+    /// (read-only: never creates, starts, signals or stops a workflow).
+    Capture {
+        /// Workflow session ID to capture.
+        session_id: String,
+        /// Target directory for the artifact bundle (must not already exist).
+        #[arg(long)]
+        artifact_dir: PathBuf,
+    },
+    /// Verify an artifact directory offline (no main process, network or DB).
+    Inspect {
+        /// Artifact directory to verify.
+        artifact_dir: PathBuf,
+    },
+    /// Project an artifact's timeline, status and usage offline.
+    Replay {
+        /// Artifact directory to replay.
+        artifact_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
