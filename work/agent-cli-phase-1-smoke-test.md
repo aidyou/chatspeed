@@ -31,11 +31,13 @@ cargo run --bin cs -- workflow stop 0rkyqdqh40400                # 返回 stoppe
 
 实测：stop 命令本身成功，但该任务在 stop 处理期间已自然完成（free 模型速度快，事件 02:35:41 `workflow_completed`），stop 后到达，会话状态被置为 `stopping` 且**永久卡住**（快照 `stopping`，无 executor 处理 stop 信号）。
 
-**根因（既有 runtime 行为，非控制面引入）**：`workflow_stop_core`（`src/commands/workflow.rs:5211`，Tauri `workflow_stop` 与 HTTP stop 共用）不校验会话是否已处于终态——对 completed/failed/cancelled 会话仍注入 stop 信号并把状态写为 `Stopping`，此后无 executor 消费该信号，状态无法收敛。Tauri 窗口内对已完成会话触发 stop 理论上同样复现。修复需在 stop 入口加终态守卫（涉及既有 stop 语义，INV-4 保护范围，需用户批准后另行处理）。
+**根因（既有 runtime 行为，非控制面引入）**：`workflow_stop_core`（`src/commands/workflow.rs`，Tauri `workflow_stop` 与 HTTP stop 共用）不校验会话是否已处于终态——对 completed/failed/cancelled 会话仍注入 stop 信号并把状态写为 `Stopping`，此后无 executor 消费该信号，状态无法收敛。Tauri 窗口内对已完成会话触发 stop 理论上同样复现。
+
+**修复（已实施，提交见 git log）**：`workflow_stop_core` 入口新增终态守卫 `is_terminal_workflow_status`（`completed`/`error`/`cancelled` 直接返回成功，不注入信号、不改状态），并附单测 `terminal_workflow_statuses_skip_stop`（同时断言所有非终态 stop 仍可用，符合 CONSTITUTION.md §5.3）。守卫带结构化日志（§13）。**真机复验待办**：dev 应用重启后执行 `cs workflow stop <已完成session>`，确认状态保持 `completed` 不再变为 `stopping`。既有卡住的 `0rkyqdqh40400` 记录保留原状。
 
 ### T2 — 审批回路（未完全验证）
 
-两次以强指令要求 free 模型调用 bash 工具（`echo cs-mvp-approval-test`），模型均未实际发起 bash 调用而直接 `complete_workflow`（free flash 模型行为），未能产生 pending approval。**approve/reject 回路的真实 smoke 未完成**；该路径已由 V-2/V-3/V-5 的 mock/单测覆盖（approval round-trip、wait reason、signal 验证）。如需真实验证，需换用会主动调用工具的模型（付费分组）。
+两次以强指令要求 free 模型调用 bash 工具（`echo cs-mvp-approval-test`），模型均未实际发起 bash 调用而直接 `complete_workflow`（free flash 模型行为），未能产生 pending approval。**approve/reject 回路的真实 smoke 未完成**；该路径已由 V-2/V-3/V-5 的 mock/单测覆盖（approval round-trip、wait reason、signal 验证）。后续改用 python 工具触发审批（python 不在 auto_approve 列表），并建议通过 `--allowed-path` 传入授权目录（如 `.cs/tmp-cli-smoke`）以排除无授权目录对文件类工具的干扰；待 dev 应用恢复后执行。
 
 ### T3 — 计划模式等待/恢复（signal 回路）
 

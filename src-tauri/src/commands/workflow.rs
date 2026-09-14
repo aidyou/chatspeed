@@ -5208,6 +5208,14 @@ pub async fn workflow_signal(
         .map_err(|e| e.message)
 }
 
+/// Terminal workflow statuses that no longer have a live executor to consume a
+/// stop signal. See CONSTITUTION.md §5.3: stop stays actionable during active
+/// execution, waiting, retry/backoff windows, and temporary signal drains; only
+/// true terminal states are skipped.
+fn is_terminal_workflow_status(status: &str) -> bool {
+    matches!(status, "completed" | "error" | "cancelled")
+}
+
 pub(crate) async fn workflow_stop_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5223,6 +5231,19 @@ pub(crate) async fn workflow_stop_core(
             .map(|snapshot| snapshot.workflow.status)
             .unwrap_or_else(|_| WorkflowState::Cancelled.to_string())
     };
+
+    // A terminal session has no executor left to consume a stop signal:
+    // injecting one would flip the persisted status to `stopping` with nothing
+    // to resolve it, leaving the session stuck. Treat stop on a terminal
+    // session as a successful no-op (idempotent).
+    if is_terminal_workflow_status(&previous_status) {
+        log::info!(
+            "[Workflow][session={}][phase=stop] Session already terminal (status={}); stop is a no-op",
+            session_id,
+            previous_status
+        );
+        return Ok(());
+    }
 
     interrupt_openai_session(chat_state, &session_id).await;
     cleanup_owned_background_resources(&session_id, chat_state).await;
@@ -6259,6 +6280,32 @@ mod tests {
 
         assert_eq!(format_workflow_terminal_error(&error), raw_body);
         assert!(!format_workflow_terminal_error(&error).contains("Critical Error:"));
+    }
+
+    #[test]
+    fn terminal_workflow_statuses_skip_stop() {
+        assert!(is_terminal_workflow_status("completed"));
+        assert!(is_terminal_workflow_status("error"));
+        assert!(is_terminal_workflow_status("cancelled"));
+
+        // Non-terminal states must keep stop actionable (CONSTITUTION.md §5.3).
+        for status in [
+            "pending",
+            "thinking",
+            "executing",
+            "auditing",
+            "stopping",
+            "paused",
+            "awaiting_user",
+            "awaiting_approval",
+            "awaiting_auto_approval",
+            "awaiting_sub_agent",
+        ] {
+            assert!(
+                !is_terminal_workflow_status(status),
+                "stop must stay actionable for status={status}"
+            );
+        }
     }
 
     #[test]

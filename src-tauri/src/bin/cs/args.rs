@@ -3,6 +3,32 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// Long help for `--agent-config`: the full camelCase inheritedAgentConfig
+/// contract, so callers do not need to read ChatSpeed source to use it.
+const AGENT_CONFIG_LONG_HELP: &str = "\
+Raw inherited agent config JSON (camelCase, same contract as the Tauri \
+create_workflow inheritedAgentConfig). Supported top-level keys:
+
+- personality: execution/communication style preset id
+- allowedPaths: [string] authorized directory paths
+- approvalLevel: \"default\" | \"smart\" | \"full\"
+- autoApprove: [tool] extra auto-approved tools (bash is always excluded)
+- autoApprovePlan: bool, approve generated plans without confirmation
+- autoCompress: bool, task-boundary rollup compression
+- availableTools: [tool] tool subset; intersected with the agent's own tools
+- finalAudit: bool (legacy flag, kept in sync with finalReviewMode)
+- finalReviewMode: \"off\" | \"sub_agent_review\"
+- skillEnabled: bool; selectedSkills: [string]
+- mcpTools: MCP tool exposure config
+- phase: default workflow phase
+- models: {plan|act|vision|utility|lite: {id, model, temperature?, \
+contextSize?, maxTokens?, functionCall?}}
+- shellPolicy: [{pattern, decision: \"Allow\" | \"Review\" | \"Deny\"}]
+- sandboxExecutionMode / sandboxSchemeId / sandboxConfig / sandboxOverride
+
+Notes: maxContexts is not inherited; unknown keys are ignored; --model is a \
+shortcut for models.act.";
+
 /// Machine-stable output formats. `human` is localized and may change;
 /// `json`/`jsonl` are versioned machine contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -88,13 +114,12 @@ pub enum WorkflowCommand {
         /// Authorized directory paths for the workflow.
         #[arg(long = "allowed-path")]
         allowed_paths: Vec<String>,
-        /// Model override for the act phase, as "group@model"
-        /// (e.g. cs@free:ds-v4-flash; provider id 0 = cs proxy group).
+        /// Model override for the act (execution) phase, as "group@model"
+        /// (e.g. cs@free:ds-v4-flash; shortcut for agent-config models.act).
         #[arg(long, conflicts_with = "agent_config")]
         model: Option<String>,
-        /// Raw inherited agent config JSON (camelCase AgentConfig, same
-        /// contract as the Tauri create_workflow inheritedAgentConfig).
-        #[arg(long)]
+        /// Raw inherited agent config JSON (use --help to list supported keys).
+        #[arg(long, long_help = AGENT_CONFIG_LONG_HELP)]
         agent_config: Option<String>,
         /// Enable final audit for the workflow.
         #[arg(long)]
@@ -124,13 +149,12 @@ pub enum WorkflowCommand {
         prompt_file: Option<PathBuf>,
         #[arg(long = "allowed-path")]
         allowed_paths: Vec<String>,
-        /// Model override for the act phase, as "group@model"
-        /// (e.g. cs@free:ds-v4-flash; provider id 0 = cs proxy group).
+        /// Model override for the act (execution) phase, as "group@model"
+        /// (e.g. cs@free:ds-v4-flash; shortcut for agent-config models.act).
         #[arg(long, conflicts_with = "agent_config")]
         model: Option<String>,
-        /// Raw inherited agent config JSON (camelCase AgentConfig, same
-        /// contract as the Tauri create_workflow inheritedAgentConfig).
-        #[arg(long)]
+        /// Raw inherited agent config JSON (use --help to list supported keys).
+        #[arg(long, long_help = AGENT_CONFIG_LONG_HELP)]
         agent_config: Option<String>,
         /// Enable final audit for the workflow.
         #[arg(long)]
