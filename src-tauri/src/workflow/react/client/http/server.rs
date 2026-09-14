@@ -693,8 +693,9 @@ mod tests {
     /// Serializes env-dependent tests: `CHATSPEED_HOME` is process-global.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// Holds the env lock for the duration of a test and clears the env var.
-    struct EnvGuard(std::sync::MutexGuard<'static, ()>);
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
@@ -721,7 +722,9 @@ mod tests {
     }
 
     async fn spawn_test_app() -> (TestApp, EnvGuard) {
-        let env = EnvGuard(ENV_LOCK.lock().unwrap());
+        let env = EnvGuard {
+            _lock: ENV_LOCK.lock().unwrap(),
+        };
         let dir = tempfile::tempdir().expect("temp dir");
         std::env::set_var("CHATSPEED_HOME", dir.path());
         let db_path = dir.path().join("control_plane_test.db");
