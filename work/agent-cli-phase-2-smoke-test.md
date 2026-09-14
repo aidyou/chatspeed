@@ -20,6 +20,9 @@ capture 来源，因此该项不能在本环境执行；这属于计划已登记
   - `?? work/agent-cli-phase-2-implementation-plan.md`
   - `?? work/agent-cli-phase-2-smoke-test.md`
 
+> 更新：上述变更已按用户要求提交为两个独立 commit——`615962ef`（2A 功能 + 两份文档）与
+> `57d30351`（既有 `server.rs` `_lock` 测试辅助修复）；提交后工作区干净。
+
 ## 2. 已执行的确定性验证（offline，可复现）
 
 ### 2.1 格式与双 binary 编译（无 warning）

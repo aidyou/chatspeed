@@ -302,9 +302,12 @@ cs experiment inspect/replay
   - 修改 `src-tauri/src/bin/cs/args.rs`：新增 `Command::Experiment` 与 `ExperimentCommand{Capture,Inspect,Replay}`；
     既有 workflow/agent/doctor 命令与参数不变（INV-1）。
   - 新增 `work/agent-cli-phase-2-implementation-plan.md`（本文件）、`work/agent-cli-phase-2-smoke-test.md`。
-- 提交/工作区状态：**未 stage/commit**（遵守项目规则）。工作区仅含：`M cs.rs`、`M args.rs`、
-  `M server.rs`（既有 `EnvGuard::_lock` 测试辅助修改，**已保留且编译通过**）、`?? artifact.rs`、`?? experiment.rs`、
-  两份新文档。无越界文件。
+- 提交/工作区状态：**已提交**（用户显式要求，两个独立 commit）：
+  - `615962ef` `feat(cs): add experiment artifact capture/inspect/replay (phase 2A)`（`cs.rs`、`args.rs`、
+    `artifact.rs`、`experiment.rs` + 本文件与 `work/agent-cli-phase-2-smoke-test.md`）；
+  - `57d30351` `fix(workflow): name EnvGuard lock field to clear test dead_code warning`（既有 `server.rs`
+    `_lock` 测试辅助修改，作为无关的独立提交保留）。
+  - 提交后工作区干净，无越界文件。
 - 验证命令与结果：
   - `cargo fmt --all -- --check` → 干净（先 `cargo fmt --all` 归一）。
   - `cargo check --bin chatspeed --bin cs` → Finished，**无 warning**。
