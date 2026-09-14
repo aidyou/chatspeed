@@ -1,11 +1,8 @@
 # cs CLI 第二期 2A 冒烟测试记录（Artifact / Provenance + offline inspect/replay）
 
-本文件记录 2A 的验证证据。真实 desktop-owned 固定模型 smoke 因当前执行环境无
-display server（`DISPLAY`/`WAYLAND_DISPLAY` 均为空）且沙箱内 `pnpm` 不在 PATH，
-无法在此环境启动 Tauri 桌面主进程，故记为**环境阻塞项**（见下），并给出在有显示
-环境主机上的完整复现脚本。2A 不引入 headless owner（属 2H），desktop 主进程是唯一
-capture 来源，因此该项不能在本环境执行；这属于计划已登记的 stop condition，
-不得记作 correctness 失败。
+本文件记录 2A 的验证证据。2026-09-14 已实际启动 `pnpm tauri dev` 的 Tauri
+桌面主进程，并通过 `cs` CLI 完成真实 desktop-owned 固定模型 smoke。2A 不引入
+headless owner（属 2H），desktop 主进程仍是唯一 capture 来源。
 
 ## 1. 环境与工作区状态
 
@@ -35,7 +32,7 @@ cargo check --bin chatspeed --bin cs  # Finished，无 warning
 ### 2.2 artifact/CLI focused tests（V-2/V-3）
 
 ```text
-cargo test --bin cs   # 48 passed; 0 failed
+cargo test --bin cs   # 51 passed; 0 failed
 ```
 
 覆盖：
@@ -90,12 +87,26 @@ cs experiment inspect /tmp/cs-no-such-artifact --output json
 signal/stop；`artifact.rs`/`experiment.rs` 不 import `MainStore`/SQLite/`WorkflowManager`/executor/
 `crate::workflow`/`crate::db`/`crate::commands`（INV-2）。
 
-## 3. 环境阻塞项：真实 desktop 固定模型 smoke（V-5）
+## 3. 真实 desktop 固定模型 smoke（V-5）
 
-**未执行原因**：本环境无 display server、`pnpm` 不在沙箱 PATH，无法启动 `pnpm tauri dev`
-的 Tauri 桌面主进程；2A 无 headless owner，desktop 主进程是唯一 capture 来源。
+**已执行环境与结果**：`pnpm tauri dev` 启动后，control plane 监听
+`127.0.0.1:39361`（protocol v1，instance `5ac23af75d8809a83e0c0bebd15ab3b0`），
+`cs doctor` 认证、连通性和协议检查均通过。使用 `builtin:coding`、模型
+`cs@free:ds-v4-flash` 和短 prompt `Reply with exactly: OK` 运行的 session
+`0rm2f4v4r0400` 终态为 `completed`。
 
-**在有显示环境主机上的复现脚本**（模型固定 `cs@free:ds-v4-flash`，短任务）：
+- `cs experiment capture` 成功产出 complete artifact，含 8 条 durable events。
+- 对不存在的 discovery 文件显式调用 `experiment inspect` 和 `experiment replay` 均成功，
+  证明两个命令在此路径不依赖 discovery 或已运行 desktop。
+- capture 前后 `workflow get` 的 JSON 字节一致（`SNAPSHOT_UNCHANGED`）。
+- 对 `run.json`、`snapshot.json`、`events.jsonl` 的 prompt/Bearer/API key/workspace 路径扫描无命中。
+- artifact usage 含 legacy breakdown 与 unpriced tokens，离线 inspect 投影 `cost_status=unknown`，
+  未把未知成本降为零。
+- 普通 shell 无法复制 host CLI 生成的真实 artifact（隔离临时文件系统只读挂载），所以手工篡改该真实
+  副本未执行；`cargo test --bin cs` 覆盖 event/hash/chain 篡改和刷新 manifest 后 result usage 篡改的
+  fail-closed 路径。
+
+**可复现脚本**（模型固定 `cs@free:ds-v4-flash`，短任务）：
 
 ```bash
 # 1) 启动主进程（后台），等待 discovery 就绪
@@ -141,6 +152,7 @@ capture 前后 snapshot/events 无差异（只读）。
 ## 4. 结论
 
 2A 的 artifact schema v1、脱敏、canonical hash、event chain、manifest、原子 writer、
-usage/cost 投影与离线 inspect/replay 已通过 37 项 focused tests、双 binary 无 warning 编译、
-一期 HTTP/前端回归（36 + 62）与真实 CLI 离线进程验证。真实 desktop 固定模型 smoke 因环境
-无 display/pnpm 记为环境阻塞项，并附完整复现脚本；不将其记作 correctness 失败。
+usage/cost 投影与离线 inspect/replay 已通过 51 项 `cs` focused tests、双 binary 无 warning 编译、
+一期 HTTP/前端回归（36 + 62），以及 `pnpm tauri dev` 实例上的真实 CLI desktop smoke。真实
+artifact 的离线 inspect/replay、隐私扫描与 capture 无副作用均已验证；手工篡改真实副本受
+host/sandbox 临时文件系统隔离限制，等价 fail-closed 路径已由 focused tests 覆盖。

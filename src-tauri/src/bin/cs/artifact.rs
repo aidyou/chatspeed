@@ -20,7 +20,7 @@
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Artifact schema version this CLI writes and reads.
@@ -40,6 +40,10 @@ pub const MAX_EVENTS: usize = 100_000;
 pub const MAX_EVENT_DATA_BYTES: usize = 1 << 20;
 /// Maximum total bytes across all published artifact files.
 pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
+/// Maximum bytes accepted for the manifest before parsing it offline.
+const MAX_MANIFEST_BYTES: u64 = 1 << 20;
+/// Maximum encoded bytes accepted for one event line during verification.
+const MAX_EVENT_LINE_BYTES: usize = MAX_EVENT_DATA_BYTES * 2;
 
 /// The exact set of data files a v1 manifest must cover (the manifest itself is
 /// stored separately under `artifacts/`). Verification requires this exact set,
@@ -248,6 +252,21 @@ const SAFE_KEYS: &[&str] = &[
     "updated_at",
     "capture_timestamp",
     "duration_ms",
+    "usage_summary",
+    "self_usage",
+    "with_sub_agents",
+    "model_breakdowns",
+    "input_tokens",
+    "output_tokens",
+    "cache_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "audio_input_tokens",
+    "audio_output_tokens",
+    "total_tokens",
+    "estimated_cost",
+    "effective_cost_per_million",
+    "unpriced_tokens",
 ];
 
 /// Fixed marker replacing any value under a secret-bearing key.
@@ -315,7 +334,7 @@ fn looks_like_path(text: &str) -> bool {
 /// - other strings (free text): `{type:"string", len, sha256}`;
 /// - numbers/bools/null: kept (usage numbers are factual, not sensitive).
 pub fn redact_value(key_hint: &str, value: &Value) -> Value {
-    if is_secret_key(key_hint) {
+    if is_secret_key(key_hint) && !is_safe_key(key_hint) {
         return Value::String(SECRET_MARKER.to_string());
     }
     match value {
@@ -495,14 +514,14 @@ fn build_event_chain(
 // Usage / cost projection
 // ---------------------------------------------------------------------------
 
-/// Extracts the usage summary from the latest `task_completed` event (raw,
-/// pre-redaction) and projects only factual numeric/enum fields.
-fn project_usage(events: &[Value]) -> (Value, &'static str) {
+/// Extracts and projects the usage summary from the latest `task_completed` event.
+/// `data_key` is `event_data` during capture and `data` during offline verify.
+fn project_usage(events: &[Value], data_key: &str) -> (Value, &'static str) {
     let summary = events
         .iter()
         .rev()
         .find(|event| event.get("event_type").and_then(Value::as_str) == Some("task_completed"))
-        .and_then(|event| event.get("event_data"))
+        .and_then(|event| event.get(data_key))
         .and_then(|data| data.get("usage_summary"))
         .filter(|summary| !summary.is_null());
 
@@ -510,34 +529,49 @@ fn project_usage(events: &[Value]) -> (Value, &'static str) {
         return (json!({ "present": false }), "unknown");
     };
 
-    let is_partial = summary
-        .get("is_partial")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let self_usage = summary.get("self_usage").cloned().unwrap_or(Value::Null);
-    let unpriced = self_usage
-        .get("unpriced_tokens")
-        .and_then(Value::as_i64)
-        .unwrap_or(1);
-    let estimated = self_usage.get("estimated_cost").and_then(Value::as_f64);
-    let cost_status = if !is_partial && unpriced == 0 && estimated.is_some() {
-        "known"
-    } else {
-        "unknown"
-    };
-
     let projection = json!({
         "present": true,
         "version": summary.get("version").and_then(Value::as_u64),
         "terminal_status": summary.get("terminal_status").and_then(Value::as_str),
         "duration_ms": summary.get("duration_ms").and_then(Value::as_i64),
-        "is_partial": is_partial,
+        "is_partial": summary.get("is_partial").and_then(Value::as_bool).unwrap_or(true),
         "has_sub_agents": summary.get("has_sub_agents").and_then(Value::as_bool).unwrap_or(false),
-        "self_usage": project_totals(&self_usage),
-        "with_sub_agents": project_totals(&summary.get("with_sub_agents").cloned().unwrap_or(Value::Null)),
+        "self_usage": project_totals(summary.get("self_usage").unwrap_or(&Value::Null)),
+        "with_sub_agents": project_totals(summary.get("with_sub_agents").unwrap_or(&Value::Null)),
         "model_breakdowns": project_breakdowns(summary.get("model_breakdowns")),
     });
-    (projection, cost_status)
+    (projection, usage_cost_status(summary))
+}
+
+fn usage_cost_status(summary: &Value) -> &'static str {
+    let complete = summary.get("is_partial").and_then(Value::as_bool) == Some(false);
+    let self_known = usage_totals_are_priced(summary.get("self_usage"));
+    let sub_agents_known = usage_totals_are_priced(summary.get("with_sub_agents"));
+    let breakdowns_known = summary
+        .get("model_breakdowns")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().all(|item| {
+                item.get("pricing_status").and_then(Value::as_str) == Some("priced")
+                    && item.get("estimated_cost").and_then(Value::as_f64).is_some()
+            })
+        });
+    if complete && self_known && sub_agents_known && breakdowns_known {
+        "known"
+    } else {
+        "unknown"
+    }
+}
+
+fn usage_totals_are_priced(value: Option<&Value>) -> bool {
+    let Some(totals) = value else {
+        return false;
+    };
+    totals.get("unpriced_tokens").and_then(Value::as_i64) == Some(0)
+        && totals
+            .get("estimated_cost")
+            .and_then(Value::as_f64)
+            .is_some()
 }
 
 fn project_totals(totals: &Value) -> Value {
@@ -550,6 +584,8 @@ fn project_totals(totals: &Value) -> Value {
         "cache_tokens": totals.get("cache_tokens").and_then(Value::as_i64),
         "cache_write_tokens": totals.get("cache_write_tokens").and_then(Value::as_i64),
         "reasoning_tokens": totals.get("reasoning_tokens").and_then(Value::as_i64),
+        "audio_input_tokens": totals.get("audio_input_tokens").and_then(Value::as_i64),
+        "audio_output_tokens": totals.get("audio_output_tokens").and_then(Value::as_i64),
         "total_tokens": totals.get("total_tokens").and_then(Value::as_i64),
         "estimated_cost": totals.get("estimated_cost").and_then(Value::as_f64),
         "effective_cost_per_million": totals.get("effective_cost_per_million").and_then(Value::as_f64),
@@ -565,13 +601,25 @@ fn project_breakdowns(value: Option<&Value>) -> Value {
         items
             .iter()
             .map(|item| {
+                let input_tokens = item.get("input_tokens").and_then(Value::as_i64);
+                let output_tokens = item.get("output_tokens").and_then(Value::as_i64);
                 json!({
                     "provider_id": item.get("provider_id").and_then(Value::as_i64),
                     "backend_model": item.get("backend_model").and_then(Value::as_str),
-                    "input_tokens": item.get("input_tokens").and_then(Value::as_i64),
-                    "output_tokens": item.get("output_tokens").and_then(Value::as_i64),
-                    "total_tokens": item.get("total_tokens").and_then(Value::as_i64),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_tokens": item.get("cache_tokens").and_then(Value::as_i64),
+                    "cache_write_tokens": item.get("cache_write_tokens").and_then(Value::as_i64),
+                    "reasoning_tokens": item.get("reasoning_tokens").and_then(Value::as_i64),
+                    "audio_input_tokens": item.get("audio_input_tokens").and_then(Value::as_i64),
+                    "audio_output_tokens": item.get("audio_output_tokens").and_then(Value::as_i64),
+                    "total_tokens": input_tokens.zip(output_tokens).map(|(input, output)| input.saturating_add(output)),
                     "pricing_status": item.get("pricing_status").and_then(Value::as_str),
+                    "input_per_million": item.get("input_per_million").and_then(Value::as_f64),
+                    "output_per_million": item.get("output_per_million").and_then(Value::as_f64),
+                    "cache_per_million": item.get("cache_per_million").and_then(Value::as_f64),
+                    "reasoning_per_million": item.get("reasoning_per_million").and_then(Value::as_f64),
+                    "multiplier": item.get("multiplier").and_then(Value::as_f64),
                     "estimated_cost": item.get("estimated_cost").and_then(Value::as_f64),
                 })
             })
@@ -607,6 +655,7 @@ fn project_snapshot(input: &CaptureInput) -> Value {
     json!({
         "provenance": "control_plane_snapshot",
         "session_id": input.session_id,
+        "workflow_id": workflow.get("id").and_then(Value::as_str),
         "agent_id": workflow.get("agent_id").and_then(Value::as_str),
         "status": workflow.get("status").and_then(Value::as_str),
         "wait_reason": workflow.get("wait_reason").and_then(Value::as_str),
@@ -702,7 +751,19 @@ pub fn construct_bundle(input: &CaptureInput) -> Result<ArtifactBundle, Artifact
         None => ArtifactStatus::Incomplete,
     };
 
-    let (usage_projection, cost_status) = project_usage(input.events);
+    let (usage_projection, cost_status) = project_usage(input.events, "event_data");
+    let workflow = input
+        .snapshot
+        .get("workflow")
+        .ok_or_else(|| ArtifactError::new(code::INVALID, "snapshot is missing workflow"))?;
+    let snapshot_id = workflow.get("id").and_then(Value::as_str).unwrap_or("");
+    if snapshot_id != input.session_id {
+        return Err(ArtifactError::new(
+            code::SESSION,
+            "snapshot workflow id does not match session_id",
+        ));
+    }
+
     let snapshot_json = canonical_pretty(&project_snapshot(input));
     let hashes = project_hashes(input);
 
@@ -946,11 +1007,12 @@ pub fn verify_bundle_dir(dir: &Path) -> Result<VerifyReport, ArtifactError> {
             "artifact directory is a symlink",
         ));
     }
-    let run = read_json_file(dir, "run.json")?;
-    let snapshot = read_json_file(dir, "snapshot.json")?;
-    let result = read_json_file(dir, "result.json")?;
-    let manifest = read_json_file(dir, "artifacts/manifest.json")?;
-    let events_raw = read_text_file(dir, "events.jsonl")?;
+    verify_input_size(dir)?;
+    let run = read_json_file(dir, "run.json", MAX_TOTAL_BYTES)?;
+    let snapshot = read_json_file(dir, "snapshot.json", MAX_TOTAL_BYTES)?;
+    let result = read_json_file(dir, "result.json", MAX_TOTAL_BYTES)?;
+    let manifest = read_json_file(dir, "artifacts/manifest.json", MAX_MANIFEST_BYTES)?;
+    let events_raw = read_text_file(dir, "events.jsonl", MAX_TOTAL_BYTES)?;
 
     // Schema gate first: an unknown future version is `incompatible`, not `invalid`.
     let schema_version = run
@@ -994,6 +1056,28 @@ pub fn verify_bundle_dir(dir: &Path) -> Result<VerifyReport, ArtifactError> {
         return Err(ArtifactError::new(
             code::SESSION,
             "snapshot session_id mismatch",
+        ));
+    }
+    if snapshot
+        .get("workflow_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        != session_id
+    {
+        return Err(ArtifactError::new(
+            code::SESSION,
+            "snapshot workflow_id mismatch",
+        ));
+    }
+    if snapshot
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        != run.get("agent_id").and_then(Value::as_str).unwrap_or("")
+    {
+        return Err(ArtifactError::new(
+            code::SESSION,
+            "snapshot agent_id does not match run agent_id",
         ));
     }
     if result
@@ -1105,6 +1189,23 @@ pub fn verify_bundle_dir(dir: &Path) -> Result<VerifyReport, ArtifactError> {
             ))
         }
     };
+    let (expected_usage, expected_cost_status) = project_usage(&events, "data");
+    if result.get("usage").cloned().unwrap_or(Value::Null) != expected_usage
+        || cost_status != expected_cost_status
+    {
+        return Err(ArtifactError::new(
+            code::INVALID,
+            "result usage or cost_status does not match the durable task_completed event",
+        ));
+    }
+    if result.get("correctness_status").and_then(Value::as_str) != Some("not_evaluated")
+        || result.get("promotion_status").and_then(Value::as_str) != Some("not_applicable")
+    {
+        return Err(ArtifactError::new(
+            code::INVALID,
+            "artifact contains an unsupported correctness or promotion status",
+        ));
+    }
 
     let status = result_artifact;
     let terminal_status = result_terminal;
@@ -1122,8 +1223,8 @@ pub fn verify_bundle_dir(dir: &Path) -> Result<VerifyReport, ArtifactError> {
     })
 }
 
-fn read_json_file(dir: &Path, relative: &str) -> Result<Value, ArtifactError> {
-    let text = read_text_file(dir, relative)?;
+fn read_json_file(dir: &Path, relative: &str, max_bytes: u64) -> Result<Value, ArtifactError> {
+    let text = read_text_file(dir, relative, max_bytes)?;
     serde_json::from_str(&text).map_err(|e| {
         ArtifactError::new(
             code::INVALID,
@@ -1132,7 +1233,7 @@ fn read_json_file(dir: &Path, relative: &str) -> Result<Value, ArtifactError> {
     })
 }
 
-fn read_text_file(dir: &Path, relative: &str) -> Result<String, ArtifactError> {
+fn read_text_file(dir: &Path, relative: &str, max_bytes: u64) -> Result<String, ArtifactError> {
     let path = dir.join(relative);
     let meta = path.symlink_metadata().map_err(|_| {
         ArtifactError::new(code::MISSING_FILE, format!("missing file {}", relative))
@@ -1143,12 +1244,29 @@ fn read_text_file(dir: &Path, relative: &str) -> Result<String, ArtifactError> {
             format!("{} is a symlink", relative),
         ));
     }
-    fs::read_to_string(&path).map_err(|e| {
+    if !meta.file_type().is_file() {
+        return Err(ArtifactError::new(
+            code::INVALID,
+            format!("{} is not a regular file", relative),
+        ));
+    }
+    if meta.len() > max_bytes {
+        return Err(ArtifactError::new(
+            code::LIMIT,
+            format!("{} exceeds {} bytes", relative, max_bytes),
+        ));
+    }
+    let mut file = fs::File::open(&path).map_err(|e| {
         ArtifactError::new(
             code::MISSING_FILE,
             format!("cannot read {}: {}", relative, e),
         )
-    })
+    })?;
+    let mut text = String::with_capacity(meta.len() as usize);
+    file.read_to_string(&mut text).map_err(|e| {
+        ArtifactError::new(code::INVALID, format!("cannot decode {}: {}", relative, e))
+    })?;
+    Ok(text)
 }
 
 fn verify_manifest(manifest: &Value, dir: &Path) -> Result<(), ArtifactError> {
@@ -1228,12 +1346,54 @@ fn verify_manifest(manifest: &Value, dir: &Path) -> Result<(), ArtifactError> {
     Ok(())
 }
 
+fn verify_input_size(dir: &Path) -> Result<(), ArtifactError> {
+    let mut total = 0u64;
+    for relative in REQUIRED_FILES {
+        let path = dir.join(relative);
+        let meta = path.symlink_metadata().map_err(|_| {
+            ArtifactError::new(code::MISSING_FILE, format!("missing file {}", relative))
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(ArtifactError::new(
+                code::SYMLINK,
+                format!("{} is a symlink", relative),
+            ));
+        }
+        if !meta.file_type().is_file() {
+            return Err(ArtifactError::new(
+                code::INVALID,
+                format!("{} is not a regular file", relative),
+            ));
+        }
+        total = total.saturating_add(meta.len());
+        if total > MAX_TOTAL_BYTES {
+            return Err(ArtifactError::new(
+                code::LIMIT,
+                format!("artifact files exceed {} bytes", MAX_TOTAL_BYTES),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_events(raw: &str) -> Result<Vec<Value>, ArtifactError> {
     let mut events = Vec::new();
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
+        }
+        if line.len() > MAX_EVENT_LINE_BYTES {
+            return Err(ArtifactError::new(
+                code::LIMIT,
+                format!("event line exceeds {} bytes", MAX_EVENT_LINE_BYTES),
+            ));
+        }
+        if events.len() >= MAX_EVENTS {
+            return Err(ArtifactError::new(
+                code::LIMIT,
+                format!("event count exceeds limit {}", MAX_EVENTS),
+            ));
         }
         let value: Value = serde_json::from_str(line)
             .map_err(|e| ArtifactError::new(code::INVALID, format!("bad event line: {}", e)))?;
@@ -1859,6 +2019,39 @@ mod tests {
             result["usage"]["model_breakdowns"][0]["pricing_status"],
             json!("priced")
         );
+    }
+
+    #[test]
+    fn sub_agent_unpriced_usage_yields_unknown_cost() {
+        let mut usage = priced_usage();
+        usage["with_sub_agents"]["unpriced_tokens"] = json!(1);
+        usage["with_sub_agents"]["estimated_cost"] = Value::Null;
+        let snapshot = sample_snapshot("completed");
+        let events = sample_events(Some(usage));
+        let bundle = construct_bundle(&capture_input(&snapshot, &events)).expect("construct");
+        let result: Value = serde_json::from_str(&bundle.result_json).unwrap();
+        assert_eq!(result["cost_status"], json!("unknown"));
+    }
+
+    #[test]
+    fn result_usage_tampering_is_rejected_after_manifest_refresh() {
+        let dir = write_complete_bundle();
+        let artifact = dir.path().join("artifact");
+        patch_file(&artifact, "result.json", |value| {
+            value["usage"]["self_usage"]["total_tokens"] = json!(999);
+        });
+        refresh_manifest(&artifact);
+        let error = verify_bundle_dir(&artifact).expect_err("must fail");
+        assert_eq!(error.code, code::INVALID);
+    }
+
+    #[test]
+    fn snapshot_workflow_id_mismatch_is_rejected_at_capture() {
+        let mut snapshot = sample_snapshot("completed");
+        snapshot["workflow"]["id"] = json!("other-session");
+        let events = sample_events(Some(priced_usage()));
+        let error = construct_bundle(&capture_input(&snapshot, &events)).expect_err("must fail");
+        assert_eq!(error.code, code::SESSION);
     }
 
     /// Rewrites the manifest files array and recomputes manifest_hash so only

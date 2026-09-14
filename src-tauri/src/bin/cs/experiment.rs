@@ -96,7 +96,8 @@ pub async fn capture(
 }
 
 /// Pages through all durable events for a session using the durable `after`
-/// cursor (never an SSE cursor). Stops when a page is short of the limit.
+/// cursor (never an SSE cursor). The empty page is the only end marker; this
+/// keeps capture correct if the server clamps a full page below our request.
 async fn fetch_all_events(
     client: &ControlPlaneClient,
     session_id: &str,
@@ -118,10 +119,30 @@ async fn fetch_all_events(
         if items.is_empty() {
             break;
         }
+
+        let first_id = items
+            .first()
+            .and_then(|event| event.get("id"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| CliError::protocol("Durable event is missing an integer id"))?;
         let last_id = items
             .last()
             .and_then(|event| event.get("id"))
-            .and_then(Value::as_i64);
+            .and_then(Value::as_i64)
+            .ok_or_else(|| CliError::protocol("Durable event is missing an integer id"))?;
+        if let Some(previous_id) = after {
+            if first_id <= previous_id {
+                return Err(CliError::protocol(
+                    "Durable events cursor did not advance monotonically",
+                ));
+            }
+        }
+        if last_id < first_id {
+            return Err(CliError::protocol(
+                "Durable events are not ordered by ascending id",
+            ));
+        }
+
         all.extend(items.iter().cloned());
         if all.len() > artifact::MAX_EVENTS {
             return Err(CliError::io(format!(
@@ -129,13 +150,7 @@ async fn fetch_all_events(
                 artifact::MAX_EVENTS
             )));
         }
-        if items.len() < EVENTS_PAGE_LIMIT {
-            break;
-        }
-        match last_id {
-            Some(id) => after = Some(id),
-            None => break,
-        }
+        after = Some(last_id);
     }
     Ok(all)
 }
@@ -317,7 +332,7 @@ mod tests {
 
     #[test]
     fn result_status_and_event_count_helpers() {
-        let snapshot = json!({ "workflow": { "status": "running" }, "messages": [] });
+        let snapshot = json!({ "workflow": { "id": "s1", "status": "running" }, "messages": [] });
         let events = vec![json!({
             "id": 1, "session_id": "s1", "event_type": "workflow_started",
             "event_version": "1.0.0", "created_at": "t0", "event_data": {}

@@ -11,9 +11,9 @@
 
 ## 0. 当前阶段指针（Current Stage Pointer）
 
-- **2A 状态**：代码与离线验证**已完成**（37 focused tests + 双 binary 无 warning + 一期 HTTP/前端回归 + 真实 CLI 离线进程验证）；
-  真实 desktop 固定模型 smoke 因执行环境无 display/`pnpm` 记为**环境阻塞项**，复现脚本见 `work/agent-cli-phase-2-smoke-test.md` 第 3 节。
-  详见 `## 9` 的 `2A Implementation Record`。
+- **2A 状态**：代码、离线验证与真实 desktop-owned CLI smoke **已完成**（51 个 `cs` focused tests +
+  双 binary 无 warning + 一期 HTTP/前端回归 + `pnpm tauri dev` 实例验证）；详见 `## 9` 的
+  `2A Implementation Record` 与 `work/agent-cli-phase-2-smoke-test.md`。
 - **下一个入口**：`2B`（Budget & effect admission ledger），进入前需确认 Q-3。
 - **规则**：每个阶段完成后，必须在本文件末尾的 `## Implementation Record` 追加该阶段的实施记录，
   并把"当前阶段指针"推进到下一阶段。**下一阶段开始前不得清空或改写已完成阶段的 Implementation Record。**
@@ -311,7 +311,8 @@ cs experiment inspect/replay
 - 验证命令与结果：
   - `cargo fmt --all -- --check` → 干净（先 `cargo fmt --all` 归一）。
   - `cargo check --bin chatspeed --bin cs` → Finished，**无 warning**。
-  - `cargo test --bin cs` → **48 passed; 0 failed**（31 artifact + 3 experiment + 既有 cs 测试；含 manifest
+  - `cargo test --bin cs` → **51 passed; 0 failed**（含新增整体 usage/cost 一致性、snapshot 身份绑定、
+    verifier 资源上限与 durable events 分页边界回归；以及 manifest
     固定集/绝对路径/重复负向、failed/cancelled 终端映射、事件链派生状态、run/result 状态交叉校验、
     缺失/非法 status 与非法 cost_status fail-closed、stale-completed→incomplete）。
   - `cargo test --lib workflow::react::client` → **36 passed; 0 failed**（含 server `_lock` 测试）。
@@ -321,12 +322,17 @@ cs experiment inspect/replay
     且未加载 discovery（离线）。
   - 结构证据：capture 仅 `client.get`；`artifact.rs`/`experiment.rs` 无 `MainStore`/SQLite/`WorkflowManager`/executor/
     `crate::workflow`/`crate::db`/`crate::commands` import。
-- 真实 smoke：**未在本环境执行**。原因：无 `DISPLAY`/`WAYLAND_DISPLAY`、沙箱内 `pnpm` 不在 PATH，无法启动
-  `pnpm tauri dev` 桌面主进程；2A 无 headless owner，desktop 主进程是唯一 capture 来源。已在
-  `work/agent-cli-phase-2-smoke-test.md` 第 3 节给出固定模型 `cs@free:ds-v4-flash` 的完整复现脚本
-  （doctor → workflow run → capture → 离线 inspect/replay → 篡改/隐私/无副作用负向）。
+- 真实 desktop smoke（V-5，2026-09-14）：已启动 `pnpm tauri dev`，`cs doctor` 认证连接
+  `127.0.0.1:39361`（protocol v1，instance `5ac23af75d8809a83e0c0bebd15ab3b0`）。使用
+  `builtin:coding`、`cs@free:ds-v4-flash`、`Reply with exactly: OK` 完成 session `0rm2f4v4r0400`；
+  只读 capture 得到 complete artifact 和 8 条 durable events。以不存在的 discovery 文件运行
+  inspect/replay 均成功，真实 artifact 隐私扫描无 prompt、Bearer/API key 或 workspace 绝对路径命中，
+  capture 前后 workflow snapshot 字节一致。真实 usage 含 legacy breakdown 与 unpriced tokens，
+  artifact 正确投影为 `cost_status=unknown`。详情见 smoke 记录。
 - 未验证项 / 环境限制 / 剩余风险：
-  - V-5 真实 desktop 固定模型 smoke 待在有显示环境主机执行（环境阻塞，非 correctness 失败）。
+  - host CLI 生成的真实 artifact 临时目录在普通 shell 中以隔离的只读挂载可见，无法复制后对其进行
+    手工篡改；真实 artifact 的离线正向/隐私/无副作用检查已完成，篡改 fail-closed 路径由 `cs` focused
+    tests 覆盖（含刷新 manifest 后的 result usage 篡改）。
   - capture 的 snapshot 与分页 events 非同一事务快照；实施按 capture_timestamp + instance_id + event range 记录，
     读取期间 session 变化导致终态/usage 不一致时由 verify 的 result 交叉绑定/终端检查判 `incomplete`/`invalid`，不伪造一致。
   - 全库 clippy 既有 baseline 未扩大处理（本次仅保证新 CLI 模块无 warning）。
