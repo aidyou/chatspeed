@@ -845,8 +845,19 @@ pub async fn run() -> crate::error::Result<()> {
             let tsid_generator = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("Failed to init TSID generator"));
             app.manage(tsid_generator.clone());
 
-            // State 7: TauriGateway (Singleton for ReAct signals)
-            let gateway = Arc::new(crate::workflow::react::gateway::TauriGateway::new(app.handle().clone()));
+            // State 7: WorkflowRuntimeHub (unique Gateway: Tauri output transport
+            // + single session input registry + live SSE event source)
+            let tauri_gateway = Arc::new(crate::workflow::react::client::tauri::gateway::TauriGateway::new(app.handle().clone()));
+            let server_instance_id: String = {
+                use rand::Rng;
+                let mut instance_bytes = [0u8; 16];
+                rand::rng().fill_bytes(&mut instance_bytes);
+                hex::encode(instance_bytes)
+            };
+            let gateway = Arc::new(crate::workflow::react::client::hub::WorkflowRuntimeHub::new(
+                tauri_gateway,
+                server_instance_id,
+            ));
             app.manage(gateway.clone());
 
             // State 8: WorkflowManager (Session lifecycle manager)
@@ -871,7 +882,48 @@ pub async fn run() -> crate::error::Result<()> {
                 app_data_dir: app.path().app_data_dir().unwrap_or_default(),
                 tsid_generator: tsid_generator.clone(),
             });
-            app.manage(factory);
+            app.manage(factory.clone());
+
+            // State 11: WorkflowApplicationService (transport-neutral canonical
+            // path shared by Tauri commands, automation and the control plane)
+            let application_service = Arc::new(
+                crate::workflow::react::application::WorkflowApplicationService::new(
+                    main_store.clone(),
+                    chat_state.clone(),
+                    tsid_generator.clone(),
+                    gateway.clone(),
+                    factory.clone(),
+                    workflow_manager.clone(),
+                    app.path().app_data_dir().unwrap_or_default(),
+                ),
+            );
+            app.manage(application_service.clone());
+
+            // Control plane: independent loopback HTTP/JSON + SSE server.
+            // Startup failures are logged (without secrets) and must not block
+            // the desktop app, static server or ccproxy.
+            {
+                let control_plane_svc = application_service.clone();
+                tokio::spawn(async move {
+                    match crate::workflow::react::client::http::server::start(control_plane_svc)
+                        .await
+                    {
+                        Ok(handle) => {
+                            log::info!(
+                                "[ControlPlane] Started on port {} (instance {})",
+                                handle.port,
+                                handle.server_instance_id
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[ControlPlane] Disabled: {}. Desktop workflows continue to work.",
+                                error
+                            );
+                        }
+                    }
+                });
+            }
 
             spawn_workflow_automation_scheduler(app.handle().clone());
 
@@ -975,7 +1027,15 @@ pub async fn run() -> crate::error::Result<()> {
             Ok(())
         })
         // Run the Tauri application with the generated context
-        .run(tauri::generate_context!()).map_err(|e| AppError::General{message:e.to_string()})?;
+        .build(tauri::generate_context!())
+        .map_err(|e| AppError::General{message:e.to_string()})?
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // Gracefully stop the control plane and remove its discovery
+                // document when it still belongs to this instance.
+                crate::workflow::react::client::http::server::request_shutdown();
+            }
+        });
     Ok(())
 }
 

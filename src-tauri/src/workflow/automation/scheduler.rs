@@ -1,12 +1,8 @@
-use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{MainStore, WorkflowAutomation};
-use crate::libs::tsid::TsidGenerator;
 use crate::workflow::automation::service::{
     advance_automation_after_scheduler_tick, normalize_datetime_for_db, run_automation_now,
 };
-use crate::workflow::react::gateway::TauriGateway;
-use crate::workflow::react::manager::WorkflowManager;
-use crate::workflow::react::orchestrator::SubAgentFactory;
+use crate::workflow::react::application::WorkflowApplicationService;
 use chrono::Local;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -115,13 +111,7 @@ pub fn spawn_workflow_automation_scheduler(app: AppHandle) {
                 }
 
                 let result = run_automation_now(
-                    app.clone(),
-                    app.state::<Arc<MainStore>>(),
-                    app.state::<Arc<ChatState>>(),
-                    app.state::<Arc<TsidGenerator>>(),
-                    app.state::<Arc<TauriGateway>>(),
-                    app.state::<Arc<dyn SubAgentFactory>>(),
-                    app.state::<Arc<WorkflowManager>>(),
+                    app.state::<Arc<WorkflowApplicationService>>(),
                     automation.id.clone(),
                 )
                 .await;

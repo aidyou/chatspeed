@@ -5,6 +5,8 @@ description = "Quickly solve problems with the help of AI"
 authors     = ["Ezool Network"]
 edition     = "2021"
 build       = "build.rs"
+# Disambiguate `cargo run` / `cargo test` toward the desktop binary.
+default-run = "chatspeed"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,6 +17,17 @@ build       = "build.rs"
 name       = "chatspeed_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 doctest    = false
+
+# Desktop application binary (default target for `cargo run` / tauri dev).
+[[bin]]
+name = "chatspeed"
+path = "src/main.rs"
+
+# `cs` CLI: a pure HTTP/SSE client of the workflow control plane. It never
+# links workflow runtime behavior, opens the database or spawns executors.
+[[bin]]
+name = "cs"
+path = "src/bin/cs.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.6.0", features = [] }
@@ -29,6 +42,7 @@ axum             = "0.8.9"
 base64           = "0.22.1"
 bytes            = "1.11.1"
 chrono           = { version = "0.4.44", features = ["serde"] }
+clap             = { version = "4.5", features = ["derive"] }
 dashmap          = "6.1.0"
 dirs             = "6.0"
 fern             = "0.7.1"

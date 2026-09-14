@@ -19,6 +19,15 @@ chat:
   failed_to_write_file: 'Failed to write file: %{error}'
   invalid_api_protocol: 'Invalid API protocol: %{protocol}'
   note_already_exists: This note already exists, no need to add again
+cs:
+  agent_list_header: Agents
+  doctor_connected: 'Connected to ChatSpeed control plane: endpoint %{endpoint}, protocol v%{protocol}, instance %{instance}, pid %{pid}'
+  doctor_ok: Connectivity, authentication and protocol version are OK
+  workflow_created: 'Workflow created: %{session_id}'
+  workflow_started: 'Workflow started: %{session_id}'
+  workflow_stopped: 'Workflow stopped: %{session_id}'
+  workflow_signal_sent: 'Signal delivered to %{session_id}'
+  workflow_follow_detached: Follow detached; the workflow keeps running in ChatSpeed
 command:
   clipboard:
     failed_to_initialize: 'Failed to initialize clipboard: %{error}'

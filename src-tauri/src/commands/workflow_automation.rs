@@ -1,4 +1,3 @@
-use crate::ai::interaction::chat_completion::ChatState;
 use crate::db::{MainStore, WorkflowAutomation, WorkflowAutomationRun};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::automation::service::{
@@ -7,11 +6,9 @@ use crate::workflow::automation::service::{
 use crate::workflow::automation::types::{
     WorkflowAutomationRequest, WorkflowAutomationRunNowResult,
 };
-use crate::workflow::react::gateway::TauriGateway;
-use crate::workflow::react::manager::WorkflowManager;
-use crate::workflow::react::orchestrator::SubAgentFactory;
+use crate::workflow::react::application::WorkflowApplicationService;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 #[tauri::command]
 pub async fn workflow_automation_list(
@@ -76,24 +73,8 @@ pub async fn workflow_automation_list_runs(
 
 #[tauri::command]
 pub async fn workflow_automation_run_now(
-    app: AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     automation_id: String,
 ) -> Result<WorkflowAutomationRunNowResult, String> {
-    run_automation_now(
-        app,
-        state,
-        chat_state,
-        tsid_generator,
-        gateway,
-        factory,
-        workflow_manager,
-        automation_id,
-    )
-    .await
+    run_automation_now(svc, automation_id).await
 }

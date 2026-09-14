@@ -19,6 +19,15 @@ chat:
   failed_to_write_file: 無法寫入檔案：%{error}
   invalid_api_protocol: 無效的 API 協定：%{protocol}
   note_already_exists: 該筆記已存在，無需重複新增
+cs:
+  agent_list_header: Agent 列表
+  doctor_connected: '已連線 ChatSpeed 控制面：端點 %{endpoint}，協定 v%{protocol}，實例 %{instance}，pid %{pid}'
+  doctor_ok: 連線、認證與協定版本檢查通過
+  workflow_created: 'Workflow 已建立：%{session_id}'
+  workflow_started: 'Workflow 已啟動：%{session_id}'
+  workflow_stopped: 'Workflow 已停止：%{session_id}'
+  workflow_signal_sent: '訊號已送達 %{session_id}'
+  workflow_follow_detached: 已退出跟隨；workflow 仍在 ChatSpeed 中繼續執行
 command:
   clipboard:
     failed_to_initialize: 初始化剪貼簿失敗：%{error}

@@ -5,12 +5,16 @@ use crate::db::{
     WorkflowSnapshot,
 };
 use crate::libs::tsid::TsidGenerator;
+use crate::workflow::react::application::{
+    ApplicationError, WorkflowApplicationService, WorkflowCreateRequest, WorkflowEventsQuery,
+};
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
+use crate::workflow::react::client::hub::WorkflowRuntimeHub;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::events::WorkflowEvent;
-use crate::workflow::react::gateway::{Gateway, TauriGateway};
+use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{
@@ -117,7 +121,7 @@ fn spawn_workflow_title_generation_if_missing(
     user_query: String,
     state: Arc<MainStore>,
     chat_state: Arc<ChatState>,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
 ) -> Result<(), String> {
     if user_query.trim().is_empty() {
         return Ok(());
@@ -303,7 +307,7 @@ fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus
 }
 
 async fn inject_runtime_config_signal(
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
     state: &Arc<MainStore>,
     session_id: &str,
@@ -1738,25 +1742,24 @@ fn normalize_workflow_agent_config_in_memory(
 }
 
 #[tauri::command]
-pub async fn create_workflow(
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    request: CreateWorkflowRequest,
-) -> Result<String, String> {
+pub(crate) async fn create_workflow_core(
+    svc: &WorkflowApplicationService,
+    request: WorkflowCreateRequest,
+) -> Result<String, ApplicationError> {
     let (agent, runtime) = {
-        let store = &*state;
+        let store = &*svc.main_store;
         let agent = store
             .get_agent(&request.agent_id)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.agent_id))
+            })?;
         let runtime = store.db_runtime().map_err(|e| e.to_string())?;
         (agent, runtime)
     };
 
     // Always use TSID for new workflow sessions
-    let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
+    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
 
     log::info!(
         "[Workflow][session={}][phase=create] Creating workflow for agent_id={}",
@@ -1765,12 +1768,24 @@ pub async fn create_workflow(
     );
 
     if agent.role.as_deref() == Some("child") {
-        return Err("Child agents cannot be used as top-level workflow agents".to_string());
+        return Err(ApplicationError::invalid_input(
+            "Child agents cannot be used as top-level workflow agents",
+        ));
     }
 
-    let mut config = build_workflow_config_for_request(&agent, &request);
+    // The config builder is shared with the Tauri wire shape; adapt the
+    // transport-neutral request into it once at this boundary.
+    let wire_request = CreateWorkflowRequest {
+        user_query: request.user_query.clone(),
+        agent_id: request.agent_id.clone(),
+        allowed_paths: request.allowed_paths.clone(),
+        auto_approve_plan: request.auto_approve_plan,
+        final_audit: request.final_audit,
+        inherited_agent_config: request.inherited_agent_config.clone(),
+    };
+    let mut config = build_workflow_config_for_request(&agent, &wire_request);
     {
-        let store = &*state;
+        let store = &*svc.main_store;
         resolve_agent_sandbox_snapshot(store, &agent, &mut config)?;
     }
 
@@ -1792,7 +1807,7 @@ pub async fn create_workflow(
 
     // Generate and store session key for proxy authentication
     let session_key = format!("sk-{}", uuid::Uuid::new_v4());
-    chat_state
+    svc.chat_state
         .workflow_keys
         .insert(session_id.clone(), session_key);
 
@@ -1805,21 +1820,48 @@ pub async fn create_workflow(
     let _ = spawn_workflow_title_generation_if_missing(
         session_id.clone(),
         user_query.to_string(),
-        state.inner().clone(),
-        chat_state.inner().clone(),
-        gateway.inner().clone(),
+        svc.main_store.clone(),
+        svc.chat_state.clone(),
+        svc.gateway.clone(),
     );
 
     Ok(session_id)
 }
 
 #[tauri::command]
-pub async fn list_workflows(state: State<'_, Arc<MainStore>>) -> Result<Vec<Workflow>, String> {
-    let runtime = state.db_runtime().map_err(|e| e.to_string())?;
+pub async fn create_workflow(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    request: CreateWorkflowRequest,
+) -> Result<String, String> {
+    create_workflow_core(
+        &svc,
+        WorkflowCreateRequest {
+            user_query: request.user_query,
+            agent_id: request.agent_id,
+            allowed_paths: request.allowed_paths,
+            auto_approve_plan: request.auto_approve_plan,
+            final_audit: request.final_audit,
+            inherited_agent_config: request.inherited_agent_config,
+        },
+    )
+    .await
+    .map_err(|e| e.message)
+}
 
+pub(crate) async fn list_workflows_core(
+    svc: &WorkflowApplicationService,
+) -> Result<Vec<Workflow>, ApplicationError> {
+    let runtime = svc.main_store.db_runtime().map_err(|e| e.to_string())?;
     MainStore::list_workflows_with_runtime(runtime)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn list_workflows(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+) -> Result<Vec<Workflow>, String> {
+    list_workflows_core(&svc).await.map_err(|e| e.message)
 }
 
 fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
@@ -2458,7 +2500,7 @@ fn reconcile_child_workflows_for_parent(
 pub async fn delete_workflow(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
@@ -2483,7 +2525,7 @@ pub async fn delete_workflow(
 pub async fn delete_last_workflow_message(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<bool, String> {
@@ -2711,7 +2753,7 @@ async fn clear_persisted_workflow_todo_list(
 async fn finalize_manual_clear_context_state(
     main_store: &Arc<MainStore>,
     workflow_manager: &Arc<WorkflowManager>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     session_id: &str,
 ) -> Result<(), String> {
     {
@@ -2747,7 +2789,7 @@ pub async fn workflow_begin_new_context_frame(
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     session_id: String,
 ) -> Result<WorkflowContextFrameResult, String> {
     let main_store = state.inner().clone();
@@ -2987,13 +3029,11 @@ pub async fn list_pending_sub_agent_approvals(
     .map_err(|error| format!("Failed to join pending sub-agent approval query: {error}"))?
 }
 
-#[tauri::command]
-pub async fn get_workflow_snapshot(
-    state: State<'_, Arc<MainStore>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn get_workflow_snapshot_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
-) -> Result<Value, String> {
-    let main_store = state.inner().clone();
+) -> Result<Value, ApplicationError> {
+    let main_store = svc.main_store.clone();
     let recovery_store = main_store.clone();
     let recovery_session_id = session_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -3037,7 +3077,7 @@ pub async fn get_workflow_snapshot(
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
     // zombie runtime sessions after a turn has already finished.
-    let workflow_manager_arc = workflow_manager.inner().clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
     let has_live_session =
         has_reconciled_live_session(&workflow_manager_arc, &session_id, "snapshot").await;
     let has_blocking_live_session = if has_live_session {
@@ -3117,6 +3157,16 @@ pub async fn get_workflow_snapshot(
 }
 
 #[tauri::command]
+pub async fn get_workflow_snapshot(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+) -> Result<Value, String> {
+    get_workflow_snapshot_core(&svc, session_id)
+        .await
+        .map_err(|e| e.message)
+}
+
+#[tauri::command]
 pub async fn get_earlier_workflow_message_page(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
@@ -3193,7 +3243,7 @@ pub async fn get_workflow_agent_config(
 pub async fn add_workflow_message(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
     let runtime = {
@@ -3417,7 +3467,7 @@ async fn try_resume_completed_live_session(
     clean_prompt: &str,
     attached_context: &str,
     message_metadata: Option<Value>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
     main_store: &Arc<MainStore>,
 ) -> Result<bool, String> {
@@ -3656,7 +3706,7 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
 async fn cleanup_workflow_resources(
     session_id: &str,
     chat_state: &Arc<ChatState>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
 ) {
     interrupt_openai_session(chat_state, session_id).await;
@@ -3691,7 +3741,7 @@ const COMPLETED_SESSION_CLEANUP_DELAY_SECS: u64 = 600;
 fn schedule_completed_session_cleanup(
     session_id: String,
     completed_at_ms: i64,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
     workflow_manager: Arc<WorkflowManager>,
 ) {
     tokio::spawn(async move {
@@ -3901,22 +3951,15 @@ fn combine_attached_context(base: String, extra: Option<String>) -> String {
     format!("{}\n\n{}", base, extra)
 }
 
-#[tauri::command]
-pub async fn workflow_start(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn workflow_start_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
     initial_metadata: Option<Value>,
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
-) -> Result<String, String> {
+) -> Result<String, ApplicationError> {
     log::info!(
         "[Workflow][session={}][phase=start] Starting workflow, agent_id={}, planning_mode={}",
         session_id,
@@ -3924,13 +3967,13 @@ pub async fn workflow_start(
         planning_mode.unwrap_or(false)
     );
 
-    let main_store_arc = state.inner().clone();
-    let chat_state_arc = chat_state.inner().clone();
-    let tsid_generator = tsid_generator.inner().clone();
-    let gateway_arc = gateway.inner().clone();
-    let factory = factory.inner().clone();
-    let workflow_manager_arc = workflow_manager.inner().clone();
-    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let main_store_arc = svc.main_store.clone();
+    let chat_state_arc = svc.chat_state.clone();
+    let tsid_generator = svc.tsid_generator.clone();
+    let gateway_arc = svc.gateway.clone();
+    let factory = svc.factory.clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
+    let app_data_dir = svc.app_data_dir.clone();
     let planning_mode = planning_mode.unwrap_or(false);
 
     if initial_prompt.is_some() {
@@ -4071,13 +4114,19 @@ pub async fn workflow_start(
                 "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
                 session_id
             );
-            return Err(format!("Session is stopping: {}", session_id));
+            return Err(ApplicationError::state(format!(
+                "Session is stopping: {}",
+                session_id
+            )));
         }
         log::info!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
         );
-        return Err(format!("Session already exists: {}", session_id));
+        return Err(ApplicationError::conflict(format!(
+            "Session already exists: {}",
+            session_id
+        )));
     }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
@@ -4223,7 +4272,10 @@ pub async fn workflow_start(
             session_id,
             e
         );
-        return Err(format!("Failed to register workflow session: {}", e));
+        return Err(ApplicationError::internal(format!(
+            "Failed to register workflow session: {}",
+            e
+        )));
     }
 
     // BACKGROUND_TASKS as compatibility layer (secondary)
@@ -4359,12 +4411,35 @@ pub async fn workflow_start(
     Ok(session_id)
 }
 
+#[tauri::command]
+pub async fn workflow_start(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+    agent_id: String,
+    initial_prompt: Option<String>,
+    initial_metadata: Option<Value>,
+    initial_attached_context: Option<String>,
+    planning_mode: Option<bool>,
+) -> Result<String, String> {
+    workflow_start_core(
+        &svc,
+        session_id,
+        agent_id,
+        initial_prompt,
+        initial_metadata,
+        initial_attached_context,
+        planning_mode,
+    )
+    .await
+    .map_err(|e| e.message)
+}
+
 async fn run_terminal_manual_compression(
-    app: &AppHandle,
+    app_data_dir: PathBuf,
     main_store: Arc<MainStore>,
     chat_state: Arc<ChatState>,
     tsid_generator: Arc<TsidGenerator>,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
     factory: Arc<dyn SubAgentFactory>,
     session_id: &str,
     workflow_snapshot: &WorkflowSnapshot,
@@ -4426,7 +4501,7 @@ async fn run_terminal_manual_compression(
         factory,
         agent_config,
         allowed_paths,
-        app.path().app_data_dir().unwrap_or_default(),
+        app_data_dir,
         None,
         None,
         tsid_generator,
@@ -4443,13 +4518,7 @@ async fn run_terminal_manual_compression(
 
 #[tauri::command]
 pub async fn workflow_approve_plan(
-    app: AppHandle,
-    main_store: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
     agent_id: String,
     plan: String,
@@ -4460,21 +4529,20 @@ pub async fn workflow_approve_plan(
         agent_id
     );
 
-    let submit_plan_tool_call_id =
-        restore_context_for_signal(main_store.inner().clone(), &session_id)
-            .and_then(|context| {
-                context
-                    .pending_tools
-                    .into_iter()
-                    .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
-                    .map(|tool| tool.tool_call_id)
-            })
-            .ok_or_else(|| {
-                format!(
+    let submit_plan_tool_call_id = restore_context_for_signal(svc.main_store.clone(), &session_id)
+        .and_then(|context| {
+            context
+                .pending_tools
+                .into_iter()
+                .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
+                .map(|tool| tool.tool_call_id)
+        })
+        .ok_or_else(|| {
+            format!(
                 "Cannot approve plan: no pending structured submit_plan approval for workflow {}",
                 session_id
             )
-            })?;
+        })?;
 
     let signal = json!({
         "type": SignalType::Approval.as_str(),
@@ -4488,33 +4556,17 @@ pub async fn workflow_approve_plan(
     })
     .to_string();
 
-    workflow_signal(
-        app,
-        main_store,
-        chat_state,
-        tsid_generator,
-        gateway,
-        factory,
-        workflow_manager,
-        session_id,
-        signal,
-    )
-    .await
-    .map(|_| ())
+    workflow_signal_core(&svc, session_id, signal)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.message)
 }
 
-#[tauri::command]
-pub async fn workflow_signal(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn workflow_signal_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     signal: String,
-) -> Result<String, String> {
+) -> Result<String, ApplicationError> {
     let signal_type = serde_json::from_str::<serde_json::Value>(&signal)
         .ok()
         .and_then(|value| {
@@ -4533,9 +4585,9 @@ pub async fn workflow_signal(
         signal_type
     );
 
-    let workflow_manager_arc = workflow_manager.inner().clone();
-    let gateway_arc = gateway.inner().clone();
-    let main_store_arc = state.inner().clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
+    let gateway_arc = svc.gateway.clone();
+    let main_store_arc = svc.main_store.clone();
     let workflow_snapshot = {
         let store = &*main_store_arc;
         store
@@ -4566,12 +4618,12 @@ pub async fn workflow_signal(
             session_id
         );
         let applied = run_terminal_manual_compression(
-            &app,
+            svc.app_data_dir.clone(),
             main_store_arc.clone(),
-            chat_state.inner().clone(),
-            tsid_generator.inner().clone(),
+            svc.chat_state.clone(),
+            svc.tsid_generator.clone(),
             gateway_arc.clone(),
-            factory.inner().clone(),
+            svc.factory.clone(),
             &session_id,
             &workflow_snapshot,
         )
@@ -4636,7 +4688,10 @@ pub async fn workflow_signal(
                                 )
                                 .await;
                         } else {
-                            return Err(format!("Gateway injection failed: {}", e));
+                            return Err(ApplicationError::gateway(format!(
+                                "Gateway injection failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -4647,14 +4702,8 @@ pub async fn workflow_signal(
                 session_id,
                 workflow_snapshot.workflow.status
             );
-            workflow_start(
-                app,
-                state,
-                chat_state,
-                tsid_generator,
-                gateway,
-                factory,
-                workflow_manager,
+            workflow_start_core(
+                svc,
                 session_id.clone(),
                 workflow_snapshot.workflow.agent_id.clone(),
                 signal_json_content(&signal),
@@ -4678,7 +4727,7 @@ pub async fn workflow_signal(
                         session_id,
                         signal_type
                     );
-                    return Err(format!("Signal rejected: {}", e));
+                    return Err(ApplicationError::state(format!("Signal rejected: {}", e)));
                 }
                 let allow_recovery_for_terminal_user_message = matches!(
                     signal_type_enum,
@@ -4709,7 +4758,7 @@ pub async fn workflow_signal(
                         signal_type,
                         e
                     );
-                    return Err(format!("Signal rejected: {}", e));
+                    return Err(ApplicationError::state(format!("Signal rejected: {}", e)));
                 }
             } else {
                 log::info!(
@@ -4753,7 +4802,10 @@ pub async fn workflow_signal(
                                 session_id,
                                 e
                             );
-                            return Err(format!("Gateway injection failed: {}", e));
+                            return Err(ApplicationError::gateway(format!(
+                                "Gateway injection failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -4813,10 +4865,10 @@ pub async fn workflow_signal(
                         effective_wait_reason,
                         workflow_snapshot.workflow.status
                     );
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot resume: workflow is in '{}' state",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
                 log::info!(
@@ -4827,14 +4879,8 @@ pub async fn workflow_signal(
                     workflow_snapshot.workflow.status
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     if should_reinject_after_recovery {
@@ -4874,10 +4920,10 @@ pub async fn workflow_signal(
                         let err_msg = last_error
                             .map(|e| e.to_string())
                             .unwrap_or_else(|| "Unknown error".into());
-                        return Err(format!(
+                        return Err(ApplicationError::gateway(format!(
                             "Failed to inject user_message after resuming: {}",
                             err_msg
-                        ));
+                        )));
                     }
 
                     return Ok("Workflow resumed and user message reinjected".to_string());
@@ -4912,14 +4958,8 @@ pub async fn workflow_signal(
                     session_id
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -4981,14 +5021,8 @@ pub async fn workflow_signal(
                     );
                 }
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -5029,10 +5063,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject {} after resuming: {}",
                         signal_type, err_msg
-                    ));
+                    )));
                 }
 
                 return Ok(format!("Workflow resumed and {} processed", signal_type));
@@ -5050,10 +5084,10 @@ pub async fn workflow_signal(
                             )
                         ));
                 if !can_resume {
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
                 log::info!(
@@ -5061,14 +5095,8 @@ pub async fn workflow_signal(
                     session_id
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -5103,10 +5131,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject approval after resuming: {}",
                         err_msg
-                    ));
+                    )));
                 }
 
                 return Ok("Workflow resumed and approval processed".to_string());
@@ -5115,20 +5143,14 @@ pub async fn workflow_signal(
                 Some(WorkflowSignal::SubAgentComplete { .. })
             ) {
                 if effective_wait_reason != Some(WaitReason::SubAgent) {
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot process sub-agent completion: Workflow is in '{}' state.",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -5158,10 +5180,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject sub_agent_complete after resuming: {}",
                         err_msg
-                    ));
+                    )));
                 }
 
                 return Ok("Workflow resumed and sub-agent completion processed".to_string());
@@ -5169,36 +5191,47 @@ pub async fn workflow_signal(
         }
     }
 
-    Err(format!(
+    Err(ApplicationError::gateway(format!(
         "Failed to send signal: No active session for {}",
         session_id
-    ))
+    )))
 }
 
 #[tauri::command]
-pub async fn workflow_stop(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub async fn workflow_signal(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
-) -> Result<(), String> {
+    signal: String,
+) -> Result<String, String> {
+    workflow_signal_core(&svc, session_id, signal)
+        .await
+        .map_err(|e| e.message)
+}
+
+pub(crate) async fn workflow_stop_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<(), ApplicationError> {
+    let state = &svc.main_store;
+    let chat_state = &svc.chat_state;
+    let gateway = &svc.gateway;
+    let workflow_manager = &svc.workflow_manager;
     let previous_status = {
-        let store = &**state.inner();
+        let store = &**state;
         store
             .get_workflow_snapshot(&session_id)
             .map(|snapshot| snapshot.workflow.status)
             .unwrap_or_else(|_| WorkflowState::Cancelled.to_string())
     };
 
-    interrupt_openai_session(chat_state.inner(), &session_id).await;
-    cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
+    interrupt_openai_session(chat_state, &session_id).await;
+    cleanup_owned_background_resources(&session_id, chat_state).await;
 
     // Keep stop as a runtime signal only.
     // Terminal persistence and session cleanup should happen on the executor's
     // normal shutdown path after it processes the stop signal.
-    let gateway_arc = gateway.inner().clone();
-    let workflow_manager = workflow_manager.inner().clone();
+    let gateway_arc = gateway.clone();
+    let workflow_manager = workflow_manager.clone();
     match gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await
@@ -5216,7 +5249,7 @@ pub async fn workflow_stop(
                 )
                 .await;
             {
-                let store = &**state.inner();
+                let store = &**state;
                 store
                     .update_workflow_status(&session_id, &WorkflowState::Stopping.to_string())
                     .map_err(|e| e.to_string())?;
@@ -5246,7 +5279,7 @@ pub async fn workflow_stop(
                 let mut guard = executor.lock().await;
                 guard.set_state(WorkflowState::Cancelled);
             }
-            let _ = persist_cancelled_workflow_state(state.inner().as_ref(), &session_id);
+            let _ = persist_cancelled_workflow_state(state.as_ref(), &session_id);
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
             let _ = gateway_arc
@@ -5269,15 +5302,23 @@ pub async fn workflow_stop(
                     "workflow_stop.gateway_injection_failed",
                 )
                 .await;
-            Err(e.to_string())
+            Err(ApplicationError::gateway(e.to_string()))
         }
         Err(e) => {
-            let _ = state
-                .inner()
-                .update_workflow_status(&session_id, &previous_status);
-            Err(e.to_string())
+            let _ = state.update_workflow_status(&session_id, &previous_status);
+            Err(ApplicationError::gateway(e.to_string()))
         }
     }
+}
+
+#[tauri::command]
+pub async fn workflow_stop(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+) -> Result<(), String> {
+    workflow_stop_core(&svc, session_id)
+        .await
+        .map_err(|e| e.message)
 }
 
 #[tauri::command]
@@ -5443,7 +5484,7 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
 #[tauri::command]
 pub async fn update_workflow_allowed_paths(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     allowed_paths: Value,
@@ -5498,7 +5539,7 @@ pub async fn get_workflow_session_key(
 #[tauri::command]
 pub async fn update_workflow_final_audit(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     final_audit: bool,
@@ -5543,7 +5584,7 @@ pub async fn update_workflow_final_audit(
 #[tauri::command]
 pub async fn update_workflow_auto_compress(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     auto_compress: bool,
@@ -5583,7 +5624,7 @@ pub async fn update_workflow_auto_compress(
 #[tauri::command]
 pub async fn update_workflow_personality(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     personality: String,
@@ -5645,7 +5686,7 @@ pub async fn update_workflow_personality(
 #[tauri::command]
 pub async fn update_workflow_model_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     configs: Value,
@@ -5687,7 +5728,7 @@ pub async fn update_workflow_model_config(
 #[tauri::command]
 pub async fn update_workflow_skills_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     skill_enabled: bool,
@@ -5730,7 +5771,7 @@ pub async fn update_workflow_skills_config(
 #[tauri::command]
 pub async fn update_workflow_approval_level(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     approval_level: String,
@@ -5770,7 +5811,7 @@ pub async fn update_workflow_approval_level(
 #[tauri::command]
 pub async fn update_workflow_phase(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     phase: String,
@@ -5810,7 +5851,7 @@ pub async fn update_workflow_phase(
 #[tauri::command]
 pub async fn update_workflow_sandbox_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     execution_mode: crate::tools::ShellExecutionMode,
@@ -5864,7 +5905,7 @@ pub async fn update_workflow_sandbox_config(
 #[tauri::command]
 pub async fn update_workflow_agent_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_config: String,
@@ -6048,7 +6089,7 @@ pub async fn get_auto_approved_tools(
 #[tauri::command]
 pub async fn remove_auto_approved_tool(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     tool_name: String,
@@ -6095,7 +6136,7 @@ pub async fn remove_auto_approved_tool(
 #[tauri::command]
 pub async fn remove_shell_policy_item(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     pattern: String,
@@ -6140,14 +6181,31 @@ pub async fn remove_shell_policy_item(
 }
 
 #[tauri::command]
+pub(crate) async fn get_workflow_events_core(
+    svc: &WorkflowApplicationService,
+    query: WorkflowEventsQuery,
+) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, ApplicationError> {
+    svc.main_store
+        .list_workflow_events_after(&query.session_id, query.after, query.limit)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[tauri::command]
 pub async fn get_workflow_events(
-    state: State<'_, Arc<MainStore>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
 ) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
-    let store = &*state;
-    store
-        .list_workflow_events(&session_id)
-        .map_err(|e| e.to_string())
+    // The Tauri wire keeps returning the full durable event list.
+    get_workflow_events_core(
+        &svc,
+        WorkflowEventsQuery {
+            session_id,
+            after: None,
+            limit: None,
+        },
+    )
+    .await
+    .map_err(|e| e.message)
 }
 
 #[tauri::command]

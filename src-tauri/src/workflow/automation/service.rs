@@ -1,5 +1,4 @@
-use crate::ai::interaction::chat_completion::ChatState;
-use crate::commands::workflow::workflow_start;
+use crate::commands::workflow::workflow_start_core;
 use crate::db::{
     MainStore, WorkflowAutomation, WorkflowAutomationRunInsert, WorkflowAutomationUpsert,
 };
@@ -8,14 +7,12 @@ use crate::workflow::automation::types::{
     DailyScheduleConfig, IntervalScheduleConfig, OnceScheduleConfig, WorkflowAutomationRequest,
     WorkflowAutomationRunNowResult, WorkflowAutomationShellConfig,
 };
-use crate::workflow::react::gateway::TauriGateway;
-use crate::workflow::react::manager::WorkflowManager;
-use crate::workflow::react::orchestrator::SubAgentFactory;
+use crate::workflow::react::application::WorkflowApplicationService;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::State;
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -630,15 +627,11 @@ pub fn advance_automation_after_scheduler_tick(
 }
 
 pub async fn run_automation_now(
-    app: AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     automation_id: String,
 ) -> Result<WorkflowAutomationRunNowResult, String> {
+    let state = &svc.main_store;
+    let tsid_generator = &svc.tsid_generator;
     let automation = {
         let store = &*state;
         store
@@ -767,16 +760,10 @@ pub async fn run_automation_now(
             .map_err(|e| e.to_string())?;
     }
 
-    let state_after_start = state.inner().clone();
+    let state_after_start = svc.main_store.clone();
 
-    if let Err(error) = workflow_start(
-        app,
-        state,
-        chat_state,
-        tsid_generator,
-        gateway,
-        factory,
-        workflow_manager,
+    if let Err(error) = workflow_start_core(
+        &svc,
         workflow_session_id.clone(),
         automation.agent_id.clone(),
         Some(initial_prompt),
@@ -787,7 +774,9 @@ pub async fn run_automation_now(
     .await
     {
         let store = &*state_after_start;
-        if let Err(update_error) = store.update_workflow_automation_run_failed(&run_id, &error) {
+        if let Err(update_error) =
+            store.update_workflow_automation_run_failed(&run_id, &error.message)
+        {
             log::error!(
                 "[WorkflowAutomation][automation={}][run={}] Failed to mark run failed after start error: {}",
                 automation.id,
@@ -795,7 +784,7 @@ pub async fn run_automation_now(
                 update_error
             );
         }
-        return Err(error);
+        return Err(error.message);
     }
 
     Ok(WorkflowAutomationRunNowResult {
