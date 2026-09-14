@@ -140,12 +140,18 @@ async fn run_workflow_command(
             prompt,
             prompt_file,
             allowed_paths,
+            model,
+            agent_config,
+            final_audit,
         } => {
             let prompt = args::resolve_prompt(prompt, prompt_file).map_err(CliError::usage)?;
             let body = json!({
                 "agent_id": agent,
                 "user_query": prompt,
                 "allowed_paths": allowed_paths_value(allowed_paths),
+                "auto_approve_plan": Value::Null,
+                "final_audit": final_audit.then_some(true),
+                "inherited_agent_config": inherited_agent_config_value(model, agent_config)?,
             });
             let result = client.post("/control/v1/workflows", body, None).await?;
             report_session(cli, &result, "cs.workflow_created")
@@ -154,16 +160,30 @@ async fn run_workflow_command(
             session_id,
             prompt,
             prompt_file,
+            plan,
             follow,
         } => {
             let prompt = args::resolve_prompt(prompt, prompt_file).map_err(CliError::usage)?;
-            start_workflow(cli, client, session_id, None, prompt, *follow).await
+            start_workflow(
+                cli,
+                client,
+                session_id,
+                None,
+                prompt,
+                (*plan).then_some(true),
+                *follow,
+            )
+            .await
         }
         WorkflowCommand::Run {
             agent,
             prompt,
             prompt_file,
             allowed_paths,
+            model,
+            agent_config,
+            final_audit,
+            plan,
             follow,
         } => {
             let prompt = args::resolve_prompt(prompt, prompt_file).map_err(CliError::usage)?;
@@ -171,6 +191,9 @@ async fn run_workflow_command(
                 "agent_id": agent,
                 "user_query": prompt,
                 "allowed_paths": allowed_paths_value(allowed_paths),
+                "auto_approve_plan": Value::Null,
+                "final_audit": final_audit.then_some(true),
+                "inherited_agent_config": inherited_agent_config_value(model, agent_config)?,
             });
             // Sequential create -> start; on start failure the created
             // session_id is reported and the workflow is kept (not deleted).
@@ -190,6 +213,7 @@ async fn run_workflow_command(
                 &session_id,
                 Some(agent.clone()),
                 prompt,
+                (*plan).then_some(true),
                 *follow,
             )
             .await
@@ -315,12 +339,54 @@ fn allowed_paths_value(allowed_paths: &[String]) -> Value {
     }
 }
 
+/// Builds the `inherited_agent_config` create-request value.
+///
+/// The field is a JSON *string* containing a camelCase AgentConfig document
+/// (the Tauri frontend sends `JSON.stringify(config)`). `--model GROUP@MODEL`
+/// overrides the act-phase model; provider id 0 targets the built-in `cs`
+/// proxy group. `--agent-config` passes a raw AgentConfig JSON string.
+fn inherited_agent_config_value(
+    model: &Option<String>,
+    agent_config: &Option<String>,
+) -> Result<Value, CliError> {
+    match (model, agent_config) {
+        (None, None) => Ok(Value::Null),
+        (Some(model), None) => {
+            if model.split('@').count() != 2 || model.starts_with('@') || model.ends_with('@') {
+                return Err(CliError::usage(format!(
+                    "Invalid --model '{}': expected the form group@model (e.g. cs@free:ds-v4-flash)",
+                    model
+                )));
+            }
+            Ok(Value::String(
+                json!({
+                    "models": {
+                        "act": { "id": 0, "model": model }
+                    }
+                })
+                .to_string(),
+            ))
+        }
+        (None, Some(agent_config)) => {
+            // Validate it parses as JSON before sending.
+            serde_json::from_str::<Value>(agent_config)
+                .map_err(|e| CliError::usage(format!("--agent-config is not valid JSON: {}", e)))?;
+            Ok(Value::String(agent_config.clone()))
+        }
+        // clap enforces the conflict; this arm only satisfies the type checker.
+        (Some(_), Some(_)) => Err(CliError::usage(
+            "--model and --agent-config are mutually exclusive".to_string(),
+        )),
+    }
+}
+
 async fn start_workflow(
     cli: &Cli,
     client: &ControlPlaneClient,
     session_id: &str,
     agent_id: Option<String>,
     prompt: String,
+    planning_mode: Option<bool>,
     follow: bool,
 ) -> Result<(), CliError> {
     // The runtime loads the Agent config by agent_id and appends the initial
@@ -344,7 +410,7 @@ async fn start_workflow(
         "initial_prompt": initial_prompt,
         "initial_metadata": Value::Null,
         "initial_attached_context": Value::Null,
-        "planning_mode": Value::Null,
+        "planning_mode": planning_mode,
     });
     let result = client
         .post(
