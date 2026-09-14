@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 280,
+      "modelCount": 282,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 397,
+      "modelCount": 402,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -2177,9 +2177,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "d458e16c50efa50060c4cdd3737dd98bdfd0a0ee007bdedc483495fda381cb3c",
-    "generatedAt": "2026-09-13T08:20:26Z",
+    "catalogSha256": "f9cb0e273fc6d991c32a96b86da3f56712e026779a564a8da2b67e052c07d1ed",
+    "generatedAt": "2026-09-14T08:57:52Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "5e72307283aca41dbd853bb579e8f2c0ab2d7722"
+    "revision": "ff90fff47eb82c4764c218a653e0819723a0df7a"
   }
 }
