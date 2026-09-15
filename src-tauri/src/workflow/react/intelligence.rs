@@ -549,17 +549,13 @@ impl IntelligenceManager {
         // attempt: each retry would issue a fresh admitted LLM effect under a
         // new identity, which 2C forbids (AC-4). Ordinary workflows keep the
         // 3-attempt best-effort behavior (INV-4).
-        let max_detection_attempts = if self
+        let max_detection_attempts = match self
             .chat_state
             .main_store
-            .get_budget_scope_chain(&self.session_id)
-            .ok()
-            .flatten()
-            .is_some()
+            .get_budget_scope_chain(&self.root_session_id)
         {
-            1
-        } else {
-            3
+            Ok(Some(_)) | Err(_) => 1,
+            Ok(None) => 3,
         };
 
         let trimmed = user_input.trim();

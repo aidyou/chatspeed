@@ -123,16 +123,18 @@ pub fn spawns_process(tool_name: &str) -> bool {
     }
 }
 
-/// Admits one physical tool effect for a workflow session. Returns `None`
-/// when the session has no backend-created budget request scope (ordinary
-/// path). Fails closed when the frozen envelope caps a dimension this
-/// boundary cannot reliably bound or measure.
-pub async fn admit_tool_effect(
+/// Admits one physical tool effect for the budget chain owned by
+/// `scope_session_id`, while keeping the effect identity bound to the
+/// executing workflow session. This lets a delegated child workflow consume
+/// its root experiment's budget without creating an independent budget owner.
+/// Returns `None` when the root session has no backend-created request scope.
+pub async fn admit_tool_effect_for_session(
     store: &Arc<MainStore>,
-    session_id: &str,
+    scope_session_id: &str,
+    effect_session_id: &str,
     tool_name: &str,
 ) -> Result<Option<ToolAdmissionLease>, AdmissionError> {
-    let envelope = match store.get_budget_scope_envelope(session_id) {
+    let envelope = match store.get_budget_scope_envelope(scope_session_id) {
         Ok(Some(envelope)) => envelope,
         Ok(None) => return Ok(None),
         Err(error) => return Err(AdmissionError::from(error)),
@@ -160,10 +162,10 @@ pub async fn admit_tool_effect(
         concurrency: 1,
         ..BudgetVector::ZERO
     };
-    let effect_id = format!("tool:{session_id}:{}", uuid::Uuid::new_v4().simple());
+    let effect_id = format!("tool:{effect_session_id}:{}", uuid::Uuid::new_v4().simple());
     let idempotency_key = format!("idem:{effect_id}");
     let store_clone = Arc::clone(store);
-    let session_id = session_id.to_string();
+    let scope_session_id = scope_session_id.to_string();
     let reservation =
         tokio::task::spawn_blocking(move || -> Result<Reservation, AdmissionError> {
             store_clone.reserve_effect(
@@ -171,10 +173,10 @@ pub async fn admit_tool_effect(
                     effect_id,
                     idempotency_key,
                     scopes: crate::budget::types::ScopeChain {
-                        request_id: session_id.clone(),
-                        trial_id: format!("{session_id}:trial"),
-                        candidate_id: format!("{session_id}:candidate"),
-                        campaign_id: format!("{session_id}:campaign"),
+                        request_id: scope_session_id.clone(),
+                        trial_id: format!("{scope_session_id}:trial"),
+                        candidate_id: format!("{scope_session_id}:candidate"),
+                        campaign_id: format!("{scope_session_id}:campaign"),
                     },
                     effect_kind: crate::budget::types::EffectKind::ToolCall,
                     attempt: 1,
@@ -190,6 +192,15 @@ pub async fn admit_tool_effect(
     Ok(Some(ToolAdmissionLease {
         reservation_id: reservation.reservation_id,
     }))
+}
+
+/// Backward-compatible convenience for effects owned by the root workflow.
+pub async fn admit_tool_effect(
+    store: &Arc<MainStore>,
+    session_id: &str,
+    tool_name: &str,
+) -> Result<Option<ToolAdmissionLease>, AdmissionError> {
+    admit_tool_effect_for_session(store, session_id, session_id, tool_name).await
 }
 
 /// Commits the actual usage of one finished tool effect. Wall time is the
@@ -400,6 +411,25 @@ mod budget_resource {
             .await
             .expect("no gate for sessions without a scope");
         assert!(admitted.is_none());
+    }
+
+    #[tokio::test]
+    async fn delegated_session_uses_root_budget_scope_with_child_effect_identity() {
+        let (store, _dir) = store();
+        create_chain(&store, "root-experiment", envelope(CapLimit::NotApplicable));
+
+        let lease =
+            admit_tool_effect_for_session(&store, "root-experiment", "subagent_child", "bash")
+                .await
+                .expect("child effect must use the root experiment scope")
+                .expect("root experiment must gate the child effect");
+        let reservation = store
+            .get_budget_reservation(lease.reservation_id())
+            .expect("read reservation")
+            .expect("reservation exists");
+
+        assert_eq!(reservation.scopes.request_id, "root-experiment");
+        assert!(reservation.effect_id.starts_with("tool:subagent_child:"));
     }
 
     #[tokio::test]

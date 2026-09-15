@@ -6297,40 +6297,46 @@ impl WorkflowExecutor {
                     // Opted-in experiment admission: reserve budget before the
                     // physical tool dispatch. Sessions without a backend-created
                     // budget request scope keep the ordinary path unchanged.
-                    let tool_admission = match crate::budget::resource::admit_tool_effect(
-                        &self.context.main_store,
-                        &self.session_id,
-                        &name,
-                    )
-                    .await
-                    {
-                        Ok(Some(lease)) => Some(lease.reservation_id().to_string()),
-                        Ok(None) => None,
-                        Err(error) => {
-                            log::warn!(
+                    let tool_admission =
+                        match crate::budget::resource::admit_tool_effect_for_session(
+                            &self.context.main_store,
+                            &self.llm_processor.root_session_id,
+                            &self.session_id,
+                            &name,
+                        )
+                        .await
+                        {
+                            Ok(Some(lease)) => Some(lease.reservation_id().to_string()),
+                            Ok(None) => None,
+                            Err(error) => {
+                                log::warn!(
                             "[Workflow][session={}][phase=execute_tools] Tool '{}' admission rejected: {}",
                             self.session_id,
                             name,
                             error
                         );
-                            let reinforced = Self::tool_error_reinforced_result(
-                                &name,
-                                &crate::tools::ToolError::Security(format!(
-                                    "Tool not executed: experiment admission rejected ({}).",
-                                    error.code.as_str()
-                                )),
-                            );
-                            self.append_reinforced_tool_terminal_event(&id, &name, &reinforced)
+                                let reinforced = Self::tool_error_reinforced_result(
+                                    &name,
+                                    &crate::tools::ToolError::Security(format!(
+                                        "Tool not executed: experiment admission rejected ({}).",
+                                        error.code.as_str()
+                                    )),
+                                );
+                                self.append_reinforced_tool_terminal_event(&id, &name, &reinforced)
+                                    .await;
+                                self.dispatch_reinforced_tool_terminal_payload(
+                                    &id,
+                                    &name,
+                                    &reinforced,
+                                )
                                 .await;
-                            self.dispatch_reinforced_tool_terminal_payload(&id, &name, &reinforced)
-                                .await;
-                            result_map.insert(
-                                id.clone(),
-                                ToolExecutionObservation::new(id, reinforced, call, None, None),
-                            );
-                            continue;
-                        }
-                    };
+                                result_map.insert(
+                                    id.clone(),
+                                    ToolExecutionObservation::new(id, reinforced, call, None, None),
+                                );
+                                continue;
+                            }
+                        };
                     if let Some(reservation_id) = tool_admission {
                         tool_admission_reservations.insert(id.clone(), reservation_id);
                     }

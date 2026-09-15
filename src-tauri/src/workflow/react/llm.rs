@@ -499,12 +499,13 @@ impl LlmProcessor {
         // A durable backend-created scope chain marks this session as a
         // budgeted experiment. Ordinary workflows resolve to `None` and keep
         // the normal retry behavior (INV-4).
-        let budgeted = chat_state
+        let budgeted = match chat_state
             .main_store
-            .get_budget_scope_chain(&session_id)
-            .ok()
-            .flatten()
-            .is_some();
+            .get_budget_scope_chain(&root_session_id)
+        {
+            Ok(Some(_)) | Err(_) => true,
+            Ok(None) => false,
+        };
         let (cached_global_agents, cached_project_agents) =
             AgentsMdScanner::scan(project_root.clone());
         let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());

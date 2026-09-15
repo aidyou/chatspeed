@@ -73,9 +73,10 @@ fn api_request_error(response: &crate::ai::network::ApiResponse, provider: Strin
 /// per invocation and `attempt` is fixed at 1 (2C single-attempt).
 fn build_experiment_admission_header(
     store: &MainStore,
-    session_id: &str,
+    scope_session_id: &str,
+    effect_session_id: &str,
 ) -> Result<Option<String>, String> {
-    let chain = match store.get_budget_scope_chain(session_id) {
+    let chain = match store.get_budget_scope_chain(scope_session_id) {
         Ok(Some(chain)) => chain,
         Ok(None) => return Ok(None),
         Err(error) => {
@@ -89,7 +90,7 @@ fn build_experiment_admission_header(
             );
         }
     };
-    let effect_id = format!("llm:{session_id}:{}", uuid::Uuid::new_v4().simple());
+    let effect_id = format!("llm:{effect_session_id}:{}", uuid::Uuid::new_v4().simple());
     let idempotency_key = format!("idem:{effect_id}");
     let context = crate::ccproxy::admission::AdmissionContext {
         scope_chain: chain,
@@ -1228,8 +1229,12 @@ mod tests {
         let store = MainStore::new(dir.path().join("admission.db")).expect("store");
         // No durable scope chain: an ordinary workflow gets no admission
         // context and keeps the normal path (INV-4).
-        let header =
-            super::build_experiment_admission_header(&store, "ordinary-session").expect("read ok");
+        let header = super::build_experiment_admission_header(
+            &store,
+            "ordinary-session",
+            "ordinary-session",
+        )
+        .expect("read ok");
         assert!(header.is_none());
     }
 
@@ -1284,7 +1289,7 @@ mod tests {
                 .expect("scope");
         }
 
-        let header = super::build_experiment_admission_header(&store, "sess-1")
+        let header = super::build_experiment_admission_header(&store, "sess-1", "sess-1")
             .expect("read ok")
             .expect("budgeted session yields a context");
         let context: AdmissionContext = serde_json::from_str(&header).expect("parse context");
@@ -1293,6 +1298,65 @@ mod tests {
         assert_eq!(context.scope_chain.campaign_id, "sess-1:campaign");
         assert!(!context.effect_id.is_empty());
         assert!(context.idempotency_key.starts_with("idem:"));
+    }
+
+    #[test]
+    fn admission_header_uses_root_scope_and_child_effect_identity() {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps, ScopeKind};
+        use crate::ccproxy::admission::AdmissionContext;
+        use crate::db::budget::NewBudgetScope;
+        use crate::db::MainStore;
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = MainStore::new(dir.path().join("admission.db")).expect("store");
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::HardCap(100_000),
+                output_tokens: CapLimit::HardCap(100_000),
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::HardCap(600_000),
+                tool_calls: CapLimit::HardCap(100),
+                processes: CapLimit::HardCap(10),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(4),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: BTreeSet::new(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: 5,
+            reservation_lease_ms: 600_000,
+        };
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, "root:campaign", None),
+            (
+                ScopeKind::Candidate,
+                "root:candidate",
+                Some("root:campaign"),
+            ),
+            (ScopeKind::Trial, "root:trial", Some("root:candidate")),
+            (ScopeKind::Request, "root", Some("root:trial")),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id.into(),
+                    scope_kind: kind,
+                    parent_scope_id: parent.map(str::to_string),
+                    envelope: envelope.clone(),
+                    now_ms: 1,
+                })
+                .expect("scope");
+        }
+
+        let header = super::build_experiment_admission_header(&store, "root", "subagent_child")
+            .expect("root chain must resolve")
+            .expect("budgeted child must be admitted");
+        let context: AdmissionContext = serde_json::from_str(&header).expect("parse context");
+        assert_eq!(context.scope_chain.request_id, "root");
+        assert!(context.effect_id.starts_with("llm:subagent_child:"));
     }
 
     #[test]
@@ -1344,7 +1408,7 @@ mod tests {
                 })
                 .expect("scope");
         }
-        let error = super::build_experiment_admission_header(&store, "req-1")
+        let error = super::build_experiment_admission_header(&store, "req-1", "req-1")
             .expect_err("non-canonical chain must fail closed before send");
         assert!(error.contains("budget_scope_chain_failed"));
     }
@@ -1994,6 +2058,7 @@ impl AiChatTrait for OpenAIChat {
         if let Some(attribution) = &merged_metadata.workflow_usage_attribution {
             match build_experiment_admission_header(
                 self.main_store.as_ref(),
+                &attribution.root_session_id,
                 &attribution.workflow_session_id,
             ) {
                 Ok(Some(header_value)) => {
