@@ -425,6 +425,68 @@ mod budget_resource {
     }
 
     #[tokio::test]
+    async fn wall_time_hard_cap_allows_measured_usage_within_cap() {
+        let (store, _dir) = store();
+        let mut base = envelope(CapLimit::NotApplicable);
+        base.caps.wall_time_ms = CapLimit::HardCap(1_000);
+        create_chain(&store, "sess-wall-within", base);
+        let lease = admit_tool_effect(&store, "sess-wall-within", "bash")
+            .await
+            .expect("admission should succeed")
+            .expect("gated session must be admitted");
+        let reservation_id = lease.reservation_id().to_string();
+        commit_tool_effect(&store, &reservation_id, "bash", 750)
+            .await
+            .expect("commit should succeed");
+
+        let reservation = store
+            .get_budget_reservation(&reservation_id)
+            .expect("read reservation")
+            .expect("reservation exists");
+        assert_eq!(
+            reservation.state,
+            crate::budget::types::ReservationState::Committed
+        );
+        let campaign = store
+            .get_budget_scope_status("sess-wall-within:campaign")
+            .expect("read scope")
+            .expect("scope exists");
+        assert_eq!(campaign.status, "active");
+        assert_eq!(campaign.committed.wall_time_ms, 750);
+    }
+
+    #[tokio::test]
+    async fn wall_time_hard_cap_pauses_when_measured_usage_exceeds_cap() {
+        let (store, _dir) = store();
+        let mut base = envelope(CapLimit::NotApplicable);
+        base.caps.wall_time_ms = CapLimit::HardCap(1_000);
+        create_chain(&store, "sess-wall-over", base);
+        let lease = admit_tool_effect(&store, "sess-wall-over", "bash")
+            .await
+            .expect("admission should succeed")
+            .expect("gated session must be admitted");
+        let reservation_id = lease.reservation_id().to_string();
+        commit_tool_effect(&store, &reservation_id, "bash", 1_001)
+            .await
+            .expect("overrun must be settled");
+
+        let reservation = store
+            .get_budget_reservation(&reservation_id)
+            .expect("read reservation")
+            .expect("reservation exists");
+        assert_eq!(
+            reservation.state,
+            crate::budget::types::ReservationState::Overrun
+        );
+        let campaign = store
+            .get_budget_scope_status("sess-wall-over:campaign")
+            .expect("read scope")
+            .expect("scope exists");
+        assert_eq!(campaign.status, "paused");
+        assert_eq!(campaign.committed.wall_time_ms, 1_001);
+    }
+
+    #[tokio::test]
     async fn unobservable_required_dimension_fails_closed() {
         let (store, _dir) = store();
         create_chain(&store, "sess-2", envelope(CapLimit::HardCap(1_024)));

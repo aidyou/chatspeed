@@ -10024,7 +10024,7 @@ mod recovery_tests {
     fn budget_test_executor(
         store: &Arc<MainStore>,
         session_id: &str,
-        global_tool_manager: Arc<ToolManager>,
+        _global_tool_manager: Arc<ToolManager>,
         available_tools: Option<String>,
     ) -> WorkflowExecutor {
         // Unique display name: agent names are globally unique in the store.

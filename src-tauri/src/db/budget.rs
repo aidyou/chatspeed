@@ -857,28 +857,37 @@ fn commit_in_tx(
         }
     }
     let scopes = load_chain_scopes(tx, &stored.scopes, false)?;
-    // Overrun means the actual usage exceeded the reservation on a
-    // dimension the envelope actually hard-caps; usage on uncapped
-    // dimensions (never reserved) is recorded truthfully but is not an
-    // overrun.
-    let capped_dimensions: std::collections::BTreeSet<ResourceDimension> = {
-        let request_scope = load_scope(tx, &stored.scopes.request_id)?;
+    let mut overrun = false;
+    for scope in &scopes {
         let envelope: BudgetEnvelope =
-            serde_json::from_str(&request_scope.envelope_json).map_err(|error| {
+            serde_json::from_str(&scope.envelope_json).map_err(|error| {
                 AdmissionError::persistence_failure(format!(
                     "corrupted frozen envelope on scope {}: {error}",
-                    stored.scopes.request_id
+                    scope.scope_id
                 ))
             })?;
-        ResourceDimension::ALL
-            .iter()
-            .copied()
-            .filter(|dimension| envelope.caps.cap(*dimension).limit().is_some())
-            .collect()
-    };
-    let overrun = capped_dimensions
-        .iter()
-        .any(|dimension| actual.dimension(*dimension) > stored.estimate.dimension(*dimension));
+        let projected = scope.committed.checked_add(&actual)?;
+        for dimension in ResourceDimension::ALL {
+            let Some(limit) = envelope.caps.cap(dimension).limit() else {
+                continue;
+            };
+            // Tool wall time is measured after execution and has no reliable
+            // pre-dispatch bound yet, so a zero estimate alone is not an
+            // overrun. Crossing the actual hard cap remains an overrun.
+            let estimate_overrun = actual.dimension(dimension)
+                > stored.estimate.dimension(dimension)
+                && !(dimension == ResourceDimension::WallTimeMs
+                    && stored.estimate.dimension(dimension) == 0);
+            let cap_overrun = projected.dimension(dimension) > limit;
+            if estimate_overrun || cap_overrun {
+                overrun = true;
+                break;
+            }
+        }
+        if overrun {
+            break;
+        }
+    }
     for scope in &scopes {
         let new_committed = scope.committed.checked_add(&actual)?;
         let new_reserved = scope.reserved.checked_sub(&stored.estimate)?;

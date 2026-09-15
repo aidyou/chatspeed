@@ -470,7 +470,6 @@ mod tests {
 
     #[tokio::test]
     async fn stream_guard_settles_conservative_input_when_no_output() {
-        use crate::budget::pricing::LlmEffectBound;
         use crate::budget::types::{BudgetEnvelope, CapLimit, EffectKind, MoneyMode, ResourceCaps};
         use crate::ccproxy::admission::{admit_before_send, LlmGateInput};
         use std::collections::BTreeSet;

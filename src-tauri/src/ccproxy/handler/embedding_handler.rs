@@ -189,7 +189,9 @@ pub async fn handle_embedding(
                 )
                 .ceil() as u64,
             effect_kind: crate::budget::types::EffectKind::Embedding,
-            max_output_tokens: None,
+            // Embeddings have no generated output; zero is an explicit bound
+            // so output-capped envelopes can still admit the effect.
+            max_output_tokens: Some(0),
         },
     )
     .await

@@ -1300,7 +1300,7 @@ mod usage_attribution_tests {
 #[cfg(test)]
 mod admission_gate_tests {
     use super::*;
-    use axum::{extract::State, routing::post, Router};
+    use axum::{routing::post, Router};
     use std::collections::BTreeSet;
     use tempfile::tempdir;
     use tokio::sync::mpsc;

@@ -33,15 +33,32 @@ fn price_to_micros(value: f64, field: &str) -> Result<u64, AdmissionError> {
             "pricing field {field} is not a finite non-negative price: {value}"
         )));
     }
-    let micros = (value as u128) * MICROS_PER_UNIT;
-    let fraction = value - (value as u128) as f64;
+
+    // Convert the whole and fractional parts separately. Rust's float-to-
+    // integer cast saturates, which would otherwise turn an unrepresentable
+    // price into a valid-looking ledger value before the overflow check.
+    let whole = value.trunc();
+    let max_whole = (u64::MAX / MICROS_PER_UNIT as u64) as f64;
+    if whole > max_whole {
+        return Err(AdmissionError::unpriced_model(format!(
+            "pricing field {field} overflows the integer micro representation"
+        )));
+    }
+    let whole_micros = (whole as u64)
+        .checked_mul(MICROS_PER_UNIT as u64)
+        .ok_or_else(|| {
+            AdmissionError::unpriced_model(format!(
+                "pricing field {field} overflows the integer micro representation"
+            ))
+        })?;
+    let fraction = value - whole;
     let fraction_micros = if fraction > 0.0 {
         // Round the fractional part up to at least one micro when present.
-        (fraction * MICROS_PER_UNIT as f64).ceil() as u128
+        (fraction * MICROS_PER_UNIT as f64).ceil() as u64
     } else {
         0
     };
-    u64::try_from(micros + fraction_micros).map_err(|_| {
+    whole_micros.checked_add(fraction_micros).ok_or_else(|| {
         AdmissionError::unpriced_model(format!(
             "pricing field {field} overflows the integer micro representation"
         ))
@@ -214,6 +231,9 @@ pub fn build_llm_estimate(
         output_tokens,
         cache_read_tokens: bound.cache_read_tokens,
         cache_write_tokens: bound.cache_write_tokens,
+        // Every admitted physical effect occupies one concurrency lease until
+        // its terminal settlement releases it.
+        concurrency: 1,
         ..BudgetVector::ZERO
     };
     match &envelope.money_mode {
@@ -421,6 +441,14 @@ mod budget_pricing {
                 .code,
             AdmissionErrorCode::UnpricedModel
         );
+        let mut config = pricing();
+        config.input_per_million = f64::MAX;
+        assert_eq!(
+            pricing_snapshot_from_config("prov", "model", "usd", &config)
+                .unwrap_err()
+                .code,
+            AdmissionErrorCode::UnpricedModel
+        );
     }
 
     #[test]
@@ -458,6 +486,17 @@ mod budget_pricing {
             build_llm_estimate(&envelope, bound()).unwrap_err().code,
             AdmissionErrorCode::UnpricedModel
         );
+    }
+
+    #[test]
+    fn zero_output_bound_is_valid_when_output_is_capped() {
+        let config = pricing();
+        let envelope = money_envelope(&config, "usd");
+        let mut embedding = bound();
+        embedding.max_output_tokens = Some(0);
+        let estimate = build_llm_estimate(&envelope, embedding).expect("zero output bound");
+        assert_eq!(estimate.output_tokens, 0);
+        assert_eq!(estimate.concurrency, 1);
     }
 
     #[test]
