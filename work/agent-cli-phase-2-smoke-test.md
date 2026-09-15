@@ -212,7 +212,7 @@ exit 9（client decode `is_budget_code`，已测），**tool-path** 拒绝会写
 
 ---
 
-## 4. 2D+2E 冒烟记录（deterministic evaluator + chatspeed-smoke@1 adapter/verifier，2026-09-15）
+## 4. 2D+2E 冒烟记录（deterministic evaluator + 初始 chatspeed-smoke@1 adapter/verifier，2026-09-15）
 
 ### 4.1 环境与执行方式
 
@@ -288,3 +288,24 @@ cargo run --bin cs -- experiment benchmark verify --suite chatspeed-smoke \
 无绝对路径（`path_hint` 仅目录文件名）；provenance 固定为
 `artifact/benchmark_adapter/independent_verifier`（evaluation 为 `artifact/evaluator`）；
 无任何 promotion 字段。
+
+### 4.6 Verifier coverage clarification（2026-09-15）
+
+初始 `chatspeed-smoke@1` 的 artifact v1 未持久化 `tool_calls`、`processes` 或 peak
+`concurrency` 实际值，因此不能把 `score=1.0` 解读为这三项 admission cap 已被离线 artifact
+独立验证。本次将 fixture/version 与 verifier 升为 `chatspeed-smoke@2` / `chatspeed-smoke-verifier@2`，
+并将 verdict document schema 升为 v2：
+
+- `metrics` 明确输出 `usage_within_{tool_calls,processes,concurrency}_cap=not_applicable`，附
+  `actual=null` 与 `reason=not_recorded_in_artifact_v1`；它们不被伪装为 pass。
+- `budget_facts` 明确划分 `admission_caps`（仍完整下发给 2C runtime）、
+  `independently_verified_caps`（token/cache/wall time）及 `unverified_admission_caps`。
+  因此 `score=1.0` 只代表可由可信 artifact 事实独立验证的 checks 均通过，不能暗示未记录资源被回验。
+- `cargo test --bin cs verifier::tests` → **13 passed; 0 failed**；
+  `cargo test --bin cs benchmark::tests::fixture_digests_match_golden_values -- --exact` →
+  **1 passed; 0 failed**；v2 fixture/verifier digests 均由 golden tests 锁定。
+
+sidecar 的既存 symlink/overlap fail-closed 防御保持不变。对于攻击者可并发替换任意输出父目录的
+TOCTOU 威胁模型，跨平台 `std::fs` 的 path-based 操作无法在当前 CLI 契约内彻底消除该竞态；完全消除
+需要 handle-relative 的 Unix/Windows writer/verifier 或将输出限制为攻击者不可写的可信根，均超出本次
+2D+2E 风险收敛的最小兼容范围。

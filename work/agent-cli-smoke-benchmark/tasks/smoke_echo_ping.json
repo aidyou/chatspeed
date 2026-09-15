@@ -19,5 +19,5 @@
     "concurrency": 1
   },
   "verifier_id": "chatspeed-smoke-verifier",
-  "verifier_version": "1"
+  "verifier_version": "2"
 }

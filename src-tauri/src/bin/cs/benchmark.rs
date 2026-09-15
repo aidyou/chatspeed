@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 pub const SUITE_ID: &str = "chatspeed-smoke";
 /// Fixed dataset identity (Phase 2E baseline).
 pub const DATASET_ID: &str = "chatspeed-smoke";
-pub const DATASET_VERSION: u32 = 1;
+pub const DATASET_VERSION: u32 = 2;
 pub const SPLIT: &str = "smoke";
 /// Runner kind recorded in adapter metadata. Real Harbor installed-agent
 /// execution is out of scope until 2G+2H and must not be claimed here.
@@ -123,9 +123,14 @@ pub struct SmokeExpectedV1 {
     pub no_budget_rejection: bool,
 }
 
-/// Per-task hard caps over the 2C-observable dimensions only. `None` is the
-/// explicit `not_applicable` (never unlimited); disk/network have no field at
-/// all because they cannot be observed before 2G and are never faked as zero.
+/// Per-task hard caps submitted to the 2C admission/runtime boundary. `None`
+/// is explicit `not_applicable` (never unlimited); disk/network have no field
+/// because they cannot be observed before 2G and are never faked as zero.
+///
+/// Artifact v1 independently projects only token totals and wall time. The
+/// verifier therefore reports `tool_calls`, `processes`, and `concurrency` as
+/// admission-only caps instead of treating their absence from an artifact as
+/// a pass; see `verifier::run_verdict_checks`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct SmokeResourceProfileV1 {
@@ -483,7 +488,7 @@ mod tests {
     fn embedded_manifest_parses_strictly() {
         let manifest = embedded_manifest().as_ref().expect("manifest parses");
         assert_eq!(manifest.dataset_id, "chatspeed-smoke");
-        assert_eq!(manifest.dataset_version, 1);
+        assert_eq!(manifest.dataset_version, 2);
         assert_eq!(manifest.split, "smoke");
         assert_eq!(manifest.runner_kind, "local_control_plane");
         assert_eq!(
@@ -522,17 +527,17 @@ mod tests {
         let resolved = resolve_task(SUITE_ID, "smoke_reply_ok").expect("resolves");
         assert_eq!(
             resolved.manifest_digest,
-            "619ae2a20b4e5a7263a627a7ec579b00d4bafc90d11b74e5346b4f33519dc723"
+            "fcedab561697fbce2e095c04969e9313900bc73a7ed2e09c1b35bc89d2738918"
         );
         assert_eq!(
             resolved.task_digest,
-            "3fcbf6edc2d98007c8e538037904fc599c751f638df6c8cd9632740bb3d9e8a0"
+            "85acd5e8d744b20f0ce537a17ca6ae51aa2caaa4b3f71853a81fb1713f7d5405"
         );
         let ping = resolve_task(SUITE_ID, "smoke_echo_ping").expect("resolves");
         assert_eq!(ping.manifest_digest, resolved.manifest_digest);
         assert_eq!(
             ping.task_digest,
-            "d0d7bb1250b6b5366044ac47c8dfc02aa3dd07e86f106165cb6a062a5538b1fb"
+            "5ce34ddef4ad2586e621a858cf810bff388596423c6ccb9bf2040b961425ed04"
         );
     }
 
@@ -610,8 +615,8 @@ mod tests {
     #[test]
     fn unknown_task_field_fails_closed() {
         let tampered = TASK_SMOKE_REPLY_OK_JSON.replace(
-            "\"verifier_version\": \"1\"",
-            "\"verifier_version\": \"1\", \"score\": 1.0",
+            "\"verifier_version\": \"2\"",
+            "\"verifier_version\": \"2\", \"score\": 1.0",
         );
         assert_ne!(tampered, TASK_SMOKE_REPLY_OK_JSON);
         let error = parse_task(&tampered).expect_err("unknown field");
@@ -628,7 +633,7 @@ mod tests {
     #[test]
     fn verifier_identity_mismatch_fails_closed() {
         let tampered = TASK_SMOKE_REPLY_OK_JSON
-            .replace("\"verifier_version\": \"1\"", "\"verifier_version\": \"2\"");
+            .replace("\"verifier_version\": \"2\"", "\"verifier_version\": \"3\"");
         let error = resolve_task_from(SUITE_ID, "smoke_reply_ok", MANIFEST_JSON, Some(&tampered))
             .expect_err("verifier identity");
         assert_eq!(error.code, code::TASK_INVALID);
@@ -645,7 +650,7 @@ mod tests {
         let metadata = adapter_metadata(&first);
         assert_eq!(metadata["runner_kind"], json!("local_control_plane"));
         assert_eq!(metadata["dataset_id"], json!("chatspeed-smoke"));
-        assert_eq!(metadata["dataset_version"], json!(1));
+        assert_eq!(metadata["dataset_version"], json!(2));
         assert_eq!(metadata["split"], json!("smoke"));
         assert_eq!(
             metadata["disk_network_enforcement"],

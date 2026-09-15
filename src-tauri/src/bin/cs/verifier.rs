@@ -23,8 +23,12 @@ use crate::output::{eprint_diagnostic, render_result};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-/// Verdict sidecar schema version.
-pub const VERDICT_SCHEMA_VERSION: u32 = 1;
+/// Verdict document schema version. Version 1 remains a valid published
+/// artifact; version 2 adds explicit independent-coverage facts for admission
+/// caps that artifact v1 cannot measure.
+pub const VERDICT_SCHEMA_VERSION: u32 = 2;
+/// Sidecar manifest schema is independent of the versioned verdict document.
+const SIDECAR_MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Fixed verdict kind label.
 pub const VERDICT_KIND: &str = "cs.benchmark.verdict";
 /// Verifier identity is inherited from the checked-in manifest.
@@ -136,8 +140,8 @@ pub fn run_verdict_checks(resolved: &ResolvedTask, report: &VerifyReport) -> Vec
         },
     ];
 
-    // Resource-cap facts over the 2C-observable dimensions recorded in the
-    // artifact usage projection. A `None` cap is explicit not_applicable.
+    // Resource-cap facts independently observable from the 2A artifact usage
+    // projection. A `None` cap is explicit not_applicable.
     let cap_checks: [(&'static str, Option<u64>, Option<i64>); 4] = [
         (
             "usage_within_input_cap",
@@ -203,11 +207,32 @@ pub fn run_verdict_checks(resolved: &ResolvedTask, report: &VerifyReport) -> Vec
         },
     });
 
+    // `tool_calls`, `processes`, and peak `concurrency` remain admission
+    // controls in 2C, but artifact v1 does not carry independently verifiable
+    // actuals for them. Publish that coverage boundary explicitly rather than
+    // allowing a score consumer to infer a false pass from omitted checks.
+    for (check_id, limit) in [
+        ("usage_within_tool_calls_cap", profile.tool_calls),
+        ("usage_within_processes_cap", profile.processes),
+        ("usage_within_concurrency_cap", profile.concurrency),
+    ] {
+        checks.push(VerdictCheck {
+            check_id,
+            status: VerdictCheckStatus::NotApplicable,
+            detail: json!({
+                "cap": limit,
+                "actual": Value::Null,
+                "reason": "not_recorded_in_artifact_v1",
+            }),
+        });
+    }
+
     checks
 }
 
-/// The deterministic score: 1.0 only when every check passes (explicit
-/// `not_applicable` dimensions neither help nor hurt), else 0.0.
+/// The deterministic score: 1.0 only when every independently verifiable
+/// check passes. Explicit `not_applicable` checks document admission controls
+/// that artifact v1 cannot independently measure; they are not pass evidence.
 pub fn score(checks: &[VerdictCheck]) -> f64 {
     if checks.iter().all(|check| {
         matches!(
@@ -245,6 +270,7 @@ pub fn build_verdict(
     created_at: &str,
 ) -> Value {
     let checks = run_verdict_checks(resolved, report);
+    let profile = &resolved.task.resource_profile;
     let total = score(&checks);
     let check_values: Vec<Value> = checks
         .iter()
@@ -316,7 +342,28 @@ pub fn build_verdict(
         json!({
             "cost_status": report.cost_status,
             "money_mode": "token_resource_only",
-            "caps": resolved.task.resource_profile,
+            "admission_caps": resolved.task.resource_profile,
+            "independently_verified_caps": {
+                "input_tokens": profile.input_tokens,
+                "output_tokens": profile.output_tokens,
+                "cache_read_tokens": profile.cache_read_tokens,
+                "cache_write_tokens": profile.cache_write_tokens,
+                "wall_time_ms": profile.wall_time_ms,
+            },
+            "unverified_admission_caps": {
+                "tool_calls": {
+                    "cap": profile.tool_calls,
+                    "reason": "not_recorded_in_artifact_v1",
+                },
+                "processes": {
+                    "cap": profile.processes,
+                    "reason": "not_recorded_in_artifact_v1",
+                },
+                "concurrency": {
+                    "cap": profile.concurrency,
+                    "reason": "not_recorded_in_artifact_v1",
+                },
+            },
         }),
     );
     verdict.insert(
@@ -391,7 +438,7 @@ pub fn verify(
     let bundle = SidecarBundle {
         file_name: "verdict.json",
         body,
-        schema_version: VERDICT_SCHEMA_VERSION,
+        schema_version: SIDECAR_MANIFEST_SCHEMA_VERSION,
         algorithm: artifact::HASH_ALGORITHM,
         manifest_domain: VERDICT_MANIFEST_DOMAIN,
     };
@@ -574,14 +621,52 @@ mod tests {
 
         let verdict = read_verdict(&verdict_dir);
         assert_eq!(verdict["verdict_kind"], json!(VERDICT_KIND));
+        assert_eq!(verdict["schema_version"], json!(VERDICT_SCHEMA_VERSION));
         assert_eq!(verdict["dataset_id"], json!("chatspeed-smoke"));
-        assert_eq!(verdict["dataset_version"], json!(1));
+        assert_eq!(verdict["dataset_version"], json!(2));
         assert_eq!(verdict["split"], json!("smoke"));
         assert_eq!(verdict["task_id"], json!("smoke_reply_ok"));
         assert_eq!(verdict["verifier_id"], json!("chatspeed-smoke-verifier"));
         assert_eq!(verdict["score"], json!(1.0));
         assert_eq!(verdict["safety_status"], json!("pass"));
         assert_eq!(verdict["infra_status"], json!("pass"));
+        assert_eq!(
+            verdict["budget_facts"]["independently_verified_caps"]["input_tokens"],
+            json!(65536)
+        );
+        assert!(verdict["budget_facts"]["independently_verified_caps"]
+            .get("tool_calls")
+            .is_none());
+        assert_eq!(
+            verdict["budget_facts"]["unverified_admission_caps"]["tool_calls"],
+            json!({ "cap": 0, "reason": "not_recorded_in_artifact_v1" })
+        );
+        assert_eq!(
+            verdict["budget_facts"]["unverified_admission_caps"]["processes"],
+            json!({ "cap": 0, "reason": "not_recorded_in_artifact_v1" })
+        );
+        assert_eq!(
+            verdict["budget_facts"]["unverified_admission_caps"]["concurrency"],
+            json!({ "cap": 1, "reason": "not_recorded_in_artifact_v1" })
+        );
+        let metrics = verdict["metrics"].as_array().unwrap();
+        for (check_id, cap) in [
+            ("usage_within_tool_calls_cap", 0),
+            ("usage_within_processes_cap", 0),
+            ("usage_within_concurrency_cap", 1),
+        ] {
+            let check = metrics
+                .iter()
+                .find(|check| check["check_id"] == json!(check_id))
+                .unwrap_or_else(|| panic!("missing {check_id}"));
+            assert_eq!(check["status"], json!("not_applicable"));
+            assert_eq!(check["detail"]["cap"], json!(cap));
+            assert!(check["detail"]["actual"].is_null());
+            assert_eq!(
+                check["detail"]["reason"],
+                json!("not_recorded_in_artifact_v1")
+            );
+        }
         assert_eq!(verdict["source_artifact"]["run_id"], json!("s1"));
         assert_eq!(
             verdict["provenance"],
@@ -590,7 +675,7 @@ mod tests {
         // Dataset digest matches the adapter's golden fixture digest.
         assert_eq!(
             verdict["dataset_digest"],
-            json!("619ae2a20b4e5a7263a627a7ec579b00d4bafc90d11b74e5346b4f33519dc723")
+            json!("fcedab561697fbce2e095c04969e9313900bc73a7ed2e09c1b35bc89d2738918")
         );
         let rendered = verdict.to_string();
         assert!(!rendered.contains("promotion"));
@@ -907,6 +992,10 @@ mod tests {
         let resolved = benchmark::resolve_task(SUITE_ID, "smoke_reply_ok").expect("resolves");
         let digest = verifier_digest(&resolved.task);
         assert_eq!(digest.len(), 64);
+        assert_eq!(
+            digest,
+            "c9b6e8cd08cce5d3d9fb8c95e3fc95569c878e7167b0267a2eec6c5c7a6f21ef"
+        );
         // Both smoke tasks share the same expected-facts contract and
         // resource profile, so the verifier contract digest is identical;
         // the task identity is bound separately via task_digest.
