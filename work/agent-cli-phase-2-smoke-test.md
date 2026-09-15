@@ -177,34 +177,35 @@ host/sandbox 临时文件系统隔离限制，等价 fail-closed 路径已由 fo
   admission header 走普通路径）；`workflow::react::{llm,intelligence,compression}` 41/6/59（budgeted retry
   门控无回归）；`cargo test --bin cs` 56（2A capture 重构无回归 + budget exit-9）；根目录 `pnpm test:workflow` 62。
 
-### 5.2 真实 desktop 固定模型 smoke（V-7）——环境阻塞，未执行
+### 5.2 真实 desktop 固定模型 smoke（V-7，2026-09-15 已执行）
 
-宿主机已有一个运行中的桌面实例占用 Vite dev 端口 1420，`pnpm tauri dev` 的 `beforeDevCommand` 因端口冲突
-退出；不得为跑 smoke 终止用户既有实例（破坏性、未授权）。因此真实 `cs@free:ds-v4-flash` admitted run /
-极小 cap 拒绝 / 普通 workflow 对照 / capture-inspect-replay / 隐私扫描的桌面端到端**留待用户交互桌面会话执行**，
-本记录不声称已跑真实模型。
+用户关闭既有桌面实例后，`pnpm tauri dev` 以 2C 重建二进制成功启动（Vite 就绪、51 skills 加载、
+control plane 发布 discovery，`cs doctor` 连上 `pid 1193377`）。真实 `cs@free:ds-v4-flash` 端到端结果：
 
-复现步骤（用户桌面会话）：
-```bash
-# 1) 关闭既有桌面实例后启动（或复用既有实例的 discovery，但需为本 2C 重建的二进制）
-pnpm tauri dev   # 等待 runtime/control-plane-v1.json 就绪
-# 2) 写一个 token/resource-only spec（max_attempts=1，input/output/wall/tool/process/concurrency hard-cap）
-# 3) 正常 admitted run + 落盘 artifact
-cargo run -q --bin cs -- experiment run --agent builtin:coding \
-  --spec /tmp/exp.json --prompt "reply with OK" \
-  --artifact-dir /tmp/exp-artifact --output json
-# 4) 离线验证（无网络/DB/key）
-cargo run -q --bin cs -- experiment inspect /tmp/exp-artifact
-cargo run -q --bin cs -- experiment replay  /tmp/exp-artifact
-# 5) 极小 cap 负向：input_tokens=1 → 期望首个 LLM effect 前 budget_exceeded，exit 9
-# 6) 普通 workflow 对照：cs workflow run ... → experiment_budget_* 无新增行（INV-4）
-# 7) 隐私扫描：artifact 内不得出现原始 prompt/response/key/env（2A 脱敏语义不变）
-```
+1. **admitted completed run**：`cs experiment run --agent builtin:coding --spec <token_resource_only>
+   --prompt "Say OK." --artifact-dir ... --output json` → 201 `started`（run_id=session_id=
+   `0rmancd3g0400`，scopes `:trial/:candidate/:campaign` 正确派生）；workflow 达 `completed`；
+   artifact `complete`、8 events；离线 `inspect`/`replay` 通过（terminal=completed、cost=known、
+   usage input 22731/output 93/cache 9216），CLI exit 0。
+2. **预算 ledger 真实触发**：completed run 与失败 run 均见 `[Budget][admission] reserved res_...
+   effect llm:<session>:... (attempt 1)`；且**语言检测 helper 与主 ReAct 两个 attributed LLM effect
+   各自 reserve**（helper coverage，AC-3）。
+3. **极小 cap 负向（input_tokens=1）**：session `0rmap8ny00400` →
+   `Experiment admission rejected before send: budget_exceeded: ... projected 200 exceeds hard cap 1`
+   （language helper）与 `projected 30519 exceeds hard cap 1`（主 react），**provider 零调用**；
+   language detection `attempt 1/1`（单 attempt，AC-4）；workflow 进 `error`。
+4. **普通 workflow 对照（INV-4）**：session `0rmapkhdw0400` 全程 **0 条 `[Budget][admission]`**（无 request
+   scope → 不进预算 gate/ledger）；且其 429 **按指数退避重试**：`Retrying in 1s (attempt 1/10)` → `2s
+   (2/10)` → `4s (3/10)`。与 experiment 的单 attempt 形成明确对比。
 
-### 5.3 结论
+**发现并修复的 CLI bug**：`wait_for_terminal` 原按 `"failed"` 匹配终态，但持久化 `WorkflowState`
+序列化为 `"error"`，导致 `--artifact-dir` 在失败 run 上轮询到超时（看似"429 直接退出/挂死"）。已改为
+`completed|error|cancelled`；失败 run 现在正确捕获 artifact 并按结局退出（completed→0，其它非完成终态→1，
+可识别的预算拒绝→9）。
 
-2C 纵切（受限版本化 spec → desktop-owned 原子创建 workflow + 四级预算 scope → 该 workflow 全部 attributed
-LLM/tool physical effect 经 backend-owned AdmissionContext 在 2B gate 下 reserve/settle、全层单 attempt →
-终态后复用 2A capture 产出可离线 inspect/replay 的 artifact）已通过上述确定性/集成测试端到端验证；
-真实桌面固定模型端到端 smoke 因既有实例占用 dev 端口而延后，按 2C 口径以 fixture/集成测试为权威证据，
-不夸大。artifact v1 仍固定 `correctness_status=not_evaluated`、`promotion_status=not_applicable`（INV-7）。
+**已知限制（如实）**：LLM-path 的**执行期**预算拒绝目前只出现在 crash 日志与瞬时 error chunk，未进入
+CLI 可读的 durable 事件/snapshot（captured events 仅 workflow_started/effective_task_objective_changed/
+state_changed），故该异步场景 CLI 退出 1 而非 9；**同步** control-plane 预算 machine code 响应仍映射
+exit 9（client decode `is_budget_code`，已测），**tool-path** 拒绝会写入 durable tool observation
+（含 "experiment admission rejected"）故可被 `budget_rejected_in_events` 命中→exit 9。若需让 LLM-path
+执行期拒绝也稳定 exit 9，需要后端把 admission 拒绝码持久化进 durable 失败事件（属 runtime 变更，另行评估）。

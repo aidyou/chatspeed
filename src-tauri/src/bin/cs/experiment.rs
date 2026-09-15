@@ -159,12 +159,21 @@ pub async fn run(
             status,
             event_count,
         );
-        // A budget rejection that terminated the run exits 9.
-        if terminal == "budget_rejected" {
+        // The artifact is captured for any durable terminal state. The exit
+        // code still reflects the outcome: a budget admission rejection exits 9,
+        // any other non-completed terminal exits 1 (the run did not succeed),
+        // and only a completed run exits 0.
+        if terminal == "completed" {
+            return Ok(());
+        }
+        if budget_rejected_in_events(client, &session_id).await? {
             return Err(CliError::budget(format!(
                 "experiment {session_id} terminated on a budget admission rejection"
             )));
         }
+        return Err(CliError::io(format!(
+            "experiment {session_id} terminated in state {terminal}"
+        )));
     } else if follow {
         crate::follow_events(cli, client, &session_id, None).await?;
     }
@@ -228,10 +237,10 @@ fn render_run_artifact(
 }
 
 /// Polls the authoritative snapshot until the workflow reaches a durable
-/// terminal state. Returns the terminal status label, or `"budget_rejected"`
-/// when the terminal failure carries a budget admission machine code. Never
-/// fabricates a terminal state: on timeout it returns an error so the caller
-/// keeps the run id but does not publish a complete artifact (AC-6).
+/// terminal state. The durable terminal statuses are `completed`, `error` and
+/// `cancelled` (the `WorkflowState` snake_case serialization). Never fabricates
+/// a terminal state: on timeout it returns an error so the caller keeps the run
+/// id but does not publish a complete artifact (AC-6).
 async fn wait_for_terminal(
     client: &ControlPlaneClient,
     session_id: &str,
@@ -247,34 +256,30 @@ async fn wait_for_terminal(
             .and_then(|workflow| workflow.get("status"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        match status {
-            "completed" | "failed" | "cancelled" => {
-                if status == "failed" && snapshot_reports_budget_rejection(&snapshot) {
-                    return Ok("budget_rejected".to_string());
-                }
-                return Ok(status.to_string());
-            }
-            _ => tokio::time::sleep(POLL_INTERVAL).await,
+        if matches!(status, "completed" | "error" | "cancelled") {
+            return Ok(status.to_string());
         }
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
     Err(CliError::io(format!(
         "experiment {session_id} did not reach a durable terminal state within the wait window"
     )))
 }
 
-/// Detects a budget admission rejection in the durable terminal evidence.
-fn snapshot_reports_budget_rejection(snapshot: &Value) -> bool {
-    // The failure reason, when present, is a protocol-safe string that carries
-    // the admission machine code; match the stable tokens only.
-    let haystack = snapshot
-        .get("workflow")
-        .and_then(|workflow| workflow.get("failure_reason"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    haystack.contains("budget_exceeded")
+/// Scans the durable events for a budget admission machine code so a
+/// budget-rejected run can exit 9 rather than a generic failure. The tool
+/// admission rejection is recorded as a structured tool observation carrying
+/// the code; provider/LLM rejections surface through the same stable tokens.
+async fn budget_rejected_in_events(
+    client: &ControlPlaneClient,
+    session_id: &str,
+) -> Result<bool, CliError> {
+    let events = fetch_all_events(client, session_id).await?;
+    let haystack = serde_json::to_string(&events).unwrap_or_default();
+    Ok(haystack.contains("budget_exceeded")
         || haystack.contains("scope_paused")
         || haystack.contains("resource_unobservable")
-        || haystack.contains("admission rejected")
+        || haystack.contains("experiment admission rejected"))
 }
 
 /// Pages through all durable events for a session using the durable `after`

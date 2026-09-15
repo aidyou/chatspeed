@@ -689,19 +689,19 @@ Final review 提出 4 个 major 发现，已全部修复并补充回归测试：
 
 #### 剩余风险 / 限制（如实记录）
 
-- **真实 desktop 固定模型 smoke（V-7）未执行**：宿主机已有一个运行中的桌面实例占用 Vite dev 端口 1420，
-  `pnpm tauri dev` 的 `beforeDevCommand` 因端口冲突退出；不得为跑 smoke 而终止用户既有实例（破坏性、未授权）。
-  因此真实 free 模型 admitted run / 极小 cap 拒绝 / 普通 workflow 对照的桌面端到端留待用户交互桌面会话执行。
-  按 2C 计划明示口径，**确定性 owner fixture 与集成测试作为权威证据**：
-  - LLM admission 信任边界与 reserve/settle 由 `ccproxy::handler` admission gate 测试（真实 mock upstream）
-    + 新增 openai AdmissionContext 构造测试覆盖；
-  - tool settlement 由 2B `budget_resource` 确定性 fixture 覆盖；
-  - workflow+四级 scope 原子创建 + 幂等由 endpoint 测试在真实 `WorkflowApplicationService`/`MainStore`
-    上端到端验证（含一次成功 run 实际落库 workflow + 4 scopes）。
-- **exit 9 的异步终态识别**：run 创建 HTTP 响应恒为 `started`；预算拒绝发生在执行期。CLI 已对 control-plane
-  返回的预算 machine code 直接映射 exit 9（同步/可判定路径），并在 `--artifact-dir` 等待路径按 durable 终态
-  failure 证据识别 `budget_rejected`。若终态 failure 证据未携带可识别的预算 machine code，则按普通终态处理并
-  照常 capture（artifact 仅记录运行/预算/usage 事实，INV-7），不夸大。
+- **真实 desktop 固定模型 smoke（V-7）已执行**（用户关闭既有实例后 `pnpm tauri dev` 以 2C 重建二进制启动）：
+  completed run（`0rmancd3g0400`，artifact complete、离线 inspect/replay 通过、exit 0）、helper+主 ReAct 两个
+  attributed LLM effect 各自 reserve、极小 cap（`0rmap8ny00400`）在 provider 前 `budget_exceeded` 零调用且
+  language helper `attempt 1/1`、普通 workflow（`0rmapkhdw0400`）0 条 admission 且 429 指数退避重试
+  （1s/2s/4s，attempt n/10）。详见 smoke 文档 §5.2。
+  - **smoke 发现并修复的 CLI bug**：`bin/cs/experiment.rs` 的 `wait_for_terminal` 原按 `"failed"` 匹配终态，
+    但持久化 `WorkflowState` 序列化为 `"error"`，导致 `--artifact-dir` 在失败 run 上轮询到超时；已改为
+    `completed|error|cancelled`，失败 run 正确捕获 artifact 并按结局退出（completed→0 / 其它→1 / 预算拒绝→9）。
+  - **已知限制**：LLM-path 执行期预算拒绝目前只在 crash 日志/瞬时 error chunk，未进入 CLI 可读 durable 事件
+    （captured events 仅 workflow_started/effective_task_objective_changed/state_changed），故该异步场景 CLI
+    退出 1 而非 9；同步 control-plane 预算 machine code 响应仍 exit 9（`is_budget_code`，已测），tool-path 拒绝
+    写入 durable tool observation 可被 `budget_rejected_in_events` 命中→exit 9。要让 LLM-path 执行期拒绝稳定
+    exit 9 需后端把 admission 拒绝码持久化进 durable 失败事件（runtime 变更，另行评估）。
 - 未引入 evaluator/benchmark/promotion/headless/新 migration/第二 runtime owner；2A/2B Implementation
   Record 原样保留。路线口径整理（`2C → 2D+2E → 2F → 2G+2H → 2I`）仅为准备，不作功能验收证据。
 
