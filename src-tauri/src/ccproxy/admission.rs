@@ -48,21 +48,40 @@ pub struct AdmissionContext {
     pub attempt: u32,
 }
 
-/// Extracts the admission context from request headers. Returns `None` for
-/// any request that is not a trusted internal request or that carries no
-/// (or malformed) context — such requests keep the ordinary path.
-pub fn admission_context_from_headers(headers: &HeaderMap) -> Option<AdmissionContext> {
+/// Extracts the admission context from request headers with a fail-closed
+/// contract:
+/// - not a trusted internal request -> `Ok(None)` (ordinary path; the router
+///   has already stripped the header from untrusted requests, and an external
+///   caller can never mint admission ownership);
+/// - trusted internal request with no admission header -> `Ok(None)` (an
+///   ordinary internal workflow call: no opt-in, no ledger, INV-4);
+/// - trusted internal request with a valid admission header -> `Ok(Some(..))`;
+/// - trusted internal request with a present-but-malformed admission header ->
+///   `Err(..)`. A budgeted session whose context cannot be parsed must fail
+///   closed *before* the provider send rather than silently downgrade to an
+///   un-admitted ordinary request (AC-3 / INV-2 / INV-3).
+pub fn extract_admission_context(
+    headers: &HeaderMap,
+) -> Result<Option<AdmissionContext>, AdmissionError> {
     if !is_trusted_internal_request(headers) {
-        return None;
+        return Ok(None);
     }
-    let raw = headers
-        .get(ADMISSION_HEADER)
-        .and_then(|value| value.to_str().ok())?;
+    let Some(raw_value) = headers.get(ADMISSION_HEADER) else {
+        return Ok(None);
+    };
+    let Ok(raw) = raw_value.to_str() else {
+        log::error!("Rejecting admission context header with invalid encoding");
+        return Err(AdmissionError::invalid_scope_chain(
+            "malformed admission context header encoding",
+        ));
+    };
     match serde_json::from_str(raw) {
-        Ok(context) => Some(context),
+        Ok(context) => Ok(Some(context)),
         Err(error) => {
-            log::warn!("Ignoring malformed admission context header: {}", error);
-            None
+            log::error!("Rejecting malformed admission context header: {}", error);
+            Err(AdmissionError::invalid_scope_chain(
+                "malformed admission context header",
+            ))
         }
     }
 }
@@ -375,7 +394,7 @@ pub async fn admit_before_send(
     headers: &HeaderMap,
     input: LlmGateInput,
 ) -> Result<Option<AdmissionLease>, AdmissionError> {
-    let Some(context) = admission_context_from_headers(headers) else {
+    let Some(context) = extract_admission_context(headers)? else {
         return Ok(None);
     };
     let envelope = load_envelope(store, &context.scope_chain.request_id).await?;
@@ -589,7 +608,7 @@ mod admission {
     }
 
     #[tokio::test]
-    async fn malformed_context_is_ignored() {
+    async fn malformed_context_fails_closed_before_send() {
         let (store, _dir) = store();
         let mut headers = HeaderMap::new();
         headers.insert("x-cs-internal-request", "true".parse().unwrap());
@@ -600,10 +619,22 @@ mod admission {
                 .unwrap(),
         );
         headers.insert(ADMISSION_HEADER, "not-json".parse().unwrap());
-        let admitted = admit_before_send(&store, &headers, gate_input())
-            .await
-            .expect("malformed context is ignored");
-        assert!(admitted.is_none());
+        // A trusted internal request carrying a present-but-malformed
+        // admission header must fail closed (Err) rather than downgrade to the
+        // ordinary path, so the provider is never called un-admitted (AC-3).
+        let error = match admit_before_send(&store, &headers, gate_input()).await {
+            Ok(_) => panic!("malformed trusted context must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.code,
+            crate::budget::errors::AdmissionErrorCode::InvalidScopeChain
+        );
+        // No reservation was created.
+        assert!(store
+            .get_budget_reservation("res-any")
+            .expect("read")
+            .is_none());
     }
 
     #[tokio::test]

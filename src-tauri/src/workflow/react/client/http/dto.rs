@@ -5,13 +5,26 @@
 //! cursors are always strings on the wire.
 
 use crate::workflow::react::application::{ApplicationError, ApplicationErrorKind};
+use crate::workflow::react::experiment::ExperimentRunSpecV1;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Control-plane protocol version (v1).
 pub const PROTOCOL_VERSION: &str = "1";
+
+/// Strict request body for `POST /control/v1/experiments:run`. The agent and
+/// prompt are supplied here; the frozen budget lives in the strict spec. The
+/// backend mints all scope/effect/attempt identity, so the body can never
+/// carry it (INV-2). Unknown fields are rejected.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct ExperimentRunHttpRequest {
+    pub agent_id: String,
+    pub prompt: String,
+    pub spec: ExperimentRunSpecV1,
+}
 
 /// `GET /control/v1/meta` response.
 #[derive(Debug, Serialize)]

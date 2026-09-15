@@ -354,6 +354,7 @@ fn build_router(state: ControlPlaneState) -> Router {
             "/control/v1/workflows/{session_id}/stream",
             get(sse::stream_workflow_events),
         )
+        .route("/control/v1/experiments:run", post(run_experiment))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -436,6 +437,57 @@ async fn get_workflow(
         Ok(snapshot) => snake_json_response(Ok(snapshot)),
         Err(error) => dto::application_error_response(&error),
     }
+}
+
+/// `POST /control/v1/experiments:run` — the single canonical, authenticated,
+/// idempotency-required entry point for a budgeted experiment run. It reuses
+/// the shared `with_idempotency` tracker (same key + body executes once,
+/// different body conflicts) and delegates to the backend experiment facade.
+/// A missing `Idempotency-Key` is rejected before any effect.
+async fn run_experiment(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let has_key = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|key| !key.is_empty());
+    if !has_key {
+        return dto::error_response(
+            StatusCode::BAD_REQUEST,
+            "missing_idempotency_key",
+            "experiments:run requires a non-empty Idempotency-Key header".to_string(),
+        );
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let request: dto::ExperimentRunHttpRequest = match serde_json::from_str(&body) {
+            Ok(request) => request,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid experiment run request: {}", error),
+                );
+            }
+        };
+        let app_request = crate::workflow::react::experiment::ExperimentRunRequest {
+            agent_id: request.agent_id,
+            prompt: request.prompt,
+            spec: request.spec,
+        };
+        match state.svc.experiment_run(app_request).await {
+            Ok(result) => {
+                let value = serde_json::to_value(&result).unwrap_or_else(|error| {
+                    log::error!("[control-plane] experiment result serialization failed: {error}");
+                    serde_json::json!({})
+                });
+                (StatusCode::CREATED, Json(value)).into_response()
+            }
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
 }
 
 async fn start_workflow(
@@ -1403,5 +1455,198 @@ mod tests {
         // Give the shutdown task a moment to clean up.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert!(!path.exists(), "discovery must be removed on shutdown");
+    }
+
+    fn experiment_body() -> String {
+        serde_json::json!({
+            "agent_id": "agent-1",
+            "prompt": "do the thing",
+            "spec": {
+                "schema_version": crate::workflow::react::experiment::EXPERIMENT_RUN_SPEC_V1,
+                "planning_mode": false,
+                "workflow": {},
+                "budget": {
+                    "money_mode": { "mode": "token_resource_only" },
+                    "caps": {
+                        "input_tokens": 100000,
+                        "output_tokens": 100000,
+                        "wall_time_ms": 600000,
+                        "tool_calls": 100,
+                        "processes": 10,
+                        "concurrency": 4
+                    },
+                    "required_dimensions": ["input_tokens", "output_tokens"],
+                    "max_attempts": 1
+                }
+            }
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn experiment_run_requires_idempotency_key() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let client = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let response = client
+            .post(auth_url(&app, "/control/v1/experiments:run"))
+            .header("Authorization", &auth)
+            .body(experiment_body())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "missing_idempotency_key");
+        // No workflow or scope chain was created (rejected before effect).
+        assert!(app.store.list_workflows().expect("list").is_empty());
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn experiment_run_requires_bearer_auth() {
+        let (app, _env) = spawn_test_app().await;
+        let client = client();
+        let response = client
+            .post(auth_url(&app, "/control/v1/experiments:run"))
+            .header("Idempotency-Key", "key-1")
+            .body(experiment_body())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn experiment_run_rejects_unknown_spec_field_before_effect() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let client = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let mut value: serde_json::Value = serde_json::from_str(&experiment_body()).unwrap();
+        value["spec"]["budget"]["caps"]["bogus_dimension"] = serde_json::json!(1);
+
+        let response = client
+            .post(auth_url(&app, "/control/v1/experiments:run"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "key-1")
+            .body(value.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "invalid_input");
+        assert!(app.store.list_workflows().expect("list").is_empty());
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn experiment_run_rejects_wrong_version_before_effect() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let client = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let mut value: serde_json::Value = serde_json::from_str(&experiment_body()).unwrap();
+        value["spec"]["schema_version"] = serde_json::json!("experiment_run_spec.v999");
+
+        let response = client
+            .post(auth_url(&app, "/control/v1/experiments:run"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "key-1")
+            .body(value.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "invalid_input");
+        // Version rejection happens before any durable effect.
+        assert!(app.store.list_workflows().expect("list").is_empty());
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn experiment_run_creates_workflow_and_scopes_and_is_idempotent() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let client = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let url = auth_url(&app, "/control/v1/experiments:run");
+        let body = experiment_body();
+
+        let response = client
+            .post(&url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "key-1")
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(first["status"], "started");
+        assert_eq!(
+            first["schema_version"],
+            crate::workflow::react::experiment::EXPERIMENT_RUN_SPEC_V1
+        );
+        let session_id = first["session_id"].as_str().unwrap().to_string();
+        assert_eq!(first["run_id"].as_str().unwrap(), session_id.as_str());
+        assert_eq!(
+            first["scopes"]["request_scope_id"].as_str().unwrap(),
+            session_id.as_str()
+        );
+        assert_eq!(
+            first["scopes"]["campaign_scope_id"].as_str().unwrap(),
+            format!("{session_id}:campaign")
+        );
+
+        // Exactly one workflow and the four-level canonical scope chain exist.
+        let workflows = app.store.list_workflows().expect("list");
+        assert_eq!(workflows.len(), 1, "one workflow per successful run");
+        for suffix in ["", ":trial", ":candidate", ":campaign"] {
+            let id = format!("{session_id}{suffix}");
+            assert!(
+                app.store
+                    .get_budget_scope_status(&id)
+                    .expect("read scope")
+                    .is_some(),
+                "scope {id} must exist"
+            );
+        }
+
+        // Same key + same body replays without a second run.
+        let response = client
+            .post(&url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "key-1")
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let second: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(second["session_id"].as_str().unwrap(), session_id.as_str());
+        assert_eq!(app.store.list_workflows().expect("list").len(), 1);
+
+        // Same key + different body conflicts.
+        let mut other: serde_json::Value = serde_json::from_str(&body).unwrap();
+        other["prompt"] = serde_json::json!("a different prompt");
+        let response = client
+            .post(&url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "key-1")
+            .body(other.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let conflict: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(conflict["error"]["code"], "idempotency_key_conflict");
+
+        app.handle.shutdown();
     }
 }

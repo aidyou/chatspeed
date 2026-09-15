@@ -156,3 +156,55 @@ usage/cost 投影与离线 inspect/replay 已通过 51 项 `cs` focused tests、
 一期 HTTP/前端回归（36 + 62），以及 `pnpm tauri dev` 实例上的真实 CLI desktop smoke。真实
 artifact 的离线 inspect/replay、隐私扫描与 capture 无副作用均已验证；手工篡改真实副本受
 host/sandbox 临时文件系统隔离限制，等价 fail-closed 路径已由 focused tests 覆盖。
+
+## 5. 2C Budgeted Experiment Run + Artifact Handoff（as built，2026-09-15）
+
+### 5.1 已执行的确定性验证（offline，可复现）
+
+`cd src-tauri`：`cargo fmt --all -- --check` 通过；`cargo check --bin chatspeed --bin cs` 双 binary 零 warning。
+- `cargo test --lib workflow::react::experiment` 10 passed：strict `ExperimentRunSpecV1` round-trip + 负向矩阵
+  （unknown field/version、`max_attempts!=1`、disk/network hard-cap、required 无 cap、currency mismatch、
+  token-only 带 money cap）均在 effect 前拒绝。
+- `cargo test --lib budget::` 66 passed：新增 `create_experiment_run_atomic` 原子性（恰一 workflow + 四级
+  canonical scope）、重复 session 回滚零部分、无效 envelope 不写入；`get_budget_scope_chain` 无链→None、
+  canonical→正解、非 canonical→fail-closed。
+- `cargo test --lib chat::openai` 55 passed：AdmissionContext 仅在 durable chain 存在时生成（attempt=1、
+  canonical scope ids），普通 session→无 context，非 canonical→send 前 fail-closed。
+- `cargo test --lib workflow::react::client` 41 passed：`POST /control/v1/experiments:run` 缺 Idempotency-Key
+  →400、无 bearer→401、unknown spec field / wrong version →400 且无 workflow 落库；valid run→201 且真实
+  `MainStore` 落库恰一 workflow + 4 scopes、同 key/body replay 不双建、异 body→409。
+- `cargo test --lib admission` 16 / `stat_guard` 4 / `ccproxy::handler` 28（2B 回归，含伪造 external
+  admission header 走普通路径）；`workflow::react::{llm,intelligence,compression}` 41/6/59（budgeted retry
+  门控无回归）；`cargo test --bin cs` 56（2A capture 重构无回归 + budget exit-9）；根目录 `pnpm test:workflow` 62。
+
+### 5.2 真实 desktop 固定模型 smoke（V-7）——环境阻塞，未执行
+
+宿主机已有一个运行中的桌面实例占用 Vite dev 端口 1420，`pnpm tauri dev` 的 `beforeDevCommand` 因端口冲突
+退出；不得为跑 smoke 终止用户既有实例（破坏性、未授权）。因此真实 `cs@free:ds-v4-flash` admitted run /
+极小 cap 拒绝 / 普通 workflow 对照 / capture-inspect-replay / 隐私扫描的桌面端到端**留待用户交互桌面会话执行**，
+本记录不声称已跑真实模型。
+
+复现步骤（用户桌面会话）：
+```bash
+# 1) 关闭既有桌面实例后启动（或复用既有实例的 discovery，但需为本 2C 重建的二进制）
+pnpm tauri dev   # 等待 runtime/control-plane-v1.json 就绪
+# 2) 写一个 token/resource-only spec（max_attempts=1，input/output/wall/tool/process/concurrency hard-cap）
+# 3) 正常 admitted run + 落盘 artifact
+cargo run -q --bin cs -- experiment run --agent builtin:coding \
+  --spec /tmp/exp.json --prompt "reply with OK" \
+  --artifact-dir /tmp/exp-artifact --output json
+# 4) 离线验证（无网络/DB/key）
+cargo run -q --bin cs -- experiment inspect /tmp/exp-artifact
+cargo run -q --bin cs -- experiment replay  /tmp/exp-artifact
+# 5) 极小 cap 负向：input_tokens=1 → 期望首个 LLM effect 前 budget_exceeded，exit 9
+# 6) 普通 workflow 对照：cs workflow run ... → experiment_budget_* 无新增行（INV-4）
+# 7) 隐私扫描：artifact 内不得出现原始 prompt/response/key/env（2A 脱敏语义不变）
+```
+
+### 5.3 结论
+
+2C 纵切（受限版本化 spec → desktop-owned 原子创建 workflow + 四级预算 scope → 该 workflow 全部 attributed
+LLM/tool physical effect 经 backend-owned AdmissionContext 在 2B gate 下 reserve/settle、全层单 attempt →
+终态后复用 2A capture 产出可离线 inspect/replay 的 artifact）已通过上述确定性/集成测试端到端验证；
+真实桌面固定模型端到端 smoke 因既有实例占用 dev 端口而延后，按 2C 口径以 fixture/集成测试为权威证据，
+不夸大。artifact v1 仍固定 `correctness_status=not_evaluated`、`promotion_status=not_applicable`（INV-7）。

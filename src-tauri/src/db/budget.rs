@@ -65,6 +65,12 @@ fn ledger_id(prefix: &str) -> Result<String, AdmissionError> {
     }
 }
 
+/// Builds a durable-store error for a malformed/partial scope chain. Read by
+/// the LLM admission-context injector to fail closed before any effect.
+fn invalid_chain_error(message: impl Into<String>) -> StoreError {
+    StoreError::InvalidData(message.into())
+}
+
 /// Canonical mapping between ledger columns and resource dimensions.
 const DIMENSION_COLUMNS: &[(&str, ResourceDimension)] = &[
     ("input_tokens", ResourceDimension::InputTokens),
@@ -1268,6 +1274,50 @@ fn reconcile_expired_in_tx(
     Ok(reconciled)
 }
 
+/// A backend-owned experiment workflow row inserted atomically with its
+/// four-level budget scope chain. Only the columns the experiment facade
+/// controls are written; timestamps use the table defaults.
+pub struct NewExperimentWorkflowRow {
+    pub session_id: String,
+    pub title: String,
+    pub user_query: String,
+    pub agent_id: String,
+    pub agent_config: Option<String>,
+}
+
+/// Derives the canonical four-level scope chain for a workflow session.
+/// The request scope id equals the session id; the outer levels use the
+/// fixed `:trial` / `:candidate` / `:campaign` suffixes shared with the 2B
+/// tool and LLM admission owners, so a single durable chain binds the
+/// run/session/request-scope identity for the whole experiment.
+pub fn canonical_experiment_chain(session_id: &str) -> ScopeChain {
+    ScopeChain {
+        request_id: session_id.to_string(),
+        trial_id: format!("{session_id}:trial"),
+        candidate_id: format!("{session_id}:candidate"),
+        campaign_id: format!("{session_id}:campaign"),
+    }
+}
+
+fn insert_experiment_workflow_in_tx(
+    tx: &Transaction<'_>,
+    row: &NewExperimentWorkflowRow,
+) -> Result<(), AdmissionError> {
+    tx.execute(
+        "INSERT INTO workflows (id, parent_session_id, title, user_query, agent_id, agent_config, status)
+         VALUES (?1, NULL, ?2, ?3, ?4, ?5, 'pending')",
+        params![
+            row.session_id,
+            row.title,
+            row.user_query,
+            row.agent_id,
+            row.agent_config
+        ],
+    )
+    .map_err(StoreError::from)?;
+    Ok(())
+}
+
 impl MainStore {
     /// Creates one budget scope with a frozen envelope. Parent chain
     /// validity is enforced here; campaign scopes have no parent.
@@ -1282,6 +1332,68 @@ impl MainStore {
             })();
             Ok(inner)
         }))
+    }
+
+    /// Atomically creates an experiment workflow and its four-level budget
+    /// scope chain (campaign -> candidate -> trial -> request) inside a
+    /// single `DbRuntime` writer transaction. Any failure rolls back the
+    /// whole unit so no partial workflow or scope chain is ever visible
+    /// (AC-2 / INV-6). The request scope id equals the session id and the
+    /// outer levels reuse the canonical suffixes, so the existing 2B tool
+    /// and LLM admission owners opt in automatically once this chain
+    /// exists. No new migration is introduced; the scopes reuse the 2B
+    /// `experiment_budget_scopes` schema.
+    pub fn create_experiment_run_atomic(
+        &self,
+        workflow: NewExperimentWorkflowRow,
+        envelope: BudgetEnvelope,
+        now_ms: u64,
+    ) -> Result<ScopeChain, AdmissionError> {
+        envelope.validate()?;
+        let chain = canonical_experiment_chain(&workflow.session_id);
+        chain.validate()?;
+        let runtime = self.db_runtime()?;
+        let chain_for_tx = chain.clone();
+        flatten(runtime.write_blocking(move |conn| {
+            let inner = (|| -> Result<(), AdmissionError> {
+                let tx = conn.transaction().map_err(AdmissionError::from)?;
+                insert_experiment_workflow_in_tx(&tx, &workflow)?;
+                let scopes = [
+                    (ScopeKind::Campaign, &chain_for_tx.campaign_id, None),
+                    (
+                        ScopeKind::Candidate,
+                        &chain_for_tx.candidate_id,
+                        Some(chain_for_tx.campaign_id.as_str()),
+                    ),
+                    (
+                        ScopeKind::Trial,
+                        &chain_for_tx.trial_id,
+                        Some(chain_for_tx.candidate_id.as_str()),
+                    ),
+                    (
+                        ScopeKind::Request,
+                        &chain_for_tx.request_id,
+                        Some(chain_for_tx.trial_id.as_str()),
+                    ),
+                ];
+                for (kind, scope_id, parent) in scopes {
+                    create_scope_in_tx(
+                        &tx,
+                        &NewBudgetScope {
+                            scope_id: scope_id.clone(),
+                            scope_kind: kind,
+                            parent_scope_id: parent.map(str::to_string),
+                            envelope: envelope.clone(),
+                            now_ms,
+                        },
+                    )?;
+                }
+                tx.commit().map_err(AdmissionError::from)?;
+                Ok(())
+            })();
+            Ok(inner)
+        }))
+        .map(|()| chain)
     }
 
     /// Atomically reserves budget across the full four-level scope chain.
@@ -1518,6 +1630,82 @@ impl MainStore {
                 }
                 None => Ok(None),
             }
+        })
+    }
+
+    /// Read-only resolution of the durable four-level scope chain rooted at a
+    /// request scope id.
+    ///
+    /// - `Ok(None)` when no request scope exists: this is an ordinary
+    ///   workflow with no budget opt-in, so callers keep the normal path
+    ///   (INV-4).
+    /// - `Ok(Some(chain))` when a complete, correctly parented canonical
+    ///   chain exists.
+    /// - `Err` when a request scope exists but its chain is incomplete or
+    ///   mis-parented. A half/forged chain must fail closed before any effect
+    ///   rather than degrading to a normal request (INV-2).
+    pub fn get_budget_scope_chain(
+        &self,
+        request_scope_id: &str,
+    ) -> Result<Option<ScopeChain>, StoreError> {
+        let runtime = self.db_runtime()?;
+        let request_scope_id = request_scope_id.to_string();
+        runtime.read_blocking(move |conn| {
+            let trial_id = format!("{request_scope_id}:trial");
+            let candidate_id = format!("{request_scope_id}:candidate");
+            let campaign_id = format!("{request_scope_id}:campaign");
+            let read_level = |id: &str| -> Result<Option<(String, Option<String>)>, StoreError> {
+                conn.query_row(
+                    "SELECT scope_kind, parent_scope_id
+                         FROM experiment_budget_scopes WHERE scope_id = ?1",
+                    [id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .optional()
+                .map_err(StoreError::from)
+            };
+            // The request level decides opt-in. Absent -> ordinary path.
+            let Some((request_kind, request_parent)) = read_level(&request_scope_id)? else {
+                return Ok(None);
+            };
+            let levels: [(&str, &str, &str, Option<&str>); 4] = [
+                (&request_scope_id, "request", "request", Some(&trial_id)),
+                (&trial_id, "trial", "trial", Some(&candidate_id)),
+                (&candidate_id, "candidate", "candidate", Some(&campaign_id)),
+                (&campaign_id, "campaign", "campaign", None),
+            ];
+            // Validate the request level against the first tuple, then the
+            // remaining levels by re-reading each id.
+            let expected_parent = request_parent.as_deref();
+            if request_kind != "request" || expected_parent != Some(trial_id.as_str()) {
+                return Err(invalid_chain_error(format!(
+                    "request scope {request_scope_id} has kind '{request_kind}' / unexpected parent"
+                )));
+            }
+            for (id, _label, expected_kind, expected_parent) in &levels[1..] {
+                let Some((kind, parent)) = read_level(id)? else {
+                    return Err(invalid_chain_error(format!(
+                        "scope chain is incomplete: {id} is missing"
+                    )));
+                };
+                if kind != *expected_kind {
+                    return Err(invalid_chain_error(format!(
+                        "scope {id} has kind '{kind}', expected '{expected_kind}'"
+                    )));
+                }
+                if parent.as_deref() != *expected_parent {
+                    return Err(invalid_chain_error(format!(
+                        "scope {id} parent mismatch: got {:?}, expected {expected_parent:?}",
+                        parent
+                    )));
+                }
+            }
+            Ok(Some(ScopeChain {
+                request_id: request_scope_id.clone(),
+                trial_id,
+                candidate_id,
+                campaign_id,
+            }))
         })
     }
 
@@ -2333,6 +2521,154 @@ mod tests {
         fn sqlite_integer_range_is_enforced_on_counters() {
             assert_eq!(ensure_sqlite_range(SQLITE_INTEGER_MAX).unwrap(), i64::MAX);
             assert!(ensure_sqlite_range(SQLITE_INTEGER_MAX + 1).is_err());
+        }
+
+        fn experiment_row(session_id: &str) -> NewExperimentWorkflowRow {
+            NewExperimentWorkflowRow {
+                session_id: session_id.into(),
+                title: format!("experiment {session_id}"),
+                user_query: "do the thing".into(),
+                agent_id: "agent-1".into(),
+                agent_config: Some("{}".into()),
+            }
+        }
+
+        fn seed_agent(store: &MainStore, agent_id: &str) {
+            let agent_id = agent_id.to_string();
+            store
+                .db_runtime()
+                .expect("runtime")
+                .write_blocking(move |conn| {
+                    conn.execute(
+                        "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            agent_id,
+                            format!("Agent {agent_id}"),
+                            "test",
+                            "autonomous",
+                            20
+                        ],
+                    )?;
+                    Ok(())
+                })
+                .expect("seed agent");
+        }
+
+        #[test]
+        fn experiment_run_atomic_creates_workflow_and_four_scopes() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            let chain = store
+                .create_experiment_run_atomic(experiment_row("sess-1"), envelope(), now())
+                .expect("atomic create");
+            // request scope id equals the session id; outer levels derive the
+            // canonical suffixes shared with the 2B admission owners.
+            assert_eq!(chain.request_id, "sess-1");
+            assert_eq!(chain.trial_id, "sess-1:trial");
+            assert_eq!(chain.candidate_id, "sess-1:candidate");
+            assert_eq!(chain.campaign_id, "sess-1:campaign");
+            assert!(store.get_workflow("sess-1").expect("read").is_some());
+            for id in [
+                &chain.request_id,
+                &chain.trial_id,
+                &chain.candidate_id,
+                &chain.campaign_id,
+            ] {
+                let status = store
+                    .get_budget_scope_status(id)
+                    .expect("read scope")
+                    .unwrap_or_else(|| panic!("scope {id} must exist"));
+                assert_eq!(status.status, "active");
+            }
+            // The envelope is frozen and readable via the request scope, so
+            // the existing tool/LLM admission owners opt in automatically.
+            let envelope = store
+                .get_budget_scope_envelope("sess-1")
+                .expect("read envelope")
+                .expect("envelope present");
+            assert_eq!(envelope.max_attempts, 1);
+        }
+
+        #[test]
+        fn experiment_run_atomic_rolls_back_on_duplicate_session() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            store
+                .create_experiment_run_atomic(experiment_row("sess-1"), envelope(), now())
+                .expect("first create");
+            // A second run reusing the same session id hits the workflow
+            // primary key and must roll back the whole transaction, leaving
+            // no partial scope chain from the failed attempt.
+            let error = store
+                .create_experiment_run_atomic(experiment_row("sess-1"), envelope(), now())
+                .expect_err("duplicate session must fail");
+            assert_eq!(error.code, AdmissionErrorCode::AdmissionPersistenceFailure);
+            // The original chain is intact and exactly one request scope
+            // exists for the session (no orphaned second chain).
+            assert!(store
+                .get_budget_scope_status("sess-1:trial")
+                .expect("read")
+                .is_some());
+        }
+
+        #[test]
+        fn experiment_run_atomic_rejects_invalid_envelope_without_writing() {
+            let (store, _dir) = store();
+            let mut bad = envelope();
+            bad.max_attempts = 0;
+            let error = store
+                .create_experiment_run_atomic(experiment_row("sess-bad"), bad, now())
+                .expect_err("invalid envelope must fail before any write");
+            assert_eq!(error.code, AdmissionErrorCode::InvalidScopeChain);
+            // Nothing was persisted: no workflow row, no request scope.
+            assert!(store.get_workflow("sess-bad").expect("read").is_none());
+            assert!(store
+                .get_budget_scope_status("sess-bad")
+                .expect("read")
+                .is_none());
+        }
+
+        #[test]
+        fn scope_chain_absent_returns_none() {
+            let (store, _dir) = store();
+            // No request scope: an ordinary workflow keeps the normal path.
+            let chain = store
+                .get_budget_scope_chain("no-such-session")
+                .expect("read");
+            assert!(chain.is_none());
+        }
+
+        #[test]
+        fn scope_chain_resolves_canonical_experiment_chain() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            store
+                .create_experiment_run_atomic(experiment_row("sess-1"), envelope(), now())
+                .expect("atomic create");
+            let chain = store
+                .get_budget_scope_chain("sess-1")
+                .expect("read")
+                .expect("canonical chain present");
+            assert_eq!(chain.request_id, "sess-1");
+            assert_eq!(chain.trial_id, "sess-1:trial");
+            assert_eq!(chain.candidate_id, "sess-1:candidate");
+            assert_eq!(chain.campaign_id, "sess-1:campaign");
+        }
+
+        #[test]
+        fn scope_chain_rejects_noncanonical_chain() {
+            let (store, _dir) = store();
+            // `create_chain` builds a kind-valid chain with non-canonical ids
+            // (req-1/trial-1/...). The canonical resolver keys the outer
+            // levels by the `:trial`/`:candidate`/`:campaign` suffixes, so a
+            // request scope that is not the root of a canonical chain must
+            // fail closed rather than resolve.
+            create_chain(&store);
+            let error = store
+                .get_budget_scope_chain("req-1")
+                .expect_err("non-canonical chain must fail closed");
+            assert!(matches!(error, StoreError::InvalidData(_)));
         }
     }
 }

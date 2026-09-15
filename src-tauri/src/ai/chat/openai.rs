@@ -61,6 +61,47 @@ fn api_request_error(response: &crate::ai::network::ApiResponse, provider: Strin
     }
 }
 
+/// Builds the backend-owned experiment admission header value for a workflow
+/// session, or `Ok(None)` when the session has no durable budget scope chain
+/// (an ordinary workflow: no opt-in, normal path preserved).
+///
+/// The chain is read from the durable store keyed by the session id, so only
+/// a backend-created canonical chain can produce an admission context
+/// (INV-2). A read/serialization failure returns `Err` so the caller fails
+/// closed *before* sending the request rather than degrading to an
+/// un-admitted call. The generated effect/idempotency identifiers are fresh
+/// per invocation and `attempt` is fixed at 1 (2C single-attempt).
+fn build_experiment_admission_header(
+    store: &MainStore,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let chain = match store.get_budget_scope_chain(session_id) {
+        Ok(Some(chain)) => chain,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            // Fail closed before send. Log the durable failure without
+            // leaking identifiers; return only a stable machine token.
+            log::error!(
+                "[Budget][admission] scope chain read failed for a budgeted session: {error}"
+            );
+            return Err(
+                "experiment admission context unavailable (budget_scope_chain_failed)".to_string(),
+            );
+        }
+    };
+    let effect_id = format!("llm:{session_id}:{}", uuid::Uuid::new_v4().simple());
+    let idempotency_key = format!("idem:{effect_id}");
+    let context = crate::ccproxy::admission::AdmissionContext {
+        scope_chain: chain,
+        effect_id,
+        idempotency_key,
+        attempt: 1,
+    };
+    let serialized = serde_json::to_string(&context)
+        .map_err(|_| "experiment admission context serialization failed".to_string())?;
+    Ok(Some(serialized))
+}
+
 /// A standardized error structure for streaming to the frontend.
 #[derive(Serialize)]
 struct JsonErrorPayload<'a> {
@@ -1181,6 +1222,134 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn admission_header_absent_for_ordinary_session() {
+        use crate::db::MainStore;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = MainStore::new(dir.path().join("admission.db")).expect("store");
+        // No durable scope chain: an ordinary workflow gets no admission
+        // context and keeps the normal path (INV-4).
+        let header =
+            super::build_experiment_admission_header(&store, "ordinary-session").expect("read ok");
+        assert!(header.is_none());
+    }
+
+    #[test]
+    fn admission_header_builds_single_attempt_context_for_budgeted_session() {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps, ScopeKind};
+        use crate::ccproxy::admission::AdmissionContext;
+        use crate::db::budget::NewBudgetScope;
+        use crate::db::MainStore;
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = MainStore::new(dir.path().join("admission.db")).expect("store");
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::HardCap(100_000),
+                output_tokens: CapLimit::HardCap(100_000),
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::HardCap(600_000),
+                tool_calls: CapLimit::HardCap(100),
+                processes: CapLimit::HardCap(10),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(4),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: BTreeSet::new(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: 5,
+            reservation_lease_ms: 600_000,
+        };
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, "sess-1:campaign", None),
+            (
+                ScopeKind::Candidate,
+                "sess-1:candidate",
+                Some("sess-1:campaign"),
+            ),
+            (ScopeKind::Trial, "sess-1:trial", Some("sess-1:candidate")),
+            (ScopeKind::Request, "sess-1", Some("sess-1:trial")),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id.into(),
+                    scope_kind: kind,
+                    parent_scope_id: parent.map(str::to_string),
+                    envelope: envelope.clone(),
+                    now_ms: 1,
+                })
+                .expect("scope");
+        }
+
+        let header = super::build_experiment_admission_header(&store, "sess-1")
+            .expect("read ok")
+            .expect("budgeted session yields a context");
+        let context: AdmissionContext = serde_json::from_str(&header).expect("parse context");
+        assert_eq!(context.attempt, 1, "2C is single-attempt");
+        assert_eq!(context.scope_chain.request_id, "sess-1");
+        assert_eq!(context.scope_chain.campaign_id, "sess-1:campaign");
+        assert!(!context.effect_id.is_empty());
+        assert!(context.idempotency_key.starts_with("idem:"));
+    }
+
+    #[test]
+    fn admission_header_fails_closed_on_noncanonical_chain() {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps, ScopeKind};
+        use crate::db::budget::NewBudgetScope;
+        use crate::db::MainStore;
+        use std::collections::BTreeSet;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = MainStore::new(dir.path().join("admission.db")).expect("store");
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::HardCap(100_000),
+                output_tokens: CapLimit::HardCap(100_000),
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::HardCap(600_000),
+                tool_calls: CapLimit::HardCap(100),
+                processes: CapLimit::HardCap(10),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(4),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: BTreeSet::new(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: 5,
+            reservation_lease_ms: 600_000,
+        };
+        // A kind-valid but non-canonical chain (req-1/trial-1/...): the
+        // canonical resolver keys outer levels by `:trial`/`:candidate`/
+        // `:campaign`, so this request scope is not the root of a canonical
+        // chain and must fail closed rather than resolve.
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, "camp-1", None),
+            (ScopeKind::Candidate, "cand-1", Some("camp-1")),
+            (ScopeKind::Trial, "trial-1", Some("cand-1")),
+            (ScopeKind::Request, "req-1", Some("trial-1")),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id.into(),
+                    scope_kind: kind,
+                    parent_scope_id: parent.map(str::to_string),
+                    envelope: envelope.clone(),
+                    now_ms: 1,
+                })
+                .expect("scope");
+        }
+        let error = super::build_experiment_admission_header(&store, "req-1")
+            .expect_err("non-canonical chain must fail closed before send");
+        assert!(error.contains("budget_scope_chain_failed"));
+    }
+
+    #[test]
     fn api_request_error_prefers_raw_upstream_body_for_chat_and_workflow() {
         let raw_body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted"}}"#;
         let response = ApiResponse {
@@ -1813,6 +1982,46 @@ impl AiChatTrait for OpenAIChat {
         if let Some(headers_obj) = headers_json.as_object_mut() {
             for (k, v) in custom_headers {
                 headers_obj.insert(k, json!(v));
+            }
+        }
+
+        // Backend-owned experiment admission context. Injected *after* custom
+        // headers so a model/user custom header can never mint or override it
+        // (INV-2). A budgeted session must fail closed before the localhost
+        // send if the durable chain cannot be resolved or serialized; it is
+        // never downgraded to an un-admitted ordinary request. Ordinary
+        // workflow sessions have no chain and keep the normal path (INV-4).
+        if let Some(attribution) = &merged_metadata.workflow_usage_attribution {
+            match build_experiment_admission_header(
+                self.main_store.as_ref(),
+                &attribution.workflow_session_id,
+            ) {
+                Ok(Some(header_value)) => {
+                    if let Some(headers_obj) = headers_json.as_object_mut() {
+                        headers_obj.insert(
+                            crate::ccproxy::admission::ADMISSION_HEADER.to_string(),
+                            json!(header_value),
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(message) => {
+                    let error = AiError::InitFailed(message);
+                    let error_payload = JsonErrorPayload {
+                        status: 500,
+                        message: &error.to_string(),
+                    };
+                    let chunk =
+                        serde_json::to_string(&error_payload).unwrap_or_else(|_| error.to_string());
+                    callback(ChatResponse::new_with_arc(
+                        chat_id.clone(),
+                        chunk,
+                        MessageType::Error,
+                        merged_metadata.to_value(),
+                        Some(FinishReason::Error),
+                    ));
+                    return Err(error);
+                }
             }
         }
 

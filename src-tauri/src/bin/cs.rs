@@ -63,7 +63,7 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
             ExperimentCommand::Replay { artifact_dir } => {
                 return experiment::replay(cli, artifact_dir)
             }
-            ExperimentCommand::Capture { .. } => {}
+            ExperimentCommand::Capture { .. } | ExperimentCommand::Run { .. } => {}
         }
     }
 
@@ -79,6 +79,26 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 session_id,
                 artifact_dir,
             } => experiment::capture(cli, &client, session_id, artifact_dir).await,
+            ExperimentCommand::Run {
+                agent,
+                spec,
+                prompt,
+                prompt_file,
+                follow,
+                artifact_dir,
+            } => {
+                let prompt = args::resolve_prompt(prompt, prompt_file).map_err(CliError::usage)?;
+                experiment::run(
+                    cli,
+                    &client,
+                    agent,
+                    spec,
+                    prompt,
+                    *follow,
+                    artifact_dir.as_deref(),
+                )
+                .await
+            }
             // Inspect/replay are handled above before discovery loading.
             ExperimentCommand::Inspect { .. } | ExperimentCommand::Replay { .. } => Ok(()),
         },

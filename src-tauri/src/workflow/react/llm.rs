@@ -59,6 +59,11 @@ pub struct LlmProcessor {
     pub workflow_task_run_id: String,
     pub root_session_id: String,
     pub root_task_run_id: String,
+    /// True when this session has a durable backend-created budget scope
+    /// chain (a Phase 2C experiment). A budgeted session must run every LLM
+    /// effect as a single attempt: the application-level retry loop is
+    /// disabled so an overrun/unknown is never silently retried (AC-4).
+    pub budgeted: bool,
     // Cached prompt inputs that should remain stable for the workflow lifetime.
     cached_global_agents_path: Option<PathBuf>,
     cached_project_agents_path: Option<PathBuf>,
@@ -481,7 +486,7 @@ impl LlmProcessor {
         child_agents: Vec<Agent>,
         available_skills: HashMap<String, SkillManifest>,
         path_guard: Arc<RwLock<PathGuard>>,
-        _chat_state: Arc<ChatState>,
+        chat_state: Arc<ChatState>,
         active_provider_id: i64,
         active_model_name: String,
         reasoning: bool,
@@ -491,6 +496,15 @@ impl LlmProcessor {
         root_session_id: String,
         root_task_run_id: String,
     ) -> Self {
+        // A durable backend-created scope chain marks this session as a
+        // budgeted experiment. Ordinary workflows resolve to `None` and keep
+        // the normal retry behavior (INV-4).
+        let budgeted = chat_state
+            .main_store
+            .get_budget_scope_chain(&session_id)
+            .ok()
+            .flatten()
+            .is_some();
         let (cached_global_agents, cached_project_agents) =
             AgentsMdScanner::scan(project_root.clone());
         let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());
@@ -513,6 +527,7 @@ impl LlmProcessor {
             workflow_task_run_id,
             root_session_id,
             root_task_run_id,
+            budgeted,
             cached_global_agents_path,
             cached_project_agents_path,
             cached_global_agents,
@@ -543,7 +558,10 @@ impl LlmProcessor {
 
         // 2. Retry Loop for transient LLM failures with exponential backoff
         let mut retry_count = 0;
-        let max_retries = 10;
+        // A budgeted experiment session runs a single attempt: application
+        // retries would re-issue an LLM effect under a fresh identity and
+        // silently mask an overrun/unknown, which 2C forbids (AC-4).
+        let max_retries = if self.budgeted { 0 } else { 10 };
         let mut last_error = None;
 
         while retry_count <= max_retries {
@@ -2044,6 +2062,7 @@ mod tests {
             workflow_task_run_id: "test-session:task:1".to_string(),
             root_session_id: "test-session".to_string(),
             root_task_run_id: "test-session:task:1".to_string(),
+            budgeted: false,
             cached_global_agents_path: None,
             cached_project_agents_path: None,
             cached_global_agents: None,

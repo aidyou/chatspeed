@@ -223,7 +223,21 @@ impl ContextCompressor {
 
         log::info!("ContextCompressor: Executing incremental compression...");
 
-        let max_attempts = 3;
+        // A budgeted experiment session compresses in a single attempt: a
+        // retry would issue another admitted LLM effect (AC-4). Ordinary
+        // workflows keep the 3-attempt best-effort behavior (INV-4).
+        let max_attempts = if self
+            .chat_state
+            .main_store
+            .get_budget_scope_chain(&self.workflow_usage_attribution.workflow_session_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            1
+        } else {
+            3
+        };
         let mut attempt = 0;
         let mut retry_instruction = String::new();
         loop {

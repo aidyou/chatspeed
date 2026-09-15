@@ -16,6 +16,9 @@
   `2A Implementation Record` 与 `work/agent-cli-phase-2-smoke-test.md`。
 - **下一个入口**：`2C`（Experiment run，受控单次试验）。2B（Budget & effect admission ledger）已完成，
   Q-3 已在 2B 计划批准时确认（本地货币、token/resource-only、全资源 hard cap、默认不 retry）。
+- **后续交付口径**：2C 之后的实现按 `2C → 2D+2E → 2F → 2G+2H → 2I` 的顺序成组交付。该口径只用于
+  规划后续阶段的打包与推进顺序，属于准备工作，不作为任何阶段的功能验收证据；各阶段仍须各自满足其
+  Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 后才可推进指针。
 - **规则**：每个阶段完成后，必须在本文件末尾的 `## Implementation Record` 追加该阶段的实施记录，
   并把"当前阶段指针"推进到下一阶段。**下一阶段开始前不得清空或改写已完成阶段的 Implementation Record。**
 - 只有当某阶段的 Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 全部有证据，
@@ -619,4 +622,86 @@ Final review 提出 4 个 major 发现，已全部修复并补充回归测试：
 `budget_pricing` 13 passed、`budget_ledger` 6 passed、`budget_concurrency` 2 passed、`budget_recovery` 4 passed、
 `budget_resource` 8 passed、`admission` 13 passed、`ccproxy::handler` 28 passed、`workflow::react::client`
 36 passed、`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
+
+### 2C Implementation Record (as built)
+
+- 日期 / 当前阶段推进：2026-09-15；2C 代码与确定性验证完成；真实 desktop 固定模型 smoke 受既有桌面实例
+  占用 dev 端口（1420）阻塞（见"剩余风险"）；下一入口 **2D+2E**。
+
+#### 交付范围（In scope 1–13）
+
+- **U-1**：新增 `src-tauri/src/workflow/react/experiment.rs`——strict `ExperimentRunSpecV1`
+  （`deny_unknown_fields`，固定 `schema_version="experiment_run_spec.v1"`）、`ExperimentRunRequest`/
+  `ExperimentRunResult`/`ExperimentScopeRefs`、`ExperimentSpecError` 稳定 machine codes
+  （`unsupported_spec_version`/`empty_prompt`/`invalid_config`/`invalid_budget`/`max_attempts_not_one`/
+  `resource_unobservable`/`currency_mismatch`/`child_agent`）。`to_envelope()` 在 effect 前强制
+  `max_attempts==1`、拒绝 disk/network hard-cap/required、复用 2B `BudgetEnvelope::validate`。
+  `db/budget.rs` 新增 `NewExperimentWorkflowRow`、`canonical_experiment_chain`（request=session id，
+  其余 `:trial`/`:candidate`/`:campaign` 后缀，与 2B tool/LLM owner 完全一致）、`create_experiment_run_atomic`
+  （单 writer transaction 插入 workflow 行 + 四级 scope，任一失败整体回滚，无新 migration）。
+  `commands/workflow.rs` 抽出共享 `build_resolved_workflow_config`（普通 create 与 experiment 共用 config
+  resolver），新增 `run_experiment_core`：backend TSID 生成 session/run id → 原子创建 → 安装 session key →
+  复用 `workflow_start_core`；experiment 以非空确定性 title 创建，使复用的 start kernel 的 title helper
+  不触发额外 LLM effect；普通 create/title 行为不变。`application.rs` 暴露唯一 facade `experiment_run`。
+- **U-2**：`db/budget.rs` 新增只读 `get_budget_scope_chain(request_scope_id)`（无 request scope→None；
+  半链/错链/非 canonical→`StoreError::InvalidData` fail closed）。`ai/chat/openai.rs` 在统一内部 header
+  构造点、custom headers **之后**由 backend 覆盖写入 `x-cs-experiment-admission` AdmissionContext
+  （fresh effect/idempotency id、attempt=1）；chain 读取/序列化失败在 localhost send 前返回
+  `AiError::InitFailed` fail closed，绝不降级普通请求。budgeted session 关闭应用层重试：
+  `llm.rs` ReAct `max_retries=0`（新增 `budgeted` 字段，构造期读 durable chain）、
+  `intelligence.rs` language helper 最多 1 次、`compression.rs` 压缩最多 1 次；smart approval 单次调用且
+  已带 attribution。ccproxy 层 retry 已为 0（既有 `x-cs-retry-max-count:0`）。tool/process 复用 2B
+  `admit_tool_effect`/settlement，未新增第二 gate。`ccproxy/mod.rs` 仅把 `admission` 模块放宽为
+  `pub(crate)`（供 openai 注入使用）。**Final review 修复**：`ccproxy/admission.rs` 把 header 解析契约改为
+  `extract_admission_context`——受信内部请求携带**存在但 malformed** 的 `x-cs-experiment-admission` 现返回稳定
+  `invalid_scope_chain` 错误（而非旧的静默 `None`），`admit_before_send` 经 `?` 传播，chat/direct/responses/
+  embedding handler 既有 `Err` 分支在 `send_with_retry` 前返回，确保 malformed context 在 provider 零调用下
+  fail closed，不降级普通路径（AC-3/INV-2/INV-3）；header 缺失仍为普通路径（INV-4）；更新原
+  `malformed_context_is_ignored` 为 `malformed_context_fails_closed_before_send` 负向测试。
+- **U-3**：`http/dto.rs` 新增 strict `ExperimentRunHttpRequest`（`deny_unknown_fields`）。
+  `http/server.rs` 注册唯一 canonical `POST /control/v1/experiments:run`，强制 bearer（既有 layer）、
+  强制非空 `Idempotency-Key`（缺失→400 `missing_idempotency_key`）、复用 `with_idempotency`（同 key/body
+  单次、异 body 409）；成功返回 201 `{schema_version,run_id,session_id,scopes,status:"started"}`。
+  CLI 新增 `cs experiment run --agent --spec (--prompt|--prompt-file) [--follow] [--artifact-dir]`
+  （`args.rs`/`bin/cs.rs`/`experiment.rs`）：读 spec 文件、生成一次 idempotency key、POST；无 artifact-dir
+  启动后返回；有 artifact-dir 隐含轮询 durable 终态后复用提取的 render-free `capture_bundle`（避免双 stdout）。
+  `error.rs` 新增 `CliError::Budget`（exit 9）；`client.rs` `is_budget_code` 将预算 machine code 映射为 exit 9，
+  stdout 仅协议、stderr 仅诊断。offline inspect/replay 分流与 artifact v1 语义未改。
+- **U-4**：见下方验证。
+
+#### 验证证据（`cd src-tauri`，双 binary 零 warning，fmt clean）
+
+- `cargo fmt --all -- --check`：通过。`cargo check --bin chatspeed --bin cs`：0 warning。
+- `cargo test --lib workflow::react::experiment`：10 passed（strict serde round-trip + 负向矩阵：unknown
+  field/version、max_attempts!=1、disk/network hard-cap、required 无 cap、currency mismatch、
+  token-only 带 money cap）。
+- `cargo test --lib budget::`：66 passed（新增 3 个 `create_experiment_run_atomic` 原子性/回滚/无效 envelope
+  零写入 + 3 个 `get_budget_scope_chain` None/正解/非 canonical fail-closed）。
+- `cargo test --lib chat::openai`：55 passed（新增 3 个 AdmissionContext 构造：普通 session→None、
+  budgeted→attempt=1 canonical、非 canonical→fail-closed）。
+- `cargo test --lib workflow::react::client`：41 passed（新增 5 个 endpoint：缺 key→400、无 bearer→401、
+  unknown spec field→400 且无 workflow、wrong version→400 且无 workflow、valid run→201 且恰一 workflow +
+  四级 scope + 同 key/body replay 不双建 + 异 body 409）。
+- `cargo test --lib admission`：16；`stat_guard`：4；`ccproxy::handler`：28（2B 回归，含伪造 external
+  admission header 走普通路径）。`cargo test --lib workflow::react::{llm,intelligence,compression}`：
+  41/6/59 passed（retry 门控无回归）。`cargo test --bin cs`：56 passed（2A capture 重构无回归 + 新增
+  error/client budget exit-9 测试）。根目录 `pnpm test:workflow`：62 passed。
+
+#### 剩余风险 / 限制（如实记录）
+
+- **真实 desktop 固定模型 smoke（V-7）未执行**：宿主机已有一个运行中的桌面实例占用 Vite dev 端口 1420，
+  `pnpm tauri dev` 的 `beforeDevCommand` 因端口冲突退出；不得为跑 smoke 而终止用户既有实例（破坏性、未授权）。
+  因此真实 free 模型 admitted run / 极小 cap 拒绝 / 普通 workflow 对照的桌面端到端留待用户交互桌面会话执行。
+  按 2C 计划明示口径，**确定性 owner fixture 与集成测试作为权威证据**：
+  - LLM admission 信任边界与 reserve/settle 由 `ccproxy::handler` admission gate 测试（真实 mock upstream）
+    + 新增 openai AdmissionContext 构造测试覆盖；
+  - tool settlement 由 2B `budget_resource` 确定性 fixture 覆盖；
+  - workflow+四级 scope 原子创建 + 幂等由 endpoint 测试在真实 `WorkflowApplicationService`/`MainStore`
+    上端到端验证（含一次成功 run 实际落库 workflow + 4 scopes）。
+- **exit 9 的异步终态识别**：run 创建 HTTP 响应恒为 `started`；预算拒绝发生在执行期。CLI 已对 control-plane
+  返回的预算 machine code 直接映射 exit 9（同步/可判定路径），并在 `--artifact-dir` 等待路径按 durable 终态
+  failure 证据识别 `budget_rejected`。若终态 failure 证据未携带可识别的预算 machine code，则按普通终态处理并
+  照常 capture（artifact 仅记录运行/预算/usage 事实，INV-7），不夸大。
+- 未引入 evaluator/benchmark/promotion/headless/新 migration/第二 runtime owner；2A/2B Implementation
+  Record 原样保留。路线口径整理（`2C → 2D+2E → 2F → 2G+2H → 2I`）仅为准备，不作功能验收证据。
 

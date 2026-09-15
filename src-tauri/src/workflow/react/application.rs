@@ -19,7 +19,8 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::commands::workflow::{
     create_workflow_core, get_workflow_events_core, get_workflow_snapshot_core,
-    list_workflows_core, workflow_signal_core, workflow_start_core, workflow_stop_core,
+    list_workflows_core, run_experiment_core, workflow_signal_core, workflow_start_core,
+    workflow_stop_core,
 };
 use crate::db::{Agent, MainStore, Workflow};
 use crate::libs::tsid::TsidGenerator;
@@ -252,5 +253,18 @@ impl WorkflowApplicationService {
         query: WorkflowEventsQuery,
     ) -> Result<Vec<WorkflowEventRecord>, ApplicationError> {
         get_workflow_events_core(self, query).await
+    }
+
+    /// Runs one budgeted, single-attempt experiment workflow. This is the
+    /// single backend-owned facade for Phase 2C: it validates the strict spec,
+    /// atomically creates the workflow plus its four-level budget scope chain,
+    /// and reuses the existing start kernel. The CLI and HTTP control plane
+    /// both delegate here; neither opens the database nor runs a second
+    /// executor (INV-1).
+    pub async fn experiment_run(
+        &self,
+        request: crate::workflow::react::experiment::ExperimentRunRequest,
+    ) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
+        run_experiment_core(self, request).await
     }
 }

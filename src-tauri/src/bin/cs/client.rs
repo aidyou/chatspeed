@@ -133,11 +133,70 @@ impl ControlPlaneClient {
                 "Authentication failed ({}): {}",
                 code, message
             ))),
-            _ => Err(CliError::Server {
-                status: status.as_u16(),
-                code,
-                message,
-            }),
+            _ => {
+                // A budget admission rejection is machine-distinguishable and
+                // exits 9 so callers can branch without parsing prose.
+                if is_budget_code(&code) {
+                    Err(CliError::budget(format!(
+                        "experiment budget admission rejected ({}): {}",
+                        code, message
+                    )))
+                } else {
+                    Err(CliError::Server {
+                        status: status.as_u16(),
+                        code,
+                        message,
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// Whether a control-plane error code represents a budget admission rejection.
+fn is_budget_code(code: &str) -> bool {
+    matches!(
+        code,
+        "budget_exceeded"
+            | "unpriced_model"
+            | "missing_bound"
+            | "scope_paused"
+            | "resource_unobservable"
+            | "invalid_scope_chain"
+            | "admission_persistence_failure"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_budget_code;
+
+    #[test]
+    fn budget_machine_codes_are_recognized() {
+        for code in [
+            "budget_exceeded",
+            "unpriced_model",
+            "missing_bound",
+            "scope_paused",
+            "resource_unobservable",
+            "invalid_scope_chain",
+            "admission_persistence_failure",
+        ] {
+            assert!(is_budget_code(code), "{code} must map to exit 9");
+        }
+    }
+
+    #[test]
+    fn non_budget_codes_are_not_exit_nine() {
+        for code in [
+            "invalid_input",
+            "not_found",
+            "idempotency_key_conflict",
+            "internal_error",
+            "missing_idempotency_key",
+            "unauthorized",
+        ] {
+            assert!(!is_budget_code(code), "{code} must not map to exit 9");
         }
     }
 }

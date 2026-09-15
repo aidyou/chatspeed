@@ -1798,13 +1798,8 @@ pub(crate) async fn create_workflow_core(
         final_audit: request.final_audit,
         inherited_agent_config: request.inherited_agent_config.clone(),
     };
-    let mut config = build_workflow_config_for_request(&agent, &wire_request);
-    {
-        let store = &*svc.main_store;
-        resolve_agent_sandbox_snapshot(store, &agent, &mut config)?;
-    }
-
-    let agent_config_json = config.to_json();
+    let agent_config_json =
+        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request)?;
 
     // Use empty string for user_query if not provided (new workflow creation)
     let user_query = request.user_query.as_deref().unwrap_or("");
@@ -1841,6 +1836,198 @@ pub(crate) async fn create_workflow_core(
     );
 
     Ok(session_id)
+}
+
+/// Builds the effective agent config for a create request and resolves its
+/// sandbox snapshot. Shared by the normal create path and the experiment
+/// facade so both use one canonical config resolver (no parallel path).
+fn build_resolved_workflow_config(
+    store: &MainStore,
+    agent: &Agent,
+    wire_request: &CreateWorkflowRequest,
+) -> Result<String, ApplicationError> {
+    let mut config = build_workflow_config_for_request(agent, wire_request);
+    resolve_agent_sandbox_snapshot(store, agent, &mut config)?;
+    Ok(config.to_json())
+}
+
+/// Runs one budgeted, single-attempt experiment workflow end to end on the
+/// shared runtime authority. The backend alone mints the session/run id and
+/// the canonical scope chain; the caller cannot supply scope, effect or
+/// attempt identity (INV-2).
+///
+/// Sequence (AC-1/AC-2/INV-1/INV-6):
+/// 1. validate the strict spec into a frozen envelope *before* any effect;
+/// 2. generate the session id (TSID) and derive the canonical chain;
+/// 3. atomically create the workflow row and the four budget scopes in one
+///    writer transaction (any failure rolls back the whole unit);
+/// 4. install the proxy session key;
+/// 5. reuse the existing start kernel.
+///
+/// A runtime start failure keeps the single created run as an auditable
+/// fact; it is never deleted and never replaced by a second run (INV-6). The
+/// experiment workflow is created with a non-empty deterministic title so the
+/// reused start kernel's "generate title if missing" helper does not fire an
+/// extra, uncontrolled LLM effect for the experiment.
+pub(crate) async fn run_experiment_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment::ExperimentRunRequest,
+) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
+    use crate::db::budget::NewExperimentWorkflowRow;
+    use crate::workflow::react::experiment::{
+        ExperimentRunResult, ExperimentScopeRefs, ExperimentSpecError, ExperimentSpecErrorCode,
+    };
+
+    let spec = request.spec.clone();
+    let envelope = spec.to_envelope().map_err(spec_validation_error)?;
+
+    if request.prompt.trim().is_empty() {
+        return Err(spec_validation_error(ExperimentSpecError::new(
+            ExperimentSpecErrorCode::EmptyPrompt,
+            "experiment prompt must be non-empty",
+        )));
+    }
+
+    let agent = {
+        let store = &*svc.main_store;
+        store
+            .get_agent(&request.agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.agent_id))
+            })?
+    };
+
+    if agent.role.as_deref() == Some("child") {
+        return Err(spec_validation_error(ExperimentSpecError::new(
+            ExperimentSpecErrorCode::ChildAgent,
+            "Child agents cannot be used as top-level workflow agents",
+        )));
+    }
+
+    // Adapt the experiment override into the shared create-request shape so
+    // the config resolver is reused unchanged.
+    let wire_request = CreateWorkflowRequest {
+        user_query: Some(request.prompt.clone()),
+        agent_id: request.agent_id.clone(),
+        allowed_paths: spec
+            .workflow
+            .allowed_paths
+            .clone()
+            .map(|paths| Value::Array(paths.into_iter().map(Value::String).collect())),
+        auto_approve_plan: spec.workflow.auto_approve_plan,
+        final_audit: spec.workflow.final_audit,
+        inherited_agent_config: experiment_inherited_config(spec.workflow.model.as_deref())?,
+    };
+    let agent_config_json =
+        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request)?;
+
+    // Backend-owned identity: one TSID serves as session id, run id and the
+    // request-scope id; the outer scopes derive canonical suffixes.
+    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
+    let title = format!("experiment {session_id}");
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+
+    let chain = {
+        let store = &*svc.main_store;
+        MainStore::create_experiment_run_atomic(
+            store,
+            NewExperimentWorkflowRow {
+                session_id: session_id.clone(),
+                title,
+                user_query: request.prompt.clone(),
+                agent_id: request.agent_id.clone(),
+                agent_config: Some(agent_config_json),
+            },
+            envelope,
+            now_ms,
+        )
+        .map_err(|e| {
+            log::error!(
+                "[Workflow][session={}][phase=experiment] atomic run creation failed: {}",
+                session_id,
+                e.code.as_str()
+            );
+            ApplicationError::internal(format!("experiment creation failed: {}", e.code.as_str()))
+        })?
+    };
+
+    // Install the proxy session key before start so the runtime's own LLM
+    // calls authenticate against ccproxy exactly like a normal workflow.
+    let session_key = format!("sk-{}", uuid::Uuid::new_v4());
+    svc.chat_state
+        .workflow_keys
+        .insert(session_id.clone(), session_key);
+
+    log::info!(
+        "[Workflow][session={}][phase=experiment] Experiment run created, agent_id={}",
+        session_id,
+        request.agent_id
+    );
+
+    // Reuse the existing start kernel. A start failure keeps the created run
+    // (with its durable scope chain) as the single auditable fact.
+    let started = workflow_start_core(
+        svc,
+        session_id.clone(),
+        request.agent_id.clone(),
+        Some(request.prompt.clone()),
+        None,
+        None,
+        Some(spec.planning_mode),
+    )
+    .await;
+    if let Err(error) = started {
+        log::error!(
+            "[Workflow][session={}][phase=experiment] start failed after durable creation: {}",
+            session_id,
+            error.message
+        );
+        return Err(error);
+    }
+
+    Ok(ExperimentRunResult {
+        schema_version: spec.schema_version.clone(),
+        run_id: session_id.clone(),
+        session_id: session_id.clone(),
+        scopes: ExperimentScopeRefs {
+            request_scope_id: chain.request_id,
+            trial_scope_id: chain.trial_id,
+            candidate_scope_id: chain.candidate_id,
+            campaign_scope_id: chain.campaign_id,
+        },
+        status: "started".to_string(),
+    })
+}
+
+/// Maps a spec validation error to a stable `InvalidInput` application error
+/// whose message carries only the machine code (never prompts or payloads).
+fn spec_validation_error(
+    error: crate::workflow::react::experiment::ExperimentSpecError,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("experiment_spec_rejected: {}", error.code.as_str()))
+}
+
+/// Builds the `inherited_agent_config` JSON for an experiment model override,
+/// matching the CLI `--model` shortcut shape exactly. `None` yields no
+/// override so the Agent defaults apply.
+fn experiment_inherited_config(model: Option<&str>) -> Result<Option<String>, ApplicationError> {
+    let Some(model) = model else {
+        return Ok(None);
+    };
+    if model.split('@').count() != 2 || model.starts_with('@') || model.ends_with('@') {
+        return Err(ApplicationError::invalid_input(format!(
+            "experiment_spec_rejected: {}",
+            crate::workflow::react::experiment::ExperimentSpecErrorCode::InvalidConfig.as_str()
+        )));
+    }
+    let value = json!({ "models": { "act": { "id": 0, "model": model } } });
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
 }
 
 #[tauri::command]

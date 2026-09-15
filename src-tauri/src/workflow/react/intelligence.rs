@@ -545,7 +545,22 @@ impl IntelligenceManager {
         max_input_tokens: usize,
         segment_id: i32,
     ) -> Option<String> {
-        const MAX_DETECTION_ATTEMPTS: u32 = 3;
+        // A budgeted experiment session limits this helper to a single
+        // attempt: each retry would issue a fresh admitted LLM effect under a
+        // new identity, which 2C forbids (AC-4). Ordinary workflows keep the
+        // 3-attempt best-effort behavior (INV-4).
+        let max_detection_attempts = if self
+            .chat_state
+            .main_store
+            .get_budget_scope_chain(&self.session_id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            1
+        } else {
+            3
+        };
 
         let trimmed = user_input.trim();
         if trimmed.is_empty() {
@@ -580,7 +595,7 @@ impl IntelligenceManager {
         };
 
         let mut last_error: Option<String> = None;
-        for attempt in 1..=MAX_DETECTION_ATTEMPTS {
+        for attempt in 1..=max_detection_attempts {
             if attempt > 1 {
                 let wait_secs = 2u64.pow(attempt - 1);
                 log::info!(
@@ -588,7 +603,7 @@ impl IntelligenceManager {
                     self.session_id,
                     wait_secs,
                     attempt,
-                    MAX_DETECTION_ATTEMPTS
+                    max_detection_attempts
                 );
                 sleep(Duration::from_secs(wait_secs)).await;
             }
@@ -624,7 +639,7 @@ impl IntelligenceManager {
                             "[Workflow][session={}][language] Empty language detection result on attempt {}/{}",
                             self.session_id,
                             attempt,
-                            MAX_DETECTION_ATTEMPTS
+                            max_detection_attempts
                         );
                         continue;
                     }
@@ -635,7 +650,7 @@ impl IntelligenceManager {
                         "[Workflow][session={}][language] Language detection failed on attempt {}/{}: {}",
                         self.session_id,
                         attempt,
-                        MAX_DETECTION_ATTEMPTS,
+                        max_detection_attempts,
                         error
                     );
                     last_error = Some(error.to_string());
@@ -646,7 +661,7 @@ impl IntelligenceManager {
         log::warn!(
             "[Workflow][session={}][language] Language detection failed after {} attempts; continuing without a language directive{}",
             self.session_id,
-            MAX_DETECTION_ATTEMPTS,
+            max_detection_attempts,
             last_error
                 .map(|error| format!(": {}", error))
                 .unwrap_or_default()

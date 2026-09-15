@@ -95,6 +95,29 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ExperimentCommand {
+    /// Submit one budgeted, single-attempt experiment run through the
+    /// authenticated control plane (the CLI never runs an executor itself).
+    Run {
+        /// Stable agent ID to run the experiment with.
+        #[arg(long)]
+        agent: String,
+        /// Path to the strict `experiment_run_spec.v1` JSON file.
+        #[arg(long)]
+        spec: PathBuf,
+        /// Prompt text (mutually exclusive with --prompt-file).
+        #[arg(long, conflicts_with = "prompt_file")]
+        prompt: Option<String>,
+        /// Read the prompt from a file ("-": stdin).
+        #[arg(long)]
+        prompt_file: Option<PathBuf>,
+        /// Follow live events after the run starts.
+        #[arg(long)]
+        follow: bool,
+        /// Wait for a durable terminal state, then capture a 2A-compatible
+        /// artifact into this directory (must not already exist).
+        #[arg(long)]
+        artifact_dir: Option<PathBuf>,
+    },
     /// Capture an existing workflow session into an artifact directory
     /// (read-only: never creates, starts, signals or stops a workflow).
     Capture {

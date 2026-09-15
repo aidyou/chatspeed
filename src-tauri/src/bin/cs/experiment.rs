@@ -25,6 +25,47 @@ pub async fn capture(
     session_id: &str,
     artifact_dir: &Path,
 ) -> Result<(), CliError> {
+    let (status, event_count) = capture_bundle(client, session_id, artifact_dir).await?;
+    match cli.output {
+        OutputFormat::Human => {
+            eprint_diagnostic(&format!(
+                "cs: artifact captured to {} (status={})",
+                artifact_dir.display(),
+                status
+            ));
+            render_result(
+                cli.output,
+                &json!({
+                    "artifact_dir": artifact_dir.display().to_string(),
+                    "artifact_status": status,
+                    "session_id": session_id,
+                }),
+            );
+        }
+        _ => {
+            render_result(
+                cli.output,
+                &json!({
+                    "artifact_dir": artifact_dir.display().to_string(),
+                    "artifact_status": status,
+                    "session_id": session_id,
+                    "event_count": event_count,
+                }),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Fetches meta + authoritative snapshot + durable events for a session,
+/// constructs a redacted 2A artifact bundle and writes it to `artifact_dir`.
+/// This helper performs no stdout rendering so both the standalone `capture`
+/// command and `run --artifact-dir` can reuse it without double output.
+async fn capture_bundle(
+    client: &ControlPlaneClient,
+    session_id: &str,
+    artifact_dir: &Path,
+) -> Result<(&'static str, usize), CliError> {
     let meta = client.get("/control/v1/meta").await?;
     let server_instance_id = meta
         .get("server_instance_id")
@@ -62,37 +103,178 @@ pub async fn capture(
 
     let bundle = artifact::construct_bundle(&input).map_err(to_cli_error)?;
     artifact::write_bundle(&bundle, artifact_dir).map_err(to_cli_error)?;
+    Ok((result_status(&bundle), bundle_event_count(&bundle)))
+}
 
-    let status = result_status(&bundle);
+/// Submits one budgeted experiment run through the control plane.
+///
+/// The CLI is a pure client: it reads the strict spec file, sends exactly one
+/// authenticated, idempotency-keyed request to the backend facade, and never
+/// runs an executor or opens the database (INV-1). Without `--artifact-dir` it
+/// returns once the run has started; with `--artifact-dir` it additionally
+/// waits for a durable terminal state and then captures a 2A-compatible
+/// artifact. A budget admission rejection surfaces as exit 9.
+pub async fn run(
+    cli: &Cli,
+    client: &ControlPlaneClient,
+    agent: &str,
+    spec_path: &Path,
+    prompt: String,
+    follow: bool,
+    artifact_dir: Option<&Path>,
+) -> Result<(), CliError> {
+    let spec_text = std::fs::read_to_string(spec_path)
+        .map_err(|error| CliError::usage(format!("Failed to read spec file: {}", error)))?;
+    let spec: Value = serde_json::from_str(&spec_text)
+        .map_err(|error| CliError::usage(format!("Spec file is not valid JSON: {}", error)))?;
+    let body = json!({
+        "agent_id": agent,
+        "prompt": prompt,
+        "spec": spec,
+    });
+    // One idempotency key per submitted run; a transport retry reuses it so
+    // the server never double-creates (AC-2).
+    let idempotency_key = crate::new_idempotency_key();
+    let result = client
+        .post("/control/v1/experiments:run", body, Some(&idempotency_key))
+        .await?;
+
+    let session_id = result
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliError::protocol("Experiment run response missing session_id"))?
+        .to_string();
+
+    render_run_started(cli, &result);
+
+    if let Some(artifact_dir) = artifact_dir {
+        // Implied wait for a structured terminal state before capture.
+        let terminal = wait_for_terminal(client, &session_id).await?;
+        let (status, event_count) = capture_bundle(client, &session_id, artifact_dir).await?;
+        render_run_artifact(
+            cli,
+            artifact_dir,
+            &session_id,
+            &terminal,
+            status,
+            event_count,
+        );
+        // A budget rejection that terminated the run exits 9.
+        if terminal == "budget_rejected" {
+            return Err(CliError::budget(format!(
+                "experiment {session_id} terminated on a budget admission rejection"
+            )));
+        }
+    } else if follow {
+        crate::follow_events(cli, client, &session_id, None).await?;
+    }
+    Ok(())
+}
+
+fn render_run_started(cli: &Cli, result: &Value) {
+    match cli.output {
+        OutputFormat::Human => {
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            let _ = writeln!(
+                handle,
+                "run: {} (session={}, status={})",
+                result["run_id"].as_str().unwrap_or("?"),
+                result["session_id"].as_str().unwrap_or("?"),
+                result["status"].as_str().unwrap_or("?"),
+            );
+        }
+        _ => render_result(cli.output, result),
+    }
+}
+
+fn render_run_artifact(
+    cli: &Cli,
+    artifact_dir: &Path,
+    session_id: &str,
+    terminal: &str,
+    status: &str,
+    event_count: usize,
+) {
     match cli.output {
         OutputFormat::Human => {
             eprint_diagnostic(&format!(
-                "cs: artifact captured to {} (status={})",
+                "cs: experiment artifact captured to {} (terminal={}, artifact={})",
                 artifact_dir.display(),
+                terminal,
                 status
             ));
             render_result(
                 cli.output,
                 &json!({
                     "artifact_dir": artifact_dir.display().to_string(),
-                    "artifact_status": status,
                     "session_id": session_id,
+                    "terminal_status": terminal,
+                    "artifact_status": status,
                 }),
             );
         }
-        _ => {
-            render_result(
-                cli.output,
-                &json!({
-                    "artifact_dir": artifact_dir.display().to_string(),
-                    "artifact_status": status,
-                    "session_id": session_id,
-                    "event_count": bundle_event_count(&bundle),
-                }),
-            );
+        _ => render_result(
+            cli.output,
+            &json!({
+                "artifact_dir": artifact_dir.display().to_string(),
+                "session_id": session_id,
+                "terminal_status": terminal,
+                "artifact_status": status,
+                "event_count": event_count,
+            }),
+        ),
+    }
+}
+
+/// Polls the authoritative snapshot until the workflow reaches a durable
+/// terminal state. Returns the terminal status label, or `"budget_rejected"`
+/// when the terminal failure carries a budget admission machine code. Never
+/// fabricates a terminal state: on timeout it returns an error so the caller
+/// keeps the run id but does not publish a complete artifact (AC-6).
+async fn wait_for_terminal(
+    client: &ControlPlaneClient,
+    session_id: &str,
+) -> Result<String, CliError> {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    const MAX_POLLS: u32 = 3600; // up to ~30 minutes
+    for _ in 0..MAX_POLLS {
+        let snapshot = client
+            .get(&format!("/control/v1/workflows/{}", session_id))
+            .await?;
+        let status = snapshot
+            .get("workflow")
+            .and_then(|workflow| workflow.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match status {
+            "completed" | "failed" | "cancelled" => {
+                if status == "failed" && snapshot_reports_budget_rejection(&snapshot) {
+                    return Ok("budget_rejected".to_string());
+                }
+                return Ok(status.to_string());
+            }
+            _ => tokio::time::sleep(POLL_INTERVAL).await,
         }
     }
-    Ok(())
+    Err(CliError::io(format!(
+        "experiment {session_id} did not reach a durable terminal state within the wait window"
+    )))
+}
+
+/// Detects a budget admission rejection in the durable terminal evidence.
+fn snapshot_reports_budget_rejection(snapshot: &Value) -> bool {
+    // The failure reason, when present, is a protocol-safe string that carries
+    // the admission machine code; match the stable tokens only.
+    let haystack = snapshot
+        .get("workflow")
+        .and_then(|workflow| workflow.get("failure_reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    haystack.contains("budget_exceeded")
+        || haystack.contains("scope_paused")
+        || haystack.contains("resource_unobservable")
+        || haystack.contains("admission rejected")
 }
 
 /// Pages through all durable events for a session using the durable `after`
