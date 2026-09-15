@@ -11,20 +11,28 @@ rust_i18n::i18n!("i18n", fallback = "en");
 mod args;
 #[path = "cs/artifact.rs"]
 mod artifact;
+#[path = "cs/benchmark.rs"]
+mod benchmark;
 #[path = "cs/client.rs"]
 mod client;
 #[path = "cs/discovery.rs"]
 mod discovery;
 #[path = "cs/error.rs"]
 mod error;
+#[path = "cs/evaluate.rs"]
+mod evaluate;
 #[path = "cs/experiment.rs"]
 mod experiment;
 #[path = "cs/output.rs"]
 mod output;
 #[path = "cs/sse.rs"]
 mod sse;
+#[path = "cs/verifier.rs"]
+mod verifier;
 
-use args::{AgentCommand, Cli, Command, ExperimentCommand, OutputFormat, WorkflowCommand};
+use args::{
+    AgentCommand, BenchmarkCommand, Cli, Command, ExperimentCommand, OutputFormat, WorkflowCommand,
+};
 use clap::Parser as _;
 use client::ControlPlaneClient;
 use discovery::ControlPlaneDiscovery;
@@ -63,7 +71,22 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
             ExperimentCommand::Replay { artifact_dir } => {
                 return experiment::replay(cli, artifact_dir)
             }
+            ExperimentCommand::Evaluate {
+                artifact_dir,
+                evaluation_dir,
+            } => return evaluate::evaluate(cli, artifact_dir, evaluation_dir),
             ExperimentCommand::Capture { .. } | ExperimentCommand::Run { .. } => {}
+            // Benchmark verify is offline; benchmark run needs the client.
+            ExperimentCommand::Benchmark {
+                command:
+                    BenchmarkCommand::Verify {
+                        suite,
+                        task,
+                        artifact_dir,
+                        verdict_dir,
+                    },
+            } => return verifier::verify(cli, suite, task, artifact_dir, verdict_dir),
+            ExperimentCommand::Benchmark { .. } => {}
         }
     }
 
@@ -99,8 +122,32 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 )
                 .await
             }
-            // Inspect/replay are handled above before discovery loading.
-            ExperimentCommand::Inspect { .. } | ExperimentCommand::Replay { .. } => Ok(()),
+            // Inspect/replay/evaluate are handled above before discovery loading.
+            ExperimentCommand::Inspect { .. }
+            | ExperimentCommand::Replay { .. }
+            | ExperimentCommand::Evaluate { .. } => Ok(()),
+            ExperimentCommand::Benchmark { command } => match command {
+                BenchmarkCommand::Run {
+                    suite,
+                    task,
+                    agent,
+                    model,
+                    artifact_dir,
+                } => {
+                    benchmark::run(
+                        cli,
+                        &client,
+                        suite,
+                        task,
+                        agent,
+                        model.as_deref(),
+                        artifact_dir.as_deref(),
+                    )
+                    .await
+                }
+                // Verify is handled above before discovery loading.
+                BenchmarkCommand::Verify { .. } => Ok(()),
+            },
         },
     }
 }

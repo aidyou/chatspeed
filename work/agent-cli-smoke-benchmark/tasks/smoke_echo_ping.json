@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "task_id": "smoke_echo_ping",
+  "instruction": "Reply with exactly: PONG",
+  "instruction_hash": "7b76032075ee307f3b105aef504b0fca43cab9804d0a2bf93f5baf3371ed5414",
+  "expected": {
+    "terminal_status": "completed",
+    "cost_status": "known",
+    "no_budget_rejection": true
+  },
+  "resource_profile": {
+    "input_tokens": 65536,
+    "output_tokens": 128000,
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "wall_time_ms": 300000,
+    "tool_calls": 0,
+    "processes": 0,
+    "concurrency": 1
+  },
+  "verifier_id": "chatspeed-smoke-verifier",
+  "verifier_version": "1"
+}

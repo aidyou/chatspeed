@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "dataset_id": "chatspeed-smoke",
+  "dataset_version": 1,
+  "split": "smoke",
+  "runner_kind": "local_control_plane",
+  "adapter_id": "chatspeed-smoke-adapter",
+  "adapter_version": "1",
+  "verifier_id": "chatspeed-smoke-verifier",
+  "verifier_version": "1",
+  "tasks": [
+    "smoke_reply_ok",
+    "smoke_echo_ping"
+  ]
+}

@@ -209,3 +209,82 @@ state_changed），故该异步场景 CLI 退出 1 而非 9；**同步** control
 exit 9（client decode `is_budget_code`，已测），**tool-path** 拒绝会写入 durable tool observation
 （含 "experiment admission rejected"）故可被 `budget_rejected_in_events` 命中→exit 9。若需让 LLM-path
 执行期拒绝也稳定 exit 9，需要后端把 admission 拒绝码持久化进 durable 失败事件（属 runtime 变更，另行评估）。
+
+---
+
+## 4. 2D+2E 冒烟记录（deterministic evaluator + chatspeed-smoke@1 adapter/verifier，2026-09-15）
+
+### 4.1 环境与执行方式
+
+- **真实 desktop 全链 smoke 已执行**：`pnpm tauri dev` 启动桌面实例（control plane
+  `127.0.0.1:33185`，instance `b546ce632fe4ec856c56009c172accb1`），`cs doctor` 认证通过；
+  免费模型 `cs@free:ds-v4-flash`（`benchmark run --model` 透传为 2C spec workflow override）。
+- 另有离线 CLI 进程 smoke（无 discovery 文件时）先行完成，证明 evaluate/verify 离线性。
+
+### 4.2 真实 desktop 全链结果（V-8，已执行）
+
+```bash
+cd src-tauri
+# 1) 在线 run（经既有 POST /control/v1/experiments:run + 预算 admission，单次 attempt）
+cargo run --bin cs -- experiment benchmark run --suite chatspeed-smoke \
+  --task smoke_reply_ok --agent builtin:coding --model "cs@free:ds-v4-flash" \
+  --artifact-dir /tmp/cs-2e-desktop-run3
+# → run: 0rmczhh500400 (status=started)
+# → cs: experiment artifact captured (terminal=completed, artifact=complete)，exit 0
+
+# 2) 离线 evaluate
+cargo run --bin cs -- experiment evaluate /tmp/cs-2e-desktop-run3 \
+  --evaluation-dir /tmp/cs-2e-desktop-eval
+# → correctness_status=pass，exit 0
+
+# 3) 离线 benchmark verify
+cargo run --bin cs -- experiment benchmark verify --suite chatspeed-smoke \
+  --task smoke_reply_ok /tmp/cs-2e-desktop-run3 --verdict-dir /tmp/cs-2e-desktop-verdict --output json
+# → score=1.0, safety=pass, infra=pass；绑定 run_id=0rmczhh500400、
+#   chain_head=177ad5be…、dataset_digest=619ae2a2…、task_digest=3fcbf6ed…、
+#   verifier_digest=612079ff…；exit 0
+
+# 4) 篡改负向（复制后改 run.json 一字节，不刷新 manifest）
+cargo run --bin cs -- experiment evaluate /tmp/cs-2e-desktop-tampered \
+  --evaluation-dir /tmp/cs-2e-desktop-eval-tampered
+# → cs: hash_mismatch: size mismatch for run.json；exit=1；无 sidecar 发布
+```
+
+应用日志证据：`[Budget][admission] reserved res_… for effect llm:0rmczhh500400:… (attempt 1)`
+——预算 admission 在真实 desktop 链路中真实生效；artifact 实际使用模型 `deepseek-v4-flash`
+（免费 `cs@free:ds-v4-flash`）。
+
+### 4.3 fixture 资源 cap 校准记录（budget gate 端到端负向证据）
+
+前两次 desktop run 因 admission 按设计 fail closed 被拒（provider 零调用）：
+
+- run `0rmcvtxt80400`：`budget_exceeded: output_tokens projected 8192/128000 exceeds hard cap 2000`
+  （language helper 与主 ReAct 请求均在发送前被拒）；
+- run `0rmcye9w00400`：`budget_exceeded: input_tokens projected 30697 exceeds hard cap 20000`
+  （首个 LLM effect 已成功 reserve，主请求发送前被拒）。
+
+据此把 fixture caps 校准为 `input_tokens=65536`、`output_tokens=128000`（worst-case reserve 需
+覆盖 agent 配置的 max tokens 与真实 prompt 规模），digest 同步更新并回写路线文档与 golden tests。
+两次被拒 run 的 artifact 为 incomplete/cost unknown，verifier 如实给不可通过事实——这正是
+"budget rejection 不是 correctness 成功"契约的真实体现。
+
+### 4.4 离线 CLI 进程验证（desktop smoke 前先行完成，可复现）
+
+```bash
+cd src-tauri
+# 无 discovery 文件时（证明无主进程/网络/DB/key）：
+cargo run --bin cs -- experiment evaluate target/cs-2e-smoke/artifact \
+  --evaluation-dir target/cs-2e-smoke/eval          # exit 0, correctness_status=pass
+cargo run --bin cs -- experiment benchmark verify --suite chatspeed-smoke \
+  --task smoke_reply_ok target/cs-2e-smoke/artifact \
+  --verdict-dir target/cs-2e-smoke/verdict          # exit 0, score=1.0
+# 篡改/未知 task/重复目标 → exit 1（hash_mismatch / unknown_task / target_exists），无发布
+# symlink 父目录指向 artifact → exit 1（symlink_rejected），artifact 内无新增文件
+```
+
+### 4.5 隐私扫描
+
+对发布的 `verdict.json`/`evaluation.json` 全文扫描：无 raw prompt、无 `Bearer `/`sk-`、无模型名、
+无绝对路径（`path_hint` 仅目录文件名）；provenance 固定为
+`artifact/benchmark_adapter/independent_verifier`（evaluation 为 `artifact/evaluator`）；
+无任何 promotion 字段。

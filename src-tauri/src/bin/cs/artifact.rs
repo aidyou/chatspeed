@@ -51,6 +51,9 @@ const MAX_EVENT_LINE_BYTES: usize = MAX_EVENT_DATA_BYTES * 2;
 /// integrity coverage.
 const REQUIRED_FILES: [&str; 4] = ["run.json", "snapshot.json", "events.jsonl", "result.json"];
 
+/// Public count of the fixed v1 data files (for sidecar projections/tests).
+pub const REQUIRED_FILE_COUNT: usize = REQUIRED_FILES.len();
+
 /// Machine-stable error codes. These are part of the CLI contract: they must
 /// not change meaning across releases, and `inspect`/`replay` surface them in
 /// structured output alongside a non-zero exit for `invalid`/`incompatible`.
@@ -76,7 +79,7 @@ pub struct ArtifactError {
 }
 
 impl ArtifactError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),

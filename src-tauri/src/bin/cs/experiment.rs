@@ -127,6 +127,24 @@ pub async fn run(
         .map_err(|error| CliError::usage(format!("Failed to read spec file: {}", error)))?;
     let spec: Value = serde_json::from_str(&spec_text)
         .map_err(|error| CliError::usage(format!("Spec file is not valid JSON: {}", error)))?;
+    run_with_spec(cli, client, agent, spec, prompt, follow, artifact_dir).await
+}
+
+/// Submits one budgeted experiment run with an already-parsed spec value.
+///
+/// Shared by the file-based `experiment run` and the benchmark adapter (which
+/// builds the strict spec from the checked-in fixture's resource profile).
+/// The CLI is a pure client: exactly one authenticated, idempotency-keyed
+/// request; no executor, no database (INV-1/INV-2).
+pub async fn run_with_spec(
+    cli: &Cli,
+    client: &ControlPlaneClient,
+    agent: &str,
+    spec: Value,
+    prompt: String,
+    follow: bool,
+    artifact_dir: Option<&Path>,
+) -> Result<(), CliError> {
     let body = json!({
         "agent_id": agent,
         "prompt": prompt,

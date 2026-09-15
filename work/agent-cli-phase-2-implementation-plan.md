@@ -11,11 +11,12 @@
 
 ## 0. 当前阶段指针（Current Stage Pointer）
 
-- **2A 状态**：代码、离线验证与真实 desktop-owned CLI smoke **已完成**（51 个 `cs` focused tests +
-  双 binary 无 warning + 一期 HTTP/前端回归 + `pnpm tauri dev` 实例验证）；详见 `## 9` 的
-  `2A Implementation Record` 与 `work/agent-cli-phase-2-smoke-test.md`。
-- **下一个入口**：`2C`（Experiment run，受控单次试验）。2B（Budget & effect admission ledger）已完成，
-  Q-3 已在 2B 计划批准时确认（本地货币、token/resource-only、全资源 hard cap、默认不 retry）。
+- **2A/2B/2C/2D+2E 状态**：均已完成（代码、focused 验证与记录见 `## 9` 对应 Implementation Record；
+  2A/2C 含真实 desktop smoke，2B 预算 gate 的端到端触发由 2C smoke 覆盖；2D+2E 含离线 CLI 进程
+  smoke 与真实 desktop 固定免费模型全链 smoke，见该记录）。
+- **下一个入口**：`2F`（Candidate / campaign / proposer）。2D+2E 已交付 deterministic evaluator 与
+  `chatspeed-smoke@1` benchmark adapter/verifier 垂直切片；LLM judge 延后（不新增 judge 外部 effect）；
+  真实 Harbor installed-agent/headless/container 延后到 2G+2H。2D+2E 契约与 fixture 身份见 `## 10`。
 - **后续交付口径**：2C 之后的实现按 `2C → 2D+2E → 2F → 2G+2H → 2I` 的顺序成组交付。该口径只用于
   规划后续阶段的打包与推进顺序，属于准备工作，不作为任何阶段的功能验收证据；各阶段仍须各自满足其
   Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 后才可推进指针。
@@ -58,12 +59,18 @@
 - **2C**
   - 进入：2B 完成（无预算 admission 不得注册 experiment effect）。
   - 退出：单次 experiment run 产出可被 2A verifier 验证的 artifact，且受预算约束；无 promotion。
-- **2D**
+- **2D**（本期与 2E 成组交付；首版仅 deterministic evaluator）
   - 进入：2A、2C 完成。
-  - 退出：evaluator 对 artifact 产出结构化 correctness 事实；judge 有版本与 prompt hash；无 promotion verdict。
-- **2E**
-  - 进入：2A–2D 完成，且 benchmark 版本/digest/split/verifier/资源预算已单独确认（见 Open Questions）。
-  - 退出：至少一个 benchmark adapter + independent verifier 端到端产出分数，绑定到具体 artifact。
+  - 退出（首版）：离线 deterministic evaluator 对已通过 2A verifier 的 artifact 产出独立、版本化
+    evaluation sidecar（绑定 `run_id/session_id/chain_head`，含确定性检查事实与
+    `pass|fail|not_evaluable` 稳定状态）；LLM judge（版本/prompt hash/预算绑定）延后到后续阶段；
+    无 promotion verdict。
+- **2E**（本期首版：checked-in `chatspeed-smoke@1` contract smoke）
+  - 进入：2D 首版完成；本期 fixture 身份固定为 `dataset_id=chatspeed-smoke`、`dataset_version=1`、
+    `split=smoke`，task manifest/verifier identity/resource profile 在实现时生成并写回本文件与
+    golden tests（见 `## 10`）；不宣称 Aider/SWE-bench/Terminal-Bench 官方成绩。
+  - 退出（首版）：至少一个 benchmark adapter + independent verifier 端到端产出绑定具体 artifact 的
+    分数事实；真实 Harbor installed-agent 接入延后到 2G+2H，本期只固定 adapter/verifier 合约。
 - **2F**
   - 进入：2B–2E 完成。
   - 退出：candidate/campaign 编排在预算与 verifier 约束下可复现；proposer 有边界。
@@ -77,10 +84,11 @@
   - 进入：2D、2E、2F、2G、2H 完成。
   - 退出：promotion verdict→apply→灰度→审计闭环，且有完整 provenance。
 
-### 1.4 本次执行范围（只展开 2A）
+### 1.4 本次执行范围（历史口径：2A 期；当前 active scope 见 `## 10`）
 
-本次**只实现 2A**。2B–2I 仅在本路线文档登记，不进入本次代码、不注册、不声称支持。
+2A 期口径：本次**只实现 2A**。2B–2I 仅在本路线文档登记，不进入本次代码、不注册、不声称支持。
 2A 的完整 contract、执行单元与验证见本文件 `## 2` 之后的 2A 详细计划与 `## Implementation Record`。
+（当前 active scope 已推进到 2D+2E，见 `## 10`；本节保留为 2A 历史口径。）
 
 ## 2. 2A 范围边界与非目标（Non-Goals）
 
@@ -704,4 +712,251 @@ Final review 提出 4 个 major 发现，已全部修复并补充回归测试：
     exit 9 需后端把 admission 拒绝码持久化进 durable 失败事件（runtime 变更，另行评估）。
 - 未引入 evaluator/benchmark/promotion/headless/新 migration/第二 runtime owner；2A/2B Implementation
   Record 原样保留。路线口径整理（`2C → 2D+2E → 2F → 2G+2H → 2I`）仅为准备，不作功能验收证据。
+
+### 2D+2E Implementation Record (as built)
+
+- 日期 / 当前阶段推进：2026-09-15；2D+2E 代码与确定性验证完成；离线 CLI 进程 smoke 与**真实 desktop
+  固定免费模型全链 smoke（benchmark run→capture→evaluate→verify）均已执行**；下一入口 **2F**。
+- 实际文件与符号：
+  - 新增 `src-tauri/src/bin/cs/evaluate.rs`（2D deterministic evaluator）：
+    `EVALUATION_SCHEMA_VERSION=1`、`EVALUATION_KIND="cs.evaluation.deterministic"`、
+    `EVALUATOR_ID/EVALUATOR_VERSION`、`code::TARGET_OVERLAP`、`CheckStatus{Pass,Fail,NotEvaluable}`、
+    `CheckClass{Correctness,Infra}`、`run_checks`（10 项确定性检查：schema/manifest/chain/session 绑定、
+    artifact 完整性、terminal 已知且 completed、cost known、usage totals、无 budget rejection）、
+    `correctness_status`（correctness-class fail→fail；infra fail 或 not_evaluable→not_evaluable；
+    否则 pass）、`build_evaluation`（`created_at` 不参与 `evaluation_hash`，重复评估 canonical-equivalent）、
+    共享 sidecar writer `SidecarBundle`/`write_sidecar`/`verify_sidecar_dir`（staging + re-verify +
+    atomic rename；单文件 manifest、symlink/extra/size/hash fail closed）、`reject_target_overlap`
+    （输出目录与 artifact 目录互含即拒绝）、`evaluate()`（discovery 分流前离线执行）。
+  - 新增 `src-tauri/src/bin/cs/benchmark.rs`（2E adapter）：`chatspeed-smoke@1`/`smoke` 身份常量、
+    `RUNNER_KIND="local_control_plane"`、fixture 经 `include_str!`（`CARGO_MANIFEST_DIR/../work/
+    agent-cli-smoke-benchmark/`）编译期内嵌（无运行时路径可替换）、strict `BenchmarkManifestV1`/
+    `SmokeTaskV1`/`SmokeResourceProfileV1`（`deny_unknown_fields`）、`resolve_task`（suite/task 白名单、
+    task 文档 swap 拒绝、verifier 身份一致性、instruction hash 校验、`task_digest`/`manifest_digest`
+    计算）、`build_run_spec`（profile→`experiment_run_spec.v1` caps，disk/network 永不 cap，
+    `max_attempts=1`，token_resource_only）、`adapter_metadata`（transport-neutral，供未来 Harbor
+    runner 复用）、`run()`（复用 `experiment::run_with_spec`→既有 `POST /control/v1/experiments:run`）。
+  - 新增 `src-tauri/src/bin/cs/verifier.rs`（2E independent verifier）：`VERDICT_KIND=
+    "cs.benchmark.verdict"`、`run_verdict_checks`（terminal/cost 与 expected 一致、无 budget rejection、
+    input/output/cache/wall-time caps 对 artifact usage 实际值，None cap=not_applicable）、
+    `score`（全部 pass/not_applicable→1.0 否则 0.0）、`verifier_digest`（绑定 verifier 身份+expected
+    契约+resource profile）、`build_verdict`（dataset/task/verifier digest + `run_id/session_id/
+    chain_head` 绑定 + safety/infra/budget facts + provenance `artifact/benchmark_adapter/
+    independent_verifier`；无 promotion 字段）、`verify()`（离线，discovery 分流前执行）。
+  - 修改 `src-tauri/src/bin/cs/args.rs`：`ExperimentCommand` 新增 `Evaluate{artifact_dir,
+    evaluation_dir}` 与 `Benchmark{Run|Verify}`（`BenchmarkCommand`）。
+  - 修改 `src-tauri/src/bin/cs.rs`：新增 `mod benchmark/evaluate/verifier`；`Evaluate` 与
+    `Benchmark::Verify` 在 `load_discovery` 前离线分流；`Benchmark::Run` 走既有 client 分支。
+  - 修改 `src-tauri/src/bin/cs/experiment.rs`：抽出 `run_with_spec`（`run` 读文件后委托；benchmark
+    adapter 复用同一 POST/idempotency/capture 路径，无第二 runtime）。
+  - 修改 `src-tauri/src/bin/cs/artifact.rs`：`ArtifactError::new` 改为 `pub`、新增
+    `REQUIRED_FILE_COUNT`（供 sidecar 投影使用；v1 verifier 语义零改动）。
+  - 新增 fixture：`work/agent-cli-smoke-benchmark/manifest.json`、`tasks/smoke_reply_ok.json`、
+    `tasks/smoke_echo_ping.json`（instruction "Reply with exactly: OK"/"PONG"；expected：terminal
+    completed + cost known + 无 budget rejection；resource profile：input 65536/output 128000/
+    cache null(not_applicable)/wall 300000ms/tool_calls 0/processes 0/concurrency 1）。
+  - `benchmark run` 新增 `--model`（可选 act-phase 模型 override，转发为 2C spec 的
+    `workflow.model`；与 `--agent` 一样是运行时参数，不进入 fixture digest）。
+- 提交/工作区状态：全部改动保留在工作区未 stage/commit（遵守项目规则）；无越界文件。
+  遗留物：`src-tauri/target/cs-2e-smoke/`（离线 CLI smoke 的临时 artifact/sidecar，位于 gitignored
+  target 目录，沙箱删除被策略拒绝，可手动删除）。
+- 验证命令与结果（`cd src-tauri`，双 binary 零 warning，fmt clean）：
+  - `cargo test --bin cs` → **110 passed; 0 failed**（2A 51+2C 5 基线无回归；新增 evaluate 23、
+    benchmark 18、verifier 16：正向 pass/fail/not_evaluable 结构化区分、canonical-equivalent 重复
+    评估/验证、artifact 不可变性 hash 前后一致、隐私负向断言、篡改/未来 schema/缺文件/重复发布/
+    symlink（含父目录 symlink）/overlap/未知 suite/task/字段/重复 task/verifier 身份/instruction
+    hash 篡改全部稳定 machine code 且不发布 sidecar、模型自述不影响分数、budget rejection→score 0+
+    safety fail、golden digest 锁定、model override 转发）。
+  - `cargo test --lib workflow::react::client` → **41 passed**（既有 endpoint/idempotency/budget
+    契约不变；benchmark run 复用同一 POST 路径，未新增 route）。
+  - `cargo check --bin chatspeed --bin cs` → 0 warning；`cargo fmt --all -- --check` 通过。
+  - 根目录 `pnpm test:workflow` → **62 passed; 0 failed**。
+- 离线 CLI 进程 smoke（V-8 替代执行，2026-09-15）：当前环境无运行桌面实例（无 discovery 文件），
+  在线 `benchmark run` 无法执行；以临时测试写出真实 2A artifact 后用真实 `cs` 二进制完成离线链路：
+  - `cs experiment evaluate <artifact> --evaluation-dir <eval>` → exit 0，
+    `correctness_status=pass`，sidecar（evaluation.json + artifacts/manifest.json）发布；
+  - `cs experiment benchmark verify --suite chatspeed-smoke --task smoke_reply_ok <artifact>
+    --verdict-dir <verdict>` → exit 0，`score=1.0, safety=pass, infra=pass`，verdict 绑定
+    dataset/task/verifier digest 与 `run_id/session_id/chain_head`；隐私扫描（secret prompt/
+    Bearer/sk-/模型名）无命中；
+  - 篡改 run.json → evaluate exit 1（`hash_mismatch`）且无 sidecar 发布；未知 task → verify exit 1
+    （`unknown_task`）且无 verdict 发布；重复目标 → exit 1（`target_exists`）；
+  - 全程无 discovery 文件存在 → 证明 evaluate/verify 离线（无主进程/网络/DB/key）。
+- 未验证项 / 环境限制 / 剩余风险：
+  - **真实 desktop 固定免费模型全链 smoke（V-8）已执行**（2026-09-15，`pnpm tauri dev` +
+    `cs@free:ds-v4-flash`）：`cs experiment benchmark run --suite chatspeed-smoke --task
+    smoke_reply_ok --agent builtin:coding --model cs@free:ds-v4-flash --artifact-dir …` → session
+    `0rmczhh500400` terminal=completed、artifact=complete、exit 0；离线 evaluate →
+    `correctness_status=pass`；离线 benchmark verify → `score=1.0, safety=pass, infra=pass`，
+    verdict 绑定 run_id/chain_head/新 digest；篡改 run.json → exit 1 `hash_mismatch` 且无 sidecar
+    发布。应用日志可见 `[Budget][admission] reserved … for effect llm:…`（预算 admission 真实生效）。
+  - **fixture 资源 cap 校准过程（有价值的负向证据）**：前两次 desktop run 因 admission 按设计
+    fail closed 被拒——run `0rmcvtxt80400`（output 投影 8192/128000 > cap 2000）与 run
+    `0rmcye9w00400`（input 投影 30697 > cap 20000）均在 provider 调用前 `budget_exceeded`，零
+    provider effect；据此把 fixture caps 校准为 input 65536/output 128000（worst-case reserve
+    需覆盖 agent 配置的 max tokens 与真实 prompt 规模），digest 同步更新并回写本文档与 golden
+    tests。这两次被拒 run 的 artifact 为 incomplete/cost unknown，verifier 如实给不可通过事实。
+  - 本期 verifier 是 contract-level candidate-untrusted boundary，不是 2G/Harbor 的 OS/container
+    隔离；输出与文档均已标注。
+  - fixture 的 response-content oracle（校验模型最终回复内容 hash）依赖 durable 事件携带回复文本，
+    当前 control-plane 事件不保证；本期 expected facts 限定为 control-plane-observable 结构化事实
+    （terminal/cost/budget/caps），内容级 oracle 留待 2G/2H（对应计划 Q-3）。
+  - cache_read/cache_write cap 在 fixture 中为 null（not_applicable）：免费模型缓存行为不可保证，
+    hard cap 0 会在 admission 前被 `budget_exceeded` 拒绝；如需收紧须同步 bump dataset version。
+  - **2F 前置决策（用户已提出）**：当前 2C `ExperimentWorkflowOverride` 仅支持
+    model/allowed_paths/auto_approve_plan/final_audit；benchmark matrix 需要的完整 agent-config
+    级 override（models 各 slot、工具集、MCP、skills 等）需扩展 2C 公共契约，留待 2F 入口单独
+    确认与实现，本期不悄悄扩。
+  - CLI flag 命名偏差（局部实现细节）：计划文本的 `--output <evaluation-dir>` 与既有全局
+    `--output`（输出格式）冲突，evaluate 使用 `--evaluation-dir`、verify 使用 `--verdict-dir`；
+    语义与计划一致。
+  - 全库 clippy 既有 baseline 未扩大处理（新模块以 `cargo check` 零 warning 为准）。
+- 下一阶段入口与前置：**2F（Candidate / campaign / proposer）**。进入前需确认 candidate 生成是否
+  引入新 LLM effect（须走 2B admission）、campaign 编排的预算 scope 复用方式，以及 verdict→candidate
+  的消费契约（本期 verdict schema 已固定 provenance/binding，2F 不得改写）。
+
+#### 2D+2E Final Review Fix (as built, 2026-09-15)
+
+Final review 指出一个 major 发现：sidecar 输出路径的**父目录符号链接**可绕过纯 lexical
+`Path::starts_with` overlap 检查（如 `<link>` → artifact 目录，输出设为 `<link>/evaluation`），
+atomic rename 会把 sidecar 实际写入 2A artifact 目录。已修复：
+
+- `evaluate.rs` 新增共享 `reject_symlink_ancestors`（对输出路径所有**已存在**祖先逐级拒绝 symlink，
+  稳定 machine code `symlink_rejected`）与 `canonicalize_output`（canonicalize 最深已存在祖先并
+  拼回不存在尾部）；`reject_target_overlap` 升级为 lexical + filesystem-resolved 双重校验（带
+  `target_kind` 参数区分 evaluation/verdict 措辞）。
+- `evaluate()` 与 `verifier::verify()` 均先做 symlink-ancestor 拒绝再做 overlap 校验；
+  `write_sidecar` 内部追加 symlink-ancestor 防御（任何调用方都被保护）；verifier 侧 overlap
+  失败保留 verdict 专属 machine code `verdict_target_unsafe`。
+- 新增负向测试：`evaluate_rejects_symlinked_parent_targeting_artifact`、
+  `verify_rejects_symlinked_parent_targeting_artifact`（断言稳定非零、无 sidecar/verdict 发布、
+  artifact 文件 hash 前后不变）与 `evaluate_allows_sibling_output_under_real_parent`（真实父目录
+  下的兄弟输出目录仍被允许，防过度拒绝回归）；`evaluate_rejects_symlinked_output_target` 更新为
+  断言 `symlink_rejected`。
+- 真实 CLI 进程复验：`cs experiment evaluate <artifact> --evaluation-dir <link>/evaluation` 与
+  `cs experiment benchmark verify ... --verdict-dir <link>/verdict`（`<link>` → artifact 目录的
+  symlink）均 exit 1（`symlink_rejected`），artifact 目录内无任何新增文件。
+- 修复后验证：`cargo test --bin cs` → **109 passed; 0 failed**；`cargo test --lib
+  workflow::react::client` → 41 passed；`cargo check --bin chatspeed --bin cs` → 0 warning；
+  `cargo fmt --all -- --check` 通过。
+
+## 10. 2D+2E Active Plan（当前执行范围）
+
+> 本节是当前 active scope 的执行契约（2026-09-15 批准）。历史 2A/2B/2C 记录见 `## 9`，原样保留，
+> 不删除、不清空、不改写。本节在实现开始前写入；其中 manifest/verifier digest 在实现时生成后回写，
+> 占位描述不作为已验证证据。
+
+### 10.1 目标与交付物
+
+1. **2D correctness evaluator 首版**：只对已通过 2A 离线 verifier 的 artifact 做确定性、只读事实投影，
+   输出独立 evaluation sidecar；本期不实现 LLM judge，不做 promotion。
+2. **2E 第一条 benchmark adapter/verifier 垂直切片**：使用仓库内固定 `chatspeed-smoke` 小型 fixture，
+   固定 `version/digest/split/verifier/resource profile`，复用 2C 唯一 experiment-run control-plane
+   入口生成 artifact，由独立、确定性 verifier 产出绑定到 artifact 的分数事实。
+3. 执行顺序：先本节文档对齐（U-1），再 evaluator（U-2）→ fixture/adapter（U-3）→ verifier（U-4）→
+   验证与回写（U-5）。
+
+### 10.2 范围边界与非目标
+
+本期包含：确定性 evaluator、固定 smoke fixture、adapter、独立 verifier、CLI 离线/运行入口、
+sidecar schema、focused tests、文档回写和可行时的 desktop smoke。
+
+本期不包含：
+
+- LLM judge 或任何新的 judge 外部 effect；
+- 2A v1 `run.json/snapshot.json/events.jsonl/result.json/manifest` 的回写或 schema 破坏性升级；
+- promotion、candidate、campaign、GEPA/DGM、lineage、自动 proposer；
+- Harbor installed-agent 的真实容器运行、headless/daemon、worktree/patch apply、独立实验 data domain、
+  MCP/skill 安装（属 2G/2H）；2E 只先固定未来 Harbor 接入所需的 adapter/verifier 合约；
+- 新 DB migration、evaluator/benchmark 表、Tauri command/event wire 改动、既有 `/control/v1` 语义改动、
+  旧 static/ccproxy router 改动；
+- 保存原始 prompt、response、transcript、patch、完整环境变量、token、API key 或 private holdout 内容。
+
+### 10.3 目标行为与 sidecar 契约
+
+- `cs experiment evaluate <artifact-dir> --output <evaluation-dir>`：在无主进程、无 discovery、无网络、
+  无数据库、无 LLM key 环境运行；先调用 `artifact::verify_bundle_dir`，再对可信 `VerifyReport` 做
+  确定性检查，并在独立 evaluation sidecar 中原子发布结果；不改变 2A artifact 目录。
+- evaluation sidecar 布局：`<evaluation-dir>/evaluation.json` + `<evaluation-dir>/artifacts/manifest.json`；
+  sidecar manifest 只覆盖 sidecar data file（schema、algorithm、size、sha256、manifest_hash），
+  不向 2A manifest 添加文件。`evaluation.json` 至少包含 `schema_version`、`evaluation_kind`、
+  `evaluator_id/version`、`source_artifact{path_hint,run_id,session_id,artifact_schema_version,chain_head}`、
+  `checks[]`、`correctness_status`、`provenance`、`created_at`；不包含原文 prompt/response/transcript，
+  不包含 promotion verdict。
+- `cs experiment benchmark run --suite chatspeed-smoke --task <task-id> ...`：复用既有
+  `POST /control/v1/experiments:run`、2C spec 与预算 admission，完成后复用现有 capture 路径得到
+  artifact；不新增第二套 runtime/HTTP/run loop。
+- `cs experiment benchmark verify --suite chatspeed-smoke --task <task-id> --artifact-dir <dir>
+  --output <dir>`：离线环境中由固定 verifier 检查 artifact 与 task manifest，输出绑定到 artifact 的
+  score/verdict 事实；模型自述、普通文本或模型生成日志不能单独构成分数。
+- verdict sidecar 布局：`<verdict-dir>/verdict.json` + `<verdict-dir>/artifacts/manifest.json`。
+  `verdict.json` 至少包含 `schema_version`、`verdict_kind`、`dataset_id/version/digest/split`、
+  `task_id/task_digest`、`verifier_id/version/digest`、`source_artifact{run_id,session_id,chain_head}`、
+  `score`、`metrics`、`safety_status`、`infra_status`、`budget_facts`、`provenance`；
+  promotion 结论不得由 verifier 产生，`promotion_status` 不出现在 verdict 之外的任何结论中。
+
+### 10.4 Benchmark fixture 基线（chatspeed-smoke@1）
+
+- 身份固定：`dataset_id=chatspeed-smoke`、`dataset_version=1`、`split=smoke`。
+- task manifest 新增于 `work/agent-cli-smoke-benchmark/`（strict snake_case JSON 解析）；第一版使用
+  少量不涉及原文持久化的 control-plane-observable smoke tasks。任务 id、instruction hash、
+  expected structured facts、resource profile、verifier id/version 固定在 manifest；实际 prompt 仅在
+  adapter→run 请求期间使用，不写入 artifact。
+- digest：对 canonical manifest（排序 key、固定字段、无时间字段）做 domain-separated SHA-256。
+  **已实现并回写的真实 digest（golden tests 锁定，见 `benchmark::tests::fixture_digests_match_golden_values`；
+  桌面 smoke 阶段因资源 cap 校准调整过一次，见 Implementation Record）**：
+  - `manifest_digest`（domain `cs-benchmark:manifest`，覆盖 manifest + 全部 task 文档按声明顺序）：
+    `619ae2a20b4e5a7263a627a7ec579b00d4bafc90d11b74e5346b4f33519dc723`
+  - `task_digest[smoke_reply_ok]`（domain `cs-benchmark:task`）：
+    `3fcbf6edc2d98007c8e538037904fc599c751f638df6c8cd9632740bb3d9e8a0`
+  - `task_digest[smoke_echo_ping]`（domain `cs-benchmark:task`）：
+    `d0d7bb1250b6b5366044ac47c8dfc02aa3dd07e86f106165cb6a062a5538b1fb`
+  - `verifier_digest`（domain `cs-benchmark:verifier`，绑定 verifier id/version + expected facts +
+    resource profile）：`612079ff5883969b40bfd1cf68d102d210b97ae11ed2428a19795ba89a0eed44`
+  - instruction hash domain：`cs-benchmark:instruction`（`smoke_reply_ok` =
+    `f58cc8905c59cc469e451f19c4141d1f6f0a59dce07a40a37040078236de4b40`）
+- resource profile 仅使用 2C 当前可观测且已支持的 `input_tokens/output_tokens/cache tokens/
+  wall_time_ms/tool_calls/processes/concurrency` hard caps；disk/network 为 not_applicable；
+  budget rejection/unknown settlement 视为不可通过的完整性/基础设施事实，而非 correctness 成功。
+- verifier 为仓库内独立模块，读取固定 fixture 与已验证 `VerifyReport`，不读取模型生成日志、不接受
+  运行时 verifier path；本期明确为 contract-level candidate-untrusted boundary，不宣称 2G/Harbor 的
+  OS/container 隔离。
+
+### 10.5 执行单元与验证映射
+
+- **U-1** 本节文档对齐（AC-1、INV-1）→ V-1。
+- **U-2** 2D deterministic evaluator + atomic evaluation sidecar（AC-2/3/4/8；INV-1..5）→ V-2/V-3/V-6。
+- **U-3** `chatspeed-smoke@1` manifest + local control-plane adapter（AC-5/6/8；INV-1..4）→ V-4/V-6/V-7。
+- **U-4** independent deterministic verifier + verdict sidecar（AC-5/7/8；INV-2/4/5）→ V-2/V-5/V-6。
+- **U-5** focused verification、desktop smoke（可行时）与 Implementation Record 回写（AC-1..8）→
+  V-1/V-7/V-8。
+- 依赖：U-1 → U-2 → U-3 → U-4 → U-5，无环。
+
+### 10.6 关键不变量（本期重申）
+
+- **INV-1** 既有外部契约不变（Tauri command、workflow event、GatewayPayload、既有 `/control/v1` route、
+  既有 `cs workflow`/`cs experiment run|capture|inspect|replay` 参数与输出语义）。
+- **INV-2** 单一 runtime/data authority：CLI 不打开 SQLite、不创建 executor/lifecycle/input loop；
+  benchmark run 只能复用 2C control-plane/application/workflow kernel；离线 evaluator/verifier 只读
+  artifact/fixture。
+- **INV-3** evaluator/verifier 本身零 LLM/tool/MCP/network effect；benchmark run 的唯一 effect 是既有
+  2C 单次 run，必须经过现有预算 admission，默认不 retry。
+- **INV-4** 所有新事实区分 `artifact/evaluator/benchmark_adapter/independent_verifier` provenance；
+  无法安全脱敏或无法证明来源绑定时拒绝发布，不降级为原文写入或模型自报。
+- **INV-5** sidecar/verdict 使用 staging、完整性校验和 atomic rename；必须绑定已验证 artifact 的
+  `run_id + chain_head` 与固定 fixture digest；篡改、额外任务、未知字段、路径穿越、重复发布或
+  verifier 输入不一致都失败。
+
+### 10.7 Stop conditions（命中即停止并请求用户确认）
+
+需要改 2A v1 verifier/schema；需要把 sidecar 写回 artifact；需要新增 DB migration/Tauri wire/
+control-plane route；需要直接从 CLI 调 LLM/tool/MCP 或新增 retry；需要真实 Harbor/headless/container/
+worktree；需要保存原始 prompt/response/patch/transcript/secret；需要新增依赖；需要把 fixture score
+宣称为公开 benchmark 或 promotion verdict；需要改变既有 run/budget/普通 workflow 契约。
+
+### 10.8 完成回写规则
+
+全部 U/V 完成后：在 `## 9` 末尾追加 `2D+2E Implementation Record (as built)`（含真实 manifest/verifier
+digest、验证命令与结果、desktop smoke 证据或其明确限制），并把 `## 0` 指针推进到 **2F**；仅在所有
+验收证据完成且无 pending 工作时推进。历史 record 不删除、不清空、不改写。
 

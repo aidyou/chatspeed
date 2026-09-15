@@ -137,6 +137,70 @@ pub enum ExperimentCommand {
         /// Artifact directory to replay.
         artifact_dir: PathBuf,
     },
+    /// Evaluate a verified artifact offline with the deterministic 2D
+    /// evaluator and publish an independent evaluation sidecar (no main
+    /// process, network, DB or LLM; never modifies the source artifact).
+    /// Note: the sidecar target flag is `--evaluation-dir` because the global
+    /// `--output` flag already selects the output format.
+    Evaluate {
+        /// Artifact directory to evaluate (must pass the 2A verifier).
+        artifact_dir: PathBuf,
+        /// Target directory for the evaluation sidecar (must not already
+        /// exist and must not overlap the artifact directory).
+        #[arg(long)]
+        evaluation_dir: PathBuf,
+    },
+    /// Run fixed benchmark tasks through the existing budgeted experiment
+    /// control plane (single runtime owner; the CLI never executes locally).
+    Benchmark {
+        #[command(subcommand)]
+        command: BenchmarkCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BenchmarkCommand {
+    /// Resolve a checked-in `chatspeed-smoke@1` fixture task and submit one
+    /// budgeted, single-attempt experiment run (2C endpoint + admission).
+    /// With --artifact-dir, waits for a durable terminal state and captures
+    /// a 2A-compatible artifact.
+    Run {
+        /// Benchmark suite id (only `chatspeed-smoke` is registered).
+        #[arg(long)]
+        suite: String,
+        /// Task id declared in the checked-in suite manifest.
+        #[arg(long)]
+        task: String,
+        /// Stable agent ID to run the task with.
+        #[arg(long)]
+        agent: String,
+        /// Optional act-phase model override as "group@model"
+        /// (e.g. cs@free:ds-v4-flash); forwarded as the 2C spec workflow
+        /// override. Without it the agent's default model is used.
+        #[arg(long)]
+        model: Option<String>,
+        /// Wait for a durable terminal state, then capture a 2A-compatible
+        /// artifact into this directory (must not already exist).
+        #[arg(long)]
+        artifact_dir: Option<PathBuf>,
+    },
+    /// Verify a captured artifact against the fixed fixture task offline and
+    /// publish an independent, digest-bound verdict sidecar (no main process,
+    /// network, DB or LLM; model self-reports are never score inputs).
+    Verify {
+        /// Benchmark suite id (only `chatspeed-smoke` is registered).
+        #[arg(long)]
+        suite: String,
+        /// Task id declared in the checked-in suite manifest.
+        #[arg(long)]
+        task: String,
+        /// Artifact directory to verify (must pass the 2A verifier).
+        artifact_dir: PathBuf,
+        /// Target directory for the verdict sidecar (must not already exist
+        /// and must not overlap the artifact directory).
+        #[arg(long)]
+        verdict_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
