@@ -5,7 +5,7 @@
       "documentationUrl": "https://doc.302.ai",
       "id": "302ai",
       "logo": "https://models.dev/logos/302ai.svg",
-      "modelCount": 116,
+      "modelCount": 117,
       "name": "302.AI",
       "protocol": "openai",
       "responses": false
@@ -164,7 +164,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/zh/model-studio/token-plan-overview",
       "id": "alibaba-token-plan-cn",
       "logo": "https://models.dev/logos/alibaba-token-plan-cn.svg",
-      "modelCount": 26,
+      "modelCount": 27,
       "name": "Alibaba Token Plan (China)",
       "protocol": "openai",
       "responses": false
@@ -205,7 +205,7 @@
       "documentationUrl": "https://developer.amd.com.cn/radeon/tokenfactory",
       "id": "amd",
       "logo": "https://models.dev/logos/amd.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "AMD",
       "protocol": "openai",
       "responses": false
@@ -433,7 +433,7 @@
       "documentationUrl": "https://www.coralbricks.ai/docs",
       "id": "coralbricks",
       "logo": "https://models.dev/logos/coralbricks.svg",
-      "modelCount": 3,
+      "modelCount": 4,
       "name": "CoralBricks",
       "protocol": "openai",
       "responses": false
@@ -443,7 +443,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 107,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -502,7 +502,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 67,
+      "modelCount": 68,
       "name": "Deep Infra",
       "responses": false
     },
@@ -522,7 +522,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 96,
+      "modelCount": 97,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -582,7 +582,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 60,
+      "modelCount": 61,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -633,7 +633,7 @@
       "documentationUrl": "https://friendli.ai/docs/guides/serverless_endpoints/introduction",
       "id": "friendli",
       "logo": "https://models.dev/logos/friendli.svg",
-      "modelCount": 6,
+      "modelCount": 7,
       "name": "Friendli",
       "protocol": "openai",
       "responses": false
@@ -817,6 +817,16 @@
       "responses": false
     },
     {
+      "api": "https://infer.flow7.org/v1",
+      "documentationUrl": "https://infer.flow7.org/opencode",
+      "id": "infer",
+      "logo": "https://models.dev/logos/infer.svg",
+      "modelCount": 2,
+      "name": "Infer by Flow7",
+      "protocol": "openai",
+      "responses": true
+    },
+    {
       "api": "https://inference.net/v1",
       "documentationUrl": "https://inference.net/models",
       "id": "inference",
@@ -971,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 192,
+      "modelCount": 193,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1053,6 +1063,16 @@
       "logo": "https://models.dev/logos/meganova.svg",
       "modelCount": 19,
       "name": "Meganova",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.melious.ai/v1",
+      "documentationUrl": "https://melious.ai/docs/reference/models",
+      "id": "melious",
+      "logo": "https://models.dev/logos/melious.svg",
+      "modelCount": 15,
+      "name": "Melious",
       "protocol": "openai",
       "responses": false
     },
@@ -1235,7 +1255,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 594,
+      "modelCount": 580,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1853,7 +1873,7 @@
       "documentationUrl": "https://docs.tinfoil.sh",
       "id": "tinfoil",
       "logo": "https://models.dev/logos/tinfoil.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "Tinfoil",
       "protocol": "openai",
       "responses": false
@@ -1952,7 +1972,7 @@
       "documentationUrl": "https://vancine.com/docs",
       "id": "vancine",
       "logo": "https://models.dev/logos/vancine.svg",
-      "modelCount": 10,
+      "modelCount": 8,
       "name": "Vancine",
       "protocol": "openai",
       "responses": false
@@ -1969,8 +1989,19 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 372,
+      "modelCount": 376,
       "name": "Vercel AI Gateway",
+      "responses": false
+    },
+    {
+      "api": "https://api.lab.vispark.in/v1",
+      "description": "Vispark builds India-centered foundational multimodal intelligence (Vision) with 1M-token context, served via Vispark Lab's API.",
+      "documentationUrl": "https://lab.vispark.in/#vision",
+      "id": "vispark",
+      "logo": "https://models.dev/logos/vispark.svg",
+      "modelCount": 3,
+      "name": "Vispark",
+      "protocol": "openai",
       "responses": false
     },
     {
@@ -2021,6 +2052,16 @@
       "logo": "https://models.dev/logos/wafer.ai.svg",
       "modelCount": 5,
       "name": "Wafer",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.wallabytoken.com/v1",
+      "documentationUrl": "https://wallabytoken.com/docs",
+      "id": "wallaby",
+      "logo": "https://models.dev/logos/wallaby.svg",
+      "modelCount": 1,
+      "name": "Wallaby",
       "protocol": "openai",
       "responses": false
     },
@@ -2177,9 +2218,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "f9cb0e273fc6d991c32a96b86da3f56712e026779a564a8da2b67e052c07d1ed",
-    "generatedAt": "2026-09-14T08:57:52Z",
+    "catalogSha256": "2a898bb742a75f165538a4090b482a6add4dee1252869785f223bd6ac46b5983",
+    "generatedAt": "2026-09-15T08:42:52Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "ff90fff47eb82c4764c218a653e0819723a0df7a"
+    "revision": "491097cb133febbb3bff4679b9bfa3b61e7915b2"
   }
 }
