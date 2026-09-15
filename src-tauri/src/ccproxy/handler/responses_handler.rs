@@ -275,8 +275,57 @@ async fn direct_forward_responses(
 
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
-    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
+    let mut retry_config = RetryConfig::from_settings(max_retries);
+
+    // Opted-in experiment admission: reserve worst-case budget before any
+    // outbound effect. Ordinary requests carry no admission context and
+    // keep the existing behavior unchanged.
+    let admission_lease = match crate::ccproxy::admission::admit_before_send(
+        &main_store_arc,
+        &client_headers,
+        crate::ccproxy::admission::LlmGateInput {
+            provider_id: proxy_model.provider.clone(),
+            model_id: proxy_model.model.clone(),
+            estimated_input_tokens: estimate_known_request_json_tokens(&body_json).ceil() as u64,
+            effect_kind: crate::budget::types::EffectKind::LlmCompletion,
+            max_output_tokens: crate::ccproxy::admission::max_output_tokens_from_json(&body_json),
+        },
+    )
+    .await
+    {
+        Ok(lease) => lease,
+        Err(error) => {
+            log::warn!("Experiment admission rejected before send: {}", error);
+            return Err(CCProxyError::InternalError(
+                crate::ccproxy::admission::rejection_message(&error),
+            ));
+        }
+    };
+    if admission_lease.is_some() {
+        // Experiment effects default to exactly one outbound attempt.
+        retry_config.max_retries = 0;
+    }
+
+    let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(lease) = admission_lease {
+                // Transport ambiguity: the request may have reached the
+                // provider. Freeze the budget as unknown and record one
+                // infra failure instead of assuming zero cost.
+                lease
+                    .mark_unknown_with_infra_failure("backend_transport_error", "transport")
+                    .await
+                    .unwrap_or_else(|error| {
+                        log::error!(
+                            "Admission unknown+infra recording failed ({}); reservation stays reserved for lease-expiry recovery",
+                            error.code.as_str()
+                        );
+                    });
+            }
+            return Err(error);
+        }
+    };
 
     let status_code = target_response.status();
     let response_headers = target_response.headers().clone();
@@ -314,6 +363,37 @@ async fn direct_forward_responses(
     } else {
         (0, 0, 0, 0, 0, 0, 0)
     };
+
+    // Settle the admission lease: the provider processed the request, so
+    // the effect happened regardless of the response status.
+    if let Some(lease) = admission_lease {
+        if status_code.is_success() {
+            // Fall back to the request estimate when the provider did not
+            // report input usage, so the committed actual never
+            // under-records.
+            let committed_input = if input_tokens > 0 {
+                input_tokens
+            } else {
+                estimate_known_request_json_tokens(&body_json).ceil() as i64
+            };
+            let actual = crate::budget::types::BudgetVector {
+                input_tokens: committed_input.max(0) as u64,
+                output_tokens: output_tokens.max(0) as u64,
+                cache_read_tokens: cache_tokens.max(0) as u64,
+                cache_write_tokens: cache_creation_tokens.max(0) as u64,
+                ..crate::budget::types::BudgetVector::ZERO
+            };
+            if let Err(error) = lease.commit_usage(actual).await {
+                log::warn!("Admission commit failed: {}", error);
+            }
+        } else {
+            // Error response: settle conservatively at the reserved input
+            // bound instead of committing a zero vector.
+            if let Err(error) = lease.commit_provider_error_response().await {
+                log::warn!("Admission commit failed: {}", error);
+            }
+        }
+    }
     let should_estimate = status_code.is_success()
         && token_usage_is_missing_or_zero(&[
             Some(input_tokens as u64),

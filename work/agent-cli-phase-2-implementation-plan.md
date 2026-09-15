@@ -14,7 +14,8 @@
 - **2A 状态**：代码、离线验证与真实 desktop-owned CLI smoke **已完成**（51 个 `cs` focused tests +
   双 binary 无 warning + 一期 HTTP/前端回归 + `pnpm tauri dev` 实例验证）；详见 `## 9` 的
   `2A Implementation Record` 与 `work/agent-cli-phase-2-smoke-test.md`。
-- **下一个入口**：`2B`（Budget & effect admission ledger），进入前需确认 Q-3。
+- **下一个入口**：`2C`（Experiment run，受控单次试验）。2B（Budget & effect admission ledger）已完成，
+  Q-3 已在 2B 计划批准时确认（本地货币、token/resource-only、全资源 hard cap、默认不 retry）。
 - **规则**：每个阶段完成后，必须在本文件末尾的 `## Implementation Record` 追加该阶段的实施记录，
   并把"当前阶段指针"推进到下一阶段。**下一阶段开始前不得清空或改写已完成阶段的 Implementation Record。**
 - 只有当某阶段的 Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 全部有证据，
@@ -342,4 +343,280 @@ cs experiment inspect/replay
     但**不抵抗掌握整个目录并能一致重算所有 hash 的攻击者**（需签名/外部 trust anchor，属后续阶段单独引入）。
 - 下一阶段入口与前置：**2B（Budget & effect admission ledger）**。进入前需确认 Q-3（预算单位、hard caps、
   未定价模型策略、资源限制）；在 2B 预算 admission 之前不得注册任何会触发 LLM/tool 的 experiment effect（INV-3）。
+
+### 2B Implementation Record (as built)
+
+- 日期 / 当前阶段推进：2026-09-14；2B 代码与 focused 验证完成；真实 experiment smoke 未执行
+  （2B 不创建 experiment run，无 backend-owned experiment fixture 可触发真实 effect，见限制）；下一入口 **2C**。
+- 实际文件与符号：
+  - 新增 `src-tauri/src/budget/`（crate 级 canonical contract，`pub mod budget`）：
+    - `types.rs`：`ScopeKind`（request/trial/candidate/campaign）、`ScopeChain`（opaque string ID + 校验）、
+      `ResourceDimension`（11 维含 money）、`CapLimit::{NotApplicable,HardCap}`（禁止 omission=unlimited）、
+      checked-integer `BudgetVector`（u64 + SQLite INTEGER range guard `ensure_sqlite_range`）、
+      `ResourceCaps::check_admission`（committed+reserved+requested<=cap）、`PricingSnapshot`（整数 micro 计价 + source hash）、
+      `MoneyMode::{TokenResourceOnly,Money}`（money cap 与 currency/pricing 成组出现）、`BudgetEnvelope::validate`
+      （required dimension 必须有 hard cap、max_attempts>=1）、`ReservationState` 状态机（unknown 不可 release）、
+      `ReserveEffect`/`Reservation`/`CommitReceipt`/`ReleaseReceipt`/`UnknownReceipt`/`InfraReceipt`。
+    - `errors.rs`：`AdmissionErrorCode` 九个稳定 machine code（budget_exceeded/unpriced_model/missing_bound/
+      scope_paused/invalid_scope_chain/idempotency_conflict/invalid_transition/admission_persistence_failure/
+      resource_unobservable）+ `AdmissionError`（带可选 dimension）。
+    - `pricing.rs`：`pricing_snapshot_from_config`（f64 per-million → 整数 micro，deterministic round-up，
+      非有限/负价 fail closed）、`worst_case_money_micros`（u128 内部运算、reasoning 取 reasoning/output 价高者、
+      multiplier round-up）、`build_llm_estimate`（money mode 要求 provider/model/currency 匹配 snapshot，
+      output cap 需显式 bound 否则 missing_bound；token-only 不要求价格且 money=0）。
+    - `resource.rs`：tool/process effect admission 边界。session 的 backend-created request scope（scope_id==session_id）
+      存在时才 gate；disk/network 无可靠 owner instrumentation，envelope 硬 cap 这两维时返回
+      `resource_unobservable` 拒绝（A-4 fail closed）；estimate=tool_calls 1 + processes（按工具是否 spawn 进程）+
+      concurrency 1；`commit_tool_effect`（实际 tool_calls/wall time）/`mark_tool_effect_unknown`/`release_tool_effect`。
+    - `recovery.rs`：`InfraFailureKind` 分类（transport/timeout/rate_limit/stream_failure 为 infra；
+      auth_failure/model_not_found 为 correctness 不计入 infra threshold）、`recover_expired_reservations`
+      （lease 过期的 reserved 保守冻结为 unknown，幂等，日志仅 opaque ID）。
+  - 新增 `src-tauri/src/db/budget.rs`（MainStore 原子 ledger，全部走 DbRuntime dedicated writer 单事务）：
+    `create_budget_scope`（冻结 envelope + cap 列物化 + parent chain/kind/status 校验）、`reserve_effect`
+    （campaign→candidate→trial→request 顺序校验 active/parent/cap，idempotency_key 幂等重放/冲突拒绝，
+    reservation 行 + 四级 reserved 余额 + append-only entries 同事务）、`commit_reservation`（actual 向量结算，
+    仅对 envelope 硬 cap 维判定 overrun，overrun 同事务 pause campaign）、`release_reservation`（仅 Reserved 可 release，
+    unknown 拒绝）、`mark_reservation_unknown`（预算冻结不释放）、`record_infra_failure`（operation_id 幂等计数，
+    达 threshold 同事务 pause）、`reconcile_expired_reservations`、读投影 `get_budget_scope_status`/
+    `get_budget_scope_envelope`/`get_budget_reservation`/`recompute_scope_balance_from_ledger`（audit 重算）。
+  - 新增 `src-tauri/src/db/sql/migrations/v18.rs`：`experiment_budget_scopes`（33 个 cap/committed/reserved 整数列 +
+    kind/parent/status CHECK + 非负 CHECK）、`experiment_budget_reservations`（idempotency_key UNIQUE、
+    operation_id UNIQUE、state CHECK、estimate/actual 列）、`experiment_budget_ledger_entries`（append-only，
+    operation CHECK）+ 4 个索引；注册于 `migrations/mod.rs`、`manager.rs`（v17→v18）。
+  - 新增 `src-tauri/src/ccproxy/admission.rs`：`ADMISSION_HEADER`（x-cs-experiment-admission）、
+    `AdmissionContext`（opaque scope chain/effect/idempotency/attempt）、`admission_context_from_headers`
+    （仅 trusted internal request，双重信任校验）、`admit_before_send`（load envelope → worst-case estimate →
+    reserve，spawn_blocking 包裹阻塞写）、`AdmissionLease`（commit / mark_unknown_with_infra_failure）、
+    `AdmissionSettlement`（streaming 终端边界 blocking commit/unknown）、`rejection_message`（协议安全，仅 machine code）。
+  - 修改 `src-tauri/src/ccproxy/handler/{chat_handler,direct_handler,responses_handler,embedding_handler}.rs`：
+    五个 outbound 发送边界（含 /v1/responses 的 direct 与 unified fallback 两条）在 `send_with_retry` 前统一调用
+    admission gate；opted-in 请求强制 `retry_config.max_retries=0`（默认单次 attempt）；发送前拒绝 → 协议安全错误、
+    不发送；transport 错误 → mark unknown + infra failure；provider 错误响应 → commit 零用量；非流式成功 →
+    按实际 usage commit；流式 → lease 进入 `StreamStatGuard` 终端边界。普通请求（无 context）路径零改动。
+  - 修改 `src-tauri/src/ccproxy/helper/stat_guard.rs` + `stream_handler.rs`：`StreamStatGuard` 新增
+    `admission: Option<AdmissionSettlement>`，Drop 终端边界 commit 实际 usage / stream_failed 时 mark unknown + infra。
+  - 修改 `src-tauri/src/ccproxy/router.rs`：`strip_untrusted_workflow_attribution_headers` 增加
+    `x-cs-experiment-admission`（外部伪造 header 剥离）。
+  - 修改 `src-tauri/src/workflow/react/engine.rs` `execute_tools`：audit/approval/postpone 判定之后、物理执行之前
+    调用 `admit_tool_effect`（仅 backend-created scope 的 session 被 gate）；拒绝 → 结构化 tool error observation
+    （不执行）；执行完成按实际 tool_calls/wall time commit；取消 → mark unknown；postponed 未派发 → release。
+    approval 等待不消耗预算。
+  - 修改 `src-tauri/src/lib.rs`：`pub mod budget`（crate 级 contract）+ 启动时后台 best-effort
+    `recover_expired_reservations`（不新增公开命令）。
+- 提交/工作区状态：全部改动保留在工作区未 stage/commit（遵守项目规则）；基线仅有一个未跟踪的
+  `work/.cs2a-smoke-artifact/`（2A 遗留，未触碰）。
+- 验证命令与结果（`cd src-tauri`，全部通过，无 warning）：
+  - V-1 `cargo test --lib budget::` → 51 passed（domain/machine code/overflow/envelope/状态机）。
+  - V-2 `cargo test --lib migration` → 15 passed（fresh install 直接 v18、v1→v18 增量、apply 失败回滚、
+    v18 三表存在断言）。
+  - V-3 `cargo test --lib budget_pricing` → 13 passed（round-up deterministic、cache/reasoning/multiplier、
+    token-only 免费模型、缺价/负价/NaN/模型不匹配/货币不匹配/无 output bound 全部 fail closed）。
+  - V-4 `cargo test --lib budget_ledger` → 6 passed（reserve→commit 全四级余额 + audit 重算一致、幂等重放/
+    冲突拒绝、任一级 cap 不足全量回滚、unknown 不可 release、overrun pause）。
+  - V-5 `cargo test --lib budget_concurrency` → 2 passed（8 线程并发 reserve 恰好 5 个通过、无部分余额）。
+  - V-6 `cargo test --lib budget_recovery` → 4 passed（infra 分类、过期冻结 unknown、幂等、live 不受影响）。
+  - V-7 `cargo test --lib admission` → 11 passed（外部伪造 header 不可 mint admission、malformed 忽略、
+    trusted reserve→commit、缺 scope fail closed、router 剥离断言、mock upstream 集成：admitted→provider 被调用
+    且 usage commit、rejected→provider 零调用、forged→普通路径不变）。
+  - V-8 `cargo fmt --all -- --check` 通过；`cargo check --bin chatspeed --bin cs` 零 warning；
+    `cargo test --lib workflow::react::client` → 36 passed；`cargo test --bin cs` → 51 passed（2A 离线命令无回归）；
+    `cargo test --lib ccproxy::handler` → 25 passed（既有 handler/stats/header 回归）。
+- 真实 smoke：未执行。2B 按计划不注册 experiment run（INV-3），当前不存在能产生 backend-owned
+  admission context 的调用方（2C 交付后才有）；真实 opt-in effect smoke 留待 2C 以 typed fixture/真实 run 验证。
+- 未验证项 / 环境限制 / 剩余风险：
+  - `workflow::react` 全量测试中有 9 个失败（security/path-guard csignore、prompts 文案、context 语言检测），
+    经 pristine HEAD baseline worktree 复现确认均为**既有环境相关失败**（沙箱 locale/git 环境差异），
+    与 2B 改动无关（2B 未触碰 security.rs/prompts.rs/context.rs）。
+  - direct/responses/embedding 三个边界的负向集成测试未单独编写（与 unified 共用同一 `admit_before_send`
+    helper 与相同 wiring 模式，unified 边界已有三条 mock-upstream 集成测试覆盖 gate 行为）。
+  - disk/network 维度无 owner instrumentation：envelope 硬 cap 这两维时 tool effect 一律拒绝（A-4 预期行为），
+    OS 级 enforcement 不在 2B 声称完成。
+  - 并发 tool 的 concurrency 维按 reservation 占用/释放执行（engine semaphore 之外的第二层硬 cap），
+    未做 OS 进程级限制（属 2G sandbox 范围）。
+  - 基线验证遗留物：`.cs-2b-target/`（baseline worktree 的 cargo target 目录，untracked，可删除）。
+  - 全库 clippy 既有 baseline 未扩大处理（新模块以 `cargo check` 零 warning 为准）。
+
+#### 2B Final Review Round 2 Fix (as built, 2026-09-15)
+
+第二轮 final review 提出 3 个 major 发现，已全部修复并补充回归测试：
+
+1. **tool settlement 不再吞错**（AC-2/AC-7）：`budget/resource.rs` 的 `mark_tool_effect_unknown`（改为原子
+   unknown+infra）、`release_tool_effect`、`release_proven_not_dispatched` 全部返回 `Result<(), AdmissionError>`
+   并向调用方传播 machine-readable 错误；`engine.rs` 所有调用点显式处理：commit 失败 → error 日志 +
+   保守 mark unknown+infra（若也失败则记录 reservation 保持 reserved 供 lease-expiry recovery）；
+   unknown/release 失败 → error 级 machine code 日志并注明 reservation 保持 reserved 可被 recovery 收敛。
+2. **流式无输出不再零结算**（AC-6/INV-5）：`AdmissionSettlement` 恢复携带 reserve estimate，新增
+   `commit_conservative_input_blocking`：流终止但无输出时按保留 input/cache 上界 + snapshot 货币保守结算
+   （output=0 有结构证据：无生成内容），envelope 不可用或 commit 失败时 fail closed 冻结 unknown；
+   `stat_guard.rs` 的 `!has_output` 分支改用该结算；新增回归测试
+   `stream_guard_settles_conservative_input_when_no_output`（money 模式下断言 committed input=100、
+   money=100 micros、output=0、reserved 归零）。
+3. **tool unknown 计入 infra threshold**（AC-6）：`mark_tool_effect_unknown` 改用
+   `MainStore::mark_reservation_unknown_with_infra_failure` 原子操作（unknown + 幂等 infra 计数 + 阈值暂停
+   同一 writer 事务）；engine 所有取消/失败路径传入 campaign id 与 failure kind（cancelled/tool_failure/
+   settlement_failure）；新增测试 `tool_unknown_counts_infra_and_pauses_at_threshold`（threshold=2 时两次
+   tool unknown 后 campaign paused 且后续 admission 返回 scope_paused）。
+
+修复后验证（`cd src-tauri`，全部通过、双 binary 零 warning）：`budget::` 67 passed、`migration` 15 passed、
+`budget_pricing` 13 passed、`budget_ledger` 6 passed、`budget_concurrency` 2 passed、`budget_recovery` 4 passed、
+`budget_resource` 9 passed、`admission` 13 passed、`stat_guard` 4 passed、`ccproxy::handler` 28 passed、
+`workflow::react::client` 36 passed、`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
+
+#### 2B Final Review Round 3 Fix (as built, 2026-09-15)
+
+第三轮 final review 指出：tool 执行返回 `Err(ToolError)`（spawn/execution/owner failure）时仍被无条件
+commit，未进入 unknown+infra 原子路径。已修复：
+
+- `engine.rs` 并行与顺序两条 tool terminal settlement 均改为按实际工具结果分类：
+  `Ok(_)`（可靠完成、有 owner 实际计量）→ `commit_tool_effect`（失败时保守 unknown+infra）；
+  `Err(_)`（execution/spawn/owner failure，effect 可能已发生）→ 单事务
+  `mark_tool_effect_unknown`（unknown + 幂等 infra 计数 + 阈值暂停），错误以 error 级 machine code
+  日志传播，失败时 reservation 保持 reserved 供 lease-expiry recovery。
+- 新增 engine 级回归测试 `tool_execution_failure_settles_reservation_as_unknown_with_infra`
+  （recovery_tests 模块）：注册一个始终失败的测试工具（`ToolDefinition` + `ToolManager::register_tool`）、
+  创建以 session id 为 request scope 的四级预算链、经真实 `execute_tools` 派发失败工具，
+  断言 reservation 进入 `unknown`、ledger 中 infra_failure entry 恰好 1 条、campaign
+  `infra_failure_count == 1` 且未暂停、request scope 的 tool_calls hold 保持冻结（unknown 不释放）。
+
+修复后验证（`cd src-tauri`，全部通过、双 binary 零 warning）：`budget::` 67 passed、`migration` 15 passed、
+`admission` 13 passed、`stat_guard` 4 passed、`workflow::react::engine::recovery_tests` 61 passed（含新增
+engine 级失败路径测试）、`ccproxy::handler` 28 passed、`workflow::react::client` 36 passed、
+`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
+
+#### 2B Final Review Round 4 Fix (as built, 2026-09-15)
+
+第四轮 final review 指出：tool 终态结算仅按 `Ok/Err` 二分，确定未派发的失败（MCP policy/security 拒绝、
+tool lookup miss）也会被错误冻结为 unknown 并计入 infra failure。已修复：
+
+- `engine.rs` 并行与顺序 tool future 显式返回 `dispatched` 标志（physical owner 是否被真正调用：
+  MCP policy 拒绝在调用 owner 前构造 `ToolError::Security`，`dispatched=false`）；terminal settlement
+  改为三分类：`Ok` → commit（失败时保守 unknown+infra）；`Err` 且已 dispatch（execution/spawn/owner
+  failure，含 `FunctionNotFound` 之外的 owner 内部错误）→ 单事务 `mark_tool_effect_unknown`
+  （unknown + 幂等 infra 计数 + 阈值暂停）；`Err` 且 `FunctionNotFound`（tool lookup miss，owner 未调用）
+  或 `dispatched=false`（policy 拒绝）→ `release_tool_effect`（release，不计 infra）。
+- 新增 engine 级回归测试：
+  - `tool_not_dispatched_error_releases_reservation_without_infra`：调用未注册工具（lookup miss），
+    断言 reservation 进入 `released`、infra_failure entry 为 0、request scope reserved 归零；
+  - `tool_infra_failures_pause_campaign_at_threshold_through_engine`：threshold=1 时一次执行失败即
+    campaign paused，后续 admission 返回 `scope_paused`；
+  - 既有 `tool_execution_failure_settles_reservation_as_unknown_with_infra` 继续覆盖
+    execution failure → unknown + infra 计数路径。
+
+修复后验证（`cd src-tauri`，全部通过、双 binary 零 warning）：`budget::` 67 passed、`migration` 15 passed、
+`admission` 13 passed、`stat_guard` 4 passed、`workflow::react::engine::recovery_tests` 63 passed（含
+not-dispatched release、threshold pause、execution failure 三条 engine 级路径）、`ccproxy::handler` 28 passed、
+`workflow::react::client` 36 passed、`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
+
+#### 2B Final Review Round 5 Fix (as built, 2026-09-15)
+
+第五轮 final review 指出：`dispatched` 标志在 `ToolManager::tool_call` 入口即置 true，而非 physical
+owner（`ToolDefinition::call`）边界；disabled-MCP/security 预校验拒绝与 semaphore 排队中的取消仍会被
+误分类为 unknown+infra。已修复：
+
+- `tool_manager.rs` 新增 `tool_call_with_dispatch(name, params, owner_entered)`：在 registry lookup、
+  disabled-MCP 预校验之后、`tool.call` 进入之前才设置 owner-entry 标志并返回权威 `dispatched` 事实；
+  `native_tool_call` 委托该方法，行为不变。
+- `engine.rs` 并行与顺序路径改用 tracked call；每个 tool 持有 `Arc<AtomicBool>` owner-entry 标志并
+  存入 `tool_dispatch_flags`；terminal settlement 的 `proven_not_dispatched` 完全由 owner 边界事实决定
+  （移除 `FunctionNotFound` 启发式）。
+- 取消路径按 owner-entry 标志分类：并行 cancelled arm 与顺序 cancelled arm 中，flag=true（owner 已进入，
+  可能产生 effect）→ 单事务 mark unknown + infra；flag=false（仍在 semaphore 排队/未进入 owner）→
+  release，不计 infra。
+- 新增回归测试：
+  - manager 级 `tool_call_with_dispatch_reports_owner_entry_fact`：lookup miss → `dispatched=false`；
+    owner 进入（即使工具失败）→ `dispatched=true` 且标志置位；
+  - engine 级 `tool_mcp_policy_rejection_releases_reservation_without_infra`：MCP 工具不在 allowlist
+    （空 `available_tools`）→ 预 owner Security 拒绝 → released、infra 0；
+  - engine 级 `tool_cancelled_while_owner_running_settles_unknown_with_infra`：owner 进入后取消
+    （BlockingTestTool 信号 + pending）→ unknown + infra 1；
+  - engine 级 `tool_cancelled_before_owner_entry_releases_reservation`：占满 3 个 semaphore permit 使
+    tool future 排队后取消 → released、infra 0。
+
+修复后验证（`cd src-tauri`，全部通过、双 binary 零 warning）：`budget::` 67 passed、`migration` 15 passed、
+`admission` 13 passed、`stat_guard` 4 passed、`workflow::react::engine::recovery_tests` 66 passed（新增
+MCP policy 拒绝 release、owner 运行中取消 unknown+infra、排队中取消 release 三条 engine 级路径）、
+`tool_manager` dispatch-fact 测试 1 passed、`ccproxy::handler` 28 passed、`workflow::react::client` 36 passed、
+`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
+
+#### 2B 真实桌面 smoke 结果（2026-09-15 已执行）
+
+用户指出其配置下 `pnpm tauri dev` 可本地执行；实测确认可用（此前"沙箱无 pnpm/DISPLAY"的判断不成立：
+Bash 工具的 host 路由使该命令在宿主机桌面会话中正常运行）。已执行并确认：
+
+1. `pnpm tauri dev` 启动成功：Vite dev server 就绪（localhost:1420），cargo run 编译并启动桌面应用，
+   前端连接正常（workflow snapshot 请求、MCP server、51 个 skills 均正常加载）。
+2. 迁移验证：日志输出 `Database is already up to date at version 18.`；dev 数据库
+   （`dev_data/chatspeed.db`）`db_version` 表含 1..18 全部版本记录，v18 于 2026-09-14 应用；
+   `experiment_budget_scopes` / `experiment_budget_reservations` / `experiment_budget_ledger_entries`
+   三表均存在。
+3. 启动恢复验证：整个运行期日志中 `[Budget]` 行数为 0——recovery 完全静默，无遗留 reservation 处理。
+4. 普通 workflow 无回归（INV-2）：应用正常处理既有 workflow 会话；三张预算表保持 0 行
+   （普通请求不进预算路径）。
+5. 运行期错误审计：日志中 10 条 error 均为既有环境问题（全局热键已被既有实例注册 ×9、
+   updater 网络检查失败 ×1），与 2B 无关。
+6. 负向信任边界（伪造 admission header 实测）：执行代理的沙箱网络与宿主机隔离，无法直接探测
+   ccproxy 端口；该边界由自动化测试覆盖（router 剥离伪造 header + admission fake-owner 集成测试）。
+   桌面环境如需人工复核，可对 ccproxy 端口发送携带伪造 `x-cs-experiment-admission` header 的请求，
+   应按普通路径处理且三张预算表无新增行。
+
+预算 gate 本身的端到端触发仍留待 2C 的 backend-owned experiment context（INV-3：2B 不注册 experiment run）。
+
+#### 2B 真实桌面 smoke 步骤（原始计划，供复现）
+
+本沙箱无 DISPLAY/X server 且无 pnpm，无法启动 `pnpm tauri dev`；且按 INV-3，2B 不注册 experiment run，
+普通 workflow 不携带 admission context，桌面 smoke 无法触发预算 gate 本身（gate 触发需 2C 的
+backend-owned experiment context）。桌面环境可执行以下 smoke 验证 2B 的启动/迁移/恢复/无回归面：
+
+1. `pnpm tauri dev` 启动应用（账号/模型用法参考 `work/agent-cli-phase-1-smoke-test.md`：
+   loopback 控制面 + 免费模型 `cs@free:ds-v4-flash`）。
+2. 迁移验证：应用数据目录 `chatspeed.db` 的 `db_version` 应为 18，且存在
+   `experiment_budget_scopes` / `experiment_budget_reservations` / `experiment_budget_ledger_entries` 三表。
+3. 启动恢复验证：应用日志无 `[Budget][recovery]` error（无遗留 reservation 时应完全静默）。
+4. 普通 workflow 无回归（INV-2）：按阶段一方式 `cs workflow run --agent builtin:coding
+   --model "cs@free:ds-v4-flash" --prompt ... --follow` 应正常完成；随后检查
+   `experiment_budget_scopes` / `experiment_budget_reservations` 仍为空（普通请求不进预算路径）、
+   `ccproxy_stats` 照常记录。
+5. 负向信任边界（可选）：对 ccproxy 端口以外部请求携带伪造 `x-cs-experiment-admission` header，
+   应被 router 剥离、请求按普通路径处理且不产生任何预算数据。
+- 下一阶段入口与前置：**2C（Experiment run，受控单次试验）**。2C 需通过 backend-owned 路径创建四级 scope chain
+  （`MainStore::create_budget_scope`，request scope id = workflow session id 的 2B 约定）并在 trusted internal
+  request 上携带 `x-cs-experiment-admission` context（或等价 backend context）触发 LLM gate；tool gate 按
+  session scope 自动生效。2C 不得绕过 admission contract，不得假设 USD（货币由 experiment profile 声明）。
+
+#### 2B Final Review Fix Round (as built, 2026-09-15)
+
+Final review 提出 4 个 major 发现，已全部修复并补充回归测试：
+
+1. **结算不再清零关键维度**（AC-3/AC-4/AC-6）：
+   - `budget/pricing.rs` 新增 `settlement_money_micros`：按冻结 pricing snapshot 从实际 token 用量计算
+     结算货币（与 reserve 相同的确定性 round-up）；money-budget 模式下结算绝不提交零货币。
+   - `ccproxy/admission.rs`：`AdmissionLease` 携带 `request_scope_id` 与 reserve estimate；新增
+     `commit_usage`（实际 token + snapshot 货币）与 `commit_provider_error_response`（provider 已处理但
+     无生成内容的错误响应：input 按保留的 estimate 上界、output 为 0 的有证据保守结算，绝不 commit 零向量）；
+     所有 handler 成功路径改用 `commit_usage`，错误响应路径改用 `commit_provider_error_response`；
+     `AdmissionSettlement::commit_usage_blocking` 在终端边界同样按 snapshot 计算货币，commit 失败时
+     fail closed 冻结为 unknown 并记录 error 级 machine code。
+   - `budget/resource.rs` `commit_tool_effect` 提交真实 `processes`（按工具是否 spawn 进程），
+     仅 concurrency 在终态释放；新增顺序请求跨 money cap 的 overrun 测试与 process cap 累计测试。
+2. **required dimension 按 effect owner 校验**（AC-3/A-4）：`budget/resource.rs` 新增
+   `check_owner_observability`：LLM/embedding owner 可观测集为 token/wall time/concurrency/money，
+   tool/process owner 为 tool_calls/processes/wall time/concurrency；envelope `required_dimensions`
+   含 owner 不可观测维度时在 physical effect 前返回 `resource_unobservable`（LLM 在 `admit_before_send`、
+   tool 在 `admit_tool_effect` 各自校验），并附 LLM（required processes）与 tool（required network bytes）
+   拒绝测试。
+3. **pre-dispatch 清理所有权**（AC-6/AC-7）：engine `execute_tools` 对 Stage 1 已 reserve、尚未 dispatch 的
+   reservation 建立显式清理：partition `Err` 早退与 dispatch 前 stop check 走
+   `release_proven_not_dispatched`（证明无 effect → release 而非冻结）；parallel/sequential 非取消失败对
+   已开始执行的工具 mark unknown、未派发的 release；turn 末尾 stop check 对任何未结算残留保守 mark unknown；
+   新增 `release_proven_not_dispatched` 批量 release 测试。
+4. **unknown + infra failure 原子化**（AC-2/AC-6）：`MainStore::mark_reservation_unknown_with_infra_failure`
+   在同一 writer transaction 完成 mark_unknown、幂等 infra 计数与 threshold pause；
+   `AdmissionLease::mark_unknown_with_infra_failure` 与 `AdmissionSettlement::mark_unknown_blocking`
+   均改用该原子操作；异步路径传播持久化失败（error 级 machine code 日志），stream/Drop 边界记录
+   error 日志且 reservation 保持 reserved 供 lease-expiry recovery 收敛；新增原子性/幂等/阈值暂停测试。
+
+修复后验证（`cd src-tauri`，全部通过、双 binary 零 warning）：`budget::` 66 passed、`migration` 15 passed、
+`budget_pricing` 13 passed、`budget_ledger` 6 passed、`budget_concurrency` 2 passed、`budget_recovery` 4 passed、
+`budget_resource` 8 passed、`admission` 13 passed、`ccproxy::handler` 28 passed、`workflow::react::client`
+36 passed、`cargo test --bin cs` 51 passed、`cargo fmt --all -- --check` 通过。
 

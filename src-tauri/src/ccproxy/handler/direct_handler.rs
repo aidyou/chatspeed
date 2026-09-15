@@ -154,7 +154,40 @@ pub async fn handle_direct_forward(
     // Get retry configuration from settings
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
+    let mut retry_config = RetryConfig::from_settings(max_retries);
+
+    // Opted-in experiment admission: reserve worst-case budget before any
+    // outbound effect. Ordinary requests carry no admission context and
+    // keep the existing behavior unchanged.
+    let mut admission_lease = match crate::ccproxy::admission::admit_before_send(
+        &main_store_arc,
+        &client_headers,
+        crate::ccproxy::admission::LlmGateInput {
+            provider_id: proxy_model.provider.clone(),
+            model_id: proxy_model.model.clone(),
+            estimated_input_tokens:
+                crate::ccproxy::utils::token_estimator::estimate_known_request_json_tokens(
+                    &body_json,
+                )
+                .ceil() as u64,
+            effect_kind: crate::budget::types::EffectKind::LlmCompletion,
+            max_output_tokens: crate::ccproxy::admission::max_output_tokens_from_json(&body_json),
+        },
+    )
+    .await
+    {
+        Ok(lease) => lease,
+        Err(error) => {
+            log::warn!("Experiment admission rejected before send: {}", error);
+            return Err(CCProxyError::InternalError(
+                crate::ccproxy::admission::rejection_message(&error),
+            ));
+        }
+    };
+    if admission_lease.is_some() {
+        // Experiment effects default to exactly one outbound attempt.
+        retry_config.max_retries = 0;
+    }
 
     let log_direct_backend_error = |message: &str| {
         if log_proxy_to_file {
@@ -166,6 +199,20 @@ pub async fn handle_direct_forward(
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
         Ok(response) => response,
         Err(error) => {
+            if let Some(lease) = admission_lease.take() {
+                // Transport ambiguity: the request may have reached the
+                // provider. Freeze the budget as unknown and record one
+                // infra failure instead of assuming zero cost.
+                lease
+                    .mark_unknown_with_infra_failure("backend_transport_error", "transport")
+                    .await
+                    .unwrap_or_else(|error| {
+                        log::error!(
+                            "Admission unknown+infra recording failed ({}); reservation stays reserved for lease-expiry recovery",
+                            error.code.as_str()
+                        );
+                    });
+            }
             log_direct_backend_error(&format!(
                 "Request failed before receiving a response: {}",
                 error
@@ -211,6 +258,17 @@ pub async fn handle_direct_forward(
     let response_headers = target_response.headers().clone();
 
     if !status_code.is_success() {
+        if let Some(lease) = admission_lease.take() {
+            // The provider processed the request and returned an error
+            // response: the effect happened. Settle conservatively at the
+            // reserved input bound instead of committing a zero vector.
+            if let Err(error) = lease.commit_provider_error_response().await {
+                log::warn!(
+                    "Admission commit failed for backend error response: {}",
+                    error
+                );
+            }
+        }
         let error_body_bytes = target_response.bytes().await.map_err(|e| {
             CCProxyError::InternalError(
                 t!("network.response_read_error", error = e.to_string()).to_string(),
@@ -320,6 +378,7 @@ pub async fn handle_direct_forward(
                 root_task_run_id: None,
                 request_kind: None,
                 pricing: proxy_model.pricing.clone(),
+                admission: admission_lease.take().map(|lease| lease.settlement()),
             }
             .with_workflow_attribution(&client_headers),
         );
@@ -411,6 +470,20 @@ pub async fn handle_direct_forward(
                 } else {
                     output
                 };
+
+                // Settle the admission lease with the actual usage vector.
+                if let Some(lease) = admission_lease.take() {
+                    let actual = crate::budget::types::BudgetVector {
+                        input_tokens: final_input.max(0) as u64,
+                        output_tokens: final_output.max(0) as u64,
+                        cache_read_tokens: cache.max(0) as u64,
+                        cache_write_tokens: cache_creation.max(0) as u64,
+                        ..crate::budget::types::BudgetVector::ZERO
+                    };
+                    if let Err(error) = lease.commit_usage(actual).await {
+                        log::warn!("Admission commit failed: {}", error);
+                    }
+                }
 
                 #[cfg(debug_assertions)]
                 log::debug!(

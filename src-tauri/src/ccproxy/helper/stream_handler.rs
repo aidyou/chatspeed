@@ -34,6 +34,7 @@ pub async fn handle_streamed_response(
     provider: String,
     tool_compat_mode: bool,
     pricing: Option<crate::db::PricingConfig>,
+    admission: Option<crate::ccproxy::admission::AdmissionSettlement>,
 ) -> ProxyResult<Response> {
     let stream_format = match backend_protocol.as_ref() {
         ChatProtocol::Gemini => StreamFormat::Gemini,
@@ -126,6 +127,7 @@ pub async fn handle_streamed_response(
             root_task_run_id: None,
             request_kind: None,
             pricing,
+            admission,
         }
         .with_workflow_attribution(client_headers),
     );

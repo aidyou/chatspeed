@@ -170,13 +170,78 @@ pub async fn handle_embedding(
     // Get retry configuration from settings
     let max_retries =
         store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
+    let mut retry_config = RetryConfig::from_settings(max_retries);
+
+    // Opted-in experiment admission: reserve worst-case budget before any
+    // outbound effect. Ordinary requests carry no admission context and
+    // keep the existing behavior unchanged. Embeddings have no output
+    // tokens, so no output bound is required.
+    let admission_lease = match crate::ccproxy::admission::admit_before_send(
+        &store_arc,
+        &_client_headers,
+        crate::ccproxy::admission::LlmGateInput {
+            provider_id: proxy_model.provider.clone(),
+            model_id: proxy_model.model.clone(),
+            estimated_input_tokens:
+                crate::ccproxy::utils::token_estimator::estimate_known_request_json_tokens(
+                    &serde_json::from_slice::<serde_json::Value>(&client_request_body)
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .ceil() as u64,
+            effect_kind: crate::budget::types::EffectKind::Embedding,
+            max_output_tokens: None,
+        },
+    )
+    .await
+    {
+        Ok(lease) => lease,
+        Err(error) => {
+            log::warn!("Experiment admission rejected before send: {}", error);
+            return Err(CCProxyError::InternalError(
+                crate::ccproxy::admission::rejection_message(&error),
+            ));
+        }
+    };
+    if admission_lease.is_some() {
+        // Experiment effects default to exactly one outbound attempt.
+        retry_config.max_retries = 0;
+    }
 
     // Send request with retry support for 429 status code
-    let response = send_with_retry(request_builder, &retry_config).await?;
+    let response = match send_with_retry(request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(lease) = admission_lease {
+                // Transport ambiguity: the request may have reached the
+                // provider. Freeze the budget as unknown and record one
+                // infra failure instead of assuming zero cost.
+                lease
+                    .mark_unknown_with_infra_failure("backend_transport_error", "transport")
+                    .await
+                    .unwrap_or_else(|error| {
+                        log::error!(
+                            "Admission unknown+infra recording failed ({}); reservation stays reserved for lease-expiry recovery",
+                            error.code.as_str()
+                        );
+                    });
+            }
+            return Err(error);
+        }
+    };
 
     let status_code = response.status();
     if !status_code.is_success() {
+        if let Some(lease) = admission_lease {
+            // The provider processed the request and returned an error
+            // response: the effect happened. Settle conservatively at the
+            // reserved input bound instead of committing a zero vector.
+            if let Err(commit_error) = lease.commit_provider_error_response().await {
+                log::warn!(
+                    "Admission commit failed for backend error response: {}",
+                    commit_error
+                );
+            }
+        }
         let error_body = response.text().await.unwrap_or_default();
         let error_message = error_body.clone();
         if let Err(error) = store_arc.record_ccproxy_stat(CcproxyStat {
@@ -240,6 +305,24 @@ pub async fn handle_embedding(
     };
 
     let usage = unified_response.usage.clone();
+
+    // Settle the admission lease with the actual usage vector.
+    if let Some(lease) = admission_lease {
+        let actual = crate::budget::types::BudgetVector {
+            input_tokens: usage.input_tokens.max(0) as u64,
+            cache_read_tokens: usage
+                .cache_read_input_tokens
+                .or(usage.cached_content_tokens)
+                .unwrap_or(0)
+                .max(0) as u64,
+            cache_write_tokens: usage.cache_creation_input_tokens.unwrap_or(0).max(0) as u64,
+            ..crate::budget::types::BudgetVector::ZERO
+        };
+        if let Err(error) = lease.commit_usage(actual).await {
+            log::warn!("Admission commit failed: {}", error);
+        }
+    }
+
     let (estimated_cost, pricing_status, pricing_snapshot) =
         crate::ccproxy::helper::stat_guard::finalize_pricing(
             usage.input_tokens as i64,

@@ -365,11 +365,58 @@ pub(crate) async fn execute_unified_chat_request(
 
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
+    let mut retry_config = RetryConfig::from_settings(max_retries);
+
+    // Opted-in experiment admission: reserve worst-case budget before any
+    // outbound effect. Ordinary requests carry no admission context and
+    // keep the existing behavior unchanged.
+    let mut admission_lease = match crate::ccproxy::admission::admit_before_send(
+        &main_store_arc,
+        &client_headers,
+        crate::ccproxy::admission::LlmGateInput {
+            provider_id: proxy_model.provider.clone(),
+            model_id: proxy_model.model.clone(),
+            estimated_input_tokens:
+                crate::ccproxy::utils::token_estimator::estimate_unified_request_tokens(
+                    &unified_request,
+                )
+                .ceil() as u64,
+            effect_kind: crate::budget::types::EffectKind::LlmCompletion,
+            max_output_tokens: unified_request.max_tokens.map(|value| value.max(0) as u64),
+        },
+    )
+    .await
+    {
+        Ok(lease) => lease,
+        Err(error) => {
+            log::warn!("Experiment admission rejected before send: {}", error);
+            return Err(CCProxyError::InternalError(
+                crate::ccproxy::admission::rejection_message(&error),
+            ));
+        }
+    };
+    if admission_lease.is_some() {
+        // Experiment effects default to exactly one outbound attempt.
+        retry_config.max_retries = 0;
+    }
 
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
         Ok(response) => response,
         Err(CCProxyError::BackendRequestError(message)) => {
+            if let Some(lease) = admission_lease.take() {
+                // Transport ambiguity: the request may have reached the
+                // provider. Freeze the budget as unknown and record one
+                // infra failure instead of assuming zero cost.
+                if let Err(error) = lease
+                    .mark_unknown_with_infra_failure("backend_transport_error", "transport")
+                    .await
+                {
+                    log::error!(
+                        "Admission unknown+infra recording failed ({}); reservation stays reserved for lease-expiry recovery",
+                        error.code.as_str()
+                    );
+                }
+            }
             log::warn!(
                 "Backend request failed before receiving a response (alias: '{}', model: '{}', provider: '{}'): error={}",
                 proxy_alias,
@@ -428,6 +475,18 @@ pub(crate) async fn execute_unified_chat_request(
     };
 
     if !target_response.status().is_success() {
+        if let Some(lease) = admission_lease.take() {
+            // The provider processed the request and returned an error
+            // response: the effect happened. Settle conservatively at the
+            // reserved input bound (error responses carry no generated
+            // content) instead of committing a zero vector.
+            if let Err(error) = lease.commit_provider_error_response().await {
+                log::warn!(
+                    "Admission commit failed for backend error response: {}",
+                    error
+                );
+            }
+        }
         let status_code = target_response.status();
         let headers_from_target = target_response.headers().clone();
         let error_body_bytes = match target_response.bytes().await {
@@ -561,6 +620,7 @@ pub(crate) async fn execute_unified_chat_request(
             proxy_model.provider.clone(),
             final_tool_compat_mode,
             proxy_model.pricing.clone(),
+            admission_lease.take().map(|lease| lease.settlement()),
         )
         .await?;
         Ok(res.into_response())
@@ -626,6 +686,21 @@ pub(crate) async fn execute_unified_chat_request(
             let audio_input_tokens = unified_response.usage.audio_input_tokens.unwrap_or(0) as i64;
             let audio_output_tokens =
                 unified_response.usage.audio_output_tokens.unwrap_or(0) as i64;
+
+            // Settle the admission lease with the actual usage vector.
+            if let Some(lease) = admission_lease.take() {
+                let actual = crate::budget::types::BudgetVector {
+                    input_tokens: input_tokens.max(0) as u64,
+                    output_tokens: output_tokens.max(0) as u64,
+                    cache_read_tokens: cache_tokens.max(0) as u64,
+                    cache_write_tokens: cache_write_tokens.max(0) as u64,
+                    ..crate::budget::types::BudgetVector::ZERO
+                };
+                if let Err(error) = lease.commit_usage(actual).await {
+                    log::warn!("Admission commit failed: {}", error);
+                }
+            }
+
             let (estimated_cost, pricing_status, pricing_snapshot) =
                 crate::ccproxy::helper::stat_guard::finalize_pricing(
                     input_tokens,
@@ -1217,6 +1292,291 @@ mod usage_attribution_tests {
                 4,
                 2,
             )
+        );
+        server.abort();
+    }
+}
+
+#[cfg(test)]
+mod admission_gate_tests {
+    use super::*;
+    use axum::{extract::State, routing::post, Router};
+    use std::collections::BTreeSet;
+    use tempfile::tempdir;
+    use tokio::sync::mpsc;
+
+    fn admission_proxy_model(base_url: String) -> ProxyModel {
+        ProxyModel {
+            client_alias: "alias".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            chat_protocol: ChatProtocol::OpenAI,
+            base_url,
+            model: "backend-model".to_string(),
+            api_key: String::new(),
+            key_index: None,
+            model_metadata: None,
+            custom_params: None,
+            pricing: None,
+            prompt_injection: "off".to_string(),
+            prompt_injection_position: None,
+            prompt_text: String::new(),
+            tool_filter: Default::default(),
+            prompt_replace: Vec::new(),
+            temp_ratio: 1.0,
+            max_tokens: None,
+            temperature: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            top_p: None,
+            top_k: None,
+            stop: Vec::new(),
+            tool_compat_mode: None,
+            thinking_adapter: None,
+            matched_transport_id: None,
+        }
+    }
+
+    fn admission_envelope() -> crate::budget::types::BudgetEnvelope {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps};
+        BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::HardCap(100_000),
+                output_tokens: CapLimit::HardCap(100_000),
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::HardCap(600_000),
+                tool_calls: CapLimit::HardCap(100),
+                processes: CapLimit::HardCap(10),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(4),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: BTreeSet::new(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: 5,
+            reservation_lease_ms: 600_000,
+        }
+    }
+
+    fn create_scope_chain(store: &MainStore) {
+        use crate::budget::types::ScopeKind;
+        use crate::db::budget::NewBudgetScope;
+        let base = admission_envelope();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, "camp-1", None),
+            (ScopeKind::Candidate, "cand-1", Some("camp-1")),
+            (ScopeKind::Trial, "trial-1", Some("cand-1")),
+            (ScopeKind::Request, "req-1", Some("trial-1")),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id.into(),
+                    scope_kind: kind,
+                    parent_scope_id: parent.map(|value| value.to_string()),
+                    envelope: base.clone(),
+                    now_ms: now,
+                })
+                .unwrap();
+        }
+    }
+
+    fn admission_context() -> crate::ccproxy::admission::AdmissionContext {
+        use crate::budget::types::ScopeChain;
+        crate::ccproxy::admission::AdmissionContext {
+            scope_chain: ScopeChain {
+                request_id: "req-1".into(),
+                trial_id: "trial-1".into(),
+                candidate_id: "cand-1".into(),
+                campaign_id: "camp-1".into(),
+            },
+            effect_id: "eff-1".into(),
+            idempotency_key: "idem-1".into(),
+            attempt: 1,
+        }
+    }
+
+    fn internal_headers_with_admission() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers.insert(
+            crate::ccproxy::admission::ADMISSION_HEADER,
+            serde_json::to_string(&admission_context())
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
+    fn forged_external_headers_with_admission() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::ccproxy::admission::ADMISSION_HEADER,
+            serde_json::to_string(&admission_context())
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
+    async fn spawn_mock_upstream(
+        sender: mpsc::Sender<HeaderMap>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let response_body = serde_json::json!({
+            "id": "chatcmpl_test", "object": "chat.completion", "created": 1, "model": "backend-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
+        })
+        .to_string();
+        let content_length = response_body.len().to_string();
+        let app = Router::new().route(
+            "/chat/completions",
+            post(move |headers: HeaderMap| {
+                let response_body = response_body.clone();
+                let content_length = content_length.clone();
+                async move {
+                    let _ = sender.send(headers).await;
+                    Response::builder()
+                        .header("content-type", "application/json")
+                        .header("content-length", content_length)
+                        .body(Body::from(response_body))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        (format!("http://{address}"), server)
+    }
+
+    fn admitted_request() -> UnifiedRequest {
+        let mut request = UnifiedRequest::default();
+        request.model = "alias".to_string();
+        request.max_tokens = Some(100);
+        request
+    }
+
+    #[tokio::test]
+    async fn admitted_request_reaches_provider_and_commits_actual_usage() {
+        let (call_tx, mut call_rx) = mpsc::channel(1);
+        let (base_url, server) = spawn_mock_upstream(call_tx).await;
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("admit-ok.db")).unwrap());
+        create_scope_chain(&store);
+
+        let response = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            internal_headers_with_admission(),
+            admitted_request(),
+            "alias".to_string(),
+            admission_proxy_model(base_url),
+            false,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store.clone(),
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert!(call_rx.recv().await.is_some(), "provider must be called");
+
+        let status = store.get_budget_scope_status("req-1").unwrap().unwrap();
+        assert_eq!(status.reserved.input_tokens, 0, "hold released on commit");
+        assert_eq!(status.committed.input_tokens, 12);
+        assert_eq!(status.committed.output_tokens, 4);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rejected_admission_blocks_the_outbound_call() {
+        let (call_tx, mut call_rx) = mpsc::channel(1);
+        let (base_url, server) = spawn_mock_upstream(call_tx).await;
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("admit-reject.db")).unwrap());
+
+        let result = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            internal_headers_with_admission(),
+            admitted_request(),
+            "alias".to_string(),
+            admission_proxy_model(base_url),
+            false,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store.clone(),
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await;
+        assert!(result.is_err(), "admission failure must fail closed");
+        assert!(
+            call_rx.try_recv().is_err(),
+            "no outbound call may happen without a reservation"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn forged_external_admission_header_keeps_ordinary_path() {
+        let (call_tx, mut call_rx) = mpsc::channel(1);
+        let (base_url, server) = spawn_mock_upstream(call_tx).await;
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("admit-forged.db")).unwrap());
+
+        let response = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            forged_external_headers_with_admission(),
+            admitted_request(),
+            "alias".to_string(),
+            admission_proxy_model(base_url),
+            false,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store.clone(),
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert!(
+            call_rx.recv().await.is_some(),
+            "ordinary path must be unchanged"
+        );
+        assert!(
+            store.get_budget_scope_status("req-1").unwrap().is_none(),
+            "no ledger scope may be created from a forged header"
         );
         server.abort();
     }

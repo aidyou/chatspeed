@@ -3,6 +3,7 @@ pub mod api_key_crypto;
 pub mod automation;
 pub mod backup;
 pub mod backup_crypto;
+pub mod budget;
 pub mod chat;
 pub mod config;
 pub mod config_transfer;

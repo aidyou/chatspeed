@@ -62,6 +62,10 @@ pub struct StreamStatGuard {
     pub root_task_run_id: Option<String>,
     pub request_kind: Option<String>,
     pub pricing: Option<PricingConfig>,
+    /// Opted-in experiment admission settlement handle. When present, the
+    /// terminal boundary commits the actual usage (or marks the effect
+    /// unknown on stream failure) against the durable budget ledger.
+    pub admission: Option<crate::ccproxy::admission::AdmissionSettlement>,
 }
 
 impl StreamStatGuard {
@@ -123,6 +127,11 @@ impl Drop for StreamStatGuard {
         };
 
         if stream_failed {
+            if let Some(settlement) = &self.admission {
+                // The effect may have happened but the outcome is unknown:
+                // freeze the budget and record one infra failure (INV-5).
+                settlement.mark_unknown_blocking("stream_failed", "stream_failure");
+            }
             let _ = self.main_store.record_ccproxy_stat(CcproxyStat {
                 id: None,
                 workflow_session_id: self.workflow_session_id.clone(),
@@ -161,6 +170,13 @@ impl Drop for StreamStatGuard {
         }
 
         if !has_output {
+            if let Some(settlement) = &self.admission {
+                // The request was sent, so input tokens were consumed even
+                // though no completion content was produced. Settle
+                // conservatively at the reserved input bound instead of
+                // committing a zero vector (INV-5 / AC-6).
+                settlement.commit_conservative_input_blocking();
+            }
             return;
         }
 
@@ -207,6 +223,16 @@ impl Drop for StreamStatGuard {
             final_output,
             final_cache
         );
+
+        if let Some(settlement) = &self.admission {
+            settlement.commit_usage_blocking(crate::budget::types::BudgetVector {
+                input_tokens: final_input,
+                output_tokens: final_output,
+                cache_read_tokens: final_cache,
+                cache_write_tokens: final_cache_write,
+                ..crate::budget::types::BudgetVector::ZERO
+            });
+        }
 
         let _ = self.main_store.record_ccproxy_stat(CcproxyStat {
             id: None,
@@ -285,6 +311,7 @@ mod tests {
             root_task_run_id: None,
             request_kind: None,
             pricing: None,
+            admission: None,
         }
         .with_workflow_attribution(&headers);
         drop(guard);
@@ -368,6 +395,7 @@ mod tests {
             root_task_run_id: None,
             request_kind: None,
             pricing: None,
+            admission: None,
         };
         drop(guard);
         let runtime = store.db_runtime().unwrap();
@@ -418,6 +446,7 @@ mod tests {
             root_task_run_id: None,
             request_kind: None,
             pricing: None,
+            admission: None,
         };
         drop(guard);
         let runtime = store.db_runtime().unwrap();
@@ -437,5 +466,167 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn stream_guard_settles_conservative_input_when_no_output() {
+        use crate::budget::pricing::LlmEffectBound;
+        use crate::budget::types::{BudgetEnvelope, CapLimit, EffectKind, MoneyMode, ResourceCaps};
+        use crate::ccproxy::admission::{admit_before_send, LlmGateInput};
+        use std::collections::BTreeSet;
+
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("no-output.db")).unwrap());
+        // Create a money-budget scope chain keyed to the request scope.
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::HardCap(1_000_000),
+                output_tokens: CapLimit::HardCap(1_000_000),
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::HardCap(600_000),
+                tool_calls: CapLimit::HardCap(100),
+                processes: CapLimit::HardCap(10),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(4),
+                money: CapLimit::HardCap(100_000_000),
+            },
+            required_dimensions: BTreeSet::new(),
+            money_mode: MoneyMode::Money {
+                currency_code: "cny".into(),
+                cap_money_micros: 100_000_000,
+                pricing: crate::budget::types::PricingSnapshot {
+                    currency_code: "cny".into(),
+                    provider_id: "provider".into(),
+                    model_id: "backend-model".into(),
+                    input_micros_per_million: 1_000_000,
+                    output_micros_per_million: 2_000_000,
+                    cache_read_micros_per_million: 0,
+                    cache_write_micros_per_million: 0,
+                    reasoning_micros_per_million: None,
+                    multiplier_micros: 1_000_000,
+                    source_hash: "hash".into(),
+                },
+            },
+            max_attempts: 1,
+            infra_failure_threshold: 5,
+            reservation_lease_ms: 600_000,
+        };
+        for (kind, id, parent) in [
+            (crate::budget::types::ScopeKind::Campaign, "camp-1", None),
+            (
+                crate::budget::types::ScopeKind::Candidate,
+                "cand-1",
+                Some("camp-1"),
+            ),
+            (
+                crate::budget::types::ScopeKind::Trial,
+                "trial-1",
+                Some("cand-1"),
+            ),
+            (
+                crate::budget::types::ScopeKind::Request,
+                "req-1",
+                Some("trial-1"),
+            ),
+        ] {
+            store
+                .create_budget_scope(crate::db::budget::NewBudgetScope {
+                    scope_id: id.into(),
+                    scope_kind: kind,
+                    parent_scope_id: parent.map(|value| value.to_string()),
+                    envelope: envelope.clone(),
+                    now_ms: 1_700_000_000_000,
+                })
+                .unwrap();
+        }
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers.insert(
+            crate::ccproxy::admission::ADMISSION_HEADER,
+            serde_json::json!({
+                "scope_chain": {
+                    "request_id": "req-1",
+                    "trial_id": "trial-1",
+                    "candidate_id": "cand-1",
+                    "campaign_id": "camp-1"
+                },
+                "effect_id": "eff-1",
+                "idempotency_key": "idem-1",
+                "attempt": 1
+            })
+            .to_string()
+            .parse()
+            .unwrap(),
+        );
+        let lease = admit_before_send(
+            &store,
+            &headers,
+            LlmGateInput {
+                provider_id: "provider".into(),
+                model_id: "backend-model".into(),
+                estimated_input_tokens: 100,
+                effect_kind: EffectKind::LlmCompletion,
+                max_output_tokens: Some(50),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("admission should succeed");
+        let settlement = lease.settlement();
+
+        // A stream that terminates with no output: the guard must settle
+        // conservatively at the reserved input bound, never at zero.
+        let guard = StreamStatGuard {
+            log_recorder: Arc::new(Mutex::new(StreamLogRecorder::new(
+                "stream".to_string(),
+                "backend".to_string(),
+            ))),
+            sse_status: Arc::new(RwLock::new(SseStatus::new(
+                "message".to_string(),
+                "alias".to_string(),
+                false,
+                120.0,
+            ))),
+            main_store: store.clone(),
+            client_model: "alias".to_string(),
+            backend_model: "backend".to_string(),
+            provider_id: 1,
+            provider: "provider".to_string(),
+            protocol: "openai".to_string(),
+            tool_compat_mode: false,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+            pricing: None,
+            admission: Some(settlement),
+        };
+        drop(guard);
+
+        let status = store.get_budget_scope_status("req-1").unwrap().unwrap();
+        assert_eq!(
+            status.committed.input_tokens, 100,
+            "input must settle at the reserved bound, never zero"
+        );
+        assert_eq!(
+            status.committed.money_micros, 100,
+            "money must accumulate (100 tokens at 1 unit/M), never zero"
+        );
+        assert_eq!(status.committed.output_tokens, 0);
+        assert_eq!(status.reserved.input_tokens, 0);
     }
 }

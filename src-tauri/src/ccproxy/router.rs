@@ -996,6 +996,7 @@ fn strip_untrusted_workflow_attribution_headers(headers: &mut HeaderMap) {
         "x-cs-root-session-id",
         "x-cs-root-task-run-id",
         "x-cs-request-kind",
+        "x-cs-experiment-admission",
     ] {
         headers.remove(header);
     }
@@ -1091,11 +1092,19 @@ mod usage_attribution_tests {
             "victim-session".parse().unwrap(),
         );
         headers.insert("x-cs-root-task-run-id", "victim-task".parse().unwrap());
+        headers.insert(
+            "x-cs-experiment-admission",
+            "{\"forged\":true}".parse().unwrap(),
+        );
 
         assert!(!is_trusted_internal_request(&headers));
         strip_untrusted_workflow_attribution_headers(&mut headers);
 
         assert!(!headers.contains_key("x-cs-workflow-session-id"));
         assert!(!headers.contains_key("x-cs-root-task-run-id"));
+        assert!(
+            !headers.contains_key("x-cs-experiment-admission"),
+            "external callers must not be able to mint admission ownership"
+        );
     }
 }

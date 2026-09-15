@@ -1,4 +1,8 @@
 mod ai;
+/// The typed budget/admission domain is a crate-level contract: the
+/// persistence layer, ccproxy admission gate, workflow tool gate and the
+/// future experiment service (2C/2F) all consume it.
+pub mod budget;
 mod builtin_agents;
 mod ccproxy;
 mod commands;
@@ -703,6 +707,21 @@ pub async fn run() -> crate::error::Result<()> {
             // and frontend code may call commands that require MainStore state before setup completes.
             // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
+
+            // Best-effort budget ledger recovery at startup: reservations
+            // whose lease expired while still reserved are conservatively
+            // frozen as unknown; recovery never releases or replays (INV-5).
+            {
+                let store_for_recovery = main_store.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        crate::budget::recovery::recover_expired_reservations(&store_for_recovery)
+                            .await
+                    {
+                        log::warn!("[Budget][recovery] startup recovery failed: {}", error);
+                    }
+                });
+            }
 
             // Load the Models.dev catalog off the startup critical path: it is only used by
             // the model settings UI, so parsing the multi-MB snapshot must not block setup.

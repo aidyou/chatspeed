@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
@@ -6138,6 +6139,8 @@ impl WorkflowExecutor {
 
         let mut has_todo_call = false;
         let mut predicted_turn_block = false;
+        // Opted-in experiment admission reservations keyed by tool call id.
+        let mut tool_admission_reservations: HashMap<String, String> = HashMap::new();
 
         // Use a map to collect results and a list to maintain original AI call order
         let mut result_map: HashMap<String, ToolExecutionObservation> = HashMap::new();
@@ -6291,6 +6294,47 @@ impl WorkflowExecutor {
                                     .and_then(|value| value.as_bool())
                                     .unwrap_or(true);
 
+                    // Opted-in experiment admission: reserve budget before the
+                    // physical tool dispatch. Sessions without a backend-created
+                    // budget request scope keep the ordinary path unchanged.
+                    let tool_admission = match crate::budget::resource::admit_tool_effect(
+                        &self.context.main_store,
+                        &self.session_id,
+                        &name,
+                    )
+                    .await
+                    {
+                        Ok(Some(lease)) => Some(lease.reservation_id().to_string()),
+                        Ok(None) => None,
+                        Err(error) => {
+                            log::warn!(
+                            "[Workflow][session={}][phase=execute_tools] Tool '{}' admission rejected: {}",
+                            self.session_id,
+                            name,
+                            error
+                        );
+                            let reinforced = Self::tool_error_reinforced_result(
+                                &name,
+                                &crate::tools::ToolError::Security(format!(
+                                    "Tool not executed: experiment admission rejected ({}).",
+                                    error.code.as_str()
+                                )),
+                            );
+                            self.append_reinforced_tool_terminal_event(&id, &name, &reinforced)
+                                .await;
+                            self.dispatch_reinforced_tool_terminal_payload(&id, &name, &reinforced)
+                                .await;
+                            result_map.insert(
+                                id.clone(),
+                                ToolExecutionObservation::new(id, reinforced, call, None, None),
+                            );
+                            continue;
+                        }
+                    };
+                    if let Some(reservation_id) = tool_admission {
+                        tool_admission_reservations.insert(id.clone(), reservation_id);
+                    }
+
                     // Safe to proceed to physical execution!
                     if name.starts_with("todo_")
                         || matches!(
@@ -6319,13 +6363,58 @@ impl WorkflowExecutor {
                         predicted_turn_block = true;
                     }
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    // Partition failed before any physical dispatch: every
+                    // reservation created so far is proven no-effect and
+                    // must be released, not frozen.
+                    let pending: Vec<String> = tool_admission_reservations
+                        .drain()
+                        .map(|(_, reservation_id)| reservation_id)
+                        .collect();
+                    if let Err(error) = crate::budget::resource::release_proven_not_dispatched(
+                        &self.context.main_store,
+                        &pending,
+                        "partition_error_before_dispatch",
+                    )
+                    .await
+                    {
+                        // Failed releases stay `reserved` and are frozen as
+                        // unknown by lease-expiry recovery.
+                        log::error!(
+                            "[Budget][tool] pre-dispatch release failed ({}); {} reservation(s) stay reserved for lease-expiry recovery",
+                            error.code.as_str(),
+                            pending.len()
+                        );
+                    }
+                    return Err(e);
+                }
             }
         }
 
         // --- 3. Stage 2: Safe Physical Execution ---
         // Final stop check before starting physical tool execution
         if self.check_stop_signal(signal_rx).await? {
+            // Cancelled before dispatch: release the queued reservations
+            // (proven no effect) instead of freezing them as unknown.
+            let pending: Vec<String> = tool_admission_reservations
+                .drain()
+                .map(|(_, reservation_id)| reservation_id)
+                .collect();
+            if let Err(error) = crate::budget::resource::release_proven_not_dispatched(
+                &self.context.main_store,
+                &pending,
+                "cancelled_before_dispatch",
+            )
+            .await
+            {
+                // Failed releases stay `reserved` and are frozen as unknown
+                // by lease-expiry recovery.
+                log::error!(
+                    "[Budget][tool] pre-dispatch release failed ({}); {} reservation(s) stay reserved for lease-expiry recovery",
+                    error.code.as_str(),
+                    pending.len()
+                );
+            }
             return Err(WorkflowEngineError::Cancelled(
                 t!("workflow.cancelled").to_string(),
             ));
@@ -6342,6 +6431,10 @@ impl WorkflowExecutor {
             let semaphore = self.context.semaphore.clone();
 
             let mut started_tools = HashMap::new();
+            // Per-tool owner-entry flags: set to true exactly when the
+            // physical owner (`ToolDefinition::call`) is entered. Used to
+            // classify cancellations that race with dispatch.
+            let mut tool_dispatch_flags: HashMap<String, Arc<AtomicBool>> = HashMap::new();
             for (id, name, args, call) in parallel_execution_queue {
                 self.append_tool_started_event(&id, &name, &args).await;
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
@@ -6354,6 +6447,9 @@ impl WorkflowExecutor {
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
+                let owner_entered = Arc::new(AtomicBool::new(false));
+                tool_dispatch_flags.insert(id.clone(), Arc::clone(&owner_entered));
+                let owner_entered_flag = Arc::clone(&owner_entered);
 
                 // Inject internal tool_call_id for streaming tools
                 let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
@@ -6362,55 +6458,228 @@ impl WorkflowExecutor {
                     let _permit = semaphore_clone.acquire().await.ok();
                     let execution_started_at = Instant::now();
 
-                    let final_res = if canonical_mcp_tool_name.is_some() {
+                    // `dispatched` is the authoritative owner-invoked fact:
+                    // registry lookup misses and disabled-MCP rejections
+                    // happen before owner entry and are proven no-effect.
+                    let (final_res, dispatched) = if canonical_mcp_tool_name.is_some() {
                         if mcp_tool_allowed {
-                            gtm_clone.tool_call(&name, enriched_args).await
+                            let (result, dispatched) = gtm_clone
+                                .tool_call_with_dispatch(
+                                    &name,
+                                    enriched_args,
+                                    Some(owner_entered_flag),
+                                )
+                                .await;
+                            (result.map(|v| v.into()), dispatched)
                         } else {
-                            Err(crate::tools::ToolError::Security(format!(
-                                "MCP tool '{}' is not available in this workflow",
-                                name
-                            )))
+                            (
+                                Err(crate::tools::ToolError::Security(format!(
+                                    "MCP tool '{}' is not available in this workflow",
+                                    name
+                                ))),
+                                false,
+                            )
                         }
                     } else {
                         // Native tools are managed session-locally. No fallback.
-                        tm_clone.tool_call(&name, enriched_args).await
+                        let (result, dispatched) = tm_clone
+                            .tool_call_with_dispatch(&name, enriched_args, Some(owner_entered_flag))
+                            .await;
+                        (result.map(|v| v.into()), dispatched)
                     };
                     let duration_ms = Self::execution_duration_ms(execution_started_at);
-                    (id, name, args, call, final_res, duration_ms)
+                    (id, name, args, call, final_res, duration_ms, dispatched)
                 });
             }
 
             loop {
-                let next_result =
-                    match await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await {
-                        Ok(next_result) => next_result,
-                        Err(error @ WorkflowEngineError::Cancelled(_)) => {
-                            let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
-                                "Tool execution interrupted because the workflow was cancelled"
-                                    .to_string(),
-                            ));
-                            for (tool_call_id, tool_name) in &started_tools {
-                                self.append_tool_terminal_event(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                                self.dispatch_tool_terminal_payload(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                            }
-                            return Err(error);
+                let next_result = match await_with_stop(
+                    &self.session_id,
+                    signal_rx,
+                    tool_futures.next(),
+                )
+                .await
+                {
+                    Ok(next_result) => next_result,
+                    Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                        let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                            "Tool execution interrupted because the workflow was cancelled"
+                                .to_string(),
+                        ));
+                        for (tool_call_id, tool_name) in &started_tools {
+                            self.append_tool_terminal_event(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
+                            self.dispatch_tool_terminal_payload(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
                         }
-                        Err(error) => return Err(error),
-                    };
-                let Some((id, name, args, call, res, duration_ms)) = next_result else {
+                        // Cancelled tools that already entered the physical
+                        // owner may have produced effects: freeze those
+                        // reservations as unknown with one infra failure
+                        // each. Tools still queued before owner entry are
+                        // proven no-effect and are released.
+                        for (tool_call_id, reservation_id) in tool_admission_reservations.drain() {
+                            let owner_entered = tool_dispatch_flags
+                                .get(&tool_call_id)
+                                .is_some_and(|flag| flag.load(Ordering::SeqCst));
+                            let settle_result = if owner_entered {
+                                crate::budget::resource::mark_tool_effect_unknown(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    &format!("{}:campaign", self.session_id),
+                                    &reservation_id,
+                                    "cancelled_while_running",
+                                    "cancelled",
+                                )
+                                .await
+                            } else {
+                                crate::budget::resource::release_tool_effect(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    "cancelled_before_owner_entry",
+                                )
+                                .await
+                                .map(|_| ())
+                            };
+                            if let Err(settle_error) = settle_result {
+                                // The reservation stays `reserved` and
+                                // is frozen by lease-expiry recovery.
+                                log::error!(
+                                        "[Budget][tool] cancelled settlement failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                        settle_error.code.as_str(),
+                                        reservation_id
+                                    );
+                            }
+                            let _ = tool_call_id;
+                        }
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        // Non-cancel failure: started tools may have
+                        // produced physical effects, so their
+                        // reservations are conservatively frozen as
+                        // unknown (INV-5) with one infra failure each.
+                        for (_, reservation_id) in tool_admission_reservations.drain() {
+                            if let Err(unknown_error) =
+                                crate::budget::resource::mark_tool_effect_unknown(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    &format!("{}:campaign", self.session_id),
+                                    &reservation_id,
+                                    "parallel_batch_failed",
+                                    "tool_failure",
+                                )
+                                .await
+                            {
+                                log::error!(
+                                        "[Budget][tool] unknown+infra recording failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                        unknown_error.code.as_str(),
+                                        reservation_id
+                                    );
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
+                let Some((id, name, args, call, res, duration_ms, dispatched)) = next_result else {
                     break;
                 };
                 started_tools.remove(&id);
+                // Settle the tool admission reservation by the actual
+                // dispatch outcome: a reliable completion commits the
+                // measured usage; a failure after the physical owner was
+                // invoked may have produced an effect and is frozen as
+                // unknown with one infra failure; a failure that provably
+                // never dispatched (policy rejection, tool lookup miss) is
+                // released without touching infra counters.
+                if let Some(reservation_id) = tool_admission_reservations.remove(&id) {
+                    // `dispatched` comes from the owner-boundary tracked
+                    // call: false means the failure happened before owner
+                    // entry (lookup miss, disabled MCP) — proven no-effect.
+                    let proven_not_dispatched = !dispatched;
+                    match (&res, proven_not_dispatched) {
+                        (Ok(_), _) => {
+                            if let Err(error) = crate::budget::resource::commit_tool_effect(
+                                &self.context.main_store,
+                                &reservation_id,
+                                &name,
+                                duration_ms,
+                            )
+                            .await
+                            {
+                                // Fail closed: freeze the reservation as
+                                // unknown (with one infra failure) instead
+                                // of leaving it silently reserved.
+                                log::error!(
+                                    "[Budget][tool] commit failed ({}); freezing reservation {} as unknown",
+                                    error.code.as_str(),
+                                    reservation_id
+                                );
+                                if let Err(unknown_error) =
+                                    crate::budget::resource::mark_tool_effect_unknown(
+                                        &self.context.main_store,
+                                        &reservation_id,
+                                        &format!("{}:campaign", self.session_id),
+                                        &reservation_id,
+                                        "commit_failed_settlement",
+                                        "settlement_failure",
+                                    )
+                                    .await
+                                {
+                                    log::error!(
+                                        "[Budget][tool] conservative unknown also failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                        unknown_error.code.as_str(),
+                                        reservation_id
+                                    );
+                                }
+                            }
+                        }
+                        (Err(_), true) => {
+                            // Proven no effect: release the hold without
+                            // counting an infra failure.
+                            if let Err(release_error) =
+                                crate::budget::resource::release_tool_effect(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    "proven_not_dispatched",
+                                )
+                                .await
+                            {
+                                log::error!(
+                                    "[Budget][tool] not-dispatched release failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                    release_error.code.as_str(),
+                                    reservation_id
+                                );
+                            }
+                        }
+                        (Err(_), false) => {
+                            if let Err(unknown_error) =
+                                crate::budget::resource::mark_tool_effect_unknown(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    &format!("{}:campaign", self.session_id),
+                                    &reservation_id,
+                                    "tool_execution_failed",
+                                    "tool_failure",
+                                )
+                                .await
+                            {
+                                log::error!(
+                                    "[Budget][tool] unknown+infra recording failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                    unknown_error.code.as_str(),
+                                    reservation_id
+                                );
+                            }
+                        }
+                    }
+                }
                 self.append_tool_terminal_event(&id, &name, &res).await;
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&res);
@@ -6448,27 +6717,52 @@ impl WorkflowExecutor {
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
-            let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
-                if canonical_mcp_tool_name.is_some() {
-                    if mcp_tool_allowed {
-                        global_tool_manager
-                            .tool_call(&tool_name_for_call, enriched_args)
-                            .await
+            // Owner-entry flag: set to true exactly when the physical owner
+            // (`ToolDefinition::call`) is entered, so cancellations that
+            // race with dispatch can be classified.
+            let owner_entered = Arc::new(AtomicBool::new(false));
+            let owner_entered_flag = Arc::clone(&owner_entered);
+            // `dispatched` is the authoritative owner-invoked fact: registry
+            // lookup misses and disabled-MCP rejections happen before owner
+            // entry and are proven no-effect.
+            let (final_res, dispatched) = match await_with_stop(
+                &self.session_id,
+                signal_rx,
+                async move {
+                    if canonical_mcp_tool_name.is_some() {
+                        if mcp_tool_allowed {
+                            let (result, dispatched) = global_tool_manager
+                                .tool_call_with_dispatch(
+                                    &tool_name_for_call,
+                                    enriched_args,
+                                    Some(owner_entered_flag),
+                                )
+                                .await;
+                            (result.map(|v| v.into()), dispatched)
+                        } else {
+                            (
+                                Err(crate::tools::ToolError::Security(format!(
+                                    "MCP tool '{}' is not available in this workflow",
+                                    tool_name_for_call
+                                ))),
+                                false,
+                            )
+                        }
                     } else {
-                        Err(crate::tools::ToolError::Security(format!(
-                            "MCP tool '{}' is not available in this workflow",
-                            tool_name_for_call
-                        )))
+                        let (result, dispatched) = tool_manager
+                            .tool_call_with_dispatch(
+                                &tool_name_for_call,
+                                enriched_args,
+                                Some(owner_entered_flag),
+                            )
+                            .await;
+                        (result.map(|v| v.into()), dispatched)
                     }
-                } else {
-                    tool_manager
-                        .tool_call(&tool_name_for_call, enriched_args)
-                        .await
-                }
-            })
+                },
+            )
             .await
             {
-                Ok(result) => result,
+                Ok(settled) => settled,
                 Err(error @ WorkflowEngineError::Cancelled(_)) => {
                     let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
                         "Tool execution interrupted because the workflow was cancelled".to_string(),
@@ -6477,12 +6771,174 @@ impl WorkflowExecutor {
                         .await;
                     self.dispatch_tool_terminal_payload(&id, &name, &cancelled_result)
                         .await;
+                    // If the physical owner was already entered the tool may
+                    // have produced an effect: freeze as unknown with one
+                    // infra failure. Otherwise it is proven no-effect and
+                    // the reservation is released.
+                    if let Some(reservation_id) = tool_admission_reservations.remove(&id) {
+                        let settle_result = if owner_entered.load(Ordering::SeqCst) {
+                            crate::budget::resource::mark_tool_effect_unknown(
+                                &self.context.main_store,
+                                &reservation_id,
+                                &format!("{}:campaign", self.session_id),
+                                &reservation_id,
+                                "cancelled_while_running",
+                                "cancelled",
+                            )
+                            .await
+                        } else {
+                            crate::budget::resource::release_tool_effect(
+                                &self.context.main_store,
+                                &reservation_id,
+                                "cancelled_before_owner_entry",
+                            )
+                            .await
+                            .map(|_| ())
+                        };
+                        if let Err(settle_error) = settle_result {
+                            log::error!(
+                                "[Budget][tool] cancelled settlement failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                settle_error.code.as_str(),
+                                reservation_id
+                            );
+                        }
+                    }
                     return Err(error);
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    // Non-cancel failure: the current tool may have
+                    // produced a physical effect (freeze as unknown with
+                    // one infra failure); queued tools were never
+                    // dispatched (release).
+                    if let Some(reservation_id) = tool_admission_reservations.remove(&id) {
+                        if let Err(unknown_error) =
+                            crate::budget::resource::mark_tool_effect_unknown(
+                                &self.context.main_store,
+                                &reservation_id,
+                                &format!("{}:campaign", self.session_id),
+                                &reservation_id,
+                                "sequential_tool_failed",
+                                "tool_failure",
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "[Budget][tool] unknown+infra recording failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                unknown_error.code.as_str(),
+                                reservation_id
+                            );
+                        }
+                    }
+                    let pending: Vec<String> = tool_admission_reservations
+                        .drain()
+                        .map(|(_, reservation_id)| reservation_id)
+                        .collect();
+                    if let Err(release_error) =
+                        crate::budget::resource::release_proven_not_dispatched(
+                            &self.context.main_store,
+                            &pending,
+                            "sequential_queue_failed_before_dispatch",
+                        )
+                        .await
+                    {
+                        log::error!(
+                            "[Budget][tool] pre-dispatch release failed ({}); {} reservation(s) stay reserved for lease-expiry recovery",
+                            release_error.code.as_str(),
+                            pending.len()
+                        );
+                    }
+                    return Err(error);
+                }
             };
 
             let duration_ms = Self::execution_duration_ms(execution_started_at);
+            // Settle the tool admission reservation by the actual dispatch
+            // outcome: a reliable completion commits the measured usage; a
+            // failure after the physical owner was invoked may have
+            // produced an effect and is frozen as unknown with one infra
+            // failure; a failure that provably never dispatched (policy
+            // rejection, tool lookup miss) is released without touching
+            // infra counters.
+            if let Some(reservation_id) = tool_admission_reservations.remove(&id) {
+                // `dispatched` comes from the owner-boundary tracked call:
+                // false means the failure happened before owner entry
+                // (lookup miss, disabled MCP) — proven no-effect.
+                let proven_not_dispatched = !dispatched;
+                match (&final_res, proven_not_dispatched) {
+                    (Ok(_), _) => {
+                        if let Err(error) = crate::budget::resource::commit_tool_effect(
+                            &self.context.main_store,
+                            &reservation_id,
+                            &name,
+                            duration_ms,
+                        )
+                        .await
+                        {
+                            // Fail closed: freeze the reservation as
+                            // unknown (with one infra failure) instead of
+                            // leaving it silently reserved or released.
+                            log::error!(
+                                "[Budget][tool] commit failed ({}); freezing reservation {} as unknown",
+                                error.code.as_str(),
+                                reservation_id
+                            );
+                            if let Err(unknown_error) =
+                                crate::budget::resource::mark_tool_effect_unknown(
+                                    &self.context.main_store,
+                                    &reservation_id,
+                                    &format!("{}:campaign", self.session_id),
+                                    &reservation_id,
+                                    "commit_failed_settlement",
+                                    "settlement_failure",
+                                )
+                                .await
+                            {
+                                log::error!(
+                                    "[Budget][tool] conservative unknown also failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                    unknown_error.code.as_str(),
+                                    reservation_id
+                                );
+                            }
+                        }
+                    }
+                    (Err(_), true) => {
+                        // Proven no effect: release the hold without
+                        // counting an infra failure.
+                        if let Err(release_error) = crate::budget::resource::release_tool_effect(
+                            &self.context.main_store,
+                            &reservation_id,
+                            "proven_not_dispatched",
+                        )
+                        .await
+                        {
+                            log::error!(
+                                "[Budget][tool] not-dispatched release failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                release_error.code.as_str(),
+                                reservation_id
+                            );
+                        }
+                    }
+                    (Err(_), false) => {
+                        if let Err(unknown_error) =
+                            crate::budget::resource::mark_tool_effect_unknown(
+                                &self.context.main_store,
+                                &reservation_id,
+                                &format!("{}:campaign", self.session_id),
+                                &reservation_id,
+                                "tool_execution_failed",
+                                "tool_failure",
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "[Budget][tool] unknown+infra recording failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                unknown_error.code.as_str(),
+                                reservation_id
+                            );
+                        }
+                    }
+                }
+            }
             self.append_tool_terminal_event(&id, &name, &final_res)
                 .await;
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
@@ -6516,6 +6972,26 @@ impl WorkflowExecutor {
                         remaining_name,
                         self.state
                     );
+                    // Postponed tools never dispatched: release their
+                    // admission reservations (proven no effect).
+                    if let Some(reservation_id) = tool_admission_reservations.remove(&remaining_id)
+                    {
+                        if let Err(release_error) = crate::budget::resource::release_tool_effect(
+                            &self.context.main_store,
+                            &reservation_id,
+                            "postponed_never_dispatched",
+                        )
+                        .await
+                        {
+                            // Failed releases stay `reserved` and are frozen
+                            // as unknown by lease-expiry recovery.
+                            log::error!(
+                                "[Budget][tool] postponed release failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                                release_error.code.as_str(),
+                                reservation_id
+                            );
+                        }
+                    }
                     result_map.insert(
                         remaining_id.clone(),
                         ToolExecutionObservation::new(
@@ -6539,6 +7015,27 @@ impl WorkflowExecutor {
         // Drain them before recording observations so accepted user messages become durable
         // queued input at this turn's observe boundary, rather than missing this flush.
         if self.check_stop_signal(signal_rx).await? {
+            // Every dispatched tool has been settled by now; any remaining
+            // reservation would indicate an unsettled possibly-executed
+            // effect, so it is conservatively frozen as unknown (INV-5).
+            for (_, reservation_id) in tool_admission_reservations.drain() {
+                if let Err(unknown_error) = crate::budget::resource::mark_tool_effect_unknown(
+                    &self.context.main_store,
+                    &reservation_id,
+                    &format!("{}:campaign", self.session_id),
+                    &reservation_id,
+                    "turn_cancelled_with_unsettled_reservation",
+                    "settlement_failure",
+                )
+                .await
+                {
+                    log::error!(
+                        "[Budget][tool] unknown+infra recording failed ({}); reservation {} stays reserved for lease-expiry recovery",
+                        unknown_error.code.as_str(),
+                        reservation_id
+                    );
+                }
+            }
             return Err(WorkflowEngineError::Cancelled(
                 t!("workflow.cancelled").to_string(),
             ));
@@ -9394,6 +9891,645 @@ mod recovery_tests {
             Some(false),
             None,
         )
+    }
+
+    /// A tool whose execution always fails, used to exercise the budget
+    /// settlement path for tool execution/owner failures.
+    struct FailingTestTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolDefinition for FailingTestTool {
+        fn name(&self) -> &str {
+            "failing_test_tool"
+        }
+
+        fn description(&self) -> &str {
+            "always fails"
+        }
+
+        fn category(&self) -> crate::tools::ToolCategory {
+            crate::tools::ToolCategory::System
+        }
+
+        fn tool_calling_spec(&self) -> crate::ai::traits::chat::MCPToolDeclaration {
+            crate::ai::traits::chat::MCPToolDeclaration {
+                name: "failing_test_tool".to_string(),
+                description: "always fails".to_string(),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                disabled: false,
+                scope: None,
+            }
+        }
+
+        async fn call(&self, _params: Value) -> crate::tools::NativeToolResult {
+            Err(crate::tools::ToolError::ExecutionFailed(
+                "intentional test failure".to_string(),
+            ))
+        }
+    }
+
+    /// Test tool that signals `started_tx` when the physical owner is
+    /// entered, then pends forever (simulating a long-running effect).
+    struct BlockingTestTool {
+        started_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolDefinition for BlockingTestTool {
+        fn name(&self) -> &str {
+            "blocking_test_tool"
+        }
+
+        fn description(&self) -> &str {
+            "blocks forever after signalling start"
+        }
+
+        fn category(&self) -> crate::tools::ToolCategory {
+            crate::tools::ToolCategory::System
+        }
+
+        fn tool_calling_spec(&self) -> crate::ai::traits::chat::MCPToolDeclaration {
+            crate::ai::traits::chat::MCPToolDeclaration {
+                name: "blocking_test_tool".to_string(),
+                description: "blocks forever".to_string(),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                output_schema: None,
+                disabled: false,
+                scope: None,
+            }
+        }
+
+        async fn call(&self, _params: Value) -> crate::tools::NativeToolResult {
+            let _ = self.started_tx.send(());
+            futures::future::pending::<crate::tools::NativeToolResult>().await
+        }
+    }
+
+    /// Creates a four-level budget scope chain keyed to `session_id` so
+    /// the tool admission gate activates for that session.
+    fn create_budget_chain_for_session(store: &MainStore, session_id: &str, threshold: u32) {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps, ScopeKind};
+        use crate::db::budget::NewBudgetScope;
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::NotApplicable,
+                output_tokens: CapLimit::NotApplicable,
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::NotApplicable,
+                tool_calls: CapLimit::HardCap(10),
+                processes: CapLimit::HardCap(4),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(2),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: Default::default(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: threshold,
+            reservation_lease_ms: 600_000,
+        };
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, format!("{session_id}:campaign"), None),
+            (
+                ScopeKind::Candidate,
+                format!("{session_id}:candidate"),
+                Some(format!("{session_id}:campaign")),
+            ),
+            (
+                ScopeKind::Trial,
+                format!("{session_id}:trial"),
+                Some(format!("{session_id}:candidate")),
+            ),
+            (
+                ScopeKind::Request,
+                session_id.to_string(),
+                Some(format!("{session_id}:trial")),
+            ),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id,
+                    scope_kind: kind,
+                    parent_scope_id: parent,
+                    envelope: envelope.clone(),
+                    now_ms: 1_700_000_000_000,
+                })
+                .expect("scope creation should succeed");
+        }
+    }
+
+    fn budget_test_executor(
+        store: &Arc<MainStore>,
+        session_id: &str,
+        global_tool_manager: Arc<ToolManager>,
+        available_tools: Option<String>,
+    ) -> WorkflowExecutor {
+        // Unique display name: agent names are globally unique in the store.
+        let mut agent = test_agent(&format!("{session_id}-agent"));
+        agent.name = format!("{session_id} Budget Test Agent");
+        agent.available_tools = available_tools;
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        // Auto-approve tools so they reach physical dispatch (approval
+        // waiting must not consume budget).
+        executor.policy.approval_level = crate::workflow::react::policy::ApprovalLevel::Full;
+        executor
+    }
+
+    #[tokio::test]
+    async fn tool_execution_failure_settles_reservation_as_unknown_with_infra() {
+        use crate::budget::types::{BudgetEnvelope, CapLimit, MoneyMode, ResourceCaps, ScopeKind};
+        use crate::db::budget::NewBudgetScope;
+
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-failure";
+        let envelope = BudgetEnvelope {
+            caps: ResourceCaps {
+                input_tokens: CapLimit::NotApplicable,
+                output_tokens: CapLimit::NotApplicable,
+                cache_read_tokens: CapLimit::NotApplicable,
+                cache_write_tokens: CapLimit::NotApplicable,
+                wall_time_ms: CapLimit::NotApplicable,
+                tool_calls: CapLimit::HardCap(10),
+                processes: CapLimit::HardCap(4),
+                disk_bytes: CapLimit::NotApplicable,
+                network_bytes: CapLimit::NotApplicable,
+                concurrency: CapLimit::HardCap(2),
+                money: CapLimit::NotApplicable,
+            },
+            required_dimensions: Default::default(),
+            money_mode: MoneyMode::TokenResourceOnly,
+            max_attempts: 1,
+            infra_failure_threshold: 2,
+            reservation_lease_ms: 600_000,
+        };
+        for (kind, id, parent) in [
+            (ScopeKind::Campaign, format!("{session_id}:campaign"), None),
+            (
+                ScopeKind::Candidate,
+                format!("{session_id}:candidate"),
+                Some(format!("{session_id}:campaign")),
+            ),
+            (
+                ScopeKind::Trial,
+                format!("{session_id}:trial"),
+                Some(format!("{session_id}:candidate")),
+            ),
+            (
+                ScopeKind::Request,
+                session_id.to_string(),
+                Some(format!("{session_id}:trial")),
+            ),
+        ] {
+            store
+                .create_budget_scope(NewBudgetScope {
+                    scope_id: id,
+                    scope_kind: kind,
+                    parent_scope_id: parent,
+                    envelope: envelope.clone(),
+                    now_ms: 1_700_000_000_000,
+                })
+                .expect("scope creation should succeed");
+        }
+
+        let agent = test_agent(&format!("{session_id}-agent"));
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        // Auto-approve the failing tool so it reaches physical dispatch
+        // (approval waiting must not consume budget).
+        executor.policy.approval_level = crate::workflow::react::policy::ApprovalLevel::Full;
+        executor
+            .tool_manager
+            .register_tool(Arc::new(FailingTestTool))
+            .await
+            .expect("failing test tool should register");
+
+        let (_signal_tx, mut signal_rx) = mpsc::channel::<String>(4);
+        let (observations, _has_todo) = executor
+            .execute_tools(
+                String::new(),
+                r#"{"tool":{"name":"failing_test_tool","arguments":{}}}"#.to_string(),
+                &mut signal_rx,
+            )
+            .await
+            .expect("execute_tools should complete");
+        assert_eq!(observations.len(), 1);
+
+        // The failed execution must freeze the reservation as unknown and
+        // count one infra failure against the campaign (atomic).
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let (reservation_state, infra_entries): (String, i64) = runtime
+            .read_blocking(|conn| {
+                Ok(conn.query_row(
+                    "SELECT state,
+                            (SELECT COUNT(*) FROM experiment_budget_ledger_entries
+                             WHERE operation = 'infra_failure') AS infra_entries
+                     FROM experiment_budget_reservations",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .expect("reservation should be readable");
+        assert_eq!(reservation_state, "unknown");
+        assert_eq!(infra_entries, 1);
+
+        let campaign = store
+            .get_budget_scope_status(&format!("{session_id}:campaign"))
+            .expect("campaign should be readable")
+            .expect("campaign scope should exist");
+        assert_eq!(campaign.infra_failure_count, 1);
+        assert_eq!(campaign.status, "active");
+        // The tool_calls hold stays frozen (unknown is never released).
+        let request_scope = store
+            .get_budget_scope_status(session_id)
+            .expect("request scope should be readable")
+            .expect("request scope should exist");
+        assert_eq!(request_scope.reserved.tool_calls, 1);
+        assert_eq!(request_scope.committed.tool_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn tool_not_dispatched_error_releases_reservation_without_infra() {
+        use rusqlite::OptionalExtension;
+
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-not-registered";
+        create_budget_chain_for_session(&store, session_id, 2);
+
+        let mut executor =
+            budget_test_executor(&store, session_id, Arc::new(ToolManager::new()), None);
+
+        let (_signal_tx, mut signal_rx) = mpsc::channel::<String>(4);
+        let (observations, _has_todo) = executor
+            .execute_tools(
+                String::new(),
+                r#"{"tool":{"name":"never_registered_tool","arguments":{}}}"#.to_string(),
+                &mut signal_rx,
+            )
+            .await
+            .expect("execute_tools should complete");
+        assert_eq!(observations.len(), 1);
+
+        // The lookup miss proves the physical owner was never invoked: the
+        // reservation must be released and no infra failure counted.
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let (state, infra_entries): (Option<String>, i64) = runtime
+            .read_blocking(|conn| {
+                let state = conn
+                    .query_row(
+                        "SELECT state FROM experiment_budget_reservations",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                let infra_entries: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM experiment_budget_ledger_entries
+                     WHERE operation = 'infra_failure'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((state, infra_entries))
+            })
+            .expect("ledger should be readable");
+        assert_eq!(state.as_deref(), Some("released"));
+        assert_eq!(infra_entries, 0);
+        let request_scope = store
+            .get_budget_scope_status(session_id)
+            .expect("request scope should be readable")
+            .expect("request scope should exist");
+        assert_eq!(request_scope.reserved.tool_calls, 0);
+        let _ = observations;
+    }
+
+    #[tokio::test]
+    async fn tool_infra_failures_pause_campaign_at_threshold_through_engine() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-threshold";
+        create_budget_chain_for_session(&store, session_id, 1);
+
+        let mut executor =
+            budget_test_executor(&store, session_id, Arc::new(ToolManager::new()), None);
+        executor
+            .tool_manager
+            .register_tool(Arc::new(FailingTestTool))
+            .await
+            .expect("failing test tool should register");
+
+        let (_signal_tx, mut signal_rx) = mpsc::channel::<String>(4);
+        executor
+            .execute_tools(
+                String::new(),
+                r#"{"tool":{"name":"failing_test_tool","arguments":{}}}"#.to_string(),
+                &mut signal_rx,
+            )
+            .await
+            .expect("execute_tools should complete");
+
+        // Threshold 1: the single execution failure pauses the campaign.
+        let campaign = store
+            .get_budget_scope_status(&format!("{session_id}:campaign"))
+            .expect("campaign should be readable")
+            .expect("campaign scope should exist");
+        assert_eq!(campaign.infra_failure_count, 1);
+        assert_eq!(campaign.status, "paused");
+        // Subsequent admissions are refused while paused.
+        assert_eq!(
+            store
+                .reserve_effect(
+                    crate::budget::ReserveEffect {
+                        effect_id: "eff-after-pause".into(),
+                        idempotency_key: "idem-after-pause".into(),
+                        scopes: crate::budget::types::ScopeChain {
+                            request_id: session_id.into(),
+                            trial_id: format!("{session_id}:trial"),
+                            candidate_id: format!("{session_id}:candidate"),
+                            campaign_id: format!("{session_id}:campaign"),
+                        },
+                        effect_kind: crate::budget::types::EffectKind::ToolCall,
+                        attempt: 1,
+                        estimate: crate::budget::types::BudgetVector {
+                            tool_calls: 1,
+                            concurrency: 1,
+                            ..crate::budget::types::BudgetVector::ZERO
+                        },
+                    },
+                    1_700_000_000_000,
+                )
+                .unwrap_err()
+                .code,
+            crate::budget::errors::AdmissionErrorCode::ScopePaused
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_mcp_policy_rejection_releases_reservation_without_infra() {
+        use rusqlite::OptionalExtension;
+
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-mcp-denied";
+        create_budget_chain_for_session(&store, session_id, 2);
+
+        let global = Arc::new(ToolManager::new());
+        global
+            .register_test_mcp_tool(
+                "browser",
+                "browser_click",
+                json!({"type": "object", "properties": {}}),
+            )
+            .await
+            .expect("test MCP tool should register");
+        // Empty allowlist: the MCP tool is registered but not allowed, so
+        // the policy rejection happens before the physical owner.
+        let mut executor = budget_test_executor(&store, session_id, global, Some("[]".into()));
+
+        let (_signal_tx, mut signal_rx) = mpsc::channel::<String>(4);
+        let (observations, _has_todo) = executor
+            .execute_tools(
+                String::new(),
+                r#"{"tool":{"name":"browser__MCP__browser_click","arguments":{}}}"#.to_string(),
+                &mut signal_rx,
+            )
+            .await
+            .expect("execute_tools should complete");
+        assert_eq!(observations.len(), 1);
+
+        // Proven pre-owner rejection: release without infra accounting.
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let (state, infra_entries): (Option<String>, i64) = runtime
+            .read_blocking(|conn| {
+                let state = conn
+                    .query_row(
+                        "SELECT state FROM experiment_budget_reservations",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                let infra_entries: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM experiment_budget_ledger_entries
+                     WHERE operation = 'infra_failure'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((state, infra_entries))
+            })
+            .expect("ledger should be readable");
+        assert_eq!(state.as_deref(), Some("released"));
+        assert_eq!(infra_entries, 0);
+        let _ = observations;
+    }
+
+    #[tokio::test]
+    async fn tool_cancelled_while_owner_running_settles_unknown_with_infra() {
+        use rusqlite::OptionalExtension;
+
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-cancel-running";
+        create_budget_chain_for_session(&store, session_id, 2);
+
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (signal_tx, signal_rx) = mpsc::channel::<String>(4);
+        let store_for_task = store.clone();
+        let handle = tokio::spawn(async move {
+            let mut executor = budget_test_executor(
+                &store_for_task,
+                session_id,
+                Arc::new(ToolManager::new()),
+                None,
+            );
+            executor
+                .tool_manager
+                .register_tool(Arc::new(BlockingTestTool { started_tx }))
+                .await
+                .expect("blocking test tool should register");
+            let mut signal_rx = signal_rx;
+            executor
+                .execute_tools(
+                    String::new(),
+                    r#"{"tool":{"name":"blocking_test_tool","arguments":{}}}"#.to_string(),
+                    &mut signal_rx,
+                )
+                .await
+        });
+
+        // Wait until the physical owner has definitely been entered.
+        started_rx
+            .recv()
+            .await
+            .expect("blocking tool should signal owner entry");
+        signal_tx
+            .send("stop".to_string())
+            .await
+            .expect("stop signal should send");
+        let result = handle.await.expect("execute_tools task should finish");
+        assert!(result.is_err(), "cancelled execution should return Err");
+
+        // Owner was entered: the reservation is frozen as unknown with one
+        // infra failure (INV-5 / AC-6).
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let (state, infra_entries): (Option<String>, i64) = runtime
+            .read_blocking(|conn| {
+                let state = conn
+                    .query_row(
+                        "SELECT state FROM experiment_budget_reservations",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                let infra_entries: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM experiment_budget_ledger_entries
+                     WHERE operation = 'infra_failure'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((state, infra_entries))
+            })
+            .expect("ledger should be readable");
+        assert_eq!(state.as_deref(), Some("unknown"));
+        assert_eq!(infra_entries, 1);
+    }
+
+    #[tokio::test]
+    async fn tool_cancelled_before_owner_entry_releases_reservation() {
+        use rusqlite::OptionalExtension;
+
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "budget-tool-cancel-queued";
+        create_budget_chain_for_session(&store, session_id, 2);
+
+        let (started_tx, _started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (signal_tx, signal_rx) = mpsc::channel::<String>(4);
+        let mut executor =
+            budget_test_executor(&store, session_id, Arc::new(ToolManager::new()), None);
+        executor
+            .tool_manager
+            .register_tool(Arc::new(BlockingTestTool { started_tx }))
+            .await
+            .expect("blocking test tool should register");
+        // Hold every semaphore permit so the tool future stays queued on
+        // `semaphore.acquire()` and never reaches the physical owner.
+        let semaphore = executor.context.semaphore.clone();
+        let _permits = semaphore
+            .acquire_many(3)
+            .await
+            .expect("semaphore permits should be available");
+
+        let store_for_task = store.clone();
+        let handle = tokio::spawn(async move {
+            let mut signal_rx = signal_rx;
+            executor
+                .execute_tools(
+                    String::new(),
+                    r#"{"tool":{"name":"blocking_test_tool","arguments":{}}}"#.to_string(),
+                    &mut signal_rx,
+                )
+                .await
+        });
+
+        // Wait until Stage 1 has created the reservation (the tool future
+        // is queued behind the held permits at that point).
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let mut reserved = false;
+        for _ in 0..500 {
+            let count: i64 = runtime
+                .read_blocking(|conn| {
+                    Ok(conn.query_row(
+                        "SELECT COUNT(*) FROM experiment_budget_reservations",
+                        [],
+                        |row| row.get(0),
+                    )?)
+                })
+                .expect("reservation count should be readable");
+            if count > 0 {
+                reserved = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            reserved,
+            "reservation should be created before cancellation"
+        );
+
+        signal_tx
+            .send("stop".to_string())
+            .await
+            .expect("stop signal should send");
+        let result = handle.await.expect("execute_tools task should finish");
+        assert!(result.is_err(), "cancelled execution should return Err");
+        let _ = store_for_task;
+
+        // The owner was never entered: the reservation is released without
+        // any infra failure.
+        let (state, infra_entries): (Option<String>, i64) = runtime
+            .read_blocking(|conn| {
+                let state = conn
+                    .query_row(
+                        "SELECT state FROM experiment_budget_reservations",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?;
+                let infra_entries: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM experiment_budget_ledger_entries
+                     WHERE operation = 'infra_failure'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((state, infra_entries))
+            })
+            .expect("ledger should be readable");
+        assert_eq!(state.as_deref(), Some("released"));
+        assert_eq!(infra_entries, 0);
     }
 
     #[tokio::test]

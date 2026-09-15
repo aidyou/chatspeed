@@ -3,6 +3,7 @@
 //! This module provides HTTP endpoints to proxy chat completion requests
 //! to various AI models, offering a unified interface and centralized key management.
 pub(crate) mod adapter;
+mod admission;
 mod auth;
 mod errors;
 mod handler;

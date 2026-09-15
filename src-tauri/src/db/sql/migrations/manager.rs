@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v2, v3, v4, v5, v6,
-    v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2, v3, v4, v5,
+    v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -23,6 +23,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v15::MIGRATION,
     v16::MIGRATION,
     v17::MIGRATION,
+    v18::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -234,6 +235,10 @@ mod tests {
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
         assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
+        // Phase 2B budget ledger tables ship with the latest schema.
+        assert!(table_exists(&conn, "experiment_budget_scopes"));
+        assert!(table_exists(&conn, "experiment_budget_reservations"));
+        assert!(table_exists(&conn, "experiment_budget_ledger_entries"));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))
