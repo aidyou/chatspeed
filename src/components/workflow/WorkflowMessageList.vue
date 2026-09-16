@@ -2897,8 +2897,22 @@ const streamingLayoutState = computed(() => {
   ]
 })
 
+const messageTailLayoutState = computed(() => [
+  props.isCompressing ? 1 : 0,
+  props.compressionMessage?.length || 0,
+  props.queuedMessages
+    .map(item => [
+      item.id,
+      item.status,
+      item.content?.length || 0,
+      item.statusText?.length || 0,
+      item.attachments?.length || 0
+    ].join(':'))
+    .join('|')
+])
+
 watch(
-  [visibleMessages, collapsedMessages],
+  [visibleMessages, collapsedMessages, messageTailLayoutState],
   () => {
     scrollController.beforeContentChange()
     scheduleMeasureUserMessageOverflow()

@@ -4,6 +4,17 @@ import test from 'node:test'
 
 const readAgentComponent = () => readFile(new URL('./Agent.vue', import.meta.url), 'utf8')
 
+test('agent model settings expose and preserve the maximum reasoning level', async () => {
+  const source = await readAgentComponent()
+
+  assert.match(source, /max: 8192/)
+  assert.match(source, /if \(normalized > 4096\) return 'max'/)
+  assert.match(
+    source,
+    /\{ value: 'max', label: 'settings\.model\.reasoningMax' \}/
+  )
+})
+
 test('agent shell policy editor defers and bounds expensive control rendering', async () => {
   const source = await readAgentComponent()
 

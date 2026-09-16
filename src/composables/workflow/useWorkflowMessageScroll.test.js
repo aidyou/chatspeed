@@ -32,6 +32,46 @@ test('keeps following mode at the bottom after content changes', async () => {
   controller.dispose()
 })
 
+test('keeps following a later tail change after an explicit send boundary', async () => {
+  const container = createContainer({ scrollTop: 200, scrollHeight: 1000 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  controller.onWheel({ deltaY: -100 })
+  controller.onScroll()
+  assert.equal(controller.mode.value, 'reading')
+
+  controller.scrollToBottom(true)
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 600)
+  assert.equal(controller.mode.value, 'following')
+
+  controller.beforeContentChange()
+  container.scrollHeight = 1250
+  controller.requestContentChange()
+  await waitForReconcile()
+
+  assert.equal(container.scrollTop, 850)
+  assert.equal(controller.mode.value, 'following')
+  controller.dispose()
+})
+
+test('non-forced tail updates do not interrupt history reading', async () => {
+  const container = createContainer({ scrollTop: 200, scrollHeight: 1000 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  controller.onWheel({ deltaY: -100 })
+  controller.onScroll()
+  controller.scrollToBottom()
+  controller.beforeContentChange()
+  container.scrollHeight = 1100
+  controller.requestContentChange()
+  await waitForReconcile()
+
+  assert.equal(container.scrollTop, 300)
+  assert.equal(controller.mode.value, 'reading')
+  controller.dispose()
+})
+
 test('restores a physical message anchor while reading history', async () => {
   const anchor = {
     id: 'message-2',

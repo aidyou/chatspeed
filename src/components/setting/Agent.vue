@@ -259,11 +259,11 @@
                 </div>
                 <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: 6px">
                   <div class="param-item">
-                    <span class="param-label">{{ $t('settings.model.reasoning') }}</span>
+                    <span class="param-label">{{ $t('settings.model.reasoningCompact') }}</span>
                     <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
                   </div>
                   <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
-                    <span class="param-label">{{ $t('settings.model.thinkingLevel') }}</span>
+                    <span class="param-label">{{ $t('settings.model.thinkingLevelCompact') }}</span>
                     <el-select v-model="agentForm[role.key + 'Model'].thinkingLevel" size="small" style="width: 120px">
                       <el-option v-for="option in agentThinkingLevelOptions" :key="option.value"
                         :label="$t(option.label)" :value="option.value" />
@@ -800,10 +800,12 @@ const defaultAgentModelConfig = () => ({
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
-  high: 4096
+  high: 4096,
+  max: 8192
 }
 const thinkingLevelFromBudget = budget => {
   const normalized = Number(budget) || 0
+  if (normalized > 4096) return 'max'
   if (normalized > 2048) return 'high'
   if (normalized > 1024) return 'medium'
   return 'low'
@@ -813,7 +815,8 @@ const budgetFromThinkingLevel = level =>
 const agentThinkingLevelOptions = [
   { value: 'low', label: 'settings.model.reasoningLow' },
   { value: 'medium', label: 'settings.model.reasoningMedium' },
-  { value: 'high', label: 'settings.model.reasoningHigh' }
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
 ]
 
 const defaultFormData = {

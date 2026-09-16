@@ -642,6 +642,16 @@ test('workflow composer keeps Tab as four spaces outside suggestion selection', 
   )
 })
 
+test('sending a workflow message forces the message list back to the latest content', async () => {
+  const workflowView = await readFile('src/views/Workflow.vue', 'utf8')
+
+  assert.match(
+    workflowView,
+    /inputComposable\.onSendMessage\.value = async \(\) => \{[\s\S]*?scrollMessageListToBottom\(true\)[\s\S]*?await coreOnSendMessage/,
+    'an explicit user send must leave history-reading mode before message rendering starts'
+  )
+})
+
 test('applied compression clears the indicator and updates context usage', async () => {
   const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
 
@@ -662,8 +672,13 @@ test('message resize observer is hoisted for immediate watchers', async () => {
   )
   assert.match(
     messageList,
-    /watch\(\n  \[visibleMessages, collapsedMessages\][\s\S]*?syncMessageContentResizeObserver\(\)/,
-    'the immediate message watcher must call the hoisted resize observer helper'
+    /const messageTailLayoutState = computed\(\(\) => \[[\s\S]*?props\.isCompressing[\s\S]*?props\.compressionMessage[\s\S]*?props\.queuedMessages[\s\S]*?\]\)/,
+    'tail status blocks must participate in message layout tracking'
+  )
+  assert.match(
+    messageList,
+    /watch\(\n  \[visibleMessages, collapsedMessages, messageTailLayoutState\][\s\S]*?scrollController\.beforeContentChange\(\)[\s\S]*?nextTick\(\(\) => \{[\s\S]*?syncMessageContentResizeObserver\(\)[\s\S]*?scrollController\.requestContentChange\(\)/,
+    'message, queue, and compression changes must share the centralized layout reconciliation path'
   )
 })
 
@@ -719,6 +734,18 @@ test('switching workflows clears an unobserved compression indicator from the pr
     /if \(previousWorkflowId && previousWorkflowId !== id\) \{\s*setCompressionStatus\(previousWorkflowId, false, ''\)[\s\S]*?currentSessionId\.value = id/,
     'switching away must discard compression UI state whose completion event is no longer observed'
   )
+})
+
+test('workflow completion tool is presented as a finished state', async () => {
+  const [enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.equal(enLocale.workflow.finishTask, 'Task finished')
+  assert.equal(zhHansLocale.workflow.finishTask, '任务完成')
+  assert.equal(zhHantLocale.workflow.finishTask, '任務完成')
 })
 
 test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {
