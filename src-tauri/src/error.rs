@@ -93,6 +93,15 @@ impl From<tauri::Error> for AppError {
     }
 }
 
+/// Errors reported by the `wry` webview that carries the ChatHub page.
+impl From<wry::Error> for AppError {
+    fn from(err: wry::Error) -> Self {
+        AppError::General {
+            message: err.to_string(),
+        }
+    }
+}
+
 impl<T> From<std::sync::PoisonError<T>> for AppError {
     fn from(err: std::sync::PoisonError<T>) -> Self {
         AppError::Db(crate::db::StoreError::LockError(

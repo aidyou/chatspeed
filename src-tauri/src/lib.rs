@@ -1,5 +1,6 @@
 mod ai;
 mod builtin_agents;
+pub mod chat_hub;
 mod ccproxy;
 mod commands;
 mod constants;
@@ -47,6 +48,7 @@ use ai::model_catalog_updater::ModelsDevCatalogService;
 use commands::agent::*;
 use commands::ccproxy::*;
 use commands::chat::*;
+use commands::chat_hub::*;
 use commands::clipboard::*;
 use commands::config_transfer::*;
 use commands::dev_tool::*;
@@ -248,6 +250,18 @@ pub async fn run() -> crate::error::Result<()> {
             get_all_backups,
             restore_setting,
             update_tray,
+            // chat hub (web chat entries)
+            get_all_chat_hubs,
+            add_chat_hub,
+            update_chat_hub,
+            delete_chat_hub,
+            update_chat_hub_order,
+            show_chat_hub_page,
+            hide_chat_hub_page,
+            set_chat_hub_page_width,
+            destroy_chat_hub_page,
+            get_chat_hub_view_mode,
+            get_chat_hub_page_limits,
             // sensitive
             get_sensitive_config,
             update_sensitive_config,
@@ -471,6 +485,11 @@ pub async fn run() -> crate::error::Result<()> {
                     // For these windows, we just hide them.
                     "assistant" | "workflow" => {
                         api.prevent_close();
+                        // The workflow window is only hidden so running tasks survive,
+                        // and the embedded ChatHub webview is deliberately left
+                        // untouched: hiding the window hides the child with it, and the
+                        // page (and its site session) is still there when the window is
+                        // shown again. It is released only when the window is destroyed.
                         // Check if the window is valid before trying to hide it.
                         if window.is_visible().unwrap_or(false) {
                             if let Err(e) = window.hide() {
@@ -523,6 +542,18 @@ pub async fn run() -> crate::error::Result<()> {
                             }
                         }
                     }
+
+                    // The page is docked inside the workflow window, so a window resize
+                    // has to be forwarded to the carriers that place the page themselves.
+                    if window_label == chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
+                        if let Some(chat_hub_state) =
+                            window.try_state::<chat_hub::ChatHubPageState>()
+                        {
+                            if let Err(e) = chat_hub_state.sync_bounds(window.app_handle()) {
+                                warn!("Failed to resize the ChatHub page: {}", e);
+                            }
+                        }
+                    }
                 }
             }
             tauri::WindowEvent::Moved(position) => {
@@ -530,6 +561,9 @@ pub async fn run() -> crate::error::Result<()> {
                     return;
                 }
 
+                // The ChatHub page is docked inside the workflow window (see
+                // `src/chat_hub`), so moving that window moves the page with it on every
+                // platform, and there is nothing to do for it here.
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
                     if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
@@ -616,6 +650,17 @@ pub async fn run() -> crate::error::Result<()> {
                     } else {
                         error!("MOVE_TIMERS mutex is poisoned when storing new timer");
                         new_timer.abort();
+                    }
+                }
+            }
+            // Release the ChatHub page together with the Workflow window it is docked
+            // into, so application exit leaves no page and no stale view state behind.
+            tauri::WindowEvent::Destroyed => {
+                if window.label() == chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
+                    let app_handle = window.app_handle();
+                    if let Some(chat_hub_state) = app_handle.try_state::<chat_hub::ChatHubPageState>()
+                    {
+                        chat_hub_state.release(app_handle);
                     }
                 }
             }
@@ -872,6 +917,10 @@ pub async fn run() -> crate::error::Result<()> {
                 tsid_generator: tsid_generator.clone(),
             });
             app.manage(factory);
+
+            // State 11: ChatHubPageState
+            // Owns the single ChatHub page docked inside the Workflow window.
+            app.manage(chat_hub::ChatHubPageState::new());
 
             spawn_workflow_automation_scheduler(app.handle().clone());
 

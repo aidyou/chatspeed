@@ -156,13 +156,28 @@
         </template>
       </div>
 
-      <div
-        class="workflow-terminal-entry compact-terminal-entry"
-        :class="{ blinking: terminalMinimized }"
-        @click="$emit('open-terminal')">
-        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
-          <cs name="bash" size="var(--cs-font-size-lg)" />
-        </el-tooltip>
+      <div class="compact-bottom-entries">
+        <ChatHubEntry
+          class="compact-chat-hub-entry"
+          :hubs="chatHubs"
+          :active-hub-id="activeChatHubId"
+          @select="$emit('select-chat-hub', $event)"
+          @open-current="$emit('open-current-chat-hub')"
+          @toggle="$emit('toggle-chat-hub')"
+          @close="$emit('close-chat-hub')" />
+
+        <!-- The docked ChatHub page stays in place, so the terminal entry only opens the
+             terminal panel. -->
+        <div class="compact-terminal-entry-group">
+          <div
+            class="workflow-terminal-entry compact-terminal-entry"
+            :class="{ blinking: terminalMinimized }"
+            @click="$emit('open-terminal')">
+            <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
+              <cs name="bash" size="var(--cs-font-size-lg)" />
+            </el-tooltip>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -337,6 +352,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
+import ChatHubEntry from './ChatHubEntry.vue'
 
 const { t } = useI18n()
 
@@ -396,6 +412,14 @@ const props = defineProps({
   navigationTab: {
     type: String,
     default: 'history'
+  },
+  chatHubs: {
+    type: Array,
+    default: () => []
+  },
+  activeChatHubId: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -415,6 +439,10 @@ const emit = defineEmits([
   'insert-path-reference',
   'open-editor-file',
   'open-terminal',
+  'select-chat-hub',
+  'open-current-chat-hub',
+  'toggle-chat-hub',
+  'close-chat-hub',
   'update:navigationTab'
 ])
 

@@ -1008,7 +1008,8 @@ const manualUpdateButtonText = computed(() => {
 
 const backups = ref([])
 const restoreDir = ref('')
-const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox']
+
+const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox', 'chatHubs']
 const configExportVisible = ref(false)
 const configExportBusy = ref(false)
 const configExportCategories = ref([])

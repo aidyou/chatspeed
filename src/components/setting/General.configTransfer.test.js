@@ -15,7 +15,7 @@ test('keeps complete backup handlers and gates configuration import behind risk 
 })
 
 test('applies frontend category dependency closure and defaults export to every category', () => {
-  assert.match(source, /const configCategories = \['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox'\]/)
+  assert.match(source, /const configCategories = \['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox', 'chatHubs'\]/)
   assert.match(source, /configExportCategories\.value = \[\.\.\.configCategories\]/)
   assert.match(source, /if \(normalized\.has\('proxy'\)\) normalized\.add\('aiModels'\)/)
   assert.match(source, /if \(normalized\.has\('agents'\)\) \['aiModels', 'skills', 'mcp', 'sandbox'\]/)

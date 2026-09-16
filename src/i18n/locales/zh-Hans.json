@@ -374,6 +374,37 @@
       "visionModel": "视觉模型",
       "workingDirectory": "工作目录"
     },
+    "chatHub": {
+      "add": "添加入口",
+      "addTitle": "添加聊天入口",
+      "delete": "删除",
+      "deleteConfirm": "确定删除聊天入口 {name} 吗？",
+      "deleteConfirmTitle": "删除聊天入口",
+      "deleteFailed": "删除聊天入口失败",
+      "deleteSuccess": "已删除聊天入口 {name}",
+      "edit": "编辑",
+      "editTitle": "编辑聊天入口",
+      "empty": "暂无聊天入口",
+      "faviconInvalidUrl": "请先填写合法的 http 或 https 网址",
+      "logo": "图标",
+      "logoInvalid": "图标必须是合法的 http 或 https 网址",
+      "logoPlaceholder": "留空则使用字母头像",
+      "logoPreview": "图标预览",
+      "logoPreviewHint": "为空或无法加载时显示字母头像",
+      "manageTooltip": "管理显示在 Workflow 窗口中的网页聊天站点，可拖拽排序。",
+      "name": "名称",
+      "namePlaceholder": "显示名称，例如 ChatGPT",
+      "nameRequired": "请输入名称",
+      "preset": "预置",
+      "reorderFailed": "保存新顺序失败",
+      "saveFailed": "保存聊天入口失败",
+      "saveSuccess": "聊天入口已保存",
+      "title": "聊天入口",
+      "url": "网址",
+      "urlInvalid": "请输入合法的 http 或 https 网址",
+      "urlPlaceholder": "https://example.com/chat",
+      "useFavicon": "使用 Google 图标"
+    },
     "general": {
       "advancedSettings": "高级设置",
       "apiKeyProtection": {
@@ -419,6 +450,7 @@
       "configCategories": {
         "agents": "智能体",
         "aiModels": "AI 引擎",
+        "chatHubs": "聊天入口",
         "mcp": "MCP",
         "proxy": "代理",
         "sandbox": "沙箱设置",
@@ -1141,6 +1173,7 @@
     "type": {
       "about": "关于",
       "agent": "智能体",
+      "chatHub": "聊天入口",
       "general": "通用",
       "mcp": "MCP",
       "model": "AI供应商",
@@ -1314,6 +1347,14 @@
       "runningTool": "正在执行工具: {tool}",
       "thinking": "思考中",
       "toolCompleted": "工具执行完成: {tool}"
+    },
+    "chatHub": {
+      "close": "关闭聊天页面",
+      "closeFailed": "关闭聊天页面失败",
+      "empty": "暂无聊天入口",
+      "hideFailed": "隐藏聊天入口失败",
+      "showFailed": "打开聊天入口失败",
+      "title": "聊天入口"
     },
     "chatspeedSkillsGroup": "ChatSpeed",
     "clearContextDivider": "开始新会话",
