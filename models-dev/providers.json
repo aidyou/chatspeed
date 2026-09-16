@@ -124,7 +124,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba-cn",
       "logo": "https://models.dev/logos/alibaba-cn.svg",
-      "modelCount": 87,
+      "modelCount": 88,
       "name": "Alibaba (China)",
       "protocol": "openai",
       "responses": false
@@ -154,7 +154,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/token-plan-overview",
       "id": "alibaba-token-plan",
       "logo": "https://models.dev/logos/alibaba-token-plan.svg",
-      "modelCount": 26,
+      "modelCount": 27,
       "name": "Alibaba Token Plan",
       "protocol": "openai",
       "responses": false
@@ -186,7 +186,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 161,
+      "modelCount": 165,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -613,7 +613,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 23,
+      "modelCount": 34,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -911,7 +911,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 375,
+      "modelCount": 376,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 193,
+      "modelCount": 194,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -991,7 +991,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 402,
+      "modelCount": 404,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1255,7 +1255,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 580,
+      "modelCount": 574,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1420,7 +1420,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 367,
+      "modelCount": 368,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1843,7 +1843,7 @@
       "documentationUrl": "https://docs.tensorx.ai/",
       "id": "tensorx",
       "logo": "https://models.dev/logos/tensorx.svg",
-      "modelCount": 25,
+      "modelCount": 26,
       "name": "TensorX",
       "protocol": "openai",
       "responses": false
@@ -1873,7 +1873,7 @@
       "documentationUrl": "https://docs.tinfoil.sh",
       "id": "tinfoil",
       "logo": "https://models.dev/logos/tinfoil.svg",
-      "modelCount": 9,
+      "modelCount": 8,
       "name": "Tinfoil",
       "protocol": "openai",
       "responses": false
@@ -1981,7 +1981,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 107,
+      "modelCount": 106,
       "name": "Venice AI",
       "responses": false
     },
@@ -1989,7 +1989,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 376,
+      "modelCount": 377,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2218,9 +2218,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "2a898bb742a75f165538a4090b482a6add4dee1252869785f223bd6ac46b5983",
-    "generatedAt": "2026-09-15T08:42:52Z",
+    "catalogSha256": "3a85c2501ad87f2794296d36bb2bb6e7332e037511f20610b34d0dfc980d8f36",
+    "generatedAt": "2026-09-16T08:37:16Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "491097cb133febbb3bff4679b9bfa3b61e7915b2"
+    "revision": "6f781d61a90d3a8c725ecea16a05092534d98a20"
   }
 }
