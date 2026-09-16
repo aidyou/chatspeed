@@ -2972,6 +2972,11 @@ onBeforeUnmount(() => {
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
 
+.app-container.macos .titlebar,
+.app-container.windows .titlebar{
+    background: var(--cs-titlebar-bg-color);
+}
+
 .main-container {
   display: flex;
   flex-direction: column;

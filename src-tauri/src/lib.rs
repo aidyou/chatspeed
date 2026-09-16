@@ -126,6 +126,13 @@ static MOVE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
 static LAST_MOVES: LazyLock<StdMutex<HashMap<String, Instant>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
+// Store the pending geometry writes by window label: a resize or a move replaces the
+// write of the same window, so a drag stores the geometry it ended at.
+static SIZE_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+static POSITION_TIMERS: LazyLock<StdMutex<HashMap<String, JoinHandle<()>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
 fn should_auto_hide_on_focus_loss(label: &str) -> bool {
     matches!(label, "assistant")
 }
@@ -511,7 +518,7 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             }
-            tauri::WindowEvent::Resized(size) => {
+            tauri::WindowEvent::Resized(_size) => {
                 // Do nothing if the window is not yet fully initialized.
                 if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -519,29 +526,7 @@ pub async fn run() -> crate::error::Result<()> {
                 let window_label = window.label();
                 if window_label == "main" || window_label == "assistant" ||
                     window_label == "workflow" || window_label == "proxy_switcher" {
-                    if let Some(config_state) = window.try_state::<Arc<MainStore>>() {
-                        let window_size = get_saved_window_size(config_state.inner().clone(), window_label).unwrap_or_default();
-                        if (window_size.width != size.width as f64
-                            || window_size.height != size.height as f64)
-                            && (size.width > 0 && size.height > 0)
-                        {
-                            // Get the current window's scale factor.
-                            let scale_factor = window.scale_factor().unwrap_or(1.0);
-                            // Convert physical size to logical size.
-                            let logical_size = size.to_logical(scale_factor);
-                            // Store the window size when the user resizes it to remember for the next startup.
-                            let store = config_state.inner().as_ref();
-                            if let Err(e) = store.set_window_size(
-                                WindowSize {
-                                    width: logical_size.width,
-                                    height: logical_size.height,
-                                },
-                                window_label,
-                            ) {
-                                error!("Failed to set window size: {}", e);
-                            }
-                        }
-                    }
+                    schedule_window_size_save(window);
 
                     // The page is docked inside the workflow window, so a window resize
                     // has to be forwarded to the carriers that place the page themselves.
@@ -556,7 +541,7 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             }
-            tauri::WindowEvent::Moved(position) => {
+            tauri::WindowEvent::Moved(_position) => {
                 if !WINDOW_READY.load(Ordering::Relaxed) {
                     return;
                 }
@@ -566,26 +551,18 @@ pub async fn run() -> crate::error::Result<()> {
                 // platform, and there is nothing to do for it here.
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
-                    if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
-                        save_window_position(
-                            window,
-                            &config_store,
-                            position,
-                            get_saved_window_position,
-                            |store, pos| store.save_window_position(pos),
-                        );
-                    }
+                    schedule_window_position_save(
+                        window,
+                        get_saved_window_position,
+                        MainStore::save_window_position,
+                    );
                 } else if window.label() == "workflow" {
                     // Save the workflow window position when it is moved.
-                    if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
-                        save_window_position(
-                            window,
-                            &config_store,
-                            position,
-                            get_saved_workflow_window_position,
-                            |store, pos| store.save_workflow_window_position(pos),
-                        );
-                    }
+                    schedule_window_position_save(
+                        window,
+                        get_saved_workflow_window_position,
+                        MainStore::save_workflow_window_position,
+                    );
                 } else if should_preserve_visibility_while_dragging(window.label()) {
                     let label = window.label().to_string();
 
@@ -1050,6 +1027,123 @@ fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Op
     config_store.get_config(key, Some(WindowSize::default()))
 }
 
+/// Remembers the size the user left a window at.
+///
+/// The size is read from the window itself instead of the resize event, because the
+/// event carries the size the window had when the platform reported the resize. A
+/// window is created with a default size and its saved size is restored right after,
+/// while the setup hook runs, and the reports both steps produce only reach the event
+/// loop afterwards: they can arrive once initialization has finished while still
+/// describing the default size, which would overwrite the size the user left behind.
+///
+/// A window the user cannot see cannot be resized by the user, so nothing is written
+/// while it is hidden.
+fn save_current_window_size(window: &tauri::Window, config_store: &Arc<MainStore>) {
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+
+    let (Ok(size), Ok(scale_factor)) = (window.inner_size(), window.scale_factor()) else {
+        warn!(
+            "Failed to read the current size of window '{}'",
+            window.label()
+        );
+        return;
+    };
+
+    // Convert the physical size to the logical size the configuration stores.
+    let logical_size = size.to_logical::<f64>(scale_factor);
+    if logical_size.width <= 0.0 || logical_size.height <= 0.0 {
+        return;
+    }
+
+    let saved_size =
+        get_saved_window_size(config_store.clone(), window.label()).unwrap_or_default();
+    if saved_size.width == logical_size.width && saved_size.height == logical_size.height {
+        return;
+    }
+
+    if let Err(e) = config_store.set_window_size(
+        WindowSize {
+            width: logical_size.width,
+            height: logical_size.height,
+        },
+        window.label(),
+    ) {
+        error!("Failed to set window size: {}", e);
+    }
+}
+
+/// How long a window change waits before it is written to the configuration.
+///
+/// A resize or a move is reported to the event loop before the window has applied the
+/// change it describes, and the windows are created with a default geometry that is
+/// replaced by the saved one while the setup hook runs: the reports of those two steps
+/// reach the event loop only afterwards, where they would be read as the geometry the
+/// window had before it was restored. Waiting for the change to settle is what keeps
+/// such a report from overwriting the geometry the user left the window at.
+const WINDOW_GEOMETRY_SAVE_DELAY: Duration = Duration::from_millis(300);
+
+/// Writes the size of a window back once its current resize has settled.
+///
+/// A new resize replaces the pending write, so dragging a window stores the size it
+/// ended at instead of every step along the way.
+fn schedule_window_size_save(window: &tauri::Window) {
+    let label = window.label().to_string();
+    let window = window.clone();
+
+    let Ok(mut timers) = SIZE_TIMERS.lock() else {
+        error!("SIZE_TIMERS mutex is poisoned");
+        return;
+    };
+
+    if let Some(handle) = timers.remove(&label) {
+        handle.abort();
+    }
+
+    let timer = spawn(async move {
+        tokio::time::sleep(WINDOW_GEOMETRY_SAVE_DELAY).await;
+
+        if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
+            save_current_window_size(&window, config_store.inner());
+        }
+    });
+
+    timers.insert(label, timer);
+}
+
+/// Writes the position of a window back once its current move has settled.
+///
+/// A new move replaces the pending write, so dragging a window stores the position it
+/// ended at instead of every step along the way.
+fn schedule_window_position_save(
+    window: &tauri::Window,
+    get_saved_pos: fn(&Arc<MainStore>) -> Option<MainWindowPosition>,
+    save_pos: fn(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
+) {
+    let label = window.label().to_string();
+    let window = window.clone();
+
+    let Ok(mut timers) = POSITION_TIMERS.lock() else {
+        error!("POSITION_TIMERS mutex is poisoned");
+        return;
+    };
+
+    if let Some(handle) = timers.remove(&label) {
+        handle.abort();
+    }
+
+    let timer = spawn(async move {
+        tokio::time::sleep(WINDOW_GEOMETRY_SAVE_DELAY).await;
+
+        if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
+            save_window_position(&window, config_store.inner(), get_saved_pos, save_pos);
+        }
+    });
+
+    timers.insert(label, timer);
+}
+
 /// Get the saved window position from the configuration
 ///
 /// # Arguments
@@ -1077,22 +1171,31 @@ fn get_saved_workflow_window_position(config_store: &Arc<MainStore>) -> Option<M
 
 /// Helper function to save window position for main and workflow windows
 ///
+/// The position is read from the window itself instead of the move event, because the
+/// event carries the position the window had when the platform reported the move: a
+/// window is created centered before its saved position is restored, while setup runs,
+/// and that early report only reaches the event loop afterwards, where it would store
+/// the default position over the one the user left behind.
+///
 /// # Arguments
 /// - `window`: The window whose position is being saved
 /// - `config_store`: The configuration store
-/// - `current_position`: The current position from the window event
 /// - `get_saved_pos`: Function to get the saved position for this window type
 /// - `save_pos`: Function to save the position for this window type
-fn save_window_position<F, G>(
+fn save_window_position(
     window: &tauri::Window,
     config_store: &Arc<MainStore>,
-    current_position: &tauri::PhysicalPosition<i32>,
-    get_saved_pos: F,
-    save_pos: G,
-) where
-    F: FnOnce(&Arc<MainStore>) -> Option<MainWindowPosition>,
-    G: FnOnce(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
-{
+    get_saved_pos: fn(&Arc<MainStore>) -> Option<MainWindowPosition>,
+    save_pos: fn(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
+) {
+    let Ok(current_position) = window.outer_position() else {
+        warn!(
+            "Failed to read the current position of window '{}'",
+            window.label()
+        );
+        return;
+    };
+
     let old_pos = get_saved_pos(config_store);
     let screen_name = get_screen_name(window);
 
