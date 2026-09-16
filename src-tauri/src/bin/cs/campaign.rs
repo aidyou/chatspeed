@@ -53,6 +53,8 @@ const CAMPAIGN_DIR: &str = "campaign";
 const CAMPAIGN_SIDECAR_DIR: &str = "main";
 const CANDIDATE_DIR: &str = "candidates";
 const RUN_DIR: &str = "runs";
+const RUN_INTENT_DIR: &str = "intent";
+const RUN_RESULT_DIR: &str = "result";
 const SUMMARY_DIR: &str = "summary";
 const EVIDENCE_DIR: &str = "evidence";
 const ARTIFACT_DIR: &str = "artifact";
@@ -63,6 +65,7 @@ const VERDICT_DIR: &str = "verdict";
 const CAMPAIGN_FILE: &str = "campaign.json";
 const CANDIDATE_FILE: &str = "candidate.json";
 const RUN_FILE: &str = "run.json";
+const RUN_INTENT_FILE: &str = "run-intent.json";
 const SUMMARY_FILE: &str = "campaign-summary.json";
 
 /// Manifest hash domain for every campaign-local sidecar. It is distinct from
@@ -106,8 +109,18 @@ fn candidate_sidecar_dir(out: &Path, candidate_key: &str) -> PathBuf {
     campaign_dir(out).join(CANDIDATE_DIR).join(candidate_key)
 }
 
-fn run_sidecar_dir(out: &Path, candidate_key: &str) -> PathBuf {
-    campaign_dir(out).join(RUN_DIR).join(candidate_key)
+fn run_intent_sidecar_dir(out: &Path, candidate_key: &str) -> PathBuf {
+    campaign_dir(out)
+        .join(RUN_DIR)
+        .join(RUN_INTENT_DIR)
+        .join(candidate_key)
+}
+
+fn run_result_sidecar_dir(out: &Path, candidate_key: &str) -> PathBuf {
+    campaign_dir(out)
+        .join(RUN_DIR)
+        .join(RUN_RESULT_DIR)
+        .join(candidate_key)
 }
 
 /// Reads and re-verifies one campaign-local sidecar. The manifest is verified
@@ -289,10 +302,6 @@ pub async fn create(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// `run`
-// ---------------------------------------------------------------------------
-
 /// The campaign context re-loaded and re-verified from the local sidecars.
 #[derive(Debug)]
 struct CampaignContext {
@@ -301,6 +310,60 @@ struct CampaignContext {
     catalog_digest: String,
     plan: Value,
     document: Value,
+}
+
+fn load_resumable_run_result(
+    out: &Path,
+    context: &CampaignContext,
+    candidate_key: &str,
+) -> Result<Option<Value>, CliError> {
+    let intent_dir = run_intent_sidecar_dir(out, candidate_key);
+    if !intent_dir.exists() {
+        return Ok(None);
+    }
+    if run_result_sidecar_dir(out, candidate_key)
+        .join(RUN_FILE)
+        .exists()
+    {
+        return Err(io_error(
+            code::RUN_ALREADY_CONSUMED,
+            format!("candidate '{candidate_key}' already has a consumed run sidecar"),
+        ));
+    }
+    let intent_sidecar = read_sidecar(&intent_dir, RUN_INTENT_FILE, "run_intent")?;
+    let backend_result = intent_sidecar
+        .get("backend_result")
+        .cloned()
+        .ok_or_else(|| io_error(code::SIDECAR_INVALID, "run intent has no backend result"))?;
+    let recorded_candidate = intent_sidecar
+        .get("candidate_key")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let recorded_campaign = intent_sidecar
+        .get("campaign_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let recorded_session = intent_sidecar
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let backend_session = backend_result
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if recorded_candidate != candidate_key
+        || recorded_campaign != context.campaign_id
+        || recorded_session.is_empty()
+        || backend_session != recorded_session
+        || backend_result.get("campaign_id").and_then(Value::as_str)
+            != Some(context.campaign_id.as_str())
+    {
+        return Err(io_error(
+            code::SIDECAR_INVALID,
+            "run intent binding does not match the campaign, candidate or backend run",
+        ));
+    }
+    Ok(Some(backend_result))
 }
 
 fn load_campaign(out: &Path) -> Result<CampaignContext, CliError> {
@@ -415,17 +478,6 @@ pub async fn run(
     candidate_key: &str,
 ) -> Result<(), CliError> {
     let context = load_campaign(out)?;
-    // Stage 0 consumes each declared arm at most once per campaign directory.
-    let run_dir = run_sidecar_dir(out, candidate_key);
-    if run_dir.exists() {
-        return Err(io_error(
-            code::RUN_ALREADY_CONSUMED,
-            format!(
-                "candidate '{candidate_key}' already has a consumed run sidecar at {}",
-                run_dir.display()
-            ),
-        ));
-    }
     let fixture = resolve_fixture(&context)?;
     let run_intent = json!({
         "schema_version": contract::CAMPAIGN_RUN_REQUEST_V1,
@@ -442,13 +494,75 @@ pub async fn run(
         ));
     }
 
-    let result = client
-        .post(
-            &format!("/control/v1/campaigns/{}/runs", context.campaign_id),
-            run_intent,
-            Some(&crate::new_idempotency_key()),
+    // Validate the candidate before it is used in any local filesystem path.
+    // The shared contract also guarantees the key is safe for the sidecar
+    // layout and that it belongs to this immutable campaign plan.
+    intent.candidate().ok_or_else(|| {
+        usage_error(
+            contract::CampaignSpecErrorCode::UnknownCandidate.as_str(),
+            format!("candidate '{candidate_key}' is not declared by the campaign plan"),
         )
-        .await?;
+    })?;
+    let result = if let Some(backend_result) =
+        load_resumable_run_result(out, &context, candidate_key)?
+    {
+        backend_result
+    } else {
+        let result = client
+            .post(
+                &format!("/control/v1/campaigns/{}/runs", context.campaign_id),
+                run_intent.clone(),
+                Some(&crate::new_idempotency_key()),
+            )
+            .await?;
+        let session_id = result
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| io_error(code::RESPONSE_MISMATCH, "run response has no session_id"))?;
+        let campaign_scope_id = result
+            .get("campaign_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if campaign_scope_id != context.campaign_id {
+            return Err(io_error(
+                code::RESPONSE_MISMATCH,
+                "run response campaign id does not match the frozen campaign",
+            ));
+        }
+        let candidate_scope_id = result
+            .get("candidate_scope_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let trial_scope_id = result
+            .get("trial_scope_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let intent_sidecar = json!({
+            "schema_version": contract::CAMPAIGN_SUMMARY_V1,
+            "sidecar_kind": "run_intent",
+            "campaign_id": context.campaign_id,
+            "campaign_hash": context.campaign_hash,
+            "candidate_key": candidate_key,
+            "run_id": session_id,
+            "session_id": session_id,
+            "run_scopes": {
+                "campaign_id": campaign_scope_id,
+                "candidate_scope_id": candidate_scope_id,
+                "trial_scope_id": trial_scope_id,
+                "request_scope_id": session_id,
+            },
+            "run_intent": run_intent,
+            "backend_result": result,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+        });
+        write_sidecar(
+            RUN_INTENT_FILE,
+            intent_sidecar,
+            &run_intent_sidecar_dir(out, candidate_key),
+        )?;
+        result
+    };
+
     let session_id = result
         .get("session_id")
         .and_then(Value::as_str)
@@ -474,37 +588,28 @@ pub async fn run(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-
-    // Exactly one run is submitted per invocation; a timeout never re-submits.
-    let terminal = match experiment::wait_for_terminal(client, &session_id).await {
-        Ok(status) => status,
-        Err(error) => {
-            // Keep the created run as the single auditable fact: record it and
-            // stop rather than retrying or fabricating a terminal state.
-            let facts = json!({
-                "schema_version": contract::CAMPAIGN_SUMMARY_V1,
-                "sidecar_kind": "consumed_run",
-                "candidate_key": candidate_key,
-                "run_id": session_id,
-                "session_id": session_id,
-                "terminal_status": Value::Null,
-                "consumed": false,
-                "stop_reason": format!("terminal_wait_failed: {error}"),
-            });
-            let _ = write_sidecar(RUN_FILE, facts, &run_dir);
-            return Err(error);
-        }
-    };
+    // The immutable run-intent sidecar remains the audit record for all
+    // intermediate failures. Because it is written before this point, a
+    // retry resumes this same backend run rather than submitting another one.
+    let terminal = experiment::wait_for_terminal(client, &session_id).await?;
 
     let bundle_dir = evidence_root(out).join(format!("{candidate_key}-{session_id}"));
     let artifact_dir = bundle_dir.join(ARTIFACT_DIR);
     let evaluation_dir = bundle_dir.join(EVALUATION_DIR);
     let verdict_dir = bundle_dir.join(VERDICT_DIR);
 
-    // Read-only capture of the existing session (2A). Never creates, starts,
-    // signals or stops a workflow.
-    let (artifact_status, event_count) =
-        experiment::capture_bundle(client, &session_id, &artifact_dir).await?;
+    // A previous capture may have completed before a later evaluation/verdict
+    // failure. Verify and reuse it so resuming never attempts to overwrite the
+    // immutable artifact target.
+    let (artifact_status, event_count) = if artifact_dir.exists() {
+        let report = artifact::verify_bundle_dir(&artifact_dir)
+            .map_err(|error| io_error(error.code, error.message))?;
+        (report.status.as_str(), report.event_count)
+    } else {
+        // Read-only capture of the existing session (2A). Never creates,
+        // starts, signals or stops a workflow.
+        experiment::capture_bundle(client, &session_id, &artifact_dir).await?
+    };
 
     let mut facts = Map::new();
     facts.insert(
@@ -540,24 +645,29 @@ pub async fn run(
         facts.insert("prompt_surface".into(), surface.clone());
     }
 
-    // Offline deterministic evaluation (2D) on the freshly captured artifact.
-    // An evaluation failure still records the run facts before stopping.
-    if let Err(error) = evaluate::evaluate_artifact_offline(&artifact_dir, &evaluation_dir) {
-        facts.insert(
-            "stop_reason".into(),
-            json!(format!("{}: {}", error.code, error.message)),
-        );
-        let _ = write_sidecar(RUN_FILE, Value::Object(facts), &run_dir);
+    // Offline deterministic evaluation (2D) on the captured artifact. A
+    // previously published sidecar is re-verified instead of overwritten.
+    if evaluation_dir.exists() {
+        evaluate::verify_sidecar_dir(
+            &evaluation_dir,
+            "evaluation.json",
+            evaluate::EVALUATION_MANIFEST_DOMAIN,
+        )
+        .map_err(|error| io_error(error.code, error.message))?;
+    } else if let Err(error) = evaluate::evaluate_artifact_offline(&artifact_dir, &evaluation_dir) {
         return Err(io_error(error.code, error.message));
     }
-    // Independent 2E verdict (never a promotion decision).
-    verifier::verify_artifact_offline(
-        fixture["suite"].as_str().unwrap_or(""),
-        fixture["task_id"].as_str().unwrap_or(""),
-        &artifact_dir,
-        &verdict_dir,
-    )
-    .map_err(|error| io_error(error.code, error.message))?;
+    // Independent 2E verdict (never a promotion decision). Existing verdicts
+    // are consumed only after their own manifest is re-verified below.
+    if !verdict_dir.exists() {
+        verifier::verify_artifact_offline(
+            fixture["suite"].as_str().unwrap_or(""),
+            fixture["task_id"].as_str().unwrap_or(""),
+            &artifact_dir,
+            &verdict_dir,
+        )
+        .map_err(|error| io_error(error.code, error.message))?;
+    }
 
     // Independent re-verification and consumption of the published verdict.
     let consumed = consume_verdict(
@@ -574,7 +684,11 @@ pub async fn run(
     let accepted = terminal == "completed" && !budget_rejected;
     facts.insert("consumed".into(), json!(accepted));
     let consumed_facts = Value::Object(facts);
-    write_sidecar(RUN_FILE, consumed_facts.clone(), &run_dir)?;
+    write_sidecar(
+        RUN_FILE,
+        consumed_facts.clone(),
+        &run_result_sidecar_dir(out, candidate_key),
+    )?;
 
     render_run(cli, out, candidate_key, &consumed_facts);
 
@@ -828,8 +942,10 @@ fn publish_summary(
     let mut runs = Vec::new();
     let mut missing = Vec::new();
     for candidate in plan.candidates.iter() {
-        let path = run_sidecar_dir(out, &candidate.candidate_key);
-        if !path.exists() {
+        let path = run_result_sidecar_dir(out, &candidate.candidate_key);
+        if !path.join(RUN_FILE).exists() {
+            // A run intent means a backend run was created but its offline
+            // evidence pipeline is resumable and not yet consumed.
             missing.push(candidate.candidate_key.clone());
             continue;
         }
@@ -882,7 +998,8 @@ pub fn inspect(cli: &crate::args::Cli, out: &Path) -> Result<(), CliError> {
             "prompt_hash": manifest.get("prompt_hash"),
             "candidate_hash": plan.candidate_hash(candidate),
             "change_hash": manifest.get("change_hash"),
-            "consumed": run_sidecar_dir(out, &candidate.candidate_key).exists(),
+            "consumed": run_result_sidecar_dir(out, &candidate.candidate_key).join(RUN_FILE).exists(),
+            "resumable": run_intent_sidecar_dir(out, &candidate.candidate_key).join(RUN_INTENT_FILE).exists(),
         }));
     }
 
@@ -1141,6 +1258,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resumable_run_intent_reuses_only_the_bound_backend_run() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let out = tmp.path();
+        let plan = plan_value("stage0-resume");
+        let parsed = contract::parse_and_validate_campaign_plan(&plan).expect("plan");
+        let hash = parsed.plan_hash();
+        write_sidecar(
+            CAMPAIGN_FILE,
+            campaign_document(&plan, &hash),
+            &campaign_dir(out).join(CAMPAIGN_SIDECAR_DIR),
+        )
+        .expect("campaign sidecar");
+        let context = load_campaign(out).expect("loads");
+        let intent_dir = run_intent_sidecar_dir(out, "baseline");
+        let backend_result = json!({
+            "campaign_id": context.campaign_id,
+            "session_id": "session-1",
+            "candidate_scope_id": "cand-1",
+            "trial_scope_id": "trial-1",
+        });
+        write_sidecar(
+            RUN_INTENT_FILE,
+            json!({
+                "schema_version": contract::CAMPAIGN_SUMMARY_V1,
+                "sidecar_kind": "run_intent",
+                "campaign_id": context.campaign_id,
+                "candidate_key": "baseline",
+                "session_id": "session-1",
+                "backend_result": backend_result,
+            }),
+            &intent_dir,
+        )
+        .expect("run intent");
+
+        assert_eq!(
+            load_resumable_run_result(out, &context, "baseline")
+                .expect("bound intent")
+                .expect("present")["session_id"],
+            "session-1"
+        );
+        write_sidecar(
+            RUN_INTENT_FILE,
+            json!({
+                "schema_version": contract::CAMPAIGN_SUMMARY_V1,
+                "sidecar_kind": "run_intent",
+                "campaign_id": context.campaign_id,
+                "candidate_key": "baseline",
+                "session_id": "session-1",
+                "backend_result": {
+                    "campaign_id": context.campaign_id,
+                    "session_id": "session-1",
+                },
+            }),
+            &run_intent_sidecar_dir(out, "prompt-a"),
+        )
+        .expect("mismatched run intent");
+        let error = load_resumable_run_result(out, &context, "prompt-a")
+            .expect_err("candidate binding must fail closed");
+        assert!(error.to_string().contains(code::SIDECAR_INVALID));
+    }
     #[test]
     fn campaign_sidecar_tampering_fails_closed() {
         let tmp = tempfile::tempdir().expect("temp dir");
