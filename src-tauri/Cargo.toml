@@ -104,8 +104,9 @@ globset                      = "0.4.18"
 # The ChatHub page is a webview docked inside the Workflow window. It is created with
 # `wry` directly so the embedded site never receives the Tauri IPC that a Tauri webview
 # inside that window would inherit, and on Linux it is placed through GTK, which is what
-# keeps the page inside the window layout instead of on top of it.
-wry                          = "0.55"
+# keeps the page inside the window layout instead of on top of it. `mac-proxy` is what
+# makes `WebViewBuilder::with_proxy_config` take effect on macOS.
+wry                          = { version = "0.55", features = ["mac-proxy"] }
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }

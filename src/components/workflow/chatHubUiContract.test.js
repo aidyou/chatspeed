@@ -10,7 +10,7 @@ const entry = read('./ChatHubEntry.vue')
 const splitter = read('./ChatHubSplitter.vue')
 const chatHubViewController = read('../../libs/chatHubView.js')
 const chatHubStore = read('../../stores/chatHub.js')
-const carrier = read('../../../src-tauri/src/chat_hub/mod.rs')
+const page = read('../../../src-tauri/src/chat_hub/page.rs')
 
 /** Text between two markers, so assertions stay inside one block of a file. */
 const section = (text, start, end) => {
@@ -49,7 +49,7 @@ test('workflow sidebar keeps the chat entry directly above the terminal entry', 
 })
 
 test('chat entry renders logos with the shared avatar fallback and current entry', () => {
-  assert.match(entry, /<cs name="talk" size="var\(--cs-font-size-lg\)" \/>/)
+  assert.match(entry, /<cs name="skill-chat" size="var\(--cs-font-size-lg\)" \/>/)
   assert.match(entry, /v-for="hub in hubs"[\s\S]*?:command="hub\.id"/)
   assert.match(entry, /<img[\s\S]*?v-if="logoOf\(hub\)"[\s\S]*?@error="markLogoBroken\(hub\)"/)
   assert.match(entry, /<avatar v-else :text="hub\.name" :size="16" \/>/)
@@ -208,9 +208,9 @@ test('the chat entry menu restores the current page', () => {
 test('the docked page is created by the carrier without Tauri IPC', () => {
   // The page is built with wry, so it never receives the Tauri IPC that a Tauri webview
   // inside this window would inherit from the workflow capabilities.
-  assert.match(carrier, /WebViewBuilder::new_with_web_context/)
-  assert.match(carrier, /NewWindowResponse::Deny/)
-  assert.match(carrier, /matches!\(url\.split\(':'\)\.next\(\), Some\("http"\) \| Some\("https"\)\)/)
+  assert.match(page, /WebViewBuilder::new_with_web_context/)
+  assert.match(page, /NewWindowResponse::Deny/)
+  assert.match(page, /matches!\(url\.split\(':'\)\.next\(\), Some\("http"\) \| Some\("https"\)\)/)
   assert.doesNotMatch(workflowView, /show_chat_hub_webview/)
 })
 

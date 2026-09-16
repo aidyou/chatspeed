@@ -19,7 +19,7 @@ use wry::{
     Rect, WebContext, WebView,
 };
 
-use super::{clamp_width, host_window, page_builder, page_data_directory};
+use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
 
@@ -82,8 +82,10 @@ impl ChatHubPageState {
         inner.top_inset = top_inset;
 
         if inner.page.is_none() {
+            // The page is reused for every entry, so building it is the only moment a
+            // proxy can be applied: the settings are read here.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
-            let webview = page_builder(&mut web_context, &url)
+            let webview = page_builder(&mut web_context, &url, page_proxy(app))
                 .with_bounds(bounds)
                 .build_as_child(&host)?;
 
@@ -217,7 +219,17 @@ fn page_bounds(host: &WebviewWindow<Wry>, width: f64, top_inset: f64) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    /// Source of one implementation block, so an assertion can never match its own text
+    /// instead of the code it guards.
+    fn implementation<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split(start)
+            .nth(1)
+            .expect("the implementation block is missing")
+            .split(end)
+            .next()
+            .expect("the implementation block is not terminated")
+    }
 
     /// Guard for the docking layout: the page has to be a child view of the workflow
     /// window placed at an explicit rectangle on its right edge, which is what makes
@@ -225,11 +237,14 @@ mod tests {
     #[test]
     fn the_page_is_a_child_view_at_the_right_edge_of_the_workflow_window() {
         let source = include_str!("child_view.rs");
+        let creation = implementation(source, "pub fn show", "pub fn hide");
+        let rectangle = implementation(source, "fn page_bounds", "#[cfg(test)]");
 
-        assert!(source.contains("build_as_child(&host)"));
-        assert!(source.contains(".with_bounds(bounds)"));
-        assert!(source.contains("LogicalPosition::new(window_size.width - width, 0.0)"));
-        assert!(source.contains("LogicalSize::new(width, window_size.height)"));
+        assert!(creation.contains("build_as_child(&host)"));
+        assert!(creation.contains(".with_bounds(bounds)"));
+        // The rectangle starts at the right edge and leaves the app chrome space free.
+        assert!(rectangle.contains("LogicalPosition::new(window_size.width - width, top)"));
+        assert!(rectangle.contains("LogicalSize::new(width, (window_size.height - top).max(1.0))"));
     }
 
     /// Guard for the resize path: the page is not part of the Tauri webview registry,
@@ -237,15 +252,9 @@ mod tests {
     #[test]
     fn the_page_rectangle_follows_a_window_resize() {
         let source = include_str!("child_view.rs");
-        let sync = source
-            .split("pub fn sync_bounds")
-            .nth(1)
-            .expect("the resize path is missing")
-            .split("pub fn destroy")
-            .next()
-            .expect("the resize path is not terminated");
+        let sync = implementation(source, "pub fn sync_bounds", "pub fn destroy");
 
-        assert!(sync.contains("page_bounds(&host, width)"));
+        assert!(sync.contains("page_bounds(&host, width, top_inset)"));
         assert!(sync.contains("page.webview.set_bounds(bounds)"));
     }
 

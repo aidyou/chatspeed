@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use tauri::{AppHandle, WebviewWindow, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix};
 
-use super::{clamp_width, host_window, page_builder, page_data_directory};
+use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
 
@@ -202,8 +202,10 @@ impl Page {
         window_box.pack_start(&column, false, false, 0);
         column.set_size_request(width.round() as i32, -1);
 
+        // The page is reused for every entry, so building it is the only moment a proxy
+        // can be applied: the settings are read here.
         let mut web_context = WebContext::new(Some(page_data_directory(app)));
-        let webview = page_builder(&mut web_context, url).build_gtk(&column)?;
+        let webview = page_builder(&mut web_context, url, page_proxy(app)).build_gtk(&column)?;
 
         Ok(Self { webview, column })
     }
