@@ -44,11 +44,18 @@ use crate::error::{AppError, Result};
 /// Label of the window the page is docked to.
 pub const CHAT_HUB_HOST_WINDOW_LABEL: &str = "workflow";
 
-/// Default width of the docked page, in logical pixels.
-pub const CHAT_HUB_DEFAULT_WIDTH: f64 = 500.0;
+/// Width the docked page opens with, in logical pixels.
+///
+/// The page opens at a phone width, so a chat site starts in the layout it is designed
+/// around; the same value is the narrowest width a carrier accepts (see
+/// [`CHAT_HUB_MIN_WIDTH`]).
+pub const CHAT_HUB_DEFAULT_WIDTH: f64 = CHAT_HUB_MIN_WIDTH;
 
-/// Narrowest page width that still renders a mobile layout, in logical pixels.
-pub const CHAT_HUB_MIN_WIDTH: f64 = 500.0;
+/// Narrowest page width, in logical pixels.
+///
+/// 375 is the logical viewport width of a common phone, so a site still renders its
+/// mobile layout when the splitter is dragged all the way in.
+pub const CHAT_HUB_MIN_WIDTH: f64 = 375.0;
 
 /// Width the workflow UI always keeps next to the page, in logical pixels.
 pub const CHAT_HUB_MIN_HOST_WIDTH: f64 = 480.0;
@@ -199,7 +206,10 @@ mod tests {
 
     #[test]
     fn the_page_width_stays_within_the_window_and_keeps_the_workflow_ui_usable() {
-        // A request below the mobile minimum is raised to it.
+        // The page can be dragged down to a phone viewport, which is the width a chat
+        // site needs to switch to its mobile layout.
+        assert_eq!(CHAT_HUB_MIN_WIDTH, 375.0);
+        // A request below the phone width is raised to it.
         assert_eq!(clamp_width(1600.0, 100.0), CHAT_HUB_MIN_WIDTH);
         // A request that would squeeze the workflow UI out is capped.
         assert_eq!(clamp_width(1600.0, 1500.0), 1600.0 - CHAT_HUB_MIN_HOST_WIDTH);

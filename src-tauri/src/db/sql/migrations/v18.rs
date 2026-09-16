@@ -32,13 +32,22 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         // permanent: the migration never runs again.
         "INSERT INTO chat_hubs (name, logo, url, sort_index, is_default)
         SELECT * FROM (
-            SELECT 'ChatGPT' AS name, 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchatgpt.com%2F' AS logo, 'https://chatgpt.com/' AS url, 0 AS sort_index, 1 AS is_default
-            UNION ALL SELECT 'Claude', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fclaude.ai%2Fnew', 'https://claude.ai/new', 1, 1
-            UNION ALL SELECT 'Gemini', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fgemini.google.com%2Fapp', 'https://gemini.google.com/app', 2, 1
-            UNION ALL SELECT 'DeepSeek', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchat.deepseek.com%2F', 'https://chat.deepseek.com/', 3, 1
-            UNION ALL SELECT 'Grok', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fgrok.com%2F', 'https://grok.com/', 4, 1
-            UNION ALL SELECT 'Qwen', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchat.qwen.ai%2F', 'https://chat.qwen.ai/', 5, 1
-            UNION ALL SELECT 'Perplexity', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fwww.perplexity.ai%2F', 'https://www.perplexity.ai/', 6, 1
+            SELECT 'Gemini' AS name, 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fgemini.google.com%2Fapp' AS logo, 'https://gemini.google.com/app' AS url, 0 AS sort_index, 1 AS is_default
+            UNION ALL SELECT 'DeepSeek', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchat.deepseek.com%2F', 'https://chat.deepseek.com/', 1, 1
+            UNION ALL SELECT 'ChatGPT', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchatgpt.com%2F', 'https://chatgpt.com/', 2, 1
+            UNION ALL SELECT 'Qwen', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchat.qwen.ai%2F', 'https://chat.qwen.ai/', 3, 1
+            UNION ALL SELECT '元宝', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fyuanbao.tencent.com%2F', 'https://yuanbao.tencent.com/', 4, 1
+            UNION ALL SELECT '豆包', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fwww.doubao.com%2Fchat%2F', 'https://www.doubao.com/chat/', 5, 1
+            UNION ALL SELECT 'Kimi', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fwww.kimi.com%2F', 'https://www.kimi.com/', 6, 1
+            UNION ALL SELECT 'Z.ai', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchat.z.ai%2F', 'https://chat.z.ai/', 7, 1
+            UNION ALL SELECT 'ChatGLM', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fchatglm.cn%2F', 'https://chatglm.cn/', 8, 1
+            UNION ALL SELECT 'Copilot', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fcopilot.microsoft.com%2F', 'https://copilot.microsoft.com/', 9, 1
+            UNION ALL SELECT 'Meta AI', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fmeta.ai%2F', 'https://meta.ai/', 10, 1
+            UNION ALL SELECT '文心一言', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fernie.baidu.com%2F', 'https://ernie.baidu.com/', 11, 1
+            UNION ALL SELECT '讯飞星火', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fxinghuo.xfyun.cn%2F', 'https://xinghuo.xfyun.cn/', 12, 1
+            UNION ALL SELECT 'Grok', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fgrok.com%2F', 'https://grok.com/', 13, 1
+            UNION ALL SELECT 'Claude', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fclaude.ai%2Fnew', 'https://claude.ai/new', 14, 1
+            UNION ALL SELECT 'Perplexity', 'https://www.google.com/s2/favicons?sz=64&domain_url=https%3A%2F%2Fwww.perplexity.ai%2F', 'https://www.perplexity.ai/', 15, 1
         )
         WHERE NOT EXISTS (SELECT 1 FROM chat_hubs)",
     ),
@@ -75,7 +84,8 @@ mod tests {
 
     fn apply_migration(conn: &Connection) {
         for (_, sql) in MIGRATION_SQL {
-            conn.execute(sql, []).expect("failed to apply migration sql");
+            conn.execute(sql, [])
+                .expect("failed to apply migration sql");
         }
     }
 
@@ -84,13 +94,18 @@ mod tests {
         let conn = Connection::open_in_memory().expect("failed to open database");
         apply_migration(&conn);
 
-        assert_eq!(count(&conn), 7, "preset entries should be seeded");
+        assert_eq!(count(&conn), 16, "preset entries should be seeded");
         let presets: i64 = conn
-            .query_row("SELECT COUNT(*) FROM chat_hubs WHERE is_default = 1", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM chat_hubs WHERE is_default = 1",
+                [],
+                |row| row.get(0),
+            )
             .expect("failed to count preset entries");
-        assert_eq!(presets, 7, "every seeded entry should be marked as a preset");
+        assert_eq!(
+            presets, 16,
+            "every seeded entry should be marked as a preset"
+        );
 
         let ordered: Vec<String> = {
             let mut stmt = conn
@@ -101,7 +116,7 @@ mod tests {
                 .expect("failed to query ordered rows");
             rows.map(|row| row.expect("failed to read name")).collect()
         };
-        assert_eq!(ordered.first().map(String::as_str), Some("ChatGPT"));
+        assert_eq!(ordered.first().map(String::as_str), Some("Gemini"));
     }
 
     #[test]

@@ -23,13 +23,13 @@ const reportError = (action, error) => {
 }
 
 /**
- * Default width of the docked page, in logical pixels.
+ * Width the docked page opens with, in logical pixels.
  *
- * It matches the narrowest layout a site still renders as a mobile page. The backend
- * owns the authoritative limits and is asked for them on mount; this value only covers
- * the moment before they arrive.
+ * A chat site starts at a phone width, which is also the narrowest width the backend
+ * accepts. The backend owns the authoritative limits and is asked for them on mount;
+ * this value only covers the moment before they arrive.
  */
-const DEFAULT_PAGE_WIDTH = 500
+const DEFAULT_PAGE_WIDTH = 375
 
 /**
  * useChatHubStore holds the independent list of ChatHub (web chat entry)

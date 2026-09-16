@@ -7,7 +7,7 @@
       @visible-change="onMenuVisibleChange">
       <div class="chat-hub-entry__button" :class="{ active: !!activeHub }">
         <el-tooltip :content="$t('workflow.chatHub.title')" placement="right" :hide-after="0" :enterable="false">
-          <cs name="talk" size="var(--cs-font-size-lg)" />
+          <cs name="skill-chat" size="var(--cs-font-size-lg)" />
         </el-tooltip>
       </div>
       <template #dropdown>
