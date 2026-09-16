@@ -67,12 +67,15 @@ impl ChatHubPageState {
     /// cookies and session while navigating between entries. `_top_inset` is only used
     /// by carriers that stack the page over the workflow UI: here the page is a sibling
     /// of the workflow webview, which already contains the app titlebar itself.
+    /// `_corner_radius` is ignored for the same reason: this window is not drawn with a
+    /// rounded border the page could paint over.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
         url: &str,
         width: f64,
         _top_inset: f64,
+        _corner_radius: f64,
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
@@ -205,7 +208,9 @@ impl Page {
         // The page is reused for every entry, so building it is the only moment a proxy
         // can be applied: the settings are read here.
         let mut web_context = WebContext::new(Some(page_data_directory(app)));
-        let webview = page_builder(&mut web_context, url, page_proxy(app)).build_gtk(&column)?;
+        // The page is packed next to the workflow webview instead of being stacked over
+        // it, so it paints over no window border and has no corner to give back.
+        let webview = page_builder(&mut web_context, url, page_proxy(app), 0.0).build_gtk(&column)?;
 
         Ok(Self { webview, column })
     }

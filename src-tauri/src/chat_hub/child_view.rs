@@ -66,13 +66,16 @@ impl ChatHubPageState {
     ///
     /// The same webview is reused for every ChatHub entry, so the site keeps its
     /// cookies and session while navigating between entries. `top_inset` is the space
-    /// the frontend chrome occupies, which a stacked page must not cover.
+    /// the frontend chrome occupies, which a stacked page must not cover, and
+    /// `corner_radius` is the radius of the rounded window border the page gives back
+    /// at its bottom-right corner.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
         url: &str,
         width: f64,
         top_inset: f64,
+        corner_radius: f64,
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
@@ -85,7 +88,7 @@ impl ChatHubPageState {
             // The page is reused for every entry, so building it is the only moment a
             // proxy can be applied: the settings are read here.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
-            let webview = page_builder(&mut web_context, &url, page_proxy(app))
+            let webview = page_builder(&mut web_context, &url, page_proxy(app), corner_radius)
                 .with_bounds(bounds)
                 .build_as_child(&host)?;
 

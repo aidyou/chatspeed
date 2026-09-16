@@ -2333,6 +2333,23 @@ const chatHubTopInset = () => {
 }
 
 /**
+ * Radius of the rounded border this window actually draws.
+ *
+ * The stacked page is a rectangle, so it paints over that border at its bottom-right
+ * corner and has to hand the corner back. The window container is what draws the border,
+ * so its computed radius is read instead of a design token: a platform whose window keeps
+ * square corners reports nothing, and the page stays rectangular there.
+ */
+const chatHubCornerRadius = () => {
+  const container = document.querySelector('.app-container')
+  if (!container) {
+    return 0
+  }
+  const radius = Number.parseFloat(getComputedStyle(container).borderBottomRightRadius)
+  return Number.isFinite(radius) && radius > 0 ? radius : 0
+}
+
+/**
  * Single ordered boundary for every ChatHub view command.
  *
  * Show/hide/width/destroy cross the IPC boundary asynchronously, so a late reply must
@@ -2342,7 +2359,12 @@ const chatHubTopInset = () => {
  */
 const chatHubView = createChatHubViewController({
   show: (url, width) =>
-    invokeWrapper('show_chat_hub_page', { url, width, topInset: chatHubTopInset() }),
+    invokeWrapper('show_chat_hub_page', {
+      url,
+      width,
+      topInset: chatHubTopInset(),
+      cornerRadius: chatHubCornerRadius()
+    }),
   hide: () => invokeWrapper('hide_chat_hub_page'),
   destroy: () => invokeWrapper('destroy_chat_hub_page'),
   setWidth: width => invokeWrapper('set_chat_hub_page_width', { width }),

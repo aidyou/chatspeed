@@ -84,16 +84,19 @@ pub fn update_chat_hub_order(
 /// The work runs on the platform main thread because it creates a real webview. The
 /// same page is reused for every entry, so the site keeps its cookies and session
 /// while navigating between entries. `top_inset` is the space the frontend chrome
-/// occupies; only carriers that stack the page over the workflow UI use it.
+/// occupies and `corner_radius` is the radius of the rounded window border the page
+/// gives back at its bottom-right corner; only carriers that stack the page over the
+/// workflow UI use them.
 #[tauri::command]
 pub async fn show_chat_hub_page(
     app: AppHandle,
     url: String,
     width: f64,
     top_inset: f64,
+    corner_radius: f64,
 ) -> Result<()> {
     chat_hub::run_on_page_thread(&app, move |state, app| {
-        state.show(app, &url, width, top_inset)
+        state.show(app, &url, width, top_inset, corner_radius)
     })
     .await
 }

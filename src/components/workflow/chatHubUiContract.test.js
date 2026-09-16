@@ -78,7 +78,7 @@ test('showing a chat entry only drives the ordered view commands', () => {
   )
   assert.match(
     workflowView,
-    /const chatHubView = createChatHubViewController\(\{[\s\S]*?invokeWrapper\('show_chat_hub_page', \{ url, width, topInset: chatHubTopInset\(\) \}\)[\s\S]*?hide: \(\) => invokeWrapper\('hide_chat_hub_page'\)[\s\S]*?destroy: \(\) => invokeWrapper\('destroy_chat_hub_page'\)[\s\S]*?setWidth: width => invokeWrapper\('set_chat_hub_page_width', \{ width \}\)/
+    /const chatHubView = createChatHubViewController\(\{[\s\S]*?invokeWrapper\('show_chat_hub_page', \{\s*url,\s*width,\s*topInset: chatHubTopInset\(\),\s*cornerRadius: chatHubCornerRadius\(\)\s*\}\)[\s\S]*?hide: \(\) => invokeWrapper\('hide_chat_hub_page'\)[\s\S]*?destroy: \(\) => invokeWrapper\('destroy_chat_hub_page'\)[\s\S]*?setWidth: width => invokeWrapper\('set_chat_hub_page_width', \{ width \}\)/
   )
   assert.match(workflowView, /getWidth: \(\) => chatHubStore\.pageWidth/)
   // The visible flag follows the applied native state instead of a local guess.
@@ -134,6 +134,12 @@ test('stacked carriers keep the page inside the reserved space, splitting carrie
   // titlebar with the window controls needs.
   assert.match(workflowView, /getPropertyValue\('--cs-titlebar-height'\)/)
   assert.match(workflowView, /topInset: chatHubTopInset\(\)/)
+  // The same carrier also paints over the rounded window border at its bottom-right
+  // corner, so the view reports the radius the window container actually draws. A
+  // platform whose window keeps square corners reports nothing and the page stays
+  // rectangular there.
+  assert.match(workflowView, /getComputedStyle\(container\)\.borderBottomRightRadius/)
+  assert.match(workflowView, /cornerRadius: chatHubCornerRadius\(\)/)
 })
 
 test('the entry of the shown site toggles the page and the entry list releases it', () => {
