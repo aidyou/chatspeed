@@ -1432,6 +1432,10 @@
     "earlierTasks": "Show {count} earlier completed tasks",
     "edited": "Edited",
     "editWorkflowTitle": "Edit Task Title",
+    "errorTypes": {
+      "llmAuthentication": "Model authentication failed",
+      "llmBilling": "Insufficient model balance or billing issue"
+    },
     "executionCompleted": "Execution completed",
     "executionFailed": "Execution failed",
     "executing": "Executing...",

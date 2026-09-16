@@ -1431,6 +1431,10 @@
     "earlierTasks": "显示更早的 {count} 个已完成任务",
     "edited": "已编辑",
     "editWorkflowTitle": "编辑任务标题",
+    "errorTypes": {
+      "llmAuthentication": "模型认证失败",
+      "llmBilling": "模型余额不足或计费异常"
+    },
     "executionCompleted": "执行完成",
     "executionFailed": "执行失败",
     "executing": "执行中...",

@@ -123,6 +123,29 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
+test('workflow terminal model errors use structured localized alert titles', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling'[\s\S]*?\}/
+  )
+  assert.match(messageList, /const rawType = String\(message\?\.metadata\?\.error_type \|\| message\?\.errorType \|\| ''\)/)
+  assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.equal(typeof locale.workflow.errorTypes.llmAuthentication, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmBilling, 'string')
+    assert.ok(locale.workflow.errorTypes.llmAuthentication.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
+  }
+})
+
 test('workflow uses a persistent navigation rail beside the collapsible task list', async () => {
   const [workflowView, sidebar] = await Promise.all([
     readFile('src/views/Workflow.vue', 'utf8'),

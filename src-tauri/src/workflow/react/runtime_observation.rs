@@ -59,6 +59,7 @@ pub enum RuntimeObservationType {
     TurnBlockedPostponed,
     SkillActivated,
     FileContextAttached,
+    TerminalError,
     GenericReminder,
 }
 
@@ -261,6 +262,10 @@ fn default_visibility(
         RuntimeObservationType::SkillActivated | RuntimeObservationType::FileContextAttached => (
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Hide,
+        ),
+        RuntimeObservationType::TerminalError => (
+            RuntimeObservationLlmVisibility::Hide,
+            RuntimeObservationUiVisibility::Show,
         ),
         _ => (
             RuntimeObservationLlmVisibility::Defer,

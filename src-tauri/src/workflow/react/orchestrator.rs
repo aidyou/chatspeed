@@ -366,10 +366,13 @@ fn build_terminal_sub_agent_result(
             } else {
                 "failed"
             };
+            let terminal = error.terminal_error();
             json!({
                 "status": status,
                 "task_id": task_id,
                 "error": error.to_string(),
+                "error_type": terminal.error_type,
+                "error_metadata": terminal.metadata,
                 "tool_calls_count": tool_calls_count
             })
         }
@@ -2541,6 +2544,75 @@ mod tests {
             assert!(summary.is_partial);
             assert_eq!(summary.terminal_status, expected_status);
         }
+    }
+
+    #[test]
+    fn sub_agent_billing_failure_is_structured_without_failing_parent() {
+        let (_dir, store) = test_store();
+        let agent = crate::db::Agent::new(
+            "billing-agent".to_string(),
+            "Billing Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "Billing test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add agent");
+        store
+            .create_workflow("billing-parent", "parent", &agent.id, None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "billing-child",
+                "child",
+                &agent.id,
+                None,
+                Some("billing-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let result = build_terminal_sub_agent_result(
+            store.as_ref(),
+            "billing-child",
+            WorkflowState::Error,
+            &Err(WorkflowEngineError::Ai(
+                crate::ai::error::AiError::RawApiRequestFailed {
+                    status_code: 402,
+                    provider: "provider".to_string(),
+                    details: "insufficient balance".to_string(),
+                },
+            )),
+            &[],
+        )
+        .expect("terminal child result must be built");
+
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["error_type"], "llm_billing");
+        assert_eq!(result["error_metadata"]["upstream_status_code"], 402);
+        assert_eq!(result["error_metadata"]["provider"], "provider");
+        assert_eq!(
+            store
+                .get_workflow("billing-parent")
+                .expect("failed to read parent workflow")
+                .expect("parent workflow should exist")
+                .status,
+            "pending"
+        );
     }
 
     #[test]

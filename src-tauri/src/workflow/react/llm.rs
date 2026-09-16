@@ -74,6 +74,20 @@ impl LlmProcessor {
         failure_count < max_failures
     }
 
+    fn should_retry_ai_error(error: &AiError) -> bool {
+        match error {
+            AiError::ApiRequestFailed { status_code, .. }
+            | AiError::RawApiRequestFailed { status_code, .. } => {
+                // Authentication, billing, authorization, and missing-resource failures require
+                // user action. Retrying them would only consume time and repeat the same charge
+                // failure, while some providers still use HTTP 400 for transient runtime errors.
+                !matches!(*status_code, 401 | 402 | 403 | 404)
+            }
+            // Stream errors and network timeouts remain eligible for bounded retries.
+            _ => true,
+        }
+    }
+
     fn should_require_tool_call(
         require_tool_call: bool,
         tools_available: bool,
@@ -792,17 +806,7 @@ impl LlmProcessor {
                         ));
                     }
 
-                    let should_retry = match &e {
-                        AiError::ApiRequestFailed { status_code, .. }
-                        | AiError::RawApiRequestFailed { status_code, .. } => {
-                            // Do NOT retry on auth/not-found errors.
-                            // Some providers return transient upstream/runtime issues as HTTP 400,
-                            // so 400 must still get bounded retries instead of crashing the workflow.
-                            !matches!(*status_code, 401 | 403 | 404)
-                        }
-                        // Retry on stream errors, network timeouts, etc.
-                        _ => true,
-                    };
+                    let should_retry = Self::should_retry_ai_error(&e);
 
                     if should_retry {
                         retry_count += 1;
@@ -1792,6 +1796,42 @@ mod tests {
     fn tenth_llm_failure_is_terminal_without_another_backoff() {
         assert!(LlmProcessor::should_schedule_retry(9, 10));
         assert!(!LlmProcessor::should_schedule_retry(10, 10));
+    }
+
+    #[test]
+    fn authentication_and_billing_errors_are_not_retried() {
+        for status_code in [401, 402, 403, 404] {
+            let error = crate::ai::error::AiError::RawApiRequestFailed {
+                status_code,
+                provider: "provider".to_string(),
+                details: "upstream error".to_string(),
+            };
+            assert!(
+                !LlmProcessor::should_retry_ai_error(&error),
+                "HTTP {status_code} must terminate without retry"
+            );
+        }
+    }
+
+    #[test]
+    fn transient_ai_errors_keep_existing_retry_behavior() {
+        for status_code in [400, 408, 429, 500, 503] {
+            let error = crate::ai::error::AiError::RawApiRequestFailed {
+                status_code,
+                provider: "provider".to_string(),
+                details: "upstream error".to_string(),
+            };
+            assert!(
+                LlmProcessor::should_retry_ai_error(&error),
+                "HTTP {status_code} must remain retryable"
+            );
+        }
+        assert!(LlmProcessor::should_retry_ai_error(
+            &crate::ai::error::AiError::StreamProcessingFailed {
+                provider: "provider".to_string(),
+                details: "connection reset".to_string(),
+            }
+        ));
     }
 
     struct NoopGateway;

@@ -1431,6 +1431,10 @@
     "earlierTasks": "顯示更早的 {count} 個已完成任務",
     "edited": "已編輯",
     "editWorkflowTitle": "編輯任務標題",
+    "errorTypes": {
+      "llmAuthentication": "模型驗證失敗",
+      "llmBilling": "模型餘額不足或計費異常"
+    },
     "executionCompleted": "執行完成",
     "executionFailed": "執行失敗",
     "executing": "執行中...",

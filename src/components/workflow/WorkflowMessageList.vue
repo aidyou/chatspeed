@@ -2137,6 +2137,13 @@ const getErrorAlertTitle = message => {
   }
 
   const rawType = String(message?.metadata?.error_type || message?.errorType || '').trim()
+  const localizedErrorTitles = {
+    llm_authentication: 'workflow.errorTypes.llmAuthentication',
+    llm_billing: 'workflow.errorTypes.llmBilling'
+  }
+  if (localizedErrorTitles[rawType]) {
+    return t(localizedErrorTitles[rawType])
+  }
   if (rawType) {
     return rawType.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
   }
