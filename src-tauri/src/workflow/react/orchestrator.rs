@@ -876,6 +876,12 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,
+            // A child-agent session never carries the parent's experiment
+            // prompt surface: a candidate may only change the top-level
+            // Agent behavior, never the child agent prompt directory.
+            experiment_agent_prompt_ref: None,
+            experiment_agent_prompt_hash: None,
+            experiment_prompt_catalog_digest: None,
         };
 
         let runtime = {

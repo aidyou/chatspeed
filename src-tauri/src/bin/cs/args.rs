@@ -156,6 +156,58 @@ pub enum ExperimentCommand {
         #[command(subcommand)]
         command: BenchmarkCommand,
     },
+    /// Phase 2F Stage 0 campaign orchestration over one immutable plan.
+    /// `create`/`run`/`close` talk to the control plane; `inspect` is fully
+    /// offline and never loads discovery.
+    Campaign {
+        #[command(subcommand)]
+        command: CampaignCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CampaignCommand {
+    /// Validate the immutable plan, create the shared backend campaign budget
+    /// scope and publish the campaign/candidate sidecars under `--out`.
+    Create {
+        /// Path to the strict `campaign_plan.v1` JSON file.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Campaign output root; the sidecars are written under
+        /// `<out>/campaign` and evidence under `<out>/evidence` (must not
+        /// already contain a campaign).
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Execute one declared candidate: submit exactly one backend-owned run
+    /// under the campaign, wait for the durable terminal state, capture the
+    /// artifact, evaluate and verify it offline, then independently re-verify
+    /// and consume the verdict. Each declared arm may be run once.
+    Run {
+        /// Campaign output root created by `campaign create`.
+        #[arg(long)]
+        out: PathBuf,
+        /// Candidate key declared by the campaign plan.
+        #[arg(long)]
+        candidate: String,
+    },
+    /// Re-verify the campaign sidecars offline and print the recomputed
+    /// canonical facts (no discovery, network, DB or LLM).
+    Inspect {
+        /// Campaign output root created by `campaign create`.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Close the campaign budget scope so no further run or reservation is
+    /// admitted, then publish the campaign summary sidecar.
+    Close {
+        /// Campaign output root created by `campaign create`.
+        #[arg(long)]
+        out: PathBuf,
+        /// Optional human-readable close reason recorded on the scope.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

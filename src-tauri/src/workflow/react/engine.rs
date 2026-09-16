@@ -1009,6 +1009,15 @@ impl WorkflowExecutor {
             phase: Some(self.policy.phase.to_string()),
             models: self.agent_config.models.clone(),
             max_contexts: self.agent_config.max_contexts,
+            // A workflow-local experiment prompt reference is frozen run
+            // identity carried by the snapshot, not an executor preference, so
+            // it is copied through unchanged (never dropped by this rewrite).
+            experiment_agent_prompt_ref: preserved_config
+                .and_then(|config| config.experiment_agent_prompt_ref.clone()),
+            experiment_agent_prompt_hash: preserved_config
+                .and_then(|config| config.experiment_agent_prompt_hash.clone()),
+            experiment_prompt_catalog_digest: preserved_config
+                .and_then(|config| config.experiment_prompt_catalog_digest.clone()),
         })
         .unwrap_or_else(|_| json!({}));
 

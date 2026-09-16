@@ -60,8 +60,9 @@ pub async fn capture(
 /// Fetches meta + authoritative snapshot + durable events for a session,
 /// constructs a redacted 2A artifact bundle and writes it to `artifact_dir`.
 /// This helper performs no stdout rendering so both the standalone `capture`
-/// command and `run --artifact-dir` can reuse it without double output.
-async fn capture_bundle(
+/// command and `run --artifact-dir` can reuse it without double output (the
+/// Phase 2F campaign runner reuses it the same way).
+pub(crate) async fn capture_bundle(
     client: &ControlPlaneClient,
     session_id: &str,
     artifact_dir: &Path,
@@ -259,7 +260,7 @@ fn render_run_artifact(
 /// `cancelled` (the `WorkflowState` snake_case serialization). Never fabricates
 /// a terminal state: on timeout it returns an error so the caller keeps the run
 /// id but does not publish a complete artifact (AC-6).
-async fn wait_for_terminal(
+pub(crate) async fn wait_for_terminal(
     client: &ControlPlaneClient,
     session_id: &str,
 ) -> Result<String, CliError> {
@@ -288,7 +289,7 @@ async fn wait_for_terminal(
 /// budget-rejected run can exit 9 rather than a generic failure. The tool
 /// admission rejection is recorded as a structured tool observation carrying
 /// the code; provider/LLM rejections surface through the same stable tokens.
-async fn budget_rejected_in_events(
+pub(crate) async fn budget_rejected_in_events(
     client: &ControlPlaneClient,
     session_id: &str,
 ) -> Result<bool, CliError> {

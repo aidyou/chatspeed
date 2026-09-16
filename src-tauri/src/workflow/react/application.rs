@@ -18,6 +18,7 @@
 
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::commands::workflow::{
+    campaign_close_core, campaign_create_core, campaign_get_core, campaign_run_core,
     create_workflow_core, get_workflow_events_core, get_workflow_snapshot_core,
     list_workflows_core, run_experiment_core, workflow_signal_core, workflow_start_core,
     workflow_stop_core,
@@ -266,5 +267,42 @@ impl WorkflowApplicationService {
         request: crate::workflow::react::experiment::ExperimentRunRequest,
     ) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
         run_experiment_core(self, request).await
+    }
+
+    /// Creates the shared Phase 2F campaign budget scope for one frozen plan.
+    /// The campaign id is derived by the backend from the plan hash; the caller
+    /// never supplies a scope id (INV-2).
+    pub async fn campaign_create(
+        &self,
+        plan: crate::workflow::react::campaign::CampaignPlanV1,
+    ) -> Result<crate::workflow::react::campaign::CampaignCreateResult, ApplicationError> {
+        campaign_create_core(self, plan)
+    }
+
+    /// Reads one campaign projection (frozen scope plus its candidate scopes).
+    pub async fn campaign_get(
+        &self,
+        campaign_id: &str,
+    ) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
+        campaign_get_core(self, campaign_id)
+    }
+
+    /// Creates one run under an existing shared campaign scope, reusing the
+    /// same run kernel and admission path as the 2C experiment facade.
+    pub async fn campaign_run(
+        &self,
+        campaign_id: &str,
+        request: crate::workflow::react::campaign::CampaignRunRequestV1,
+    ) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
+        campaign_run_core(self, campaign_id, request).await
+    }
+
+    /// Closes a campaign scope so no further run or reservation is admitted.
+    pub async fn campaign_close(
+        &self,
+        campaign_id: &str,
+        reason: &str,
+    ) -> Result<crate::workflow::react::campaign::CampaignCloseResult, ApplicationError> {
+        campaign_close_core(self, campaign_id, reason)
     }
 }

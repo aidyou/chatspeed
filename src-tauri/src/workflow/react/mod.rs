@@ -1,5 +1,6 @@
 pub mod agents_md;
 pub mod application;
+pub mod campaign;
 pub mod child_tasks;
 #[cfg(test)]
 pub mod child_tasks_tests;

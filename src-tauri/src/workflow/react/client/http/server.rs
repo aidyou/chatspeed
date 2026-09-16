@@ -355,6 +355,21 @@ fn build_router(state: ControlPlaneState) -> Router {
             get(sse::stream_workflow_events),
         )
         .route("/control/v1/experiments:run", post(run_experiment))
+        .route("/control/v1/campaigns", post(create_campaign))
+        .route("/control/v1/campaigns/{campaign_id}", get(get_campaign))
+        .route(
+            "/control/v1/campaigns/{campaign_id}/runs",
+            post(run_campaign),
+        )
+        // Note: the close route uses a `/close` path segment instead of a
+        // `{id}:close` suffix because the axum/matchit router cannot match a
+        // path parameter that shares a segment with static text. The contract
+        // is otherwise unchanged: the path parameter is authoritative, the
+        // body is strict, and the route is additive.
+        .route(
+            "/control/v1/campaigns/{campaign_id}/close",
+            post(close_campaign),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -483,6 +498,241 @@ async fn run_experiment(
                     serde_json::json!({})
                 });
                 (StatusCode::CREATED, Json(value)).into_response()
+            }
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// Whether the request carries a non-empty `Idempotency-Key` header. Every
+/// mutating control-plane route requires one so a transport retry can never
+/// double-create a run or a campaign.
+fn has_idempotency_key(headers: &HeaderMap) -> bool {
+    headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|key| !key.is_empty())
+}
+
+fn missing_idempotency_key_response(route: &str) -> Response {
+    dto::error_response(
+        StatusCode::BAD_REQUEST,
+        "missing_idempotency_key",
+        format!("{route} requires a non-empty Idempotency-Key header"),
+    )
+}
+
+/// Maps a Phase 2F campaign contract rejection to its stable HTTP code. The
+/// campaign machine codes are part of the CLI contract and are surfaced
+/// verbatim (like the 2C `experiment_spec_rejected` token) so a caller can
+/// branch without parsing prose.
+fn campaign_spec_error_response(
+    error: &crate::workflow::react::campaign::CampaignSpecError,
+) -> Response {
+    dto::error_response(
+        StatusCode::BAD_REQUEST,
+        error.code.as_str(),
+        format!("{}: {}", error.code.as_str(), error.message),
+    )
+}
+
+/// `POST /control/v1/campaigns` — creates the shared campaign budget scope for
+/// one frozen Stage 0 plan. Additive to the v1 routes: the plan is strict,
+/// bearer-protected and idempotency-required, and the backend derives the
+/// campaign id from the plan hash.
+async fn create_campaign(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:create");
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid campaign create request: {error}"),
+                );
+            }
+        };
+        let plan =
+            match crate::workflow::react::campaign::parse_and_validate_campaign_create_request(
+                &value,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => return campaign_spec_error_response(&error),
+            };
+        match state.svc.campaign_create(plan).await {
+            Ok(result) => {
+                let value = serde_json::to_value(&result).unwrap_or_else(|error| {
+                    log::error!("[control-plane] campaign create serialization failed: {error}");
+                    serde_json::json!({})
+                });
+                (StatusCode::CREATED, Json(value)).into_response()
+            }
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `GET /control/v1/campaigns/{campaign_id}` — the authoritative campaign
+/// projection (frozen scope + candidate scopes). Read-only, so it requires no
+/// idempotency key.
+async fn get_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+) -> Response {
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    match state.svc.campaign_get(&campaign_id).await {
+        Ok(projection) => snake_json_response(serde_json::to_value(&projection)),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/campaigns/{campaign_id}/runs` — creates exactly one run
+/// under the shared campaign scope. The path campaign id is authoritative and
+/// the body must re-supply the immutable plan (the backend re-derives the
+/// campaign id from it) plus the candidate key and fixture projection.
+async fn run_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:run");
+    }
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    // The campaign must exist and still admit runs. This read is a fast,
+    // stable-code pre-check; the store re-checks the same condition inside the
+    // run-creation transaction, so a close race still fails closed there.
+    match state.svc.campaign_get(&campaign_id).await {
+        Ok(projection) => {
+            if projection.status != "active" {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "campaign_not_active",
+                    format!("campaign {campaign_id} is {}", projection.status),
+                );
+            }
+        }
+        Err(error) => return dto::application_error_response(&error),
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid campaign run request: {error}"),
+                );
+            }
+        };
+        let request =
+            match crate::workflow::react::campaign::parse_and_validate_campaign_run_request(&value)
+            {
+                Ok(request) => request,
+                Err(error) => return campaign_spec_error_response(&error),
+            };
+        // The path campaign id is authoritative: a plan that derives another
+        // campaign is a contract rejection with a stable code.
+        if request.campaign_id() != campaign_id {
+            return campaign_spec_error_response(
+                &crate::workflow::react::campaign::CampaignSpecError::new(
+                    crate::workflow::react::campaign::CampaignSpecErrorCode::CampaignPlanMismatch,
+                    "run intent plan does not match the campaign id",
+                ),
+            );
+        }
+        match state.svc.campaign_run(&campaign_id, request).await {
+            Ok(result) => {
+                let value = serde_json::to_value(&result).unwrap_or_else(|error| {
+                    log::error!("[control-plane] campaign run serialization failed: {error}");
+                    serde_json::json!({})
+                });
+                (StatusCode::CREATED, Json(value)).into_response()
+            }
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// Parses the optional campaign close body. An absent/empty body means "no
+/// explicit reason"; any key other than `reason` is rejected.
+fn parse_campaign_close_body(body: &str) -> Result<String, Response> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|error| {
+        dto::error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            format!("Invalid campaign close request: {error}"),
+        )
+    })?;
+    let map = value.as_object().ok_or_else(|| {
+        dto::error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "Campaign close request must be a JSON object".to_string(),
+        )
+    })?;
+    for key in map.keys() {
+        if key != "reason" {
+            return Err(dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "forbidden_field",
+                format!("'{key}' is not an allowed field for a campaign close request"),
+            ));
+        }
+    }
+    Ok(map
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string())
+}
+
+/// `POST /control/v1/campaigns/{campaign_id}/close` — closes the campaign so
+/// no further run or reservation is admitted. Existing runs keep converging to
+/// their real terminal state; nothing is rewritten.
+async fn close_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:close");
+    }
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let reason = match parse_campaign_close_body(&body) {
+            Ok(reason) => reason,
+            Err(response) => return response,
+        };
+        match state.svc.campaign_close(&campaign_id, &reason).await {
+            Ok(result) => {
+                let value = serde_json::to_value(&result).unwrap_or_else(|error| {
+                    log::error!("[control-plane] campaign close serialization failed: {error}");
+                    serde_json::json!({})
+                });
+                (StatusCode::OK, Json(value)).into_response()
             }
             Err(error) => dto::application_error_response(&error),
         }
@@ -1646,6 +1896,446 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let conflict: serde_json::Value = response.json().await.unwrap();
         assert_eq!(conflict["error"]["code"], "idempotency_key_conflict");
+
+        app.handle.shutdown();
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 2F campaign routes
+    // ------------------------------------------------------------------
+
+    fn campaign_plan_value() -> serde_json::Value {
+        use crate::workflow::react::campaign::{CAMPAIGN_PLAN_V1, STAGE_0_MANUAL};
+        let surface = crate::workflow::react::campaign::CandidatePromptCatalog::embedded()
+            .surfaces()
+            .first()
+            .expect("checked-in surface")
+            .clone();
+        serde_json::json!({
+            "schema_version": CAMPAIGN_PLAN_V1,
+            "campaign_key": "stage0-http",
+            "stage": STAGE_0_MANUAL,
+            "agent_id": "agent-1",
+            "suite": "chatspeed-smoke",
+            "task": "smoke_reply_ok",
+            "model": "cs@free:ds-v4-flash",
+            "concurrency": 1,
+            "budget": {
+                "money_mode": { "mode": "token_resource_only" },
+                "caps": {
+                    "input_tokens": 65536,
+                    "output_tokens": 128000,
+                    "wall_time_ms": 300000,
+                    "tool_calls": 0,
+                    "processes": 0,
+                    "concurrency": 1
+                },
+                "required_dimensions": [],
+                "max_attempts": 1
+            },
+            "candidates": [
+                { "candidate_key": "baseline", "kind": "baseline" },
+                {
+                    "candidate_key": "prompt-a",
+                    "kind": "candidate",
+                    "mutable_surface": ["agent_prompt_ref"],
+                    "agent_prompt_ref": surface.agent_prompt_ref,
+                    "prompt_hash": surface.prompt_hash
+                }
+            ]
+        })
+    }
+
+    fn campaign_run_body(candidate_key: &str) -> String {
+        use crate::workflow::react::campaign::{
+            CampaignFixtureRefV1, FIXTURE_INSTRUCTION_HASH_DOMAIN,
+        };
+        let instruction = "Reply with exactly: OK";
+        serde_json::json!({
+            "schema_version": crate::workflow::react::campaign::CAMPAIGN_RUN_REQUEST_V1,
+            "candidate_key": candidate_key,
+            "fixture": serde_json::to_value(CampaignFixtureRefV1 {
+                suite: "chatspeed-smoke".into(),
+                task_id: "smoke_reply_ok".into(),
+                instruction: instruction.into(),
+                instruction_hash: crate::workflow::react::campaign::domain_hash(
+                    FIXTURE_INSTRUCTION_HASH_DOMAIN,
+                    instruction.as_bytes(),
+                ),
+                dataset_id: "chatspeed-smoke".into(),
+                dataset_version: 2,
+                split: "smoke".into(),
+                manifest_digest: "a".repeat(64),
+                task_digest: "b".repeat(64),
+                verifier_id: "chatspeed-smoke-verifier".into(),
+                verifier_version: "2".into(),
+            })
+            .unwrap(),
+            "plan": campaign_plan_value(),
+        })
+        .to_string()
+    }
+
+    async fn create_campaign(app: &TestApp, auth: &str) -> String {
+        let response = client()
+            .post(auth_url(app, "/control/v1/campaigns"))
+            .header("Authorization", auth)
+            .header("Idempotency-Key", "campaign-create-1")
+            .body(serde_json::json!({ "plan": campaign_plan_value() }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json().await.unwrap();
+        body["campaign_id"]
+            .as_str()
+            .expect("campaign id")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn campaign_routes_require_bearer_and_idempotency() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let client = client();
+
+        // No bearer token.
+        let response = client
+            .post(auth_url(&app, "/control/v1/campaigns"))
+            .header("Idempotency-Key", "key-1")
+            .body(serde_json::json!({ "plan": campaign_plan_value() }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // Bearer but no idempotency key: rejected before any effect.
+        let auth = format!("Bearer {}", auth_token(&app));
+        let response = client
+            .post(auth_url(&app, "/control/v1/campaigns"))
+            .header("Authorization", &auth)
+            .body(serde_json::json!({ "plan": campaign_plan_value() }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "missing_idempotency_key");
+        assert!(app.store.list_workflows().expect("list").is_empty());
+
+        // The new routes are additive: the legacy v1 route still answers.
+        let response = client
+            .get(auth_url(&app, "/control/v1/meta"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn campaign_create_run_and_close_share_one_budget_scope() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let auth = format!("Bearer {}", auth_token(&app));
+        let campaign_id = create_campaign(&app, &auth).await;
+
+        // Replaying the identical plan is idempotent (same derived id).
+        let response = client()
+            .post(auth_url(&app, "/control/v1/campaigns"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-create-2")
+            .body(serde_json::json!({ "plan": campaign_plan_value() }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let replay: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(replay["campaign_id"].as_str(), Some(campaign_id.as_str()));
+
+        // Projection is readable and active.
+        let response = client()
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let projection: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(projection["status"], "active");
+        assert!(projection["candidates"]
+            .as_array()
+            .expect("candidates")
+            .is_empty());
+
+        // Two runs on two candidates under the same campaign scope.
+        let mut scopes = Vec::new();
+        for (index, candidate) in ["baseline", "prompt-a", "prompt-a"].iter().enumerate() {
+            let response = client()
+                .post(auth_url(
+                    &app,
+                    &format!("/control/v1/campaigns/{campaign_id}/runs"),
+                ))
+                .header("Authorization", &auth)
+                .header("Idempotency-Key", format!("campaign-run-{index}"))
+                .body(campaign_run_body(candidate))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let body: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(body["campaign_id"].as_str(), Some(campaign_id.as_str()));
+            assert_eq!(body["candidate_key"].as_str(), Some(*candidate));
+            scopes.push(body);
+        }
+        // The baseline arm carries no prompt surface; only the candidate does.
+        assert!(scopes[0]["prompt_surface"].is_null());
+        assert_eq!(
+            scopes[1]["prompt_surface"]["agent_prompt_ref"].as_str(),
+            Some("smoke-terse-v1")
+        );
+        // Every run shares one campaign scope; the same candidate reuses its
+        // shared candidate scope while each run gets its own request scope.
+        assert_ne!(
+            scopes[0]["candidate_scope_id"].as_str(),
+            scopes[1]["candidate_scope_id"].as_str(),
+            "baseline and candidate have distinct shared candidate scopes"
+        );
+        assert_eq!(
+            scopes[1]["candidate_scope_id"].as_str(),
+            scopes[2]["candidate_scope_id"].as_str(),
+            "replicate runs of one candidate reuse the shared candidate scope"
+        );
+        assert_eq!(
+            scopes[1]["trial_scope_id"].as_str(),
+            scopes[2]["trial_scope_id"].as_str(),
+            "the same candidate/task trial scope is reused"
+        );
+        for scope in &scopes {
+            assert_ne!(
+                scope["request_scope_id"].as_str(),
+                scope["trial_scope_id"].as_str()
+            );
+            assert_eq!(
+                scope["candidate_scope_id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("cand-"),
+                true
+            );
+        }
+        assert_eq!(
+            app.store
+                .get_budget_scope_chain(scopes[0]["session_id"].as_str().unwrap())
+                .expect("chain")
+                .expect("present")
+                .campaign_id,
+            campaign_id
+        );
+        // The campaign owns exactly two shared candidate scopes.
+        let response = client()
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        let projection: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(projection["candidates"].as_array().unwrap().len(), 2);
+
+        // The candidate run's snapshot carries only the prompt reference (never
+        // the prompt body); the baseline run carries no reference at all.
+        let candidate_config: serde_json::Value = serde_json::from_str(
+            &app.store
+                .get_workflow(scopes[1]["session_id"].as_str().unwrap())
+                .expect("read")
+                .and_then(|workflow| workflow.agent_config)
+                .expect("config present"),
+        )
+        .expect("candidate config parses");
+        assert_eq!(
+            candidate_config["experimentAgentPromptRef"].as_str(),
+            Some("smoke-terse-v1")
+        );
+        assert!(candidate_config["experimentAgentPromptHash"].is_string());
+        assert!(candidate_config["experimentPromptCatalogDigest"].is_string());
+        assert!(!candidate_config
+            .to_string()
+            .contains("Output only the token"));
+        let baseline_config: serde_json::Value = serde_json::from_str(
+            &app.store
+                .get_workflow(scopes[0]["session_id"].as_str().unwrap())
+                .expect("read")
+                .and_then(|workflow| workflow.agent_config)
+                .expect("config present"),
+        )
+        .expect("baseline config parses");
+        assert!(baseline_config["experimentAgentPromptRef"].is_null());
+        assert!(baseline_config["experimentAgentPromptHash"].is_null());
+
+        // Close stops further runs and is idempotent.
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/close"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-close-1")
+            .body(serde_json::json!({ "reason": "stage0_complete" }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let close: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(close["status"], "closed");
+        assert_eq!(close["changed"], true);
+
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/close"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-close-2")
+            .body(String::new())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let replay: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(replay["status"], "closed");
+        assert_eq!(replay["changed"], false);
+
+        let workflows_before = app.store.list_workflows().expect("list").len();
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/runs"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-run-after-close")
+            .body(campaign_run_body("baseline"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "campaign_not_active");
+        assert_eq!(
+            app.store.list_workflows().expect("list").len(),
+            workflows_before,
+            "a closed campaign creates no run"
+        );
+
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn campaign_run_rejects_foreign_plan_and_forbidden_fields() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let auth = format!("Bearer {}", auth_token(&app));
+        let campaign_id = create_campaign(&app, &auth).await;
+
+        // A plan that does not derive this campaign id is rejected.
+        let mut foreign: serde_json::Value =
+            serde_json::from_str(&campaign_run_body("baseline")).expect("parse run body");
+        foreign["plan"]["campaign_key"] = serde_json::json!("another-campaign");
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/runs"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-run-foreign")
+            .body(foreign.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "campaign_plan_mismatch");
+        assert!(app.store.list_workflows().expect("list").is_empty());
+
+        // A tampered instruction digest fails closed with a stable code.
+        let mut tampered: serde_json::Value =
+            serde_json::from_str(&campaign_run_body("baseline")).expect("parse run body");
+        tampered["fixture"]["instruction"] = serde_json::json!("Reply with exactly: PONG");
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/runs"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-run-tampered")
+            .body(tampered.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "fixture_digest_mismatch");
+
+        // A caller-supplied scope id is a forbidden field.
+        let mut injected: serde_json::Value =
+            serde_json::from_str(&campaign_run_body("baseline")).expect("parse run body");
+        injected["candidate_scope_id"] = serde_json::json!("cand-forged");
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/runs"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "campaign-run-injected")
+            .body(injected.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "forbidden_field");
+
+        assert!(app.store.list_workflows().expect("list").is_empty());
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn campaign_close_rejects_unknown_and_non_campaign_ids() {
+        let (app, _env) = spawn_test_app().await;
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let response = client()
+            .post(auth_url(&app, "/control/v1/campaigns/not-a-campaign/close"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "close-bad")
+            .body(String::new())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "invalid_campaign_id");
+
+        let unknown = crate::workflow::react::campaign::campaign_id_for_plan("deadbeef");
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{unknown}/close"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "close-unknown")
+            .body(String::new())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         app.handle.shutdown();
     }

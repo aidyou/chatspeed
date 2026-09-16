@@ -15,7 +15,7 @@
 //! with `score = 0.0` (the verdict is a fact, not a promotion decision).
 
 use crate::args::Cli;
-use crate::artifact::{self, VerifyReport};
+use crate::artifact::{self, ArtifactError, VerifyReport};
 use crate::benchmark::{self, ResolvedTask, SmokeTaskV1};
 use crate::error::CliError;
 use crate::evaluate::{write_sidecar, SidecarBundle};
@@ -28,7 +28,7 @@ use std::path::Path;
 /// caps that artifact v1 cannot measure.
 pub const VERDICT_SCHEMA_VERSION: u32 = 2;
 /// Sidecar manifest schema is independent of the versioned verdict document.
-const SIDECAR_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub(crate) const SIDECAR_MANIFEST_SCHEMA_VERSION: u32 = 1;
 /// Fixed verdict kind label.
 pub const VERDICT_KIND: &str = "cs.benchmark.verdict";
 /// Verifier identity is inherited from the checked-in manifest.
@@ -402,11 +402,34 @@ pub fn verify(
     artifact_dir: &Path,
     verdict_dir: &Path,
 ) -> Result<(), CliError> {
+    match verify_artifact_offline(suite, task_id, artifact_dir, verdict_dir) {
+        Ok((verdict, _resolved)) => {
+            render_verdict(cli, artifact_dir, verdict_dir, &verdict);
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.message.clone();
+            render_verify_failure(cli, artifact_dir, verdict_dir, error.code, &message);
+            Err(CliError::io(format!("{}: {}", error.code, error.message)))
+        }
+    }
+}
+
+/// The non-rendering verification seam: resolve the checked-in fixture, verify
+/// the artifact offline with the 2A verifier, compute the deterministic 2E
+/// verdict (never a promotion decision) and publish the verdict sidecar.
+/// Shared by `cs experiment benchmark verify` and the Phase 2F campaign
+/// runner; the source artifact is never modified.
+pub(crate) fn verify_artifact_offline(
+    suite: &str,
+    task_id: &str,
+    artifact_dir: &Path,
+    verdict_dir: &Path,
+) -> Result<(Value, ResolvedTask), ArtifactError> {
     // Output target safety first: fail closed on any symlink component of the
     // verdict path, then on any (lexical or filesystem-resolved) overlap with
     // the immutable 2A artifact directory.
-    crate::evaluate::reject_symlink_ancestors(verdict_dir)
-        .map_err(|error| CliError::io(format!("{}: {}", error.code, error.message)))?;
+    crate::evaluate::reject_symlink_ancestors(verdict_dir)?;
     crate::evaluate::reject_target_overlap(artifact_dir, verdict_dir, "verdict").map_err(
         |error| {
             // Keep the verdict-specific machine code for overlap failures.
@@ -415,38 +438,34 @@ pub fn verify(
             } else {
                 error.code
             };
-            CliError::io(format!("{}: {}", code, error.message))
+            ArtifactError::new(code, error.message)
         },
     )?;
 
     // Fixed fixture identity (digest-bound; unknown task/suite hard-fails).
-    let resolved = benchmark::resolve_task(suite, task_id)
-        .map_err(|error| CliError::io(format!("{}: {}", error.code, error.message)))?;
+    let resolved = benchmark::resolve_task(suite, task_id).map_err(to_artifact_error)?;
 
     // Trusted artifact facts only.
-    let report = match artifact::verify_bundle_dir(artifact_dir) {
-        Ok(report) => report,
-        Err(error) => {
-            render_verify_failure(cli, artifact_dir, verdict_dir, error.code, &error.message);
-            return Err(CliError::io(format!("{}: {}", error.code, error.message)));
-        }
-    };
+    let report = artifact::verify_bundle_dir(artifact_dir)?;
 
     let created_at = chrono::Utc::now().to_rfc3339();
     let verdict = build_verdict(&resolved, &report, artifact_dir, &created_at);
     let body = serde_json::to_string_pretty(&verdict).unwrap_or_else(|_| "{}".to_string());
     let bundle = SidecarBundle {
-        file_name: "verdict.json",
+        file_name: "verdict.json".to_string(),
         body,
         schema_version: SIDECAR_MANIFEST_SCHEMA_VERSION,
         algorithm: artifact::HASH_ALGORITHM,
         manifest_domain: VERDICT_MANIFEST_DOMAIN,
     };
-    write_sidecar(&bundle, verdict_dir)
-        .map_err(|error| CliError::io(format!("{}: {}", error.code, error.message)))?;
+    write_sidecar(&bundle, verdict_dir)?;
+    Ok((verdict, resolved))
+}
 
-    render_verdict(cli, artifact_dir, verdict_dir, &verdict);
-    Ok(())
+/// Maps a benchmark adapter error onto the artifact error surface so the
+/// non-rendering seam has one error type.
+fn to_artifact_error(error: benchmark::BenchmarkError) -> ArtifactError {
+    ArtifactError::new(error.code, error.message)
 }
 
 fn render_verify_failure(

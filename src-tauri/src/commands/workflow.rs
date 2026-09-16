@@ -1216,6 +1216,14 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
 
     inherited_config.sync_legacy_final_audit_flag();
 
+    // Phase 2F: a candidate prompt reference is frozen run identity minted by
+    // the backend campaign facade, never an inheritable workflow preference.
+    // Dropping it here keeps `--agent-config` and inherited workflow snapshots
+    // from selecting an experiment surface outside a campaign run.
+    inherited_config.experiment_agent_prompt_ref = None;
+    inherited_config.experiment_agent_prompt_hash = None;
+    inherited_config.experiment_prompt_catalog_digest = None;
+
     if let Some(models) = &inherited_config.models {
         let mut validated_models = models.clone();
         for model in [
@@ -1572,6 +1580,19 @@ fn sync_workflow_agent_config_at_tool_boundary(
         .map(|inherited| merge_inherited_workflow_config(&agent_config, &inherited))
         .unwrap_or(agent_config);
     fill_missing_agent_config_fields(&mut merged, &agent);
+    // Phase 2F: preserve the workflow-local experiment prompt identity. This
+    // sync rebuilds the config from the current Agent, so the frozen run
+    // surface is re-applied from this workflow's own snapshot only. It is
+    // deliberately never taken from any other workflow's inherited config.
+    if let Some(existing) = workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+    {
+        merged.experiment_agent_prompt_ref = existing.experiment_agent_prompt_ref;
+        merged.experiment_agent_prompt_hash = existing.experiment_agent_prompt_hash;
+        merged.experiment_prompt_catalog_digest = existing.experiment_prompt_catalog_digest;
+    }
     resolve_agent_sandbox_snapshot(store, &agent, &mut merged)?;
     enforce_auto_approve_tool_visibility(&mut merged);
 
@@ -1799,7 +1820,7 @@ pub(crate) async fn create_workflow_core(
         inherited_agent_config: request.inherited_agent_config.clone(),
     };
     let agent_config_json =
-        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request)?;
+        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request, None)?;
 
     // Use empty string for user_query if not provided (new workflow creation)
     let user_query = request.user_query.as_deref().unwrap_or("");
@@ -1840,15 +1861,195 @@ pub(crate) async fn create_workflow_core(
 
 /// Builds the effective agent config for a create request and resolves its
 /// sandbox snapshot. Shared by the normal create path and the experiment
-/// facade so both use one canonical config resolver (no parallel path).
+/// facades so all of them use one canonical config resolver (no parallel
+/// path).
+///
+/// `experiment_prompt` is only supplied by the Phase 2F campaign run facade:
+/// it attaches the resolved checked-in candidate prompt reference to the
+/// workflow snapshot. The normal create path passes `None`, so its behavior is
+/// unchanged (INV-2/INV-4).
 fn build_resolved_workflow_config(
     store: &MainStore,
     agent: &Agent,
     wire_request: &CreateWorkflowRequest,
+    experiment_prompt: Option<&crate::workflow::react::campaign::ResolvedCandidatePrompt>,
 ) -> Result<String, ApplicationError> {
     let mut config = build_workflow_config_for_request(agent, wire_request);
+    if let Some(resolved) = experiment_prompt {
+        config.experiment_agent_prompt_ref = Some(resolved.agent_prompt_ref.clone());
+        config.experiment_agent_prompt_hash = Some(resolved.prompt_hash.clone());
+        config.experiment_prompt_catalog_digest = Some(resolved.catalog_digest.clone());
+    }
     resolve_agent_sandbox_snapshot(store, agent, &mut config)?;
     Ok(config.to_json())
+}
+
+/// The scope layout one budgeted run is created with.
+pub(crate) enum BudgetedRunScope {
+    /// 2C single-run experiment: a fresh per-run canonical scope chain.
+    Standalone(crate::budget::types::BudgetEnvelope),
+    /// 2F campaign run: the shared campaign/candidate/trial scopes plus a
+    /// fresh per-run request scope. Every id is derived by the backend from
+    /// the frozen plan; the caller only names a candidate/trial key.
+    Campaign {
+        campaign_id: String,
+        candidate_key: String,
+        trial_key: String,
+        envelope: crate::budget::types::BudgetEnvelope,
+    },
+}
+
+/// Everything a budgeted run needs after its strict request/plan has already
+/// been validated, so the 2C experiment facade and the 2F campaign facade
+/// share one run kernel instead of two lifecycle paths (INV-1).
+pub(crate) struct BudgetedRunSetup {
+    pub agent: Agent,
+    pub agent_id: String,
+    pub prompt: String,
+    pub planning_mode: bool,
+    pub wire_request: CreateWorkflowRequest,
+    /// Resolved checked-in candidate prompt, only ever set by the campaign
+    /// facade. `None` keeps the run on the Agent defaults (baseline arm).
+    pub experiment_prompt: Option<crate::workflow::react::campaign::ResolvedCandidatePrompt>,
+    pub title_prefix: &'static str,
+    pub scope: BudgetedRunScope,
+}
+
+/// Creates one backend-owned budgeted run atomically (workflow row plus its
+/// budget scopes) and starts it on the shared runtime authority.
+///
+/// A runtime start failure keeps the single created run as an auditable fact;
+/// it is never deleted and never replaced by a second run (INV-6). The
+/// workflow is created with a non-empty deterministic title so the reused
+/// start kernel's "generate title if missing" helper does not fire an extra,
+/// uncontrolled LLM effect.
+async fn create_and_start_budgeted_run(
+    svc: &WorkflowApplicationService,
+    setup: BudgetedRunSetup,
+) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
+    use crate::db::budget::{NewCampaignRun, NewCampaignRunScopes, NewExperimentWorkflowRow};
+    use crate::workflow::react::campaign;
+    use crate::workflow::react::experiment::{ExperimentRunResult, ExperimentScopeRefs};
+
+    let agent_config_json = build_resolved_workflow_config(
+        &*svc.main_store,
+        &setup.agent,
+        &setup.wire_request,
+        setup.experiment_prompt.as_ref(),
+    )?;
+
+    // Backend-owned identity: one TSID serves as session id, run id and the
+    // request-scope id; the outer scopes are either the canonical 2C suffix
+    // chain or the shared 2F campaign scopes.
+    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
+    let title = format!("{} {session_id}", setup.title_prefix);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+
+    let workflow = NewExperimentWorkflowRow {
+        session_id: session_id.clone(),
+        title,
+        user_query: setup.prompt.clone(),
+        agent_id: setup.agent_id.clone(),
+        agent_config: Some(agent_config_json),
+    };
+
+    let chain = {
+        let store = &*svc.main_store;
+        match &setup.scope {
+            BudgetedRunScope::Standalone(envelope) => {
+                MainStore::create_experiment_run_atomic(store, workflow, envelope.clone(), now_ms)
+            }
+            BudgetedRunScope::Campaign {
+                campaign_id,
+                candidate_key,
+                trial_key,
+                envelope,
+            } => {
+                // The backend derives every campaign scope id from the frozen
+                // plan hash; the caller can only name a declared candidate and
+                // trial key (INV-2).
+                let candidate_scope_id =
+                    campaign::candidate_scope_id_for(campaign_id, candidate_key);
+                let trial_scope_id = campaign::trial_scope_id_for(&candidate_scope_id, trial_key);
+                MainStore::create_campaign_run_atomic(
+                    store,
+                    NewCampaignRun {
+                        workflow,
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.clone(),
+                            candidate_scope_id,
+                            trial_scope_id,
+                            request_scope_id: session_id.clone(),
+                        },
+                        envelope: envelope.clone(),
+                    },
+                    now_ms,
+                )
+            }
+        }
+        .map_err(|error| {
+            log::error!(
+                "[Workflow][session={}][phase=experiment] atomic run creation failed: {}",
+                session_id,
+                error.code.as_str()
+            );
+            ApplicationError::internal(format!(
+                "experiment creation failed: {}",
+                error.code.as_str()
+            ))
+        })?
+    };
+
+    // Install the proxy session key before start so the runtime's own LLM
+    // calls authenticate against ccproxy exactly like a normal workflow.
+    let session_key = format!("sk-{}", uuid::Uuid::new_v4());
+    svc.chat_state
+        .workflow_keys
+        .insert(session_id.clone(), session_key);
+
+    log::info!(
+        "[Workflow][session={}][phase=experiment] Budgeted run created, agent_id={}, campaign_scope={}",
+        session_id,
+        setup.agent_id,
+        chain.campaign_id
+    );
+
+    // Reuse the existing start kernel. A start failure keeps the created run
+    // (with its durable scope chain) as the single auditable fact.
+    let started = workflow_start_core(
+        svc,
+        session_id.clone(),
+        setup.agent_id.clone(),
+        Some(setup.prompt.clone()),
+        None,
+        None,
+        Some(setup.planning_mode),
+    )
+    .await;
+    if let Err(error) = started {
+        log::error!(
+            "[Workflow][session={}][phase=experiment] start failed after durable creation: {}",
+            session_id,
+            error.message
+        );
+        return Err(error);
+    }
+
+    Ok(ExperimentRunResult {
+        schema_version: crate::workflow::react::experiment::EXPERIMENT_RUN_SPEC_V1.to_string(),
+        run_id: session_id.clone(),
+        session_id,
+        scopes: ExperimentScopeRefs {
+            request_scope_id: chain.request_id,
+            trial_scope_id: chain.trial_id,
+            candidate_scope_id: chain.candidate_id,
+            campaign_scope_id: chain.campaign_id,
+        },
+        status: "started".to_string(),
+    })
 }
 
 /// Runs one budgeted, single-attempt experiment workflow end to end on the
@@ -1863,20 +2064,11 @@ fn build_resolved_workflow_config(
 ///    writer transaction (any failure rolls back the whole unit);
 /// 4. install the proxy session key;
 /// 5. reuse the existing start kernel.
-///
-/// A runtime start failure keeps the single created run as an auditable
-/// fact; it is never deleted and never replaced by a second run (INV-6). The
-/// experiment workflow is created with a non-empty deterministic title so the
-/// reused start kernel's "generate title if missing" helper does not fire an
-/// extra, uncontrolled LLM effect for the experiment.
 pub(crate) async fn run_experiment_core(
     svc: &WorkflowApplicationService,
     request: crate::workflow::react::experiment::ExperimentRunRequest,
 ) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
-    use crate::db::budget::NewExperimentWorkflowRow;
-    use crate::workflow::react::experiment::{
-        ExperimentRunResult, ExperimentScopeRefs, ExperimentSpecError, ExperimentSpecErrorCode,
-    };
+    use crate::workflow::react::experiment::{ExperimentSpecError, ExperimentSpecErrorCode};
 
     let spec = request.spec.clone();
     let envelope = spec.to_envelope().map_err(spec_validation_error)?;
@@ -1919,87 +2111,287 @@ pub(crate) async fn run_experiment_core(
         final_audit: spec.workflow.final_audit,
         inherited_agent_config: experiment_inherited_config(spec.workflow.model.as_deref())?,
     };
-    let agent_config_json =
-        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request)?;
 
-    // Backend-owned identity: one TSID serves as session id, run id and the
-    // request-scope id; the outer scopes derive canonical suffixes.
-    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
-    let title = format!("experiment {session_id}");
+    create_and_start_budgeted_run(
+        svc,
+        BudgetedRunSetup {
+            agent,
+            agent_id: request.agent_id.clone(),
+            prompt: request.prompt.clone(),
+            planning_mode: spec.planning_mode,
+            wire_request,
+            // The 2C single-run experiment never carries a candidate surface.
+            experiment_prompt: None,
+            title_prefix: "experiment",
+            scope: BudgetedRunScope::Standalone(envelope),
+        },
+    )
+    .await
+}
+
+/// Maps a campaign contract rejection to a stable `InvalidInput` application
+/// error whose message carries only the machine code (never prompts or
+/// payloads), mirroring the 2C `experiment_spec_rejected` contract.
+fn campaign_validation_error(
+    error: crate::workflow::react::campaign::CampaignSpecError,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("campaign_spec_rejected: {}", error.code.as_str()))
+}
+
+/// Reads a campaign scope projection. The campaign id is the only campaign
+/// identity a caller may supply, and it is always re-checked against the
+/// durable scope table.
+fn load_campaign_projection(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    campaign::validate_campaign_id(campaign_id).map_err(campaign_validation_error)?;
+    let store = &*svc.main_store;
+    let scope = store
+        .get_budget_scope_status(campaign_id)
+        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .ok_or_else(|| ApplicationError::not_found(format!("campaign {campaign_id} not found")))?;
+    if scope.scope_kind != crate::budget::types::ScopeKind::Campaign {
+        return Err(campaign_validation_error(campaign::CampaignSpecError::new(
+            campaign::CampaignSpecErrorCode::InvalidCampaignId,
+            "scope is not a campaign scope",
+        )));
+    }
+    let candidates = store
+        .list_budget_child_scopes(campaign_id)
+        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .into_iter()
+        .map(
+            |child| crate::workflow::react::campaign::CampaignCandidateProjection {
+                candidate_scope_id: child.scope_id,
+                status: child.status,
+                committed: child.committed,
+                reserved: child.reserved,
+            },
+        )
+        .collect();
+    Ok(campaign::CampaignProjection {
+        campaign_id: scope.scope_id,
+        status: scope.status,
+        pause_reason: scope.pause_reason,
+        committed: scope.committed,
+        reserved: scope.reserved,
+        caps: scope.caps,
+        infra_failure_count: scope.infra_failure_count,
+        infra_failure_threshold: scope.infra_failure_threshold,
+        candidates,
+    })
+}
+
+/// Creates the shared campaign budget scope for one frozen Stage 0 plan.
+///
+/// The campaign id is derived by the backend from the canonical plan hash, so
+/// the same plan always maps to the same campaign and a caller can never mint
+/// a scope. Creation is idempotent for an identical plan/budget and fails
+/// closed on any envelope mismatch.
+pub(crate) fn campaign_create_core(
+    svc: &WorkflowApplicationService,
+    plan: crate::workflow::react::campaign::CampaignPlanV1,
+) -> Result<crate::workflow::react::campaign::CampaignCreateResult, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    plan.validate().map_err(campaign_validation_error)?;
+    let store = &*svc.main_store;
+    // The agent must exist before a budget scope is frozen for it.
+    store
+        .get_agent(&plan.agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| ApplicationError::not_found(format!("Agent {} not found", plan.agent_id)))?;
+
+    let envelope = plan.envelope().map_err(campaign_validation_error)?;
+    let campaign_id = campaign::campaign_id_for_plan(&plan.plan_hash());
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
-
-    let chain = {
-        let store = &*svc.main_store;
-        MainStore::create_experiment_run_atomic(
-            store,
-            NewExperimentWorkflowRow {
-                session_id: session_id.clone(),
-                title,
-                user_query: request.prompt.clone(),
-                agent_id: request.agent_id.clone(),
-                agent_config: Some(agent_config_json),
-            },
-            envelope,
-            now_ms,
-        )
-        .map_err(|e| {
+    store
+        .create_campaign_atomic(&campaign_id, envelope.clone(), now_ms)
+        .map_err(|error| {
             log::error!(
-                "[Workflow][session={}][phase=experiment] atomic run creation failed: {}",
-                session_id,
-                e.code.as_str()
+                "[Workflow][campaign={}][phase=create] campaign scope creation failed: {}",
+                campaign_id,
+                error.code.as_str()
             );
-            ApplicationError::internal(format!("experiment creation failed: {}", e.code.as_str()))
-        })?
+            ApplicationError::internal(format!("campaign creation failed: {}", error.code.as_str()))
+        })?;
+    let status = load_campaign_projection(svc, &campaign_id)?.status;
+    Ok(campaign::CampaignCreateResult {
+        schema_version: campaign::CAMPAIGN_PLAN_V1.to_string(),
+        campaign_id,
+        campaign_key: plan.campaign_key.clone(),
+        campaign_hash: plan.plan_hash(),
+        envelope_hash: campaign::envelope_hash(&envelope),
+        catalog_digest: campaign::CandidatePromptCatalog::embedded()
+            .digest()
+            .to_string(),
+        candidate_order: plan.candidate_order(),
+        concurrency: plan.concurrency,
+        status,
+    })
+}
+
+/// Reads one campaign projection (campaign scope plus its candidate scopes).
+pub(crate) fn campaign_get_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
+    load_campaign_projection(svc, campaign_id)
+}
+
+/// Closes a campaign scope so no further run or reservation is admitted.
+///
+/// Closing never rewrites existing runs, reservations or committed balances;
+/// it only stops new admissions. The path campaign id is authoritative and the
+/// body can never carry one.
+pub(crate) fn campaign_close_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    reason: &str,
+) -> Result<crate::workflow::react::campaign::CampaignCloseResult, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    // Fail closed on an unknown/non-campaign scope before mutating anything.
+    load_campaign_projection(svc, campaign_id)?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let reason = if reason.trim().is_empty() {
+        "campaign_closed"
+    } else {
+        reason
     };
-
-    // Install the proxy session key before start so the runtime's own LLM
-    // calls authenticate against ccproxy exactly like a normal workflow.
-    let session_key = format!("sk-{}", uuid::Uuid::new_v4());
-    svc.chat_state
-        .workflow_keys
-        .insert(session_id.clone(), session_key);
-
+    let changed = svc
+        .main_store
+        .close_budget_scope(campaign_id, reason, now_ms)
+        .map_err(|error| {
+            log::error!(
+                "[Workflow][campaign={}][phase=close] close failed: {}",
+                campaign_id,
+                error.code.as_str()
+            );
+            ApplicationError::internal(format!("campaign close failed: {}", error.code.as_str()))
+        })?;
+    let projection = load_campaign_projection(svc, campaign_id)?;
     log::info!(
-        "[Workflow][session={}][phase=experiment] Experiment run created, agent_id={}",
-        session_id,
-        request.agent_id
+        "[Workflow][campaign={}][phase=close] campaign status={} changed={}",
+        campaign_id,
+        projection.status,
+        changed
     );
+    Ok(campaign::CampaignCloseResult {
+        campaign_id: campaign_id.to_string(),
+        status: projection.status,
+        pause_reason: projection.pause_reason,
+        changed,
+    })
+}
 
-    // Reuse the existing start kernel. A start failure keeps the created run
-    // (with its durable scope chain) as the single auditable fact.
-    let started = workflow_start_core(
-        svc,
-        session_id.clone(),
-        request.agent_id.clone(),
-        Some(request.prompt.clone()),
-        None,
-        None,
-        Some(spec.planning_mode),
-    )
-    .await;
-    if let Err(error) = started {
-        log::error!(
-            "[Workflow][session={}][phase=experiment] start failed after durable creation: {}",
-            session_id,
-            error.message
-        );
-        return Err(error);
+/// Creates one run under an existing shared campaign scope.
+///
+/// The path campaign id is authoritative. The run intent must re-supply the
+/// immutable plan, and the backend re-derives the campaign id from that plan's
+/// canonical hash: a plan that does not belong to this campaign is rejected
+/// before any effect. The budget is the campaign's frozen envelope, so any run
+/// in the campaign is admitted against the same aggregate cap (AC-1).
+pub(crate) async fn campaign_run_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    request: crate::workflow::react::campaign::CampaignRunRequestV1,
+) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
+    use crate::workflow::react::campaign::{self, CampaignSpecError, CampaignSpecErrorCode};
+
+    request.validate().map_err(campaign_validation_error)?;
+    if request.campaign_id() != campaign_id {
+        return Err(campaign_validation_error(CampaignSpecError::new(
+            CampaignSpecErrorCode::CampaignPlanMismatch,
+            "run intent plan does not match the campaign id",
+        )));
+    }
+    // An unknown or already-closed campaign is refused before any workflow row
+    // or budget scope is created.
+    let projection = load_campaign_projection(svc, campaign_id)?;
+    if projection.status != "active" {
+        return Err(ApplicationError::invalid_input(format!(
+            "campaign_spec_rejected: {}",
+            "campaign_not_active"
+        )));
     }
 
-    Ok(ExperimentRunResult {
-        schema_version: spec.schema_version.clone(),
-        run_id: session_id.clone(),
-        session_id: session_id.clone(),
-        scopes: ExperimentScopeRefs {
-            request_scope_id: chain.request_id,
-            trial_scope_id: chain.trial_id,
-            candidate_scope_id: chain.candidate_id,
-            campaign_scope_id: chain.campaign_id,
+    let envelope = request.envelope().map_err(campaign_validation_error)?;
+    let experiment_prompt = request
+        .resolved_prompt()
+        .map_err(campaign_validation_error)?;
+    let prompt_surface = experiment_prompt
+        .as_ref()
+        .map(campaign::CampaignPromptSurfaceRef::from);
+
+    let agent = {
+        let store = &*svc.main_store;
+        store
+            .get_agent(&request.plan.agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.plan.agent_id))
+            })?
+    };
+    if agent.role.as_deref() == Some("child") {
+        return Err(ApplicationError::invalid_input(
+            "campaign_spec_rejected: child_agent",
+        ));
+    }
+
+    // Only the frozen act-model knob is forwarded; every other workflow knob
+    // stays at the shared resolver's default for both arms (single variable).
+    let wire_request = CreateWorkflowRequest {
+        user_query: Some(request.fixture.instruction.clone()),
+        agent_id: request.plan.agent_id.clone(),
+        allowed_paths: None,
+        auto_approve_plan: None,
+        final_audit: None,
+        inherited_agent_config: experiment_inherited_config(request.plan.model.as_deref())?,
+    };
+    let trial_key = format!("{}/{}", request.plan.suite, request.fixture.task_id);
+
+    let result = create_and_start_budgeted_run(
+        svc,
+        BudgetedRunSetup {
+            agent,
+            agent_id: request.plan.agent_id.clone(),
+            prompt: request.fixture.instruction.clone(),
+            // Stage 0 fixes the execution phase: no separate planning run.
+            planning_mode: false,
+            wire_request,
+            experiment_prompt,
+            title_prefix: "campaign",
+            scope: BudgetedRunScope::Campaign {
+                campaign_id: campaign_id.to_string(),
+                candidate_key: request.candidate_key.clone(),
+                trial_key,
+                envelope,
+            },
         },
-        status: "started".to_string(),
+    )
+    .await?;
+
+    Ok(campaign::CampaignRunResult {
+        schema_version: campaign::CAMPAIGN_RUN_REQUEST_V1.to_string(),
+        campaign_id: campaign_id.to_string(),
+        candidate_key: request.candidate_key.clone(),
+        candidate_scope_id: result.scopes.candidate_scope_id.clone(),
+        trial_scope_id: result.scopes.trial_scope_id.clone(),
+        request_scope_id: result.scopes.request_scope_id.clone(),
+        run_id: result.run_id.clone(),
+        session_id: result.session_id.clone(),
+        status: result.status,
+        prompt_surface,
     })
 }
 
@@ -4273,12 +4665,59 @@ pub(crate) async fn workflow_start_core(
         }
     };
 
+    // Raw workflow agent_config JSON, kept so the Phase 2F experiment prompt
+    // resolution reads the exact persisted snapshot instead of a merged view.
+    let workflow_agent_config_raw: String = {
+        let store = &*main_store_arc;
+        store
+            .get_workflow_snapshot(&session_id)
+            .ok()
+            .and_then(|snapshot| snapshot.workflow.agent_config)
+            .unwrap_or_default()
+    };
+
     // Load agent_config from workflow record if available and merge into agent_config struct
     if let Some(config_str) = agent_config_json.as_str() {
         agent_config.merge_config(config_str);
     } else if !agent_config_json.is_null() {
         if let Ok(config_str) = serde_json::to_string(&agent_config_json) {
             agent_config.merge_config(&config_str);
+        }
+    }
+
+    // Phase 2F: resolve a workflow-local experiment prompt reference, if the
+    // snapshot carries one, into this executor's Agent. The prompt body is
+    // re-read from the checked-in candidate catalog; an unknown ref, a stale
+    // hash or a catalog drift fails closed instead of silently starting the
+    // run with the baseline prompt. `llm.rs::inject_prompts` stays the single
+    // prompt assembly point and reads `system_prompt`/`planning_prompt`
+    // exactly as before, so no second prompt path is introduced.
+    match crate::workflow::react::campaign::resolve_workflow_prompt_override(
+        &workflow_agent_config_raw,
+    ) {
+        Ok(Some(resolved)) => {
+            log::info!(
+                "[Workflow][session={}][phase=start] Applying experiment prompt ref={} surface_hash={}",
+                session_id,
+                resolved.agent_prompt_ref,
+                resolved.surface_hash()
+            );
+            agent_config.system_prompt = resolved.system_prompt;
+            if resolved.planning_prompt.is_some() {
+                agent_config.planning_prompt = resolved.planning_prompt;
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            log::error!(
+                "[Workflow][session={}][phase=start] experiment prompt rejected: {}",
+                session_id,
+                error.code.as_str()
+            );
+            return Err(ApplicationError::invalid_input(format!(
+                "experiment_prompt_rejected: {}",
+                error.code.as_str()
+            )));
         }
     }
 
@@ -8287,6 +8726,96 @@ mod tests {
         assert_eq!(persisted.available_tools, synced.available_tools);
         assert_eq!(persisted.auto_approve, synced.auto_approve);
         assert_eq!(persisted.mcp_tool_exposure, synced.mcp_tool_exposure);
+    }
+
+    #[test]
+    fn experiment_prompt_identity_survives_sync_and_is_never_inherited() {
+        use crate::workflow::react::campaign;
+
+        let store = create_test_store();
+        let session_id = "campaign-prompt-identity";
+        seed_agent(&store, "agent-test");
+
+        let surface = campaign::CandidatePromptCatalog::embedded()
+            .surfaces()
+            .first()
+            .expect("checked-in candidate surface")
+            .clone();
+        let resolved =
+            campaign::resolve_candidate_prompt(&surface.agent_prompt_ref, &surface.prompt_hash)
+                .expect("resolves");
+
+        // The campaign run facade attaches the ref/hash/catalog digest to the
+        // workflow snapshot through the single config resolver.
+        let config = AgentConfig {
+            experiment_agent_prompt_ref: Some(resolved.agent_prompt_ref.clone()),
+            experiment_agent_prompt_hash: Some(resolved.prompt_hash.clone()),
+            experiment_prompt_catalog_digest: Some(resolved.catalog_digest.clone()),
+            ..AgentConfig::default()
+        };
+        store
+            .create_workflow(
+                session_id,
+                "Reply with exactly: OK",
+                "agent-test",
+                Some(config.to_json()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        // The snapshot round-trips the reference (nothing but the ref/hash and
+        // the catalog digest is persisted, never the prompt body).
+        let persisted_json = store
+            .get_workflow(session_id)
+            .expect("read")
+            .and_then(|workflow| workflow.agent_config)
+            .expect("workflow config present");
+        assert!(!persisted_json.contains("Output only the token"));
+        assert_eq!(
+            campaign::resolve_workflow_prompt_override(&persisted_json)
+                .expect("resolves")
+                .expect("override present"),
+            resolved
+        );
+
+        // The tool-boundary capability sync rebuilds the config from the
+        // current Agent; the frozen run surface must survive it.
+        let synced =
+            sync_workflow_agent_config_at_tool_boundary(&store, session_id).expect("sync succeeds");
+        assert_eq!(
+            synced.experiment_agent_prompt_ref.as_deref(),
+            Some(resolved.agent_prompt_ref.as_str())
+        );
+        assert_eq!(
+            synced.experiment_agent_prompt_hash.as_deref(),
+            Some(resolved.prompt_hash.as_str())
+        );
+        let persisted_after_sync = store
+            .get_workflow(session_id)
+            .expect("read")
+            .and_then(|workflow| workflow.agent_config)
+            .expect("workflow config present");
+        assert_eq!(
+            campaign::resolve_workflow_prompt_override(&persisted_after_sync)
+                .expect("resolves")
+                .expect("override present"),
+            resolved
+        );
+
+        // An inherited payload can never select an experiment surface: the
+        // validated inherited config strips these fields, so a normal
+        // `--agent-config` or "create from workflow" cannot opt in.
+        let injected = AgentConfig {
+            experiment_agent_prompt_ref: Some(resolved.agent_prompt_ref.clone()),
+            experiment_agent_prompt_hash: Some(resolved.prompt_hash.clone()),
+            experiment_prompt_catalog_digest: Some(resolved.catalog_digest.clone()),
+            ..AgentConfig::default()
+        }
+        .to_json();
+        let validated = validated_inherited_agent_config(&injected).expect("parses");
+        assert!(validated.experiment_agent_prompt_ref.is_none());
+        assert!(validated.experiment_agent_prompt_hash.is_none());
+        assert!(validated.experiment_prompt_catalog_digest.is_none());
     }
 
     #[test]

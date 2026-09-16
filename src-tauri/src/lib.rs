@@ -3,6 +3,18 @@ mod ai;
 /// persistence layer, ccproxy admission gate, workflow tool gate and the
 /// future experiment service (2C/2F) all consume it.
 pub mod budget;
+/// The Phase 2F campaign/candidate contract, re-exported narrowly so the `cs`
+/// CLI binary can reuse exactly one strict parser, one canonical-hash
+/// implementation and one checked-in prompt catalog instead of duplicating
+/// them (a duplicated validator would silently drift from the backend's).
+///
+/// The exposed items are pure contract types and pure functions: they never
+/// reach the database, the workflow runtime, an executor or the control plane.
+/// The CLI therefore still never opens SQLite or starts a runtime (INV-1);
+/// only build-time linkage grows.
+pub mod campaign {
+    pub use crate::workflow::react::campaign::*;
+}
 mod builtin_agents;
 mod ccproxy;
 mod commands;

@@ -1,7 +1,10 @@
 //! `cs` — ChatSpeed workflow CLI.
 //!
-//! A pure HTTP/SSE client of the local loopback control plane. It never links
-//! workflow runtime behavior, opens the database or spawns executors.
+//! A pure HTTP/SSE client of the local loopback control plane. It never opens
+//! the database, never starts a workflow runtime or executor and never runs an
+//! input loop. Phase 2F campaign commands additionally link the shared,
+//! dependency-free `chatspeed_lib::campaign` contract (strict parsers and
+//! canonical hashes only) so validation cannot drift from the backend's.
 
 // Shared i18n catalogs are embedded into this binary at crate root so human
 // output can be localized without linking any workflow runtime behavior.
@@ -13,6 +16,8 @@ mod args;
 mod artifact;
 #[path = "cs/benchmark.rs"]
 mod benchmark;
+#[path = "cs/campaign.rs"]
+mod campaign;
 #[path = "cs/client.rs"]
 mod client;
 #[path = "cs/discovery.rs"]
@@ -31,7 +36,8 @@ mod sse;
 mod verifier;
 
 use args::{
-    AgentCommand, BenchmarkCommand, Cli, Command, ExperimentCommand, OutputFormat, WorkflowCommand,
+    AgentCommand, BenchmarkCommand, CampaignCommand, Cli, Command, ExperimentCommand, OutputFormat,
+    WorkflowCommand,
 };
 use clap::Parser as _;
 use client::ControlPlaneClient;
@@ -87,6 +93,11 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                     },
             } => return verifier::verify(cli, suite, task, artifact_dir, verdict_dir),
             ExperimentCommand::Benchmark { .. } => {}
+            // Campaign inspect is offline; create/run/close need the client.
+            ExperimentCommand::Campaign {
+                command: CampaignCommand::Inspect { out },
+            } => return campaign::inspect(cli, out),
+            ExperimentCommand::Campaign { .. } => {}
         }
     }
 
@@ -147,6 +158,18 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 }
                 // Verify is handled above before discovery loading.
                 BenchmarkCommand::Verify { .. } => Ok(()),
+            },
+            ExperimentCommand::Campaign { command } => match command {
+                CampaignCommand::Inspect { .. } => Ok(()),
+                CampaignCommand::Create { plan, out } => {
+                    campaign::create(cli, &client, plan, out).await
+                }
+                CampaignCommand::Run { out, candidate } => {
+                    campaign::run(cli, &client, out, candidate).await
+                }
+                CampaignCommand::Close { out, reason } => {
+                    campaign::close(cli, &client, out, reason.as_deref().unwrap_or("")).await
+                }
             },
         },
     }

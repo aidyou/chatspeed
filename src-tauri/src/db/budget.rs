@@ -205,7 +205,9 @@ struct ScopeRow {
     pause_reason: Option<String>,
 }
 
-fn scope_select_sql() -> String {
+/// Canonical column list of a full scope row, shared by the by-id and
+/// by-parent selectors so both project identical columns.
+fn scope_select_columns() -> String {
     let mut columns: Vec<String> = vec![
         "scope_id".into(),
         "scope_kind".into(),
@@ -227,9 +229,13 @@ fn scope_select_sql() -> String {
         "envelope_json".to_string(),
         "pause_reason".to_string(),
     ]);
+    columns.join(", ")
+}
+
+fn scope_select_sql() -> String {
     format!(
         "SELECT {} FROM experiment_budget_scopes WHERE scope_id = ?1",
-        columns.join(", ")
+        scope_select_columns()
     )
 }
 
@@ -331,6 +337,103 @@ fn load_scope(tx: &Transaction<'_>, scope_id: &str) -> Result<ScopeRow, Admissio
         .ok_or_else(|| {
             AdmissionError::invalid_scope_chain(format!("budget scope {scope_id} does not exist"))
         })
+}
+
+/// Soft scope lookup: `Ok(None)` when the scope does not exist yet. Used by
+/// the campaign run creation path, where shared candidate/trial scopes are
+/// legitimately absent on the first run.
+fn find_scope_in_tx(
+    tx: &Transaction<'_>,
+    scope_id: &str,
+) -> Result<Option<ScopeRow>, AdmissionError> {
+    tx.query_row(&scope_select_sql(), [scope_id], read_scope_row)
+        .optional()
+        .map_err(|error| AdmissionError::from(StoreError::from(error)))
+}
+
+/// Projection of a durable scope row into its read-only status.
+fn scope_status_from_row(row: ScopeRow) -> BudgetScopeStatus {
+    BudgetScopeStatus {
+        scope_id: row.scope_id,
+        scope_kind: row.scope_kind,
+        parent_scope_id: row.parent_scope_id,
+        status: row.status,
+        committed: row.committed,
+        reserved: row.reserved,
+        caps: row.caps,
+        infra_failure_count: row.infra_failure_count,
+        infra_failure_threshold: row.infra_failure_threshold,
+        pause_reason: row.pause_reason,
+    }
+}
+
+/// Verifies that an existing scope may be reused by a new run: right kind,
+/// right parent, still active, and the exact same frozen envelope. A campaign
+/// run must never attach itself to a scope frozen under a different budget.
+fn ensure_reusable_scope(
+    scope: &ScopeRow,
+    expected_kind: ScopeKind,
+    expected_parent: Option<&str>,
+    envelope: &BudgetEnvelope,
+) -> Result<(), AdmissionError> {
+    if scope.scope_kind != expected_kind {
+        return Err(AdmissionError::invalid_scope_chain(format!(
+            "scope {} is a {} scope, expected {}",
+            scope.scope_id,
+            scope.scope_kind.as_str(),
+            expected_kind.as_str()
+        )));
+    }
+    if scope.parent_scope_id.as_deref() != expected_parent {
+        return Err(AdmissionError::invalid_scope_chain(format!(
+            "scope {} parent linkage does not match the campaign chain",
+            scope.scope_id
+        )));
+    }
+    if scope.status != "active" {
+        return Err(AdmissionError::scope_paused(format!(
+            "scope {} is {}",
+            scope.scope_id, scope.status
+        )));
+    }
+    let frozen: BudgetEnvelope = serde_json::from_str(&scope.envelope_json).map_err(|error| {
+        AdmissionError::persistence_failure(format!(
+            "corrupted frozen envelope on scope {}: {error}",
+            scope.scope_id
+        ))
+    })?;
+    if frozen != *envelope {
+        return Err(AdmissionError::invalid_scope_chain(format!(
+            "scope {} was frozen with a different budget envelope",
+            scope.scope_id
+        )));
+    }
+    Ok(())
+}
+
+/// Reuses a shared campaign child scope when it already exists, otherwise
+/// creates it under the given parent.
+fn ensure_scope_in_tx(
+    tx: &Transaction<'_>,
+    kind: ScopeKind,
+    scope_id: &str,
+    parent_scope_id: &str,
+    envelope: &BudgetEnvelope,
+    now_ms: u64,
+) -> Result<(), AdmissionError> {
+    match find_scope_in_tx(tx, scope_id)? {
+        Some(existing) => ensure_reusable_scope(&existing, kind, Some(parent_scope_id), envelope),
+        None => create_scope_in_tx(
+            tx,
+            &NewBudgetScope {
+                scope_id: scope_id.to_string(),
+                scope_kind: kind,
+                parent_scope_id: Some(parent_scope_id.to_string()),
+                envelope: envelope.clone(),
+                now_ms,
+            },
+        ),
+    }
 }
 
 fn update_scope_balances(
@@ -1285,6 +1388,27 @@ pub struct NewExperimentWorkflowRow {
     pub agent_config: Option<String>,
 }
 
+/// Backend-derived scope identities for one run under a shared campaign.
+///
+/// Every id is minted by the backend application layer from the frozen plan
+/// hash; a caller never supplies one. The campaign and candidate scopes are
+/// shared by every run of the campaign/candidate, the trial scope is shared by
+/// every replicate of one candidate/task pair, and the request scope is
+/// per run and equals the workflow session id (INV-2).
+pub struct NewCampaignRunScopes {
+    pub campaign_id: String,
+    pub candidate_scope_id: String,
+    pub trial_scope_id: String,
+    pub request_scope_id: String,
+}
+
+/// One backend-owned run created under an existing shared campaign scope.
+pub struct NewCampaignRun {
+    pub workflow: NewExperimentWorkflowRow,
+    pub scopes: NewCampaignRunScopes,
+    pub envelope: BudgetEnvelope,
+}
+
 /// Derives the canonical four-level scope chain for a workflow session.
 /// The request scope id equals the session id; the outer levels use the
 /// fixed `:trial` / `:candidate` / `:campaign` suffixes shared with the 2B
@@ -1394,6 +1518,200 @@ impl MainStore {
             Ok(inner)
         }))
         .map(|()| chain)
+    }
+
+    /// Creates the shared campaign scope for one frozen plan hash, or
+    /// verifies the already-created scope.
+    ///
+    /// The campaign scope is the only cross-run budget level: every run
+    /// admitted under it shares the same frozen envelope, so a campaign cap is
+    /// enforced by the ledger instead of by CLI-side arithmetic. Replaying the
+    /// same plan is idempotent (the campaign id is derived from the plan
+    /// hash), but a replay with a different envelope fails closed.
+    pub fn create_campaign_atomic(
+        &self,
+        campaign_id: &str,
+        envelope: BudgetEnvelope,
+        now_ms: u64,
+    ) -> Result<(), AdmissionError> {
+        envelope.validate()?;
+        let campaign_id = campaign_id.to_string();
+        let runtime = self.db_runtime()?;
+        flatten(runtime.write_blocking(move |conn| {
+            let inner = (|| -> Result<(), AdmissionError> {
+                let tx = conn.transaction().map_err(AdmissionError::from)?;
+                match find_scope_in_tx(&tx, &campaign_id)? {
+                    Some(existing) => {
+                        ensure_reusable_scope(&existing, ScopeKind::Campaign, None, &envelope)?;
+                    }
+                    None => create_scope_in_tx(
+                        &tx,
+                        &NewBudgetScope {
+                            scope_id: campaign_id.clone(),
+                            scope_kind: ScopeKind::Campaign,
+                            parent_scope_id: None,
+                            envelope: envelope.clone(),
+                            now_ms,
+                        },
+                    )?,
+                }
+                tx.commit().map_err(AdmissionError::from)?;
+                Ok(())
+            })();
+            Ok(inner)
+        }))
+    }
+
+    /// Atomically creates one run under an existing shared campaign scope.
+    ///
+    /// Inside a single writer transaction it verifies the campaign is still
+    /// active and shares the frozen envelope, reuses (or creates) the shared
+    /// candidate and trial scopes, creates the per-run request scope, and
+    /// inserts the workflow row. Any failure rolls the whole unit back, so no
+    /// partial chain or orphan workflow is ever visible (INV-6).
+    pub fn create_campaign_run_atomic(
+        &self,
+        run: NewCampaignRun,
+        now_ms: u64,
+    ) -> Result<ScopeChain, AdmissionError> {
+        run.envelope.validate()?;
+        let chain = ScopeChain {
+            request_id: run.scopes.request_scope_id.clone(),
+            trial_id: run.scopes.trial_scope_id.clone(),
+            candidate_id: run.scopes.candidate_scope_id.clone(),
+            campaign_id: run.scopes.campaign_id.clone(),
+        };
+        chain.validate()?;
+        let workflow = run.workflow;
+        let runtime = self.db_runtime()?;
+        let chain_for_tx = chain.clone();
+        flatten(runtime.write_blocking(move |conn| {
+            let inner = (|| -> Result<(), AdmissionError> {
+                let tx = conn.transaction().map_err(AdmissionError::from)?;
+                // The campaign scope is the authority for the frozen budget
+                // and for whether new runs are still admitted.
+                let campaign = load_scope(&tx, &chain_for_tx.campaign_id)?;
+                ensure_reusable_scope(&campaign, ScopeKind::Campaign, None, &run.envelope)?;
+                ensure_scope_in_tx(
+                    &tx,
+                    ScopeKind::Candidate,
+                    &chain_for_tx.candidate_id,
+                    &chain_for_tx.campaign_id,
+                    &run.envelope,
+                    now_ms,
+                )?;
+                ensure_scope_in_tx(
+                    &tx,
+                    ScopeKind::Trial,
+                    &chain_for_tx.trial_id,
+                    &chain_for_tx.candidate_id,
+                    &run.envelope,
+                    now_ms,
+                )?;
+                // The request scope is per run: reusing one would silently
+                // merge two runs into a single admission identity.
+                if find_scope_in_tx(&tx, &chain_for_tx.request_id)?.is_some() {
+                    return Err(AdmissionError::invalid_scope_chain(format!(
+                        "request scope {} already exists",
+                        chain_for_tx.request_id
+                    )));
+                }
+                insert_experiment_workflow_in_tx(&tx, &workflow)?;
+                create_scope_in_tx(
+                    &tx,
+                    &NewBudgetScope {
+                        scope_id: chain_for_tx.request_id.clone(),
+                        scope_kind: ScopeKind::Request,
+                        parent_scope_id: Some(chain_for_tx.trial_id.clone()),
+                        envelope: run.envelope.clone(),
+                        now_ms,
+                    },
+                )?;
+                tx.commit().map_err(AdmissionError::from)?;
+                Ok(())
+            })();
+            Ok(inner)
+        }))
+        .map(|()| chain)
+    }
+
+    /// Closes a budget scope so no further reservation is admitted.
+    ///
+    /// Closing is a status transition only: existing reservations, committed
+    /// balances and running workflows are never rewritten. The 2B active-scope
+    /// check makes the close effective before any provider/tool effect.
+    /// Returns whether this call performed the transition (a replay of an
+    /// already-closed scope is a no-op, not a failure).
+    pub fn close_budget_scope(
+        &self,
+        scope_id: &str,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<bool, AdmissionError> {
+        let scope_id = scope_id.to_string();
+        let reason = reason.to_string();
+        let runtime = self.db_runtime()?;
+        flatten(runtime.write_blocking(move |conn| {
+            let inner = (|| -> Result<bool, AdmissionError> {
+                let tx = conn.transaction().map_err(AdmissionError::from)?;
+                let scope = load_scope(&tx, &scope_id)?;
+                if scope.status == "closed" {
+                    tx.commit().map_err(AdmissionError::from)?;
+                    return Ok(false);
+                }
+                let changed = tx
+                    .execute(
+                        "UPDATE experiment_budget_scopes
+                         SET status = 'closed', pause_reason = ?2, updated_at_ms = ?3,
+                             version = version + 1
+                         WHERE scope_id = ?1 AND status != 'closed'",
+                        params![scope_id, reason, ensure_sqlite_range(now_ms)?],
+                    )
+                    .map_err(StoreError::from)?;
+                if changed == 1 {
+                    // The ledger records a close as a `pause` transition
+                    // (the only non-effect status operation in the v18 schema
+                    // check constraint); the `closed:` reason prefix keeps it
+                    // distinguishable from an infra-failure pause.
+                    insert_ledger_entry(
+                        &tx,
+                        &scope_id,
+                        None,
+                        None,
+                        "pause",
+                        &BudgetVector::ZERO,
+                        None,
+                        None,
+                        Some(&format!("closed:{reason}")),
+                        now_ms,
+                    )?;
+                }
+                tx.commit().map_err(AdmissionError::from)?;
+                Ok(changed == 1)
+            })();
+            Ok(inner)
+        }))
+    }
+
+    /// Lists the direct children of one scope in creation order (used for the
+    /// campaign projection: campaign -> candidate scopes).
+    pub fn list_budget_child_scopes(
+        &self,
+        parent_scope_id: &str,
+    ) -> Result<Vec<BudgetScopeStatus>, StoreError> {
+        let runtime = self.db_runtime()?;
+        let parent_scope_id = parent_scope_id.to_string();
+        runtime.read_blocking(move |conn| {
+            let mut statement = conn.prepare(&format!(
+                "SELECT {} FROM experiment_budget_scopes
+                 WHERE parent_scope_id = ?1 ORDER BY created_at_ms, scope_id",
+                scope_select_columns()
+            ))?;
+            let rows = statement
+                .query_map([&parent_scope_id], read_scope_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows.into_iter().map(scope_status_from_row).collect())
+        })
     }
 
     /// Atomically reserves budget across the full four-level scope chain.
@@ -1636,14 +1954,22 @@ impl MainStore {
     /// Read-only resolution of the durable four-level scope chain rooted at a
     /// request scope id.
     ///
+    /// The chain is resolved by walking the durable `parent_scope_id` linkage
+    /// (`request -> trial -> candidate -> campaign`) and checking every level's
+    /// kind, so the same resolver serves both the legacy single-run 2C chain
+    /// (which happens to use fixed id suffixes) and a 2F campaign run whose
+    /// candidate/trial/campaign scopes are shared opaque backend ids. The
+    /// suffix convention is never used as authority.
+    ///
     /// - `Ok(None)` when no request scope exists: this is an ordinary
     ///   workflow with no budget opt-in, so callers keep the normal path
     ///   (INV-4).
-    /// - `Ok(Some(chain))` when a complete, correctly parented canonical
+    /// - `Ok(Some(chain))` when a complete, correctly parented four-level
     ///   chain exists.
-    /// - `Err` when a request scope exists but its chain is incomplete or
-    ///   mis-parented. A half/forged chain must fail closed before any effect
-    ///   rather than degrading to a normal request (INV-2).
+    /// - `Err` when a request scope exists but its chain is incomplete, is
+    ///   mis-parented, malformed or cyclic. A half/forged chain must fail
+    ///   closed before any effect rather than degrading to a normal request
+    ///   (INV-2).
     pub fn get_budget_scope_chain(
         &self,
         request_scope_id: &str,
@@ -1651,9 +1977,6 @@ impl MainStore {
         let runtime = self.db_runtime()?;
         let request_scope_id = request_scope_id.to_string();
         runtime.read_blocking(move |conn| {
-            let trial_id = format!("{request_scope_id}:trial");
-            let candidate_id = format!("{request_scope_id}:candidate");
-            let campaign_id = format!("{request_scope_id}:campaign");
             let read_level = |id: &str| -> Result<Option<(String, Option<String>)>, StoreError> {
                 conn.query_row(
                     "SELECT scope_kind, parent_scope_id
@@ -1668,44 +1991,55 @@ impl MainStore {
             let Some((request_kind, request_parent)) = read_level(&request_scope_id)? else {
                 return Ok(None);
             };
-            let levels: [(&str, &str, &str, Option<&str>); 4] = [
-                (&request_scope_id, "request", "request", Some(&trial_id)),
-                (&trial_id, "trial", "trial", Some(&candidate_id)),
-                (&candidate_id, "candidate", "candidate", Some(&campaign_id)),
-                (&campaign_id, "campaign", "campaign", None),
-            ];
-            // Validate the request level against the first tuple, then the
-            // remaining levels by re-reading each id.
-            let expected_parent = request_parent.as_deref();
-            if request_kind != "request" || expected_parent != Some(trial_id.as_str()) {
+            if request_kind != "request" {
                 return Err(invalid_chain_error(format!(
-                    "request scope {request_scope_id} has kind '{request_kind}' / unexpected parent"
+                    "scope {request_scope_id} has kind '{request_kind}', expected 'request'"
                 )));
             }
-            for (id, _label, expected_kind, expected_parent) in &levels[1..] {
-                let Some((kind, parent)) = read_level(id)? else {
+            // Expected kind for each outer level, in walk order.
+            let outer_kinds = ["trial", "candidate", "campaign"];
+            let mut resolved: Vec<String> = vec![request_scope_id.clone()];
+            let mut current = request_parent;
+            for expected_kind in outer_kinds {
+                let Some(id) = current.clone() else {
+                    return Err(invalid_chain_error(format!(
+                        "scope chain for request {request_scope_id} is incomplete: \
+                         no {expected_kind} scope"
+                    )));
+                };
+                if resolved.contains(&id) {
+                    return Err(invalid_chain_error(format!(
+                        "scope chain for request {request_scope_id} is cyclic at {id}"
+                    )));
+                }
+                let Some((kind, parent)) = read_level(&id)? else {
                     return Err(invalid_chain_error(format!(
                         "scope chain is incomplete: {id} is missing"
                     )));
                 };
-                if kind != *expected_kind {
+                if kind != expected_kind {
                     return Err(invalid_chain_error(format!(
                         "scope {id} has kind '{kind}', expected '{expected_kind}'"
                     )));
                 }
-                if parent.as_deref() != *expected_parent {
-                    return Err(invalid_chain_error(format!(
-                        "scope {id} parent mismatch: got {:?}, expected {expected_parent:?}",
-                        parent
-                    )));
-                }
+                resolved.push(id);
+                current = parent;
             }
-            Ok(Some(ScopeChain {
-                request_id: request_scope_id.clone(),
-                trial_id,
-                candidate_id,
-                campaign_id,
-            }))
+            if current.is_some() {
+                return Err(invalid_chain_error(
+                    "campaign scope must not have a parent scope",
+                ));
+            }
+            let chain = ScopeChain {
+                request_id: resolved[0].clone(),
+                trial_id: resolved[1].clone(),
+                candidate_id: resolved[2].clone(),
+                campaign_id: resolved[3].clone(),
+            };
+            chain
+                .validate()
+                .map_err(|error| invalid_chain_error(error.message.clone()))?;
+            Ok(Some(chain))
         })
     }
 
@@ -1720,18 +2054,7 @@ impl MainStore {
             let row = conn
                 .query_row(&scope_select_sql(), [scope_id], read_scope_row)
                 .optional()?;
-            Ok(row.map(|row| BudgetScopeStatus {
-                scope_id: row.scope_id,
-                scope_kind: row.scope_kind,
-                parent_scope_id: row.parent_scope_id,
-                status: row.status,
-                committed: row.committed,
-                reserved: row.reserved,
-                caps: row.caps,
-                infra_failure_count: row.infra_failure_count,
-                infra_failure_threshold: row.infra_failure_threshold,
-                pause_reason: row.pause_reason,
-            }))
+            Ok(row.map(scope_status_from_row))
         })
     }
 
@@ -2657,18 +2980,300 @@ mod tests {
         }
 
         #[test]
-        fn scope_chain_rejects_noncanonical_chain() {
+        fn scope_chain_resolves_by_durable_parent_linkage() {
             let (store, _dir) = store();
-            // `create_chain` builds a kind-valid chain with non-canonical ids
-            // (req-1/trial-1/...). The canonical resolver keys the outer
-            // levels by the `:trial`/`:candidate`/`:campaign` suffixes, so a
-            // request scope that is not the root of a canonical chain must
-            // fail closed rather than resolve.
+            // `create_chain` builds a kind-valid chain whose ids do not follow
+            // the legacy `:trial`/`:candidate`/`:campaign` suffix convention.
+            // Resolution is authority-by-linkage, so it must resolve through
+            // the real parent chain (this is also what a shared 2F campaign
+            // chain looks like).
             create_chain(&store);
-            let error = store
+            let chain = store
                 .get_budget_scope_chain("req-1")
-                .expect_err("non-canonical chain must fail closed");
-            assert!(matches!(error, StoreError::InvalidData(_)));
+                .expect("read")
+                .expect("parent-linked chain present");
+            assert_eq!(chain.request_id, "req-1");
+            assert_eq!(chain.trial_id, "trial-1");
+            assert_eq!(chain.candidate_id, "cand-1");
+            assert_eq!(chain.campaign_id, "camp-1");
+        }
+
+        #[test]
+        fn scope_chain_rejects_non_request_root() {
+            let (store, _dir) = store();
+            create_chain(&store);
+            // Only a request scope may root a budget chain. The legacy suffix
+            // convention is not authority, so a campaign/candidate/trial scope
+            // id must fail closed instead of resolving.
+            for root in ["camp-1", "cand-1", "trial-1"] {
+                let error = store
+                    .get_budget_scope_chain(root)
+                    .expect_err("non-request root must fail closed");
+                assert!(matches!(error, StoreError::InvalidData(_)), "{root}");
+            }
+            // A scope id that does not exist at all is an ordinary workflow.
+            assert!(store
+                .get_budget_scope_chain("orphan-scope")
+                .expect("read")
+                .is_none());
+        }
+
+        #[test]
+        fn campaign_scope_is_shared_across_runs_and_caps_are_aggregate() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            let mut campaign_envelope = envelope();
+            campaign_envelope.caps.input_tokens = CapLimit::HardCap(1_000);
+            let campaign_id = "camp-0000000000000000000000000000abcd";
+            store
+                .create_campaign_atomic(campaign_id, campaign_envelope.clone(), now())
+                .expect("campaign create");
+            // Replaying the same plan is idempotent.
+            store
+                .create_campaign_atomic(campaign_id, campaign_envelope.clone(), now())
+                .expect("idempotent campaign create");
+
+            let mut chains = Vec::new();
+            for index in 0..2 {
+                let session_id = format!("sess-{index}");
+                let candidate_scope = format!("cand-{index}");
+                let trial_scope = format!("trial-{index}");
+                let chain = store
+                    .create_campaign_run_atomic(
+                        NewCampaignRun {
+                            workflow: experiment_row(&session_id),
+                            scopes: NewCampaignRunScopes {
+                                campaign_id: campaign_id.to_string(),
+                                candidate_scope_id: candidate_scope,
+                                trial_scope_id: trial_scope,
+                                request_scope_id: session_id.clone(),
+                            },
+                            envelope: campaign_envelope.clone(),
+                        },
+                        now(),
+                    )
+                    .expect("campaign run create");
+                assert_eq!(chain.campaign_id, campaign_id);
+                chains.push(chain);
+            }
+            // Every run resolves back to the same shared campaign scope.
+            for chain in &chains {
+                let resolved = store
+                    .get_budget_scope_chain(&chain.request_id)
+                    .expect("read")
+                    .expect("chain present");
+                assert_eq!(resolved.campaign_id, campaign_id);
+                assert_eq!(resolved.candidate_id, chain.candidate_id);
+            }
+            // Two runs on the same candidate reuse the shared candidate scope.
+            let shared_candidate = store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-replicate"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.to_string(),
+                            candidate_scope_id: "cand-0".to_string(),
+                            trial_scope_id: "trial-0".to_string(),
+                            request_scope_id: "sess-replicate".to_string(),
+                        },
+                        envelope: campaign_envelope.clone(),
+                    },
+                    now(),
+                )
+                .expect("replicate run reuses candidate/trial scopes");
+            assert_eq!(shared_candidate.candidate_id, "cand-0");
+            assert_eq!(shared_candidate.trial_id, "trial-0");
+            assert_eq!(
+                store
+                    .list_budget_child_scopes(campaign_id)
+                    .expect("children")
+                    .len(),
+                2,
+                "campaign has exactly two candidate scopes"
+            );
+
+            // Aggregate campaign cap: the first reserve takes 600 of the 1000
+            // campaign input-token budget, so the second 600 is refused at the
+            // campaign level even though each request scope has room.
+            let first = store
+                .reserve_effect(
+                    ReserveEffect {
+                        scopes: chains[0].clone(),
+                        ..reserve_request("idem-camp-1", estimate(600, 0))
+                    },
+                    now(),
+                )
+                .expect("first reserve");
+            let second = store
+                .reserve_effect(
+                    ReserveEffect {
+                        scopes: chains[1].clone(),
+                        ..reserve_request("idem-camp-2", estimate(600, 0))
+                    },
+                    now(),
+                )
+                .expect_err("aggregate campaign cap must reject");
+            assert_eq!(second.code, AdmissionErrorCode::BudgetExceeded);
+            // The rejection left no reservation behind on any level.
+            assert!(store
+                .get_budget_reservation(&first.reservation_id)
+                .expect("read")
+                .is_some());
+            let campaign_status = store
+                .get_budget_scope_status(campaign_id)
+                .expect("read")
+                .expect("campaign exists");
+            assert_eq!(campaign_status.reserved.input_tokens, 600);
+        }
+
+        #[test]
+        fn closed_campaign_scope_rejects_new_runs_and_reservations() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            let campaign_id = "camp-1111111111111111111111111111abcd";
+            store
+                .create_campaign_atomic(campaign_id, envelope(), now())
+                .expect("campaign create");
+            store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-close"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.to_string(),
+                            candidate_scope_id: "cand-close".into(),
+                            trial_scope_id: "trial-close".into(),
+                            request_scope_id: "sess-close".into(),
+                        },
+                        envelope: envelope(),
+                    },
+                    now(),
+                )
+                .expect("run create");
+            assert!(store
+                .close_budget_scope(campaign_id, "campaign_complete", now())
+                .expect("close"));
+            // Replaying a close is a no-op, not a failure.
+            assert!(!store
+                .close_budget_scope(campaign_id, "campaign_complete", now())
+                .expect("idempotent close"));
+
+            let status = store
+                .get_budget_scope_status(campaign_id)
+                .expect("read")
+                .expect("campaign exists");
+            assert_eq!(status.status, "closed");
+
+            // A new run under a closed campaign is refused before any workflow
+            // row or scope is created.
+            let error = store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-after-close"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.to_string(),
+                            candidate_scope_id: "cand-close-2".into(),
+                            trial_scope_id: "trial-close-2".into(),
+                            request_scope_id: "sess-after-close".into(),
+                        },
+                        envelope: envelope(),
+                    },
+                    now(),
+                )
+                .expect_err("closed campaign must reject a new run");
+            assert_eq!(error.code, AdmissionErrorCode::ScopePaused);
+            assert!(store
+                .get_workflow("sess-after-close")
+                .expect("read")
+                .is_none());
+
+            // Admission through an existing run's chain is refused too.
+            let error = store
+                .reserve_effect(
+                    ReserveEffect {
+                        scopes: ScopeChain {
+                            request_id: "sess-close".into(),
+                            trial_id: "trial-close".into(),
+                            candidate_id: "cand-close".into(),
+                            campaign_id: campaign_id.into(),
+                        },
+                        ..reserve_request("idem-closed", estimate(1, 1))
+                    },
+                    now(),
+                )
+                .expect_err("closed campaign must reject admission");
+            assert_eq!(error.code, AdmissionErrorCode::ScopePaused);
+        }
+
+        #[test]
+        fn campaign_run_rejects_scope_reuse_and_envelope_mismatch() {
+            let (store, _dir) = store();
+            seed_agent(&store, "agent-1");
+            let campaign_id = "camp-2222222222222222222222222222abcd";
+            store
+                .create_campaign_atomic(campaign_id, envelope(), now())
+                .expect("campaign create");
+
+            let mut other = envelope();
+            other.caps.input_tokens = CapLimit::HardCap(1);
+            let error = store
+                .create_campaign_atomic(campaign_id, other, now())
+                .expect_err("envelope mismatch must fail closed");
+            assert_eq!(error.code, AdmissionErrorCode::InvalidScopeChain);
+
+            store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-a"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.into(),
+                            candidate_scope_id: "cand-a".into(),
+                            trial_scope_id: "trial-a".into(),
+                            request_scope_id: "sess-a".into(),
+                        },
+                        envelope: envelope(),
+                    },
+                    now(),
+                )
+                .expect("first run");
+            // A second run may not reuse an existing request scope.
+            let error = store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-b"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.into(),
+                            candidate_scope_id: "cand-a".into(),
+                            trial_scope_id: "trial-a".into(),
+                            request_scope_id: "sess-a".into(),
+                        },
+                        envelope: envelope(),
+                    },
+                    now(),
+                )
+                .expect_err("request scope reuse must fail closed");
+            assert_eq!(error.code, AdmissionErrorCode::InvalidScopeChain);
+
+            // A candidate scope frozen under a different budget cannot be
+            // silently reused by a run carrying another envelope.
+            let mut widened = envelope();
+            widened.caps.input_tokens = CapLimit::HardCap(9_999_999);
+            let error = store
+                .create_campaign_run_atomic(
+                    NewCampaignRun {
+                        workflow: experiment_row("sess-c"),
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.into(),
+                            candidate_scope_id: "cand-a".into(),
+                            trial_scope_id: "trial-c".into(),
+                            request_scope_id: "sess-c".into(),
+                        },
+                        envelope: widened,
+                    },
+                    now(),
+                )
+                .expect_err("envelope mismatch on a shared scope must fail closed");
+            assert_eq!(error.code, AdmissionErrorCode::InvalidScopeChain);
+            assert!(store.get_workflow("sess-c").expect("read").is_none());
         }
     }
 }

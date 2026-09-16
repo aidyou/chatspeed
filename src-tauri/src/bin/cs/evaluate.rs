@@ -329,7 +329,7 @@ pub fn build_evaluation(report: &VerifyReport, artifact_dir: &Path, created_at: 
 /// A sidecar bundle: one data file plus a generated sidecar manifest.
 pub(crate) struct SidecarBundle {
     /// Data file name inside the sidecar directory (e.g. `evaluation.json`).
-    pub file_name: &'static str,
+    pub file_name: String,
     /// Exact body of the data file.
     pub body: String,
     /// Sidecar schema version recorded in the manifest.
@@ -357,6 +357,15 @@ impl SidecarBundle {
         });
         serde_json::to_string_pretty(&manifest).unwrap_or_else(|_| "{}".to_string())
     }
+}
+
+/// Content hash of a published sidecar's manifest file (the same hash the
+/// manifest records for its own files list). `None` when the manifest is
+/// missing or unreadable, so a projection never invents a binding it cannot
+/// prove.
+pub(crate) fn sidecar_manifest_hash(dir: &Path) -> Option<String> {
+    let bytes = fs::read(dir.join("artifacts").join("manifest.json")).ok()?;
+    Some(artifact::blob_hash(&bytes))
 }
 
 /// Verifies a published/staged sidecar directory: exact single-file manifest,
@@ -547,13 +556,13 @@ pub(crate) fn write_sidecar(bundle: &SidecarBundle, final_dir: &Path) -> Result<
 
     let write_result = (|| -> Result<(), ArtifactError> {
         let manifest_json = bundle.manifest_json();
-        write_sidecar_file(&staging.join(bundle.file_name), bundle.body.as_bytes())?;
+        write_sidecar_file(&staging.join(&bundle.file_name), bundle.body.as_bytes())?;
         write_sidecar_file(
             &staging.join("artifacts").join("manifest.json"),
             manifest_json.as_bytes(),
         )?;
         // Re-verify the staged sidecar before publishing.
-        verify_sidecar_dir(&staging, bundle.file_name, bundle.manifest_domain)?;
+        verify_sidecar_dir(&staging, &bundle.file_name, bundle.manifest_domain)?;
         Ok(())
     })();
 
@@ -707,13 +716,11 @@ pub(crate) fn reject_target_overlap(
 /// Runs `cs experiment evaluate`: verify the artifact offline, project
 /// deterministic correctness facts, publish the evaluation sidecar.
 pub fn evaluate(cli: &Cli, artifact_dir: &Path, output_dir: &Path) -> Result<(), CliError> {
-    // Fail closed on any symlink component of the output path, then on any
-    // (lexical or filesystem-resolved) overlap with the artifact directory.
-    reject_symlink_ancestors(output_dir).map_err(to_cli_error)?;
-    reject_target_overlap(artifact_dir, output_dir, "evaluation").map_err(to_cli_error)?;
-
-    let report = match artifact::verify_bundle_dir(artifact_dir) {
-        Ok(report) => report,
+    match evaluate_artifact_offline(artifact_dir, output_dir) {
+        Ok(evaluation) => {
+            render_evaluation(cli, artifact_dir, output_dir, &evaluation);
+            Ok(())
+        }
         Err(error) => {
             // Fail closed: render the structured error projection (json/jsonl)
             // or a stderr diagnostic (human), and never publish a sidecar.
@@ -730,24 +737,38 @@ pub fn evaluate(cli: &Cli, artifact_dir: &Path, output_dir: &Path) -> Result<(),
             } else {
                 render_result(cli.output, &projection);
             }
-            return Err(CliError::io(format!("{}: {}", error.code, error.message)));
+            Err(to_cli_error(error))
         }
-    };
+    }
+}
+
+/// The non-rendering evaluation seam: output-target safety, offline artifact
+/// verification, deterministic evaluation and sidecar publication. Shared by
+/// `cs experiment evaluate` and the Phase 2F campaign runner so both use one
+/// evaluator path and one sidecar writer. The source artifact is never
+/// modified.
+pub(crate) fn evaluate_artifact_offline(
+    artifact_dir: &Path,
+    output_dir: &Path,
+) -> Result<Value, ArtifactError> {
+    // Fail closed on any symlink component of the output path, then on any
+    // (lexical or filesystem-resolved) overlap with the artifact directory.
+    reject_symlink_ancestors(output_dir)?;
+    reject_target_overlap(artifact_dir, output_dir, "evaluation")?;
+    let report = artifact::verify_bundle_dir(artifact_dir)?;
 
     let created_at = chrono::Utc::now().to_rfc3339();
     let evaluation = build_evaluation(&report, artifact_dir, &created_at);
     let body = serde_json::to_string_pretty(&evaluation).unwrap_or_else(|_| "{}".to_string());
     let bundle = SidecarBundle {
-        file_name: "evaluation.json",
+        file_name: "evaluation.json".to_string(),
         body,
         schema_version: EVALUATION_SCHEMA_VERSION,
         algorithm: HASH_ALGORITHM,
         manifest_domain: EVALUATION_MANIFEST_DOMAIN,
     };
-    write_sidecar(&bundle, output_dir).map_err(to_cli_error)?;
-
-    render_evaluation(cli, artifact_dir, output_dir, &evaluation);
-    Ok(())
+    write_sidecar(&bundle, output_dir)?;
+    Ok(evaluation)
 }
 
 fn render_evaluation(cli: &Cli, artifact_dir: &Path, output_dir: &Path, evaluation: &Value) {
@@ -1288,7 +1309,7 @@ mod tests {
     fn sidecar_writer_never_publishes_on_staging_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let bundle = SidecarBundle {
-            file_name: "evaluation.json",
+            file_name: "evaluation.json".to_string(),
             body: "{}".to_string(),
             schema_version: EVALUATION_SCHEMA_VERSION,
             algorithm: HASH_ALGORITHM,

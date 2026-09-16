@@ -2431,6 +2431,53 @@ mod tests {
     }
 
     #[test]
+    fn campaign_prompt_override_changes_the_single_assembled_system_prompt() {
+        use crate::workflow::react::campaign;
+
+        let history = vec![json!({ "role": "user", "content": "Run the smoke task" })];
+
+        // Baseline: the Agent defaults must be used unchanged.
+        let baseline = test_llm_processor();
+        let baseline_system = baseline
+            .inject_prompts(history.clone(), &ExecutionPolicy::standard())[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(baseline_system.contains("System prompt"));
+        assert!(!baseline_system.contains("Output only the token"));
+
+        // A campaign run resolves the checked-in candidate prompt from the
+        // workflow snapshot's ref/hash and applies it to the workflow-local
+        // Agent exactly like `workflow_start_core` does.
+        let surface = campaign::CandidatePromptCatalog::embedded()
+            .surfaces()
+            .first()
+            .expect("checked-in surface");
+        let resolved =
+            campaign::resolve_candidate_prompt(&surface.agent_prompt_ref, &surface.prompt_hash)
+                .expect("resolves");
+        let mut override_processor = test_llm_processor();
+        override_processor.agent_config.system_prompt = resolved.system_prompt.clone();
+
+        let overridden_system = override_processor
+            .inject_prompts(history, &ExecutionPolicy::standard())[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(overridden_system.contains("Output only the token"));
+        assert!(!overridden_system.contains("System prompt"));
+        // Still exactly one Agent-instructions block: the override changes the
+        // value injected into the existing assembly point, not the number of
+        // prompt assembly paths.
+        assert_eq!(
+            overridden_system
+                .matches("<AGENT_SPECIFIC_INSTRUCTIONS>")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn normalize_history_defers_internal_runtime_observation_until_after_tool_result() {
         let history = LlmProcessor::normalize_history_messages(vec![
             message("user", "Fix the bug", None, None),

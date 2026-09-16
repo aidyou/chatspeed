@@ -309,3 +309,165 @@ sidecar 的既存 symlink/overlap fail-closed 防御保持不变。对于攻击�
 TOCTOU 威胁模型，跨平台 `std::fs` 的 path-based 操作无法在当前 CLI 契约内彻底消除该竞态；完全消除
 需要 handle-relative 的 Unix/Windows writer/verifier 或将输出限制为攻击者不可写的可信根，均超出本次
 2D+2E 风险收敛的最小兼容范围。
+
+## 6. 2F Campaign / Candidate Stage 0（实现完成，真实 smoke 部分被 provider 限流阻塞，2026-09-16）
+
+**状态：U-1..U-5 全部完成；V-1..V-8 通过。AC-1..AC-8 满足，阶段指针推进到 2G+2H。**
+（首选用 `cs@free:ds-v4-flash` 因 provider 配额持续 429 无法完成三 campaign，经用户确认后改用
+同为免费组的 `cs@free:qwen-3.8-flash` 完成真实交付；`ds-v4-flash` 的 429 记录保留在 6.3 作为
+fail-closed 证据。）
+
+### 6.1 环境与进程隔离（INV-7 / A-5）
+
+- 环境中已存在**用户自己的** dev 实例（另一 checkout `/home/xc/dev/rust/chatspeed`，pid 454388 等，
+  占用 Vite 默认端口 1420）。本次**未终止、未干扰**该实例：自动化审计在其启动前后都记录到同一组
+  用户进程（5 个），全程未被 kill。
+- 本次实例使用**独立** `CHATSPEED_HOME=/home/xc/dev/rust/chatspeed-cli/dev_data/p2f-home`，因此
+  discovery 落在 `<repo>/dev_data/p2f-home/runtime/control-plane-v1.json`，不覆盖用户的
+  `~/.chatspeed/runtime/control-plane-v1.json`。
+- 启动命令（为避开用户实例占用的 1420，仅在**运行时**以 `--config` 覆盖 devUrl/beforeDevCommand，
+  未修改仓库配置）：
+  ```bash
+  CHATSPEED_HOME=<repo>/dev_data/p2f-home pnpm tauri dev --config \
+    '{"build":{"devUrl":"http://localhost:1431","beforeDevCommand":"pnpm exec vite --port 1431 --strictPort"}}'
+  # wrapper(进程组) pid=533167，tauri.js pid=533183，app pid=552669，
+  # instance d13a2e67cb9c7e67f4ffce6883077c9b，control plane 127.0.0.1:46731，ccproxy :11437
+  cargo run -q --bin cs -- --discovery-file <repo>/dev_data/p2f-home/runtime/control-plane-v1.json doctor
+  # → Connected ... instance d13a2e67..., protocol v1, pid 552669；认证/连通/协议 OK
+  ```
+- 退出审计：`kill -TERM -533167`（仅本次进程组）后 5 秒内记录的 5 个 PID 全部消失
+  （`/proc/<pid>` 不存在），未使用无界 `pkill`；`kill -0` 语义复核确认 discovery 记录的
+  pid 552669 已不存在；无残留 dev server 子进程（esbuild/sass/vite/tauri 全部退出）。用户的另一实例
+  进程数在审计前后保持不变（5）。残留物只有 `dev_data/p2f-home/runtime/control-plane-v1.json`
+  这一**指向已退出 pid 的陈旧 discovery**（位于本次隔离 home 内，不影响用户实例）。
+
+### 6.2 真实 desktop 上已确证的行为（backend 权威路径）
+
+在**真实 control plane**（非 mock）上实际执行并通过：
+
+1. `experiment campaign create`：真实创建共享 campaign budget scope，返回
+   `campaign_id=camp-3e46048f52c55ebbf5fc32b206f5f259`、`campaign_hash=cb2f688a…`、
+   `envelope_hash=b2809c4c…`、`catalog_digest=1edb36fa…`、`status=active`；两个 candidate
+   manifest sidecar 原子发布。
+2. **确定性 campaign identity（AC-2/INV-6）**：用同一 plan 在另一个输出目录
+   （`c1` → `c1b`）再次 `create`，**推导出完全相同的 campaign_id**，证明 campaign/plan 绑定
+   可离线复现。
+3. **重复发布拒绝（AC-6）**：在同一 `--out` 目录再次 `create` 稳定失败
+   （`campaign_sidecar_exists`，非零退出）。
+4. **真实 run 全链（AC-4/AC-5）**：`experiment campaign run` 提交真实 backend-owned run；
+   模型调用因 provider 限流失败后，CLI 仍完成真实 artifact→evaluate→verify→consume 链并发布
+   fail-closed sidecar：
+   `run_id=0rmewdcvm0400, terminal_status=error, artifact_status=incomplete, score=0.0,
+   safety_status=pass, infra_status=fail, consumed=false, chain_head=42afea4c…`，
+   随后 `cs: campaign_stopped: candidate 'baseline' run 0rmewdcvm0400 terminated as error`（退出码 1）。
+   即：**不伪造成功**，infra 失败即停止 campaign，并把已核实的事实写入不可变 sidecar。
+5. **共享 campaign cap 在 provider 调用前生效（AC-1）**：
+   ```text
+   2026-09-16 00:21:40 [E] Workflow error: Ai(RawApiRequestFailed { status_code: 500,
+   provider: "Internal Proxy", details: "内部服务器错误: experiment admission rejected
+   (budget_exceeded: input_tokens dimension)" })
+   ```
+   这是一个真实 workflow 在**同一 campaign scope** 上因累计 input_tokens 超过 envelope 而在
+   provider 之前被拒（此前的失败 run 的 reservation 已计入 campaign 级 committed/reserved），
+   证明 CLI 事后累加成本并未被当作 gate，campaign cap 由 ledger 权威执行。
+6. **普通 workflow 无 budget 对照**：同一实例上 `cs workflow run --model cs@free:ds-v4-flash`
+   在 00:15:30 成功 `completed`（session `0rmewxk4c0400`），说明失败不是 desktop/control plane
+   或模型路由故障。
+
+### 6.3 `cs@free:ds-v4-flash` 配额阻塞与模型切换（用户确认）
+
+固定首选免费模型 `cs@free:ds-v4-flash`（free 组 `deepseek-v4-flash`，provider 日日新）在
+2026-09-16 00:13–00:35 窗口内**持续返回 429**，每次 campaign run 的 LLM effect 均在 provider 前
+正常 reserve、随后被 provider 拒绝：
+
+```text
+2026-09-16 00:13:52 … Backend API error (alias: 'free:ds-v4-flash', model: 'deepseek-v4-flash',
+  provider: '日日新') status_code=429 Too Many Requests
+  response={"error":{"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"429001"}}
+2026-09-16 00:17:16 / 00:22:53 / 00:27:21 / 00:34:53 同 429（含 4 分钟与 7 分钟静默窗口）
+```
+
+共 6 次真实尝试全部 429（唯一一次成功是 00:15:30 的普通 workflow 对照，见 6.2 第 6 条）。
+按用户确认：改用同为**免费组**的 `cs@free:qwen-3.8-flash` 完成三 campaign 真实交付（仍是免费模型，
+不违反 D-5 的“首版不做收费正向测试”）；`cs@qwen3.8-flash` 作为最后回退未被使用。
+
+### 6.4 三个独立 campaign 的真实交付（V-7，模型 `cs@free:qwen-3.8-flash`，concurrency=1）
+
+每个 campaign：immutable plan → `create`（冻结共享 campaign scope + 两个 candidate sidecar）→
+`run baseline` → `run prompt-a`（每个 run 真实完成 artifact→evaluate→verify→campaign consume）→
+`close`（发布 campaign-summary）。所有 run 均达到 durable `completed`，无自动重试、无并发。
+
+| campaign_key | campaign_id | baseline run | candidate run | 双方 score |
+|---|---|---|---|---|
+| p2f-smoke-21 | `camp-4f2bb0b4f90760e56bdf9853155fb4ab` | `0rmjnz81g0400` | `0rmjpak6c0400` | 1.0 / 1.0 |
+| p2f-smoke-22 | `camp-22bea6c4b6d431dcffeadfed60c100ba` | `0rmjppza40400` | `0rmjq32a40400` | 1.0 / 1.0 |
+| p2f-smoke-23 | `camp-8a039947a84e9a82d586a5145c8f72f9` | `0rmjqf7p00400` | `0rmjqv3e40400` | 1.0 / 1.0 |
+
+三份 `campaign-summary.json` 均为 `close.status=closed`、`changed=true`、`missing_arms=[]`、
+`produced_promotion=false`；每个 run 的 `safety_status=pass`、`infra_status=pass`、
+`cost_status=known`，且 `chain_head`/`verdict_hash` 互不相同（独立证据，非复制）。
+
+**Candidate surface 真实生效且不污染 defaults（AC-3/INV-4/INV-6）**：同一 campaign 内
+baseline artifact 的 snapshot 为 `"experimentAgentPromptRef": null` /
+`"experimentAgentPromptHash": null`（Agent defaults 未变），candidate artifact 中两者均为
+非空 redacted 投影（`{len, sha256, type}`）——即 ref/hash 进入 workflow-local config，
+而 prompt 原文不出现在 artifact（隐私边界成立）。
+
+**负向（全部 fail closed，无伪造成功）**：
+
+1. **campaign cap 在 provider 调用前拒绝（AC-1）**：`campaign-31`（input/output cap=1）的 run：
+   ```text
+   09:14:04.078 [W] Experiment admission rejected before send: budget_exceeded:
+     scope camp-2b8fffd9cca5e8fd925e5606a148720e dimension input_tokens
+     projected 30523 exceeds hard cap 1
+   ```
+   外部 provider 零调用；run 终态 `error`，campaign 停止并发布 fail-closed sidecar。
+   另在 00:21:40 用小 envelope 复现了跨 run 聚合 cap 拒绝（同 campaign scope 累计超限）。
+2. **重复消费同一 arm**：`campaign run --candidate baseline`（q1 已消费）→
+   `campaign_run_already_consumed`，退出码 1，无新 run。
+3. **close 后继续 run**：`close n1`（`status=closed`）后对未消费 arm 再 run →
+   `server error 400: campaign … is closed (campaign_not_active)`，无新 workflow 创建。
+4. **篡改 campaign sidecar**：复制 q1 后改写 `campaign.json` 数据文件（不刷新 manifest）→
+   `campaign inspect` 返回 `hash_mismatch: sidecar data file hash mismatch`，退出码 1；
+   未篡改的 q1 `inspect` 通过（`sidecar_verification: passed`），且 inspect 全程离线
+   （不加载 discovery、不访问网络/DB）。
+
+**已知限制**：mid-run 的 admission 拒绝信息只出现在 server 日志，不在 durable events/snapshot 中，
+因此 CLI 对这类 run 以 `campaign_stopped`（exit 1）停止而非 exit 9；exit 9 仍适用于
+创建期即被拒的 budget 错误（HTTP budget code → `CliError::budget`）。这与既有 2C 行为一致，
+不构成 2F 回归。
+
+### 6.5 退出审计（V-8）
+
+- 所有已启动 run 均为 durable `completed|error`（6 个交付 run `completed`；负向 run `error`），
+  无 polling timeout 冒充终态。
+- 三个交付 campaign 均 `close`（`status=closed`），负向 campaign `n1` 亦显式 close。
+- 结束后对**本次启动**实例（进程组 787361，含 wrapper/tauri-cli/vite/esbuild/sass/app/MCP 子进程
+  共 12 个 PID）发送 `SIGTERM`：5 秒后组内全部 PID 消失，12 秒后复核仍为空，
+  discovery 记录的 app pid 787551 不存在；未使用无界 `pkill`。
+- 用户自己的另一 dev 实例（另一 checkout）进程在审计前后持续存活，未被误杀。
+- 残留物：`dev_data/p2f-home/runtime/control-plane-v1.json` 为指向已退出 pid 的陈旧 discovery
+  （位于本次隔离 CHATSPEED_HOME 内，不影响用户实例）。
+
+### 6.6 本阶段已完成并复核的离线验证
+
+```text
+cd src-tauri && cargo fmt --all -- --check                 # clean
+cargo check --bin chatspeed --bin cs                       # 0 warnings
+cargo test --lib db::budget::                              # 24 passed
+cargo test --lib migration                                 # 15 passed（无新 migration）
+cargo test --lib workflow::react::campaign                 # 20 passed
+cargo test --lib workflow::react::client                   # 45 passed（含 4 个 campaign HTTP 路由测试）
+cargo test --lib workflow::react::experiment               # 10 passed
+cargo test --lib commands::workflow                        # 67 passed
+cargo test --bin cs                                        # 117 passed（含 7 个 2F campaign/verdict 测试）
+pnpm test:workflow                                         # 62 passed
+```
+
+其中 2F 新增覆盖：strict plan/create/run-intent 契约与 canonical hash（unknown/forbidden/重复
+candidate/非法 surface/未 allowlist ref/hash 不匹配/fixture digest 不匹配）、共享 campaign scope
+的 parent linkage 与跨 run 聚合 cap、closed campaign 拒绝新 run 与 admission、envelope 不匹配、
+request/candidate scope 复用规则、HTTP bearer+idempotency+stable machine code、verdict 独立复验
+（manifest/内容 hash/artifact binding/fixture 身份/safety-infra-budget 事实/promotion 拒绝）、
+sidecar 重复发布与篡改拒绝、campaign prompt ref 进入 workflow-local Agent 且 Agent defaults 不变、
+catalog 漂移 fail-closed。

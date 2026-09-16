@@ -11,12 +11,14 @@
 
 ## 0. 当前阶段指针（Current Stage Pointer）
 
-- **2A/2B/2C/2D+2E 状态**：均已完成（代码、focused 验证与记录见 `## 9` 对应 Implementation Record；
-  2A/2C 含真实 desktop smoke，2B 预算 gate 的端到端触发由 2C smoke 覆盖；2D+2E 含离线 CLI 进程
-  smoke 与真实 desktop 固定免费模型全链 smoke，见该记录）。
-- **下一个入口**：`2F`（Candidate / campaign / proposer）。2D+2E 已交付 deterministic evaluator 与
-  `chatspeed-smoke@2` benchmark adapter/verifier 垂直切片；LLM judge 延后（不新增 judge 外部 effect）；
-  真实 Harbor installed-agent/headless/container 延后到 2G+2H。2D+2E 契约与 fixture 身份见 `## 10`。
+- **2A/2B/2C/2D+2E/2F 状态**：均已完成（代码、focused 验证与记录见 `## 9` 对应 Implementation Record；
+  2A/2C/2F 含真实 desktop smoke，2B 预算 gate 的端到端触发由 2C/2F smoke 覆盖；2D+2E 含离线 CLI 进程
+  smoke 与真实 desktop 固定免费模型全链 smoke；2F 含三个独立 campaign 的真实免费模型
+  baseline+candidate 交付、负向与退出审计，见该记录与 `work/agent-cli-phase-2-smoke-test.md` `## 6`）。
+- **下一个入口**：`2G+2H`（真实 Harbor installed-agent / headless / container 隔离 owner 与
+  可恢复 scheduler）。2F 已交付 Stage 0 candidate/campaign/proposer 边界与共享 campaign budget
+  scope；LLM judge、GEPA-like 自动候选、promotion 仍延后；2F 契约与 campaign 身份规则见
+  `## 9` 的 2F Implementation Record。
 - **后续交付口径**：2C 之后的实现按 `2C → 2D+2E → 2F → 2G+2H → 2I` 的顺序成组交付。该口径只用于
   规划后续阶段的打包与推进顺序，属于准备工作，不作为任何阶段的功能验收证据；各阶段仍须各自满足其
   Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 后才可推进指针。
@@ -856,6 +858,95 @@ atomic rename 会把 sidecar 实际写入 2A artifact 目录。已修复：
 - 修复后验证：`cargo test --bin cs` → **109 passed; 0 failed**；`cargo test --lib
   workflow::react::client` → 41 passed；`cargo check --bin chatspeed --bin cs` → 0 warning；
   `cargo fmt --all -- --check` 通过。
+
+### 2F Implementation Record (as built)
+
+**范围**：Stage 0 人工单变量 candidate + 确定性规范化/校验 + 不可变 CLI campaign plan +
+backend-owned shared campaign budget scope。无 LLM proposer、无 promotion、无 migration、无新依赖。
+
+**实际文件/符号**
+
+- `src-tauri/src/workflow/react/campaign.rs`（新增）：strict `campaign_plan.v1` /
+  `candidate_manifest.v1` / `campaign_run_request.v1` / `campaign_summary.v1` 契约
+  （`deny_unknown_fields` + snake_case + 稳定 machine code `CampaignSpecErrorCode`）、
+  domain-separated canonical hash（plan/candidate/surface/envelope/catalog/campaign-id/
+  candidate-scope-id/trial-scope-id）、checked-in prompt catalog（`include_str!` 编译期内嵌，
+  拒绝任何 runtime 路径）、`resolve_workflow_prompt_override`（workflow snapshot 只存
+  ref/hash/catalog digest，正文只在内存中解析，catalog 漂移 fail closed）。
+- `work/agent-cli-candidate-surfaces/catalog.json`（新增，checked-in）：唯一 allowlisted surface
+  `smoke-terse-v1`（`prompt_hash` 为 `cs-campaign:candidate-prompt` domain hash，加载时校验）。
+- `src-tauri/src/db/budget.rs`：`create_campaign_atomic`（幂等，envelope 不一致 fail closed）、
+  `create_campaign_run_atomic`（单 writer 事务内校验 campaign active/envelope 一致、复用或创建
+  共享 candidate/trial scope、新建 per-run request scope + workflow row）、`close_budget_scope`
+  （幂等，ledger 记 `pause`/`closed:` 前缀）、`list_budget_child_scopes`；
+  `get_budget_scope_chain` 改为**按 durable parent linkage** 解析并校验四级 kind/环/完整性
+  （v1 单 run 的 suffix 链因本就写入真实 parent 而继续可用，suffix 不再作为 authority）。
+- `src-tauri/src/commands/workflow.rs`：抽出唯一 run kernel `create_and_start_budgeted_run`
+  （`BudgetedRunSetup`/`BudgetedRunScope::{Standalone,Campaign}`），2C `run_experiment_core` 与
+  2F `campaign_run_core` 共用；`campaign_create_core`/`campaign_get_core`/`campaign_close_core`/
+  `campaign_run_core`；`build_resolved_workflow_config` 增加仅 campaign facade 使用的
+  experiment prompt 参数；`workflow_start_core` 在构造 executor 前解析 workflow-local prompt ref
+  （失败即 `experiment_prompt_rejected: <code>`，不降级为 baseline prompt）。
+- `src-tauri/src/db/agent.rs`：`AgentConfig` 新增 `experimentAgentPromptRef/Hash` +
+  `experimentPromptCatalogDigest`（只存 ref/hash/digest，从不写 Agent 记录）；
+  `validated_inherited_agent_config` 剥离这三个字段（`--agent-config`/继承快照无法越权选择
+  experiment surface）；`sync_workflow_agent_config_at_tool_boundary` 从本 workflow 自身快照
+  回填（tool-boundary 能力同步不丢 frozen run identity）。
+- `src-tauri/src/workflow/react/engine.rs` / `orchestrator.rs`：runtime config 重写透传
+  experiment prompt identity（来自 preserved snapshot）；child-agent 会话显式置空
+  （candidate 不得改写 child agent prompt）。
+- `src-tauri/src/workflow/react/application.rs`：`campaign_create/get/run/close` 唯一 facade。
+- `src-tauri/src/workflow/react/client/http/{server.rs,dto.rs}`：additive 路由
+  `POST /control/v1/campaigns`、`GET /control/v1/campaigns/{id}`、
+  `POST /control/v1/campaigns/{id}/runs`、`POST /control/v1/campaigns/{id}/close`
+  （bearer + 必填 Idempotency-Key；path campaign id 权威；body 禁止 scope id；
+  稳定 machine code 直接上 wire）。**偏差说明**：close 路由用 `/close` 段而非 `{id}:close`，
+  因为 axum/matchit 不支持同段内 path parameter + 静态后缀；契约其余不变。
+- `src-tauri/src/bin/cs/{campaign.rs,args.rs,cs.rs}`（campaign.rs 新增）：
+  `cs experiment campaign create|run|inspect|close`；CLI-local sidecar 布局
+  `<out>/campaign/{main,candidates,runs,summary}` 与 `<out>/evidence/<key>-<run_id>/{artifact,
+  evaluation,verdict}` 恒为兄弟目录；sidecar 复用 `SidecarBundle`（staging + re-verify +
+  atomic rename + symlink/overlap 防御），manifest domain 独立为
+  `cs-campaign-sidecar:manifest`；独立 verdict consumer（先 `verify_sidecar_dir`，再重算
+  verdict 内容 hash、校验 artifact run/session/chain_head 绑定、fixture 身份/digest、
+  safety/infra/budget 事实、拒绝 promotion 字段）；sidecar 只记录 campaign-local
+  `evidence_dir_hint`，不写绝对路径。`inspect` 完全离线。
+- `src-tauri/src/lib.rs`：`pub mod campaign` 窄导出（仅纯契约类型/函数），使 `cs` 与 backend
+  共享同一 parser/hash 实现；`cs` 仍不打开 DB、不启动 runtime/executor。
+- `src-tauri/src/bin/cs/{evaluate.rs,verifier.rs,experiment.rs}`：抽出非渲染 seam
+  `evaluate_artifact_offline` / `verify_artifact_offline`，`capture_bundle`/`wait_for_terminal`/
+  `budget_rejected_in_events` 改 `pub(crate)` 供 campaign runner 复用；`SidecarBundle.file_name`
+  改为 `String`；新增 `sidecar_manifest_hash`。
+
+**验证命令与结果（最终态）**
+
+```text
+cd src-tauri && cargo fmt --all -- --check        # clean
+cargo check --bin chatspeed --bin cs              # 0 warnings
+cargo test --lib db::budget::                     # 24 passed（含共享 scope/聚合 cap/close/复用/parent-linkage）
+cargo test --lib migration                        # 15 passed（无新 migration，仍为 v18）
+cargo test --lib workflow::react::campaign        # 20 passed
+cargo test --lib workflow::react::client          # 45 passed（含 4 个 campaign HTTP 路由测试）
+cargo test --lib workflow::react::experiment      # 10 passed
+cargo test --lib commands::workflow               # 67 passed（含 prompt identity 继承/同步测试）
+cargo test --lib workflow::react::llm             # 含 campaign_prompt_override_changes_the_single_assembled_system_prompt
+cargo test --bin cs                               # 117 passed（含 7 个 2F campaign/verdict 消费测试）
+pnpm test:workflow                                # 62 passed
+```
+
+**真实 desktop smoke**：见 `work/agent-cli-phase-2-smoke-test.md` `## 6`。要点：隔离
+`CHATSPEED_HOME` 的真实 `pnpm tauri dev` 实例（未触碰用户另一 checkout 的在跑实例）；三个独立
+campaign（`p2f-smoke-21/22/23`）各 baseline + 单变量 prompt-ref candidate，6 个 run 全部 durable
+`completed`、score 1.0、safety/infra pass、cost known，全部 artifact→evaluate→verify→consume 并
+`close`；负向覆盖 campaign cap 在 provider 前拒绝（`rejected before send`，外部 provider 零调用）、
+重复消费、close 后 run（`campaign_not_active`）、篡改 sidecar（`hash_mismatch`）；退出审计
+TERM 本次进程组后 12 个 PID 全部退出、用户实例未受影响。首选模型 `cs@free:ds-v4-flash` 因免费配额
+持续 429 无法完成三 campaign，经用户确认改用同为免费组的 `cs@free:qwen-3.8-flash`（未使用收费模型）。
+
+**已知限制 / 后续**：mid-run admission 拒绝只记录在 server 日志（不在 durable events/snapshot），
+CLI 对该类 run 以 `campaign_stopped`(exit 1) 停止而非 exit 9（与 2C 现状一致）；campaign 的
+plan/candidate/summary 事实由 CLI-local sidecar 保存，backend 不持久化 plan（重启后由 plan hash
+重新推导 campaign identity），真正可恢复的 headless scheduler 留待 2H。
 
 ## 10. 2D+2E Active Plan（当前执行范围）
 
