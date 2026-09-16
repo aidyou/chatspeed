@@ -29,27 +29,6 @@
     <div class="titlebar-content-wrapper">
       <!-- left button area -->
       <div class="left">
-        <slot name="left"></slot>
-      </div>
-
-      <!-- center area -->
-      <div class="center">
-        <slot name="center"></slot>
-        <el-tooltip
-          placement="bottom"
-          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
-          :content="t('common.newVersionReady')">
-          <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
-            <cs name="restart" />
-            {{ t('common.updateButtonText') }}
-          </div>
-        </el-tooltip>
-      </div>
-
-      <!-- right button area -->
-      <div class="right">
-        <slot name="right"></slot>
-
         <!-- menu show control -->
         <el-dropdown
           @command="handleCommand"
@@ -77,6 +56,27 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+
+        <slot name="left"></slot>
+      </div>
+
+      <!-- center area -->
+      <div class="center">
+        <slot name="center"></slot>
+        <el-tooltip
+          placement="bottom"
+          v-if="updateStore.isUpdateReady && windowStore.windowLabel === 'main'"
+          :content="t('common.newVersionReady')">
+          <div class="menu icon-btn upperLayer restart" @click="updateStore.restartApp">
+            <cs name="restart" />
+            {{ t('common.updateButtonText') }}
+          </div>
+        </el-tooltip>
+      </div>
+
+      <!-- right button area -->
+      <div class="right">
+        <slot name="right"></slot>
       </div>
     </div>
   </el-header>
@@ -126,10 +126,11 @@ const availableMenus = [
   'divider',
   'setting',
   'model',
-  'skill',
-  'mcp',
-  'proxy',
   'agent',
+  'proxy',
+  { name: 'chatHub', icon: 'skill-chat' },
+  'mcp',
+  'skill',
   'divider',
   { name: 'scraperTest', icon: 'extract' },
   'divider',
@@ -311,6 +312,7 @@ const handleCommand = async command => {
       case 'model':
       case 'proxy':
       case 'skill':
+      case 'chatHub':
       case 'scraperTest':
         await invoke('open_setting_window', { settingType: command })
         break
@@ -354,6 +356,7 @@ init()
   .right {
     flex: 0 0 auto;
     display: flex;
+    gap:var(--cs-space-xs);
     align-items: center;
     justify-content: center;
     white-space: nowrap;

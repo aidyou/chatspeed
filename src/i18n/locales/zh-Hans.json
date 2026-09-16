@@ -161,6 +161,7 @@
     "agent": "智能体",
     "assistant": "助手",
     "chat": "聊天",
+    "chatHub":"聊天入口",
     "mcp": "MCP",
     "model": "AI供应商",
     "note": "智记",

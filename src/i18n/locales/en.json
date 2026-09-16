@@ -161,6 +161,7 @@
     "agent": "Agent",
     "assistant": "Assistant",
     "chat": "Chat",
+    "chatHub":"Chat Hub",
     "mcp": "MCP",
     "model": "AI Provider",
     "note": "Note",

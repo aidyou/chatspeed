@@ -151,6 +151,24 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     )
     .map_err(|e| e.to_string())?;
 
+    let agent_window_menu_item = tauri::menu::MenuItem::with_id(
+        app,
+        "agent",
+        &rust_i18n::t!("tray.agent"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let chathub_window_menu_item = tauri::menu::MenuItem::with_id(
+        app,
+        "chathub",
+        &rust_i18n::t!("tray.chathub"),
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+
     let skill_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
         "skill",
@@ -186,15 +204,6 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     )
     .map_err(|e| e.to_string())?;
 
-    let agent_window_menu_item = tauri::menu::MenuItem::with_id(
-        app,
-        "agent",
-        &rust_i18n::t!("tray.agent"),
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| e.to_string())?;
-
     let about_window_menu_item = tauri::menu::MenuItem::with_id(
         app,
         "about",
@@ -222,10 +231,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
         .separator()
         .item(&settings_window_menu_item)
         .item(&model_window_menu_item)
-        .item(&skill_window_menu_item)
-        .item(&mcp_window_menu_item)
-        .item(&proxy_window_menu_item)
         .item(&agent_window_menu_item)
+        .item(&chathub_window_menu_item)
+        .item(&proxy_window_menu_item)
+        .item(&mcp_window_menu_item)
+        .item(&skill_window_menu_item)
         .separator()
         .item(&about_window_menu_item)
         .item(&quit_item)
@@ -290,7 +300,7 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
         "proxy_switcher" => {
             crate::window::toggle_proxy_switcher_window(app);
         }
-        "settings" | "agent" | "mcp" | "model" | "proxy" | "skill" | "about" => {
+        "settings" | "agent" | "chathub" | "mcp" | "model" | "proxy" | "skill" | "about" => {
             let setting_type = if menu_id.as_str() == "settings" {
                 "general"
             } else {
