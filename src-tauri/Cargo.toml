@@ -73,8 +73,9 @@ serde_json                   = "1.0.149"
 serde_yaml                   = "0.9.34-deprecated"
 sha2                         = "0.11.0"
 # The `unstable` feature is required for the same-window child webview API
-# (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view.
-tauri                        = { version = "2.11.0", features = ["macos-private-api", "tray-icon", "unstable"] }
+# (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view, and `macos-proxy` is
+# what makes `WebviewWindowBuilder::proxy_url` take effect on macOS.
+tauri                        = { version = "2.11.0", features = ["macos-private-api", "macos-proxy", "tray-icon", "unstable"] }
 tauri-plugin-dialog          = "2.7.1"
 tauri-plugin-fs              = "2.5.1"
 tauri-plugin-global-shortcut = "2.3.1"

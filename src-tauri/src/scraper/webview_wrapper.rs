@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::types::{FullConfig, GenericContentRule};
 use crate::constants::CFG_SCRAPER_DEBUG_MODE;
 use crate::db::MainStore;
+use crate::libs::webview_proxy::WebviewProxy;
 
 #[derive(Deserialize, Debug, Clone)]
 struct ScrapeResultMessage {
@@ -359,7 +360,7 @@ impl WebviewScraper {
         //     init_script.push_str(block_script);
         // }
 
-        WebviewWindowBuilder::new(
+        let mut builder = WebviewWindowBuilder::new(
             &self.app_handle,
             &window_label,
             WebviewUrl::External(url.parse()?),
@@ -376,8 +377,16 @@ impl WebviewScraper {
             }
         })
         .visible(visible)
-        .additional_browser_args("--mute-audio")
-        .build()
-        .map_err(|e| anyhow!("Failed to create webview window: {}", e))
+        .additional_browser_args("--mute-audio");
+
+        // The scraper leaves through the same network settings as the embedded ChatHub
+        // page, and like there the proxy can only be given while the webview is built.
+        if let Some(proxy) = WebviewProxy::current(&self.app_handle).and_then(|p| p.proxy_url()) {
+            builder = builder.proxy_url(proxy);
+        }
+
+        builder
+            .build()
+            .map_err(|e| anyhow!("Failed to create webview window: {}", e))
     }
 }
