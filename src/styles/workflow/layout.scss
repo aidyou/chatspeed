@@ -87,6 +87,9 @@
     min-height: 0;
     display: flex;
     flex-direction: row;
+    // The docked ChatHub page covers the right edge of the window while the app titlebar
+    // above it keeps the full width, so only this content gives the page its space.
+    margin-right: var(--cs-chathub-reserved-width, 0px);
 
     .workflow-sidebar-region {
       display: flex;

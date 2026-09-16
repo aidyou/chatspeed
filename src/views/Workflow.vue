@@ -2318,8 +2318,18 @@ const chatHubReservedWidth = computed(() =>
   chatHubStore.viewMode === 'reserve' && chatHubVisible.value ? chatHubStore.pageWidth : 0
 )
 
+/**
+ * Space the docked page reserves, handed to the layout as a custom property rather than as
+ * a padding of the layout itself.
+ *
+ * The page starts below the app titlebar, so the titlebar keeps the full window width and
+ * only the workflow content has to stay clear of the page. A carrier that lays the page out
+ * itself reserves nothing, and the content then keeps its full width.
+ */
 const chatHubLayoutStyle = computed(() =>
-  chatHubReservedWidth.value ? { paddingRight: `${chatHubReservedWidth.value}px` } : undefined
+  chatHubReservedWidth.value
+    ? { '--cs-chathub-reserved-width': `${chatHubReservedWidth.value}px` }
+    : undefined
 )
 
 /**

@@ -11,6 +11,7 @@ const splitter = read('./ChatHubSplitter.vue')
 const chatHubViewController = read('../../libs/chatHubView.js')
 const chatHubStore = read('../../stores/chatHub.js')
 const page = read('../../../src-tauri/src/chat_hub/page.rs')
+const layoutStyles = read('../../styles/workflow/layout.scss')
 
 /** Text between two markers, so assertions stay inside one block of a file. */
 const section = (text, start, end) => {
@@ -128,8 +129,17 @@ test('stacked carriers keep the page inside the reserved space, splitting carrie
     workflowView,
     /const chatHubReservedWidth = computed\(\(\) =>\s*chatHubStore\.viewMode === 'reserve' && chatHubVisible\.value \? chatHubStore\.pageWidth : 0\s*\)/
   )
-  assert.match(workflowView, /const chatHubLayoutStyle = computed\(\(\) =>\s*chatHubReservedWidth\.value \? \{ paddingRight: `\$\{chatHubReservedWidth\.value\}px` \} : undefined\s*\)/)
+  assert.match(
+    workflowView,
+    /const chatHubLayoutStyle = computed\(\(\) =>\s*chatHubReservedWidth\.value\s*\? \{ '--cs-chathub-reserved-width': `\$\{chatHubReservedWidth\.value\}px` \}\s*: undefined\s*\)/
+  )
   assert.match(workflowView, /<div class="workflow-layout" :style="chatHubLayoutStyle">/)
+  // The page starts below the app titlebar, so the reserved space narrows the workflow
+  // content only and the titlebar keeps the full window width.
+  assert.match(
+    layoutStyles,
+    /\.workflow-main \{[\s\S]*?margin-right: var\(--cs-chathub-reserved-width, 0px\)/
+  )
   // A stacked page must not cover the app chrome, so the view reports how much room the
   // titlebar with the window controls needs.
   assert.match(workflowView, /getPropertyValue\('--cs-titlebar-height'\)/)
