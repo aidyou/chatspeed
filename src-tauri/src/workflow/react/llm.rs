@@ -777,7 +777,12 @@ impl LlmProcessor {
 
                             continue;
                         }
-                        return Err(e);
+                        return Err(WorkflowEngineError::LlmRetryExhausted {
+                            source: None,
+                            details: e.to_string(),
+                            attempt: retry_count,
+                            max_attempts: max_retries,
+                        });
                     }
 
                     let _ = gateway
@@ -811,7 +816,13 @@ impl LlmProcessor {
                     if should_retry {
                         retry_count += 1;
                         if !Self::should_schedule_retry(retry_count, max_retries) {
-                            return Err(WorkflowEngineError::Ai(e));
+                            let details = e.to_string();
+                            return Err(WorkflowEngineError::LlmRetryExhausted {
+                                source: Some(e),
+                                details,
+                                attempt: retry_count,
+                                max_attempts: max_retries,
+                            });
                         }
 
                         let wait_secs = 2u32.pow(retry_count - 1);

@@ -1433,7 +1433,9 @@
     "editWorkflowTitle": "编辑任务标题",
     "errorTypes": {
       "llmAuthentication": "模型认证失败",
-      "llmBilling": "模型余额不足或计费异常"
+      "llmBilling": "模型余额不足或计费异常",
+      "llmRetryExhausted": "模型重试次数已耗尽",
+      "retryAttemptsExhausted": "重试次数已耗尽（{attempt}/{maxAttempts}）"
     },
     "executionCompleted": "执行完成",
     "executionFailed": "执行失败",

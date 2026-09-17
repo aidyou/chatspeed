@@ -1259,6 +1259,7 @@ import {
   isWorkflowManualClearContextMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
+  normalizeWorkflowErrorAlertContent,
   isWorkflowToolRunningForDisplay,
   projectWorkflowMessageList,
   shouldRenderSubAgentCard
@@ -2139,7 +2140,8 @@ const getErrorAlertTitle = message => {
   const rawType = String(message?.metadata?.error_type || message?.errorType || '').trim()
   const localizedErrorTitles = {
     llm_authentication: 'workflow.errorTypes.llmAuthentication',
-    llm_billing: 'workflow.errorTypes.llmBilling'
+    llm_billing: 'workflow.errorTypes.llmBilling',
+    llm_retry_exhausted: 'workflow.errorTypes.llmRetryExhausted'
   }
   if (localizedErrorTitles[rawType]) {
     return t(localizedErrorTitles[rawType])
@@ -2152,15 +2154,19 @@ const getErrorAlertTitle = message => {
 }
 
 const getErrorAlertContent = message => {
-  const parsed = props.getParsedMessage(message)
-  const rawContent = String(
-    parsed?.content || props.removeSystemReminder(message?.message || '')
-  ).trim()
+  const content = normalizeWorkflowErrorAlertContent(message?.message)
+  const metadata = message?.metadata || {}
+  if (metadata.retry_exhausted !== true) return content
 
-  return rawContent
-    .replace(/^critical error:\s*/i, '')
-    .replace(/^\[?error\]?:\s*/i, '')
-    .trim()
+  const attempt = Number(metadata.retry_attempt)
+  const maxAttempts = Number(metadata.retry_max_attempts)
+  if (!Number.isFinite(attempt) || !Number.isFinite(maxAttempts)) return content
+
+  const retrySummary = t('workflow.errorTypes.retryAttemptsExhausted', {
+    attempt,
+    maxAttempts
+  })
+  return [content, retrySummary].filter(Boolean).join('\n\n')
 }
 
 const getExplorationBatchSummary = message => {

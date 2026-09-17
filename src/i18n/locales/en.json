@@ -1434,7 +1434,9 @@
     "editWorkflowTitle": "Edit Task Title",
     "errorTypes": {
       "llmAuthentication": "Model authentication failed",
-      "llmBilling": "Insufficient model balance or billing issue"
+      "llmBilling": "Insufficient model balance or billing issue",
+      "llmRetryExhausted": "Model retry limit reached",
+      "retryAttemptsExhausted": "Retry attempts exhausted ({attempt}/{maxAttempts})"
     },
     "executionCompleted": "Execution completed",
     "executionFailed": "Execution failed",

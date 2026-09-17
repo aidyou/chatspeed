@@ -1433,7 +1433,9 @@
     "editWorkflowTitle": "編輯任務標題",
     "errorTypes": {
       "llmAuthentication": "模型驗證失敗",
-      "llmBilling": "模型餘額不足或計費異常"
+      "llmBilling": "模型餘額不足或計費異常",
+      "llmRetryExhausted": "模型重試次數已耗盡",
+      "retryAttemptsExhausted": "重試次數已耗盡（{attempt}/{maxAttempts}）"
     },
     "executionCompleted": "執行完成",
     "executionFailed": "執行失敗",

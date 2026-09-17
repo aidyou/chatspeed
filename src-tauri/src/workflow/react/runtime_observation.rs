@@ -324,6 +324,22 @@ mod tests {
     }
 
     #[test]
+    fn terminal_error_is_visible_in_ui_and_hidden_from_llm() {
+        let metadata = runtime_observation_metadata(
+            RuntimeObservationType::TerminalError,
+            json!({
+                "error_type": "llm_retry_exhausted",
+                "retry_attempt": 10,
+                "retry_max_attempts": 10
+            }),
+        );
+
+        assert_eq!(metadata["observation_type"], "terminal_error");
+        assert_eq!(metadata["llm_visibility"], "hide");
+        assert_eq!(metadata["ui_visibility"], "show");
+    }
+
+    #[test]
     fn sub_agent_interrupted_metadata_preserves_position_and_stays_hidden_in_ui() {
         let metadata = runtime_observation_metadata(
             RuntimeObservationType::SubAgentInterrupted,

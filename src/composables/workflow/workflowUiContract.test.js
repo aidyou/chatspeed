@@ -133,16 +133,31 @@ test('workflow terminal model errors use structured localized alert titles', asy
 
   assert.match(
     messageList,
-    /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling'[\s\S]*?\}/
+    /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling',[\s\S]*?llm_retry_exhausted: 'workflow\.errorTypes\.llmRetryExhausted'[\s\S]*?\}/
   )
   assert.match(messageList, /const rawType = String\(message\?\.metadata\?\.error_type \|\| message\?\.errorType \|\| ''\)/)
+  const errorContentStart = messageList.indexOf('const getErrorAlertContent = message =>')
+  const errorContentEnd = messageList.indexOf(
+    'const getExplorationBatchSummary = message =>',
+    errorContentStart
+  )
+  const errorContentSource = messageList.slice(errorContentStart, errorContentEnd)
+  assert.match(
+    errorContentSource,
+    /normalizeWorkflowErrorAlertContent\(message\?\.message\)[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
+  )
+  assert.doesNotMatch(errorContentSource, /props\.getParsedMessage\(message\)/)
   assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
 
   for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
     assert.equal(typeof locale.workflow.errorTypes.llmAuthentication, 'string')
     assert.equal(typeof locale.workflow.errorTypes.llmBilling, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmRetryExhausted, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.retryAttemptsExhausted, 'string')
     assert.ok(locale.workflow.errorTypes.llmAuthentication.length > 0)
     assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmRetryExhausted.length > 0)
+    assert.ok(locale.workflow.errorTypes.retryAttemptsExhausted.length > 0)
   }
 })
 

@@ -10193,6 +10193,11 @@ mod recovery_tests {
                 .and_then(Value::as_str),
             Some("show")
         );
+        assert!(executor
+            .context
+            .get_messages_for_llm()
+            .iter()
+            .all(|message| message.id != durable_error.id));
 
         let payloads = observed_payloads.lock().expect("payload lock");
         let error_message_index = payloads

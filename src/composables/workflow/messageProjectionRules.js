@@ -10,6 +10,30 @@ export const normalizeWorkflowTextForVisibility = value =>
 export const hasVisibleWorkflowText = value =>
   normalizeWorkflowTextForVisibility(value).trim().length > 0
 
+export const normalizeWorkflowErrorAlertContent = value => {
+  const content = String(value ?? '')
+    .replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '')
+    .trim()
+    .replace(/^critical error:\s*/i, '')
+    .replace(/^\[?error\]?:\s*/i, '')
+    .trim()
+  if (!content.startsWith('{')) return content
+
+  try {
+    const parsed = JSON.parse(content)
+    const serverMessage =
+      parsed?.error?.message ||
+      (typeof parsed?.error === 'string' ? parsed.error : '') ||
+      parsed?.message ||
+      parsed?.details
+    return typeof serverMessage === 'string' && serverMessage.trim()
+      ? serverMessage.trim()
+      : content
+  } catch {
+    return content
+  }
+}
+
 /**
  * Frontend workflow projection rules that must stay aligned with backend authority.
  *
