@@ -30,6 +30,66 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
+/// The hub's output transport.
+///
+/// The hub owns exactly one output route per process, and that route differs
+/// between the two runtimes: the desktop app batches payloads to the Tauri
+/// frontend, while `chatspeed-headless` has no window at all. Making the
+/// transport a trait keeps the rest of the hub — the single input registry and
+/// the SSE event broker — shared and unmodified, instead of duplicating the
+/// runtime for the headless case (INV-1/INV-2).
+#[async_trait]
+pub trait WorkflowEventTransport: Send + Sync + 'static {
+    /// Delivers one payload to this transport's own consumers.
+    async fn send(
+        &self,
+        session_id: &str,
+        payload: GatewayPayload,
+    ) -> Result<(), WorkflowEngineError>;
+
+    /// Drops this transport's per-session state. Returns whether anything was
+    /// removed.
+    async fn remove_event_channel(&self, session_id: &str) -> bool;
+}
+
+#[async_trait]
+impl WorkflowEventTransport for TauriGateway {
+    async fn send(
+        &self,
+        session_id: &str,
+        payload: GatewayPayload,
+    ) -> Result<(), WorkflowEngineError> {
+        TauriGateway::send(self, session_id, payload).await
+    }
+
+    async fn remove_event_channel(&self, session_id: &str) -> bool {
+        TauriGateway::remove_event_channel(self, session_id).await
+    }
+}
+
+/// The no-window output transport used by `chatspeed-headless`.
+///
+/// It deliberately has no sink of its own: the hub's SSE broker is the single
+/// observation path for a headless process, so a payload is never written to a
+/// transcript, a log line or a file (INV-6). Delivery therefore always
+/// succeeds, and there is never per-session transport state to drop.
+pub struct NoWindowTransport;
+
+#[async_trait]
+impl WorkflowEventTransport for NoWindowTransport {
+    async fn send(
+        &self,
+        _session_id: &str,
+        _payload: GatewayPayload,
+    ) -> Result<(), WorkflowEngineError> {
+        Ok(())
+    }
+
+    async fn remove_event_channel(&self, _session_id: &str) -> bool {
+        false
+    }
+}
+
 /// Schema version of the live stream envelope.
 pub const STREAM_SCHEMA_VERSION: u32 = 1;
 
@@ -277,8 +337,9 @@ impl SessionInputRegistry {
 
 /// The unique workflow runtime hub: the only production [`Gateway`].
 pub struct WorkflowRuntimeHub {
-    /// Tauri output transport (event emission with chunk batching).
-    tauri: Arc<TauriGateway>,
+    /// Output transport: the batching Tauri gateway on desktop, a no-window
+    /// transport in a headless process.
+    transport: Arc<dyn WorkflowEventTransport>,
     /// Single owner of live session input senders.
     input_registry: SessionInputRegistry,
     /// Live SSE event source.
@@ -286,9 +347,19 @@ pub struct WorkflowRuntimeHub {
 }
 
 impl WorkflowRuntimeHub {
+    /// Desktop constructor: the Tauri batching gateway is the output transport.
     pub fn new(tauri: Arc<TauriGateway>, server_instance_id: String) -> Self {
+        Self::with_transport(tauri, server_instance_id)
+    }
+
+    /// Transport-neutral constructor. Both runtimes share exactly one input
+    /// registry and one SSE broker; only the output route differs.
+    pub fn with_transport(
+        transport: Arc<dyn WorkflowEventTransport>,
+        server_instance_id: String,
+    ) -> Self {
         Self {
-            tauri,
+            transport,
             input_registry: SessionInputRegistry::new(),
             broker: Arc::new(SessionEventBroker::new(server_instance_id)),
         }
@@ -323,7 +394,7 @@ impl WorkflowRuntimeHub {
 
     pub async fn unregister_session_with_source(&self, session_id: &str, source: &str) {
         let input_removed = self.input_registry.unregister(session_id).await;
-        let event_removed = self.tauri.remove_event_channel(session_id).await;
+        let event_removed = self.transport.remove_event_channel(session_id).await;
         let stream_removed = self.broker.unregister(session_id).await;
         if input_removed || event_removed || stream_removed {
             log::info!(
@@ -351,10 +422,10 @@ impl Gateway for WorkflowRuntimeHub {
         session_id: &str,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
-        // Keep the original Tauri delivery/batching first, then publish the
+        // Keep the transport's own delivery/batching first, then publish the
         // versioned envelope to the live SSE source. Both consumers observe
         // the same payload from a single send call.
-        self.tauri.send(session_id, payload.clone()).await?;
+        self.transport.send(session_id, payload.clone()).await?;
         self.broker.publish(session_id, payload).await;
         Ok(())
     }
@@ -614,5 +685,60 @@ mod tests {
             err,
             WorkflowEngineError::GatewayInputChannelClosed
         ));
+    }
+
+    /// A headless hub must deliver every payload through the same single send
+    /// path as the desktop hub, with no Tauri transport involved.
+    #[tokio::test]
+    async fn a_no_window_hub_publishes_through_the_shared_send_path() {
+        let hub = WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "instance-headless".to_string(),
+        );
+        let mut subscription = hub.broker().subscribe("s1", None).await.unwrap();
+
+        hub.send("s1", chunk("one")).await.expect("send");
+        let envelope = subscription.rx.recv().await.unwrap();
+        assert_eq!(envelope.cursor(), "instance-headless:0");
+        assert!(matches!(&envelope.payload, GatewayPayload::Chunk { content } if content == "one"));
+    }
+
+    /// Input routing is shared with the desktop hub: the no-window transport
+    /// only changes the output route.
+    #[tokio::test]
+    async fn a_no_window_hub_registers_and_injects_session_input() {
+        let hub = WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "instance-headless".to_string(),
+        );
+        let (tx, mut rx) = mpsc::channel::<String>(4);
+        hub.register_session_tx_with_source("s1".to_string(), tx, "test")
+            .await;
+        hub.inject_input("s1", "{\"type\":\"interrupt\"}".to_string())
+            .await
+            .expect("inject");
+        assert_eq!(rx.recv().await.as_deref(), Some("{\"type\":\"interrupt\"}"));
+
+        hub.unregister_session_with_source("s1", "test").await;
+        let err = hub
+            .inject_input("s1", "again".to_string())
+            .await
+            .expect_err("channel must be gone");
+        assert!(matches!(
+            err,
+            WorkflowEngineError::GatewayInputChannelMissing
+        ));
+    }
+
+    /// The no-window transport owns no per-session state, so unregistering
+    /// only ever clears the input registry and the broker.
+    #[tokio::test]
+    async fn a_no_window_transport_has_no_event_channels_to_remove() {
+        let transport = NoWindowTransport;
+        assert!(!transport.remove_event_channel("s1").await);
+        transport
+            .send("s1", chunk("dropped"))
+            .await
+            .expect("no-window send never fails");
     }
 }

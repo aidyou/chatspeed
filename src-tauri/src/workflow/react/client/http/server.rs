@@ -260,8 +260,22 @@ fn now_timestamp() -> String {
 }
 
 /// Starts the control plane on an ephemeral loopback port and publishes the
-/// discovery document.
+/// discovery document under the default runtime directory.
 pub async fn start(svc: Arc<WorkflowApplicationService>) -> Result<ControlPlaneHandle, String> {
+    start_with_discovery_dir(svc, None).await
+}
+
+/// Starts the control plane and publishes its discovery document in an
+/// explicit runtime directory.
+///
+/// `chatspeed-headless` passes its own `<data-dir>/runtime` so a headless
+/// instance and a desktop instance on the same machine publish independent
+/// endpoints and tokens (AC-1/AC-6). Passing `None` keeps the desktop default
+/// (`${CHATSPEED_HOME:-~/.chatspeed}/runtime`).
+pub async fn start_with_discovery_dir(
+    svc: Arc<WorkflowApplicationService>,
+    discovery_dir: Option<std::path::PathBuf>,
+) -> Result<ControlPlaneHandle, String> {
     let token = Arc::new(generate_token());
     let server_instance_id = Arc::new(svc.gateway.broker().server_instance_id().to_string());
 
@@ -288,10 +302,19 @@ pub async fn start(svc: Arc<WorkflowApplicationService>) -> Result<ControlPlaneH
         token: (*token).clone(),
         started_at: now_timestamp(),
     };
-    discovery::write_discovery(&discovery_document)?;
+    let publish_dir = discovery_dir
+        .clone()
+        .unwrap_or_else(discovery::discovery_dir);
+    let publish_path = discovery::discovery_path_in(&publish_dir);
+    discovery::write_discovery_in(&publish_dir, &discovery_document)?;
+    log::info!(
+        "[ControlPlane] Published discovery document at {}",
+        publish_path.display()
+    );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let cleanup_instance_id = (*server_instance_id).clone();
+    let cleanup_dir = publish_dir.clone();
     tokio::spawn(async move {
         let server = axum::serve(listener, router).with_graceful_shutdown(async move {
             let _ = shutdown_rx.changed().await;
@@ -300,7 +323,7 @@ pub async fn start(svc: Arc<WorkflowApplicationService>) -> Result<ControlPlaneH
         if let Err(error) = server.await {
             log::warn!("[ControlPlane] Server terminated with error: {}", error);
         }
-        discovery::remove_discovery_if_instance(&cleanup_instance_id);
+        discovery::remove_discovery_if_instance_in(&cleanup_dir, &cleanup_instance_id);
         log::info!("[ControlPlane] Server stopped");
     });
 
@@ -370,6 +393,26 @@ fn build_router(state: ControlPlaneState) -> Router {
             "/control/v1/campaigns/{campaign_id}/close",
             post(close_campaign),
         )
+        // Phase 2G+2H durable schedule surface. Additive: the immediate 2F
+        // routes above keep their exact semantics, and these only accept a
+        // marked experiment domain (AC-2/AC-6).
+        .route(
+            "/control/v1/campaigns/{campaign_id}/schedule",
+            post(schedule_campaign),
+        )
+        .route(
+            "/control/v1/campaigns/{campaign_id}/jobs",
+            get(list_campaign_jobs),
+        )
+        .route(
+            "/control/v1/campaigns/{campaign_id}/cancel",
+            post(cancel_campaign),
+        )
+        .route(
+            "/control/v1/campaigns/{campaign_id}/reconcile",
+            post(reconcile_campaign),
+        )
+        .route("/control/v1/campaign-jobs/{job_id}", get(get_campaign_job))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -740,6 +783,172 @@ async fn close_campaign(
     .await
 }
 
+/// Maps a durable-schedule contract rejection to its stable HTTP code. The
+/// machine codes are part of the CLI contract and travel verbatim, like the 2F
+/// campaign codes.
+fn schedule_error_response(
+    error: &crate::workflow::react::experiment_schedule::types::ScheduleError,
+) -> Response {
+    dto::error_response(
+        StatusCode::BAD_REQUEST,
+        error.code.as_str(),
+        format!("{}: {}", error.code.as_str(), error.message),
+    )
+}
+
+/// The `Idempotency-Key` header value, already proven present by the caller.
+fn idempotency_key(headers: &HeaderMap) -> String {
+    headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// `POST /control/v1/campaigns/{campaign_id}/schedule` — persists one durable
+/// campaign schedule and its ordered job list.
+///
+/// Additive to the immediate 2F surface: the frozen plan, the fixture refs and
+/// the server-registered execution profile ref are stored, the ordered jobs are
+/// created in one transaction, and the path campaign id stays authoritative.
+async fn schedule_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:schedule");
+    }
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid campaign schedule request: {error}"),
+                );
+            }
+        };
+        let request = match crate::workflow::react::experiment_schedule::types::parse_and_validate_campaign_schedule_request(
+            &value,
+        ) {
+            Ok(request) => request,
+            Err(error) => return schedule_error_response(&error),
+        };
+        // The path campaign id is authoritative: a plan that derives another
+        // campaign is a contract rejection with a stable code.
+        let derived = crate::workflow::react::experiment_schedule::types::campaign_id_for_schedule(&request);
+        if derived != campaign_id {
+            return campaign_spec_error_response(
+                &crate::workflow::react::campaign::CampaignSpecError::new(
+                    crate::workflow::react::campaign::CampaignSpecErrorCode::CampaignPlanMismatch,
+                    "schedule plan does not match the campaign id",
+                ),
+            );
+        }
+        match state.svc.campaign_schedule(request, &key) {
+            Ok(accepted) => {
+                let value = serde_json::to_value(&accepted).unwrap_or_else(|error| {
+                    log::error!("[control-plane] schedule serialization failed: {error}");
+                    serde_json::json!({})
+                });
+                (StatusCode::CREATED, Json(value)).into_response()
+            }
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `GET /control/v1/campaigns/{campaign_id}/jobs` — the durable job list.
+async fn list_campaign_jobs(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+) -> Response {
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    match state.svc.campaign_jobs(&campaign_id) {
+        Ok(list) => snake_json_response(serde_json::to_value(&list)),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/campaign-jobs/{job_id}` — one durable job.
+async fn get_campaign_job(
+    State(state): State<ControlPlaneState>,
+    Path(job_id): Path<String>,
+) -> Response {
+    match state.svc.campaign_job(&job_id) {
+        Ok(job) => snake_json_response(serde_json::to_value(&job)),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/campaigns/{campaign_id}/cancel` — cancels pre-dispatch
+/// work and stops admitting new work.
+async fn cancel_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:cancel");
+    }
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let reason = match parse_campaign_close_body(&body) {
+            Ok(reason) => reason,
+            Err(response) => return response,
+        };
+        match state.svc.campaign_cancel(&campaign_id, &reason).await {
+            Ok(result) => (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
+                .into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/campaigns/{campaign_id}/reconcile` — evidence-only
+/// classification of the campaign's non-terminal jobs.
+async fn reconcile_campaign(
+    State(state): State<ControlPlaneState>,
+    Path(campaign_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("campaigns:reconcile");
+    }
+    if let Err(error) = crate::workflow::react::campaign::validate_campaign_id(&campaign_id) {
+        return campaign_spec_error_response(&error);
+    }
+    with_idempotency(&state, &headers, &body, |state, _body| async move {
+        match state.svc.campaign_reconcile(&campaign_id) {
+            Ok(result) => (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
+                .into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
 async fn start_workflow(
     State(state): State<ControlPlaneState>,
     Path(session_id): Path<String>,
@@ -1070,13 +1279,70 @@ mod tests {
         reqwest::Client::new()
     }
 
+    /// A headless instance publishes its discovery document under its own
+    /// runtime directory and leaves the desktop default untouched, so the two
+    /// instances on one machine can never overwrite each other (AC-1/AC-6).
+    #[tokio::test]
+    async fn an_explicit_discovery_dir_is_published_instead_of_the_default() {
+        let _env = EnvGuard {
+            _lock: ENV_LOCK.lock().unwrap(),
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::env::set_var("CHATSPEED_HOME", dir.path());
+        let headless_runtime = dir.path().join("domain-runtime");
+
+        let store = Arc::new(MainStore::new(dir.path().join("headless.db")).expect("store"));
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let tsid = Arc::new(TsidGenerator::new(1).expect("tsid"));
+        let hub = Arc::new(WorkflowRuntimeHub::with_transport(
+            Arc::new(crate::workflow::react::client::hub::NoWindowTransport),
+            "headless-instance".to_string(),
+        ));
+        let manager = Arc::new(WorkflowManager::new());
+        let factory: Arc<dyn SubAgentFactory> = Arc::new(DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state: chat_state.clone(),
+            gateway: hub.clone(),
+            workflow_manager: manager.clone(),
+            app_data_dir: dir.path().to_path_buf(),
+            tsid_generator: tsid.clone(),
+        });
+        let svc = Arc::new(WorkflowApplicationService::new(
+            store,
+            chat_state,
+            tsid,
+            hub,
+            factory,
+            manager,
+            dir.path().to_path_buf(),
+        ));
+
+        let handle = start_with_discovery_dir(svc, Some(headless_runtime.clone()))
+            .await
+            .expect("control plane start");
+        assert_eq!(handle.server_instance_id, "headless-instance");
+
+        let published =
+            discovery::read_discovery_in(&headless_runtime).expect("headless discovery document");
+        assert_eq!(published.server_instance_id, "headless-instance");
+        assert_eq!(published.port, handle.port);
+        assert!(
+            !discovery::discovery_path_in(&discovery::discovery_dir()).exists(),
+            "the desktop discovery document must stay untouched"
+        );
+
+        // Any ambient request would have to use this instance's token.
+        assert!(super::ACTIVE_HANDLE.lock().unwrap().is_some());
+        handle.shutdown();
+    }
+
     fn auth_url(app: &TestApp, path: &str) -> String {
         format!("http://127.0.0.1:{}{}", app.handle.port, path)
     }
 
     /// Reads the per-instance bearer token from the discovery document.
     fn auth_token(_app: &TestApp) -> String {
-        discovery::read_discovery()
+        discovery::read_discovery_in(&discovery::discovery_dir())
             .expect("discovery document")
             .token
     }
@@ -1680,9 +1946,10 @@ mod tests {
     #[tokio::test]
     async fn discovery_document_is_written_with_restricted_permissions_and_removed_on_shutdown() {
         let (app, _env) = spawn_test_app().await;
-        let path = discovery::discovery_path();
+        let path = discovery::discovery_path_in(&discovery::discovery_dir());
         assert!(path.exists());
-        let document = discovery::read_discovery().expect("discovery document");
+        let document =
+            discovery::read_discovery_in(&discovery::discovery_dir()).expect("discovery document");
         assert_eq!(document.protocol_version, "1");
         assert_eq!(document.server_instance_id, app.handle.server_instance_id);
         assert_eq!(document.port, app.handle.port);
@@ -2338,5 +2605,333 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         app.handle.shutdown();
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2G+2H durable schedule surface
+    // -----------------------------------------------------------------------
+
+    use crate::workflow::react::experiment_schedule::types::{
+        campaign_id_for_schedule, parse_and_validate_campaign_schedule_request,
+        CAMPAIGN_SCHEDULE_V1,
+    };
+    use serde_json::json;
+
+    /// Marks the test database as an experiment domain.
+    fn mark_domain(app: &TestApp) {
+        app.store
+            .db_runtime()
+            .expect("runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO experiment_domain (
+                        domain_id, domain_kind, marker_schema_version, singleton, created_at_ms
+                     ) VALUES ('domain-test', 'experiment.v1', 'experiment_domain_marker.v1', 1, 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("mark domain");
+    }
+
+    /// Registers one execution profile in the test domain.
+    fn register_profile(app: &TestApp, profile_ref: &str) {
+        let directory = app._dir.path().join("execution-profiles");
+        std::fs::create_dir_all(&directory).expect("create profile dir");
+        let profile = json!({
+            "schema_version": "execution_profile.v1",
+            "profile_ref": profile_ref,
+            "owner_kind": "host_worktree",
+            "base_repo_ref": "repo:primary",
+            "base_revision": "refs/heads/main",
+            "network_policy": { "mode": "none", "allow_hosts": [] },
+            "mounts": [{
+                "source_kind": "workspace",
+                "container_path": "/workspace",
+                "read_only": false
+            }],
+            "resources": {
+                "cpu_millis": 1000,
+                "memory_bytes": 1073741824,
+                "pids": 128,
+                "no_new_privileges": true
+            },
+            "allowed_bundle_refs": ["smoke-tools"]
+        });
+        std::fs::write(
+            directory.join(format!("{profile_ref}.json")),
+            serde_json::to_vec_pretty(&profile).expect("serialize"),
+        )
+        .expect("write profile");
+    }
+
+    /// A strict durable schedule request whose fixture refs come from the
+    /// checked-in catalog.
+    fn schedule_body() -> serde_json::Value {
+        let resolved = crate::workflow::react::experiment_schedule::fixture::resolve_task(
+            "chatspeed-smoke",
+            "smoke_reply_ok",
+        )
+        .expect("fixture");
+        json!({
+            "schema_version": CAMPAIGN_SCHEDULE_V1,
+            "plan": {
+                "schema_version": "campaign_plan.v1",
+                "campaign_key": "p2gh-http",
+                "stage": "stage_0_manual",
+                "agent_id": "agent-1",
+                "suite": "chatspeed-smoke",
+                "task": "smoke_reply_ok",
+                "concurrency": 1,
+                "budget": {
+                    "money_mode": { "mode": "token_resource_only" },
+                    "caps": { "input_tokens": 1024, "output_tokens": 1024 },
+                    "required_dimensions": [],
+                    "max_attempts": 1
+                },
+                "candidates": [
+                    { "candidate_key": "baseline", "kind": "baseline" },
+                    { "candidate_key": "cand-a", "kind": "candidate",
+                      "mutable_surface": ["agent_prompt_ref"],
+                      "agent_prompt_ref": "smoke-terse-v1",
+                      "prompt_hash": "bb41d700c9a2cdd26bffe26b5a3deac849188ce1966414c32700e38d51d2bf88" }
+                ]
+            },
+            "fixture_refs": [serde_json::to_value(resolved.task_ref()).expect("ref")],
+            "execution_profile_ref": "smoke-local",
+            "bundle_refs": ["smoke-tools"]
+        })
+    }
+
+    fn derived_campaign_id() -> String {
+        let request =
+            parse_and_validate_campaign_schedule_request(&schedule_body()).expect("valid request");
+        campaign_id_for_schedule(&request)
+    }
+
+    /// The durable schedule surface is only valid inside a marked experiment
+    /// domain: a desktop-style database refuses to enqueue work.
+    #[tokio::test]
+    async fn durable_schedule_requires_a_marked_experiment_domain() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        register_profile(&app, "smoke-local");
+
+        let campaign_id = derived_campaign_id();
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/schedule"),
+            ))
+            .header("Authorization", format!("Bearer {}", auth_token(&app)))
+            .header("Idempotency-Key", "idem-unmarked")
+            .json(&schedule_body())
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.expect("json");
+        // The stable machine code travels in the message with the documented
+        // `schedule_rejected: <code>` prefix, exactly like the 2F
+        // `campaign_spec_rejected: <code>` contract.
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("domain_unmarked"),
+            "unexpected body: {body}"
+        );
+    }
+
+    /// A marked domain with a registered profile accepts one schedule, creates
+    /// the ordered jobs transactionally, and serves job/cancel/reconcile over
+    /// the same control plane. Replaying the identical request is idempotent.
+    #[tokio::test]
+    async fn durable_schedule_persists_ordered_jobs_and_serves_the_full_surface() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        mark_domain(&app);
+        register_profile(&app, "smoke-local");
+
+        let campaign_id = derived_campaign_id();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let schedule_url = auth_url(
+            &app,
+            &format!("/control/v1/campaigns/{campaign_id}/schedule"),
+        );
+
+        let first = client()
+            .post(&schedule_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "idem-1")
+            .json(&schedule_body())
+            .send()
+            .await
+            .expect("schedule");
+        assert_eq!(first.status(), reqwest::StatusCode::CREATED);
+        let accepted: serde_json::Value = first.json().await.expect("json");
+        assert_eq!(accepted["campaign_id"], json!(campaign_id));
+        assert_eq!(accepted["concurrency"], json!(1));
+        let job_ids = accepted["job_ids"].as_array().expect("job ids").clone();
+        assert_eq!(job_ids.len(), 2, "one ordered job per candidate");
+
+        // Replaying the same idempotency key returns the same acceptance.
+        let replay = client()
+            .post(&schedule_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "idem-1")
+            .json(&schedule_body())
+            .send()
+            .await
+            .expect("replay");
+        assert_eq!(replay.status(), reqwest::StatusCode::CREATED);
+        let replayed: serde_json::Value = replay.json().await.expect("json");
+        assert_eq!(replayed["job_ids"], accepted["job_ids"]);
+
+        // The job list is ordered by candidate order and carries no instruction.
+        let jobs_response = client()
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/jobs"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("jobs");
+        assert_eq!(jobs_response.status(), reqwest::StatusCode::OK);
+        let jobs: serde_json::Value = jobs_response.json().await.expect("json");
+        let listed = jobs["jobs"].as_array().expect("jobs array");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0]["candidate_key"], json!("baseline"));
+        assert_eq!(listed[1]["candidate_key"], json!("cand-a"));
+        assert_eq!(listed[0]["state"], json!("queued"));
+        assert_eq!(listed[0]["dispatch_marker"], json!("not_dispatched"));
+        let serialized = jobs.to_string();
+        assert!(
+            !serialized.contains("Reply with exactly"),
+            "the fixture instruction must never be served"
+        );
+
+        // One job by id.
+        let job_id = job_ids[0].as_str().expect("job id");
+        let job_response = client()
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/campaign-jobs/{job_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("job");
+        assert_eq!(job_response.status(), reqwest::StatusCode::OK);
+        let job: serde_json::Value = job_response.json().await.expect("json");
+        assert_eq!(job["job_id"], json!(job_id));
+        assert_eq!(job["state"], json!("queued"));
+
+        // Reconcile is evidence-only and reports the queued jobs as resumable.
+        let reconcile = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/reconcile"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "idem-reconcile")
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("reconcile");
+        assert_eq!(reconcile.status(), reqwest::StatusCode::OK);
+        let reconciled: serde_json::Value = reconcile.json().await.expect("json");
+        let classified = reconciled["jobs"].as_array().expect("jobs array");
+        assert_eq!(classified.len(), 2);
+        for entry in classified {
+            assert_eq!(entry["decision"], json!("resume"));
+            assert_eq!(entry["parked"], json!(false));
+        }
+
+        // Cancel stops admitting work and cancels the pre-dispatch jobs.
+        let cancel = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/cancel"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "idem-cancel")
+            .json(&json!({ "reason": "smoke" }))
+            .send()
+            .await
+            .expect("cancel");
+        assert_eq!(cancel.status(), reqwest::StatusCode::OK);
+        let cancelled: serde_json::Value = cancel.json().await.expect("json");
+        assert_eq!(cancelled["status"], json!("cancelled"));
+        assert_eq!(
+            cancelled["cancelled_job_ids"]
+                .as_array()
+                .expect("ids")
+                .len(),
+            2
+        );
+        assert!(cancelled["dispatched_job_ids"]
+            .as_array()
+            .expect("ids")
+            .is_empty());
+
+        // A cancelled campaign no longer admits new schedules for a new plan.
+        let error = client()
+            .post(&schedule_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "idem-2")
+            .json(&schedule_body())
+            .send()
+            .await
+            .expect("reschedule");
+        assert!(
+            error.status().is_client_error(),
+            "a cancelled campaign must not admit work"
+        );
+    }
+
+    /// An unregistered execution profile fails closed before any write.
+    #[tokio::test]
+    async fn durable_schedule_rejects_an_unregistered_execution_profile() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        mark_domain(&app);
+        // No profile registered in this domain.
+
+        let campaign_id = derived_campaign_id();
+        let response = client()
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/campaigns/{campaign_id}/schedule"),
+            ))
+            .header("Authorization", format!("Bearer {}", auth_token(&app)))
+            .header("Idempotency-Key", "idem-no-profile")
+            .json(&schedule_body())
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.expect("json");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unknown_execution_profile"),
+            "unexpected body: {body}"
+        );
+        // Nothing was persisted for the rejected schedule.
+        let store = crate::db::experiment_schedule::ExperimentScheduleStore::new(app.store.clone());
+        assert!(store.domain_is_marked().expect("marked"));
+        let jobs = store.list_jobs(&campaign_id);
+        assert!(
+            matches!(
+                jobs,
+                Err(ref error)
+                    if error.code
+                        == crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownCampaign
+            ),
+            "no campaign row may exist for a rejected schedule"
+        );
     }
 }

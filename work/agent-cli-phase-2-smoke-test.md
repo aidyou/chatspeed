@@ -471,3 +471,55 @@ request/candidate scope 复用规则、HTTP bearer+idempotency+stable machine co
 （manifest/内容 hash/artifact binding/fixture 身份/safety-infra-budget 事实/promotion 拒绝）、
 sidecar 重复发布与篡改拒绝、campaign prompt ref 进入 workflow-local Agent 且 Agent defaults 不变、
 catalog 漂移 fail-closed。
+
+## 7. 2G+2H Headless + Durable Scheduler Smoke（2026-09-17，真实 Docker owner + 真实模型）
+
+实现细节、缺陷根因与修复见 `work/agent-cli-phase-2-implementation-plan.md` §11.7。
+
+- **实例**：`chatspeed-headless --data-dir dev_data/2gh-smoke/domain --base-repo <tmp repo>
+  --api-key-file <operator key file>`；独立 DB/布局/marker/lease；**自带 loopback ccproxy**
+  （`Serving chat completion proxy on http://127.0.0.1:11437`），discovery 在 domain 内。
+- **提交**：`cs --discovery-file <domain discovery> experiment campaign schedule --plan plan.json
+  --profile docker-smoke`（纯 HTTP；`campaign_schedule_accepted.v1`；1 个有序 job；concurrency=1）。
+- **结果**（`dev_data/2gh-smoke/evidence.txt`）：job `succeeded`、marker `confirmed`、
+  `run_id=0rmsf5a1c0400`；journal `workspace_acquired → environment_ready → dispatch_intent →
+  workflow_started → artifacts_collected → cleanup_done`；快照 `Running → Completed`；
+  输出补丁 + manifest 已发布（绑定 job/run/session/candidate/base_revision）。
+- **模型顺序**（用户指定）：`cs@qwen-3.8-flash`（该域未配置该 alias，确定性不可用）→
+  `cs@free:gemini-flash`（上游 503，已知失败）→ `cs@free:ds-v4-flash`（**成功**）。
+  未使用付费回退 `cs@qwen3.8-flash`；全部失败均为**已知**失败，未出现 `unknown_manual`。
+- **隔离与残留审计**：无遗留 owner 容器（按 `cs.owner_schema` label 过滤为空）、base repo
+  `status` 干净且只有一个 worktree、HEAD 未变；SIGTERM 后进程退出、discovery 由实例自行删除、
+  domain lease 归零。
+- **desktop（AC-8）**：`pnpm tauri dev` 在改动后已自行重编译（运行二进制 mtime 00:51 > 源码 00:21），
+  真实桌面实例控制面可连（`cs doctor` OK），并经新的共用 launcher 拥有自己的 ccproxy（127.0.0.1:11436）。
+- **进程级 crash/restart 矩阵（V-3）**：`dev_data/2gh-crash/matrix.txt`
+  - A **预派发重启恢复**：SIGKILL 时 job 为 `queued/not_dispatched` → 重启后 **`succeeded/confirmed`**，
+    journal 完整 6 阶段（run `0rmsxwnwg0400`），run kernel 仅被调用 1 次；
+  - B/C kill 于 dispatch intent 之后（`dispatching/intent_recorded`，无 run id）→ 重启后
+    `unknown_manual` + `dispatch_uncertain`，**run kernel 调用次数保持 0**（INV-5 不重放）；
+  - 崩溃 generation 的 domain lease 未过期时，重启以 `experiment_domain_locked` 拒绝启动（fail-closed 生效）。
+- **退出残留 + 敏感内容审计（INV-6）**：`dev_data/2gh-smoke/gate-evidence.txt`
+  - fixture instruction 在 experiment 三张表中出现 **0** 次；journal/artifact/log 中
+    `sk-/ghp_/xoxb-/-----BEGIN/AKIA` 命中 **0**；discovery 消失、lease 释放、无进程、无 owner 容器、
+    base repo 干净（崩溃遗留的 2 个 worktree 已按 path 校验后清理）。
+- **AC-7 hand-off 修复**：adapter 的 capability manifest 现写在
+  `<data-dir>/runtime/harbor-task-capability.json`（与 runtime 一致），并新增 2 个 focused test
+  用真实 Python producer 断言路径/token 契约与 declared-roots↔task-image 一致性。
+- **真实 Harbor 0.23.0 trial：通过（提交时最新一轮）**（`dev_data/2gh-harbor/harbor-trial.txt`、`jobs/2gh-trial/**`）：
+  Harbor `Trials 1 / Mean 1.000 / Exceptions 0`；separate verifier `reward=1`，verdict
+  `verified 2 declared artifact(s); all 2 job(s) reached 'succeeded'`；Harbor 收集 `/logs/artifacts` 成功，
+  内含 `chatspeed-campaign.json`、`chatspeed-jobs.jsonl` 与两个 job 的 `patch.diff` + `patch-manifest.json`；
+  durable rows：`job-2b49e2b8… baseline succeeded/confirmed run=0rmyapb1w0400`、
+  `job-e03434a7… cand-a succeeded/confirmed run=0rmyapzj40400`，profile 均为 `harbor-task`。
+  关键接线：任务镜像由 `ubuntu:26.04`（glibc 2.43）+ GTK3/WebKitGTK + `python3` 构建并携带 `/tests` verifier 入口；
+  job 环境提供模型端点为宿主桌面实例 ccproxy 的 grouped 形状 `http://127.0.0.1:11436/cs/v1`
+  （客户端拼接 `/chat/completions`，curl 实测该 URL 返回 200）；agent+模型经 0600 config package 注入 domain，
+  不进入任何 artifact。此前记录的“base 镜像/Docker Hub 阻塞”已由用户提供的 `ubuntu:26.04` 解除，
+  不再是当前阻塞项。
+- **凭据通道（INV-6）**：模型 token 经 `environment.upload_file()` 以 0600 文件送入沙箱，
+  **不进入任何被 Harbor 记录的命令**；扩展后的 `dev_data/2gh-smoke/gate-audit.sh` 会扫描 Harbor 通道
+  （job.log/trial.log/agent logs/artifacts，24 个文件），修复后复验结果为 `markers=0`、`token occurrences=0`。
+  扫描器实现为 `dev_data/2gh-smoke/scan_secrets.py`，其检测能力由阳性对照
+  `dev_data/2gh-smoke/audit-selftest.sh` 验证（植入凭据可被发现、capability 文件名不误报、
+  未提供 token 时拒绝报告干净），因此该 `0 命中` 是有检测能力背书的结论。

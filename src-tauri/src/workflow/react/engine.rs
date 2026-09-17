@@ -100,6 +100,11 @@ where
 pub trait ReActExecutor: Send + Sync {
     async fn init(&mut self) -> Result<(), WorkflowEngineError>;
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError>;
+    /// Removes this run's session-scoped capability servers, when it had any.
+    ///
+    /// Default: nothing to do, which is the case for every run that was not
+    /// dispatched with a verified capability bundle.
+    async fn release_owned_capabilities(&mut self) {}
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError>;
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError>;
     async fn prepare_completed_resume(&mut self) -> Result<(), WorkflowEngineError>;
@@ -160,6 +165,15 @@ pub struct WorkflowExecutor {
     pub context: ContextManager,
     pub tool_manager: Arc<ToolManager>,
     pub global_tool_manager: Arc<ToolManager>,
+    /// The verified capability lease of this run, when the durable scheduler
+    /// dispatched it with one.
+    ///
+    /// It is session scoped on purpose: its MCP servers are registered into
+    /// `tool_manager` (which every executor owns separately) and never into
+    /// `global_tool_manager`, so a run-scoped bundle can never leak into another
+    /// session or into the user's global configuration (AC-4/INV-8).
+    pub owned_capabilities:
+        Option<crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease>,
     pub chat_state: Arc<ChatState>,
     pub gateway: Arc<dyn Gateway>,
     pub sub_agent_factory: Arc<dyn SubAgentFactory>,
@@ -803,6 +817,116 @@ impl WorkflowExecutor {
 
     fn should_register_mcp_tool_expander(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
         mcp_tool_count > 0 && folded_tool_count > 0
+    }
+
+    /// Attaches (or clears) this run's verified capability lease.
+    ///
+    /// Only a run the durable scheduler dispatched with a verified bundle has
+    /// one; every immediate run keeps `None`.
+    pub fn set_owned_capabilities(
+        &mut self,
+        lease: Option<
+            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+        >,
+    ) {
+        self.owned_capabilities = lease;
+    }
+
+    /// Registers this run's verified capability bundle into the **session-local**
+    /// tool manager.
+    ///
+    /// The lease was verified by the scheduler before the run existed, so this
+    /// step only projects it: each declared MCP server is registered on the
+    /// executor's own manager (never on `global_tool_manager`, so it cannot leak
+    /// into another session or the user's global configuration), with its
+    /// resolved secret values held in memory only (AC-4/INV-6/INV-8).
+    pub async fn register_owned_capabilities(&self) {
+        let Some(lease) = self.owned_capabilities.clone() else {
+            return;
+        };
+        for server in &lease.registration.mcp_servers {
+            let config = crate::mcp::client::McpServerConfig {
+                name: server.name.clone(),
+                protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                command: Some(server.command.to_string_lossy().to_string()),
+                args: Some(server.args.clone()),
+                env: Some(server.env.clone()),
+                ..Default::default()
+            };
+            if let Err(error) = self.tool_manager.clone().register_mcp_server(config).await {
+                log::warn!(
+                    "[Workflow][session={}][capability={}] registration failed: {error}",
+                    self.session_id,
+                    server.name
+                );
+            } else {
+                log::info!(
+                    "[Workflow][session={}][capability={}] run-scoped MCP server registered",
+                    self.session_id,
+                    server.name
+                );
+            }
+        }
+        for skill in &lease.registration.skills {
+            // A skill becomes visible to this run only. The directory join is
+            // applied by `apply_owned_capability_skills` (which needs `&mut self`)
+            // right before the run loop starts.
+            log::info!(
+                "[Workflow][session={}][capability={}] verified run-scoped skill {}",
+                self.session_id,
+                skill.name,
+                skill.entry_path.display()
+            );
+        }
+    }
+
+    /// Makes this run's verified skills visible to its own scanner only.
+    ///
+    /// Called with `&mut self` immediately before the run loop, and undone by
+    /// [`Self::release_owned_capabilities`] when the run ends, so a run-scoped
+    /// bundle never leaks into another session (AC-4).
+    pub fn apply_owned_capability_skills(&mut self) {
+        let Some(lease) = self.owned_capabilities.clone() else {
+            return;
+        };
+        for skill in &lease.registration.skills {
+            // The scanner looks for skill *directories* (`<root>/<skill>/SKILL.md`),
+            // so the search path is the bundle directory that contains the
+            // skill's own directory, falling back to the skill directory itself.
+            let candidate = skill
+                .entry_path
+                .parent()
+                .and_then(|skill_dir| skill_dir.parent().map(|root| root.to_path_buf()))
+                .unwrap_or_else(|| lease.staged_root.clone());
+            self.skill_scanner.add_run_scoped_path(candidate);
+        }
+    }
+
+    /// Removes this run's capability servers from the session manager and drops
+    /// the lease. Idempotent, and never touches the global manager.
+    pub async fn release_owned_capabilities(&mut self) {
+        let Some(lease) = self.owned_capabilities.take() else {
+            return;
+        };
+        for server in &lease.registration.mcp_servers {
+            if let Err(error) = self
+                .tool_manager
+                .clone()
+                .unregister_mcp_server(server.name.as_str())
+                .await
+            {
+                log::warn!(
+                    "[Workflow][session={}][capability={}] unregister failed: {error}",
+                    self.session_id,
+                    server.name
+                );
+            }
+        }
+        for skill in &lease.registration.skills {
+            if let Some(root) = skill.entry_path.parent() {
+                self.skill_scanner.remove_run_scoped_path(root);
+            }
+        }
     }
 
     pub(crate) async fn resolve_mcp_tool_call(
@@ -1797,6 +1921,7 @@ impl WorkflowExecutor {
             ),
             tool_manager: Arc::new(ToolManager::new()),
             global_tool_manager,
+            owned_capabilities: None,
             chat_state,
             gateway: gateway.clone(),
             sub_agent_factory,
@@ -2840,6 +2965,11 @@ impl WorkflowExecutor {
         //     }
         // }
 
+        // A durable scheduled run sees exactly the capabilities that were
+        // verified for its job: they are projected onto this session's own tool
+        // manager, never onto the global one (AC-4/INV-8).
+        self.register_owned_capabilities().await;
+
         Ok(())
     }
 
@@ -3336,6 +3466,9 @@ impl WorkflowExecutor {
     }
 
     pub(crate) async fn run_loop_internal(&mut self) -> Result<(), WorkflowEngineError> {
+        // A run-scoped capability bundle becomes visible to this session only,
+        // right before the run actually starts executing (AC-4).
+        self.apply_owned_capability_skills();
         // P0-2: Guard - do not continue execution in safe-failed state
         if self.recovery_failed {
             log::error!(

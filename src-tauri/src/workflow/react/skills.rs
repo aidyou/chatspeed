@@ -77,6 +77,23 @@ impl SkillScanner {
         self.search_paths.clone()
     }
 
+    /// Adds a run-scoped skill directory to this session's search paths.
+    ///
+    /// Used for the verified capability bundle of one dispatched run: the
+    /// directory is visible to this session only, and [`Self::remove_run_scoped_path`]
+    /// takes it away again when the run ends (AC-4). Adding a path that is
+    /// already present is a no-op, so repeated registration cannot duplicate it.
+    pub fn add_run_scoped_path(&mut self, path: PathBuf) {
+        if !self.search_paths.iter().any(|existing| existing == &path) {
+            self.search_paths.push(path);
+        }
+    }
+
+    /// Removes a run-scoped skill directory. Idempotent.
+    pub fn remove_run_scoped_path(&mut self, path: &std::path::Path) {
+        self.search_paths.retain(|existing| existing != path);
+    }
+
     /// Scans all paths and returns a map of skill_name -> manifest.
     /// Higher priority paths (earlier in search_paths) override lower ones.
     pub fn scan(&self) -> Result<HashMap<String, SkillManifest>, WorkflowEngineError> {
@@ -407,5 +424,41 @@ mod tests {
 
         let manifest = skills.get("builtin-help").unwrap();
         assert_eq!(manifest.source, "builtin");
+    }
+
+    /// A run-scoped capability bundle exposes its skills only to the run that
+    /// owns it, and taking the path away again removes them (AC-4).
+    #[test]
+    fn a_run_scoped_skill_path_is_scoped_to_its_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let skills_root = directory.path().join("staged-skills");
+        let skill_dir = skills_root.join("run-capability");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: run-capability\ndescription: Run scoped\n---\n\nInstructions...",
+        )
+        .unwrap();
+
+        let mut scanner = SkillScanner::new(directory.path().to_path_buf());
+        assert!(scanner.scan().unwrap().get("run-capability").is_none());
+
+        scanner.add_run_scoped_path(skills_root.clone());
+        // Adding the same path twice must not duplicate it.
+        scanner.add_run_scoped_path(skills_root.clone());
+        assert_eq!(
+            scanner
+                .get_search_paths()
+                .iter()
+                .filter(|path| **path == skills_root)
+                .count(),
+            1
+        );
+        assert!(scanner.scan().unwrap().contains_key("run-capability"));
+
+        scanner.remove_run_scoped_path(&skills_root);
+        assert!(scanner.scan().unwrap().get("run-capability").is_none());
+        // Removing it again is a no-op.
+        scanner.remove_run_scoped_path(&skills_root);
     }
 }

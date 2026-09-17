@@ -971,6 +971,9 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     self.chat_state.tool_manager.clone(),
                     auto_compress_enabled,
                     policy,
+                    // A delegated sub-agent never carries the parent run's
+                    // run-scoped capability bundle.
+                    None,
                 ),
             ))
         } else {
@@ -997,6 +1000,9 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     self.chat_state.tool_manager.clone(),
                     auto_compress_enabled,
                     policy,
+                    // A delegated sub-agent never carries the parent run's
+                    // run-scoped capability bundle.
+                    None,
                 ),
             ))
         };

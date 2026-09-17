@@ -31,6 +31,10 @@ impl ReActExecutor for PlanningExecutor {
         self.executor.run_loop_internal().await
     }
 
+    async fn release_owned_capabilities(&mut self) {
+        self.executor.release_owned_capabilities().await;
+    }
+
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.executor.begin_new_context_segment().await
     }
@@ -105,8 +109,11 @@ impl PlanningExecutor {
         global_tool_manager: Arc<ToolManager>,
         auto_compress_enabled: bool,
         policy: ExecutionPolicy,
+        owned_capabilities: Option<
+            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+        >,
     ) -> Self {
-        let executor = WorkflowExecutor::new(
+        let mut executor = WorkflowExecutor::new(
             session_id,
             main_store,
             chat_state,
@@ -122,6 +129,9 @@ impl PlanningExecutor {
             auto_compress_enabled,
             policy,
         );
+        // A planning run dispatched by the durable scheduler carries the same
+        // verified capability bundle as the run it belongs to.
+        executor.set_owned_capabilities(owned_capabilities);
         Self { executor }
     }
 }

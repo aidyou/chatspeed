@@ -1,0 +1,12 @@
+[project]
+name = "chatspeed-harbor-adapter"
+version = "0.1.0"
+description = "ChatSpeed installed-agent adapter and artifact contract for Harbor"
+requires-python = ">=3.11"
+# Pinned exactly: the adapter implements the installed-agent API as it exists in
+# this release (BaseInstalledAgent lives in harbor.agents.installed.base and its
+# setup/install contract was verified against 0.23.0 before implementing).
+dependencies = ["harbor==0.23.0"]
+
+[tool.uv]
+package = false

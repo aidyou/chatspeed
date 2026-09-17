@@ -1,0 +1,43 @@
+schema_version = "1.0"
+
+[task]
+name = "chatspeed/smoke"
+description = "Runs one ChatSpeed durable scheduled campaign inside a Harbor task sandbox."
+keywords = ["chatspeed", "agent", "smoke"]
+
+[environment]
+# The task environment is provisioned with the exact ChatSpeed binaries under
+# test (chatspeed-headless + cs); the adapter only verifies them and never
+# downloads anything. The image itself is built from
+# `environment/Dockerfile` (glibc >= 2.38 plus the Tauri runtime libs).
+docker_image = "chatspeed-harbor-smoke:local"
+workdir = "/workspace"
+cpus = 2
+memory_mb = 4096
+# `no-network` is not declarable here: the isolated headless instance inside the
+# sandbox resolves its `group@alias` model through its own loopback ccproxy and
+# that proxy must reach the provider. Harbor's Docker provider cannot enforce
+# `no-network` anyway (it has no `disable_internet` capability), and Harbor
+# rejects a task that asks for a policy its provider cannot enforce — so the
+# declared policy is the one the provider can actually honour.
+network_mode = "public"
+
+[agent]
+network_mode = "public"
+timeout_sec = 900.0
+
+[verifier]
+# A fresh verifier environment receives only the declared artifacts under
+# /logs/artifacts — never the experiment database, the agent logs or the
+# transcript. Its isolation claim is the declared-artifact boundary plus the
+# fresh environment, not network confinement (which this provider cannot
+# enforce).
+environment_mode = "separate"
+network_mode = "public"
+timeout_sec = 300.0
+
+# The verifier receives the declared artifact root only. The file-level
+# allowlist lives in tools/harbor/artifact_contract.py, which is what actually
+# decides which files may be published.
+[[artifacts]]
+source = "/logs/artifacts"

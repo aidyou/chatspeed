@@ -30,6 +30,8 @@ mod evaluate;
 mod experiment;
 #[path = "cs/output.rs"]
 mod output;
+#[path = "cs/schedule.rs"]
+mod schedule;
 #[path = "cs/sse.rs"]
 mod sse;
 #[path = "cs/verifier.rs"]
@@ -169,6 +171,25 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 }
                 CampaignCommand::Close { out, reason } => {
                     campaign::close(cli, &client, out, reason.as_deref().unwrap_or("")).await
+                }
+                CampaignCommand::Schedule {
+                    plan,
+                    profile,
+                    bundle_ref,
+                } => schedule::schedule(cli, &client, plan, profile, bundle_ref.clone()).await,
+                CampaignCommand::Jobs { campaign_id } => {
+                    schedule::jobs(cli, &client, campaign_id).await
+                }
+                CampaignCommand::Job { job_id } => schedule::job(cli, &client, job_id).await,
+                CampaignCommand::Cancel {
+                    campaign_id,
+                    reason,
+                } => {
+                    schedule::cancel(cli, &client, campaign_id, reason.as_deref().unwrap_or(""))
+                        .await
+                }
+                CampaignCommand::Reconcile { campaign_id } => {
+                    schedule::reconcile(cli, &client, campaign_id).await
                 }
             },
         },

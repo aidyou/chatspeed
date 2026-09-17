@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2, v3, v4, v5,
-    v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v3, v4,
+    v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -24,6 +24,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v16::MIGRATION,
     v17::MIGRATION,
     v18::MIGRATION,
+    v19::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -333,5 +334,73 @@ mod tests {
             has_v3_marker, 1,
             "placeholder migrations should still advance db_version"
         );
+    }
+
+    /// Builds a database at exactly `version` by replaying the historical
+    /// statements, which is how the pre-v19 shape is reproduced for the
+    /// additive-upgrade test.
+    fn build_at_version(conn: &mut Connection, version: i32) {
+        let mut statements: Vec<(&'static str, &'static str)> = Vec::new();
+        statements.extend_from_slice(v1::INIT_SQL);
+        for migration in MIGRATIONS
+            .iter()
+            .filter(|migration| migration.version <= version)
+        {
+            statements.extend_from_slice(migration.sql);
+        }
+        execute_migration_statements(conn, statements, version)
+            .expect("historical schema should build");
+    }
+
+    /// Phase 2G+2H adds v19. It must be purely additive: an existing v18
+    /// database keeps every row and simply gains the new empty tables, so an
+    /// older binary can still open it (no down migration, no drop).
+    #[test]
+    fn v18_database_upgrades_to_v19_without_touching_existing_rows() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        build_at_version(&mut conn, 18);
+        assert_eq!(get_db_version(&conn).expect("version"), 18);
+        assert!(!table_exists(&conn, "experiment_campaign_jobs"));
+        assert!(!table_exists(&conn, "experiment_domain"));
+
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-1', 'kept', 'prompt', '0', '0')",
+            [],
+        )
+        .expect("seed an existing row");
+
+        run_migrations(&mut conn).expect("v18 -> v19 should succeed");
+
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            latest_migration_version()
+        );
+        assert_eq!(latest_migration_version(), 19);
+        // The pre-existing row survived untouched.
+        let name: String = conn
+            .query_row("SELECT name FROM agents WHERE id = 'agent-1'", [], |row| {
+                row.get(0)
+            })
+            .expect("existing row survives");
+        assert_eq!(name, "kept");
+        // The new tables exist and are empty; nothing is auto-marked.
+        for table in [
+            "experiment_domain",
+            "experiment_domain_lease",
+            "experiment_campaign_schedules",
+            "experiment_campaign_jobs",
+            "experiment_job_journal",
+            "experiment_job_bundles",
+            "experiment_job_artifacts",
+        ] {
+            assert!(table_exists(&conn, table), "missing v19 table {table}");
+        }
+        let markers: i64 = conn
+            .query_row("SELECT COUNT(1) FROM experiment_domain", [], |row| {
+                row.get(0)
+            })
+            .expect("count markers");
+        assert_eq!(markers, 0, "an upgraded database is never auto-marked");
     }
 }

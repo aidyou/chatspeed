@@ -29,6 +29,13 @@ path = "src/main.rs"
 name = "cs"
 path = "src/bin/cs.rs"
 
+# `chatspeed-headless` (Phase 2H): the windowless runtime owner for one
+# isolated experiment data domain. It is the only headless process allowed to
+# open that domain's database, and it publishes its own control plane.
+[[bin]]
+name = "chatspeed-headless"
+path = "src/bin/chatspeed_headless.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.0", features = [] }
 walkdir     = "2"

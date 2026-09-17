@@ -198,6 +198,49 @@ pub enum CampaignCommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Persist one durable campaign schedule: the frozen plan, its fixture
+    /// refs, the server-registered execution profile and the bundle refs. The
+    /// ordered jobs are created in one backend transaction (Phase 2G+2H).
+    Schedule {
+        /// Path to the strict `campaign_plan.v1` JSON file.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Server-registered execution profile reference of the target domain.
+        #[arg(long)]
+        profile: String,
+        /// Allowlisted bundle reference the profile permits. Repeat for several.
+        #[arg(long = "bundle-ref")]
+        bundle_ref: Vec<String>,
+    },
+    /// List the durable jobs of a campaign, in candidate order.
+    Jobs {
+        /// Durable campaign id (backend-minted, `camp-...`).
+        #[arg(long = "campaign-id")]
+        campaign_id: String,
+    },
+    /// Read one durable job by its backend-minted id.
+    Job {
+        /// Durable job id (backend-minted, `job-...`).
+        #[arg(long = "job-id")]
+        job_id: String,
+    },
+    /// Cancel a campaign's pre-dispatch work and stop admitting new work.
+    /// Already-dispatched jobs are reported, never cancelled.
+    Cancel {
+        /// Durable campaign id (backend-minted, `camp-...`).
+        #[arg(long = "campaign-id")]
+        campaign_id: String,
+        /// Optional human-readable cancel reason.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Re-read the durable state plus the workflow authority and classify every
+    /// non-terminal job. Evidence-only: it never requeues and never runs work.
+    Reconcile {
+        /// Durable campaign id (backend-minted, `camp-...`).
+        #[arg(long = "campaign-id")]
+        campaign_id: String,
+    },
     /// Close the campaign budget scope so no further run or reservation is
     /// admitted, then publish the campaign summary sidecar.
     Close {

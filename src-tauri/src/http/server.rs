@@ -30,9 +30,8 @@ use tower_http::{
 
 use crate::{ai::interaction::chat_completion::ChatState, ccproxy, db::MainStore};
 use crate::{
-    CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT, CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT,
-    CHAT_COMPLETION_PROXY, HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR,
-    HTTP_SERVER_TMP_DIR, HTTP_SERVER_UPLOAD_DIR, SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
+    HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
+    HTTP_SERVER_UPLOAD_DIR, SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
 };
 
 static INIT: Once = Once::new();
@@ -148,95 +147,21 @@ pub async fn start_http_server(
         }
     });
 
-    // 0. Initialize the global proxy address from DB before starting the server task
-    {
-        let (initial_port, _initial_listen) = (
-            main_store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
-            main_store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
-        );
-        *CHAT_COMPLETION_PROXY.write() = format!("http://127.0.0.1:{}", initial_port);
-    }
-
-    // Create chat completion proxy routes
-    // ccproxy routes are served independently on a separate port
-    let ccproxy_app = ccproxy::routes(app.clone(), main_store.clone(), chat_state.clone())
-        .await
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024)) // 50MB limit for AI requests
-        .layer(cors); // Apply CORS to the ccproxy routes
-    let (server_port, server_listen) = (
-        main_store.get_config(CFG_CCPROXY_PORT, CFG_CCPROXY_PORT_DEFAULT),
-        main_store.get_config(CFG_CCPROXY_LISTEN, CFG_CCPROXY_LISTEN_DEFAULT.to_string()),
-    );
-
-    // Start chat completion proxy server with retry mechanism
-    let ccproxy_shutdown_rx = shutdown_tx.subscribe();
+    // The loopback chat-completion proxy is served through the shared launcher,
+    // so the desktop and a headless instance own exactly the same proxy surface
+    // and publish their own address into `CHAT_COMPLETION_PROXY`.
+    let ccproxy_version = app.package_info().version.to_string();
+    let mut ccproxy_shutdown_rx = shutdown_tx.subscribe();
     let ccproxy_handle = task::spawn(async move {
-        let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 5;
-
-        loop {
-            attempts += 1;
-
-            match try_available_port(&server_listen, server_port).await {
-                Ok(ccproxy_listener) => {
-                    let ccproxy_addr = ccproxy_listener.local_addr().map_err(|e| {
-                        log::error!("Failed to get CCProxy local address: {}", e);
-                        e.to_string()
-                    })?;
-
-                    // save the chat completion proxy address
-                    *CHAT_COMPLETION_PROXY.write() =
-                        format!("http://127.0.0.1:{}", ccproxy_addr.port());
-
-                    log::info!("Serving chat completion proxy on http://{}", ccproxy_addr);
-
-                    let mut shutdown_rx = ccproxy_shutdown_rx;
-
-                    // Create server with graceful shutdown
-                    let server = axum::serve(
-                        ccproxy_listener,
-                        ccproxy_app
-                            .clone()
-                            .into_make_service_with_connect_info::<SocketAddr>(),
-                    )
-                    .with_graceful_shutdown(async move {
-                        let _ = shutdown_rx.recv().await;
-                        log::info!("CCProxy server received shutdown signal");
-                    });
-
-                    match server.await {
-                        Ok(_) => {
-                            log::info!("CCProxy server shut down gracefully");
-                            break;
-                        }
-                        Err(e) => {
-                            log::error!("CCProxy server error: {}", e);
-                            // Do not return Err, just break or retry.
-                            // In this case, breaking allows the app to continue without proxy but without crashing.
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!(
-                        "Failed to start ccproxy server (attempt {}): {}",
-                        attempts,
-                        e
-                    );
-                    if attempts >= MAX_ATTEMPTS {
-                        log::error!(
-                            "Failed to start ccproxy server after {} attempts",
-                            MAX_ATTEMPTS
-                        );
-                        return Err(format!(
-                            "Failed to start ccproxy server after {} attempts",
-                            MAX_ATTEMPTS
-                        ));
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
+        let proxy =
+            match ccproxy::launcher::start(main_store.clone(), chat_state.clone(), ccproxy_version)
+                .await
+            {
+                Ok(proxy) => proxy,
+                Err(error) => return Err(error),
+            };
+        let _ = ccproxy_shutdown_rx.recv().await;
+        proxy.shutdown().await;
         Ok(())
     });
 
@@ -276,7 +201,11 @@ pub async fn start_http_server(
     Ok(())
 }
 
-async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, String> {
+/// Binds the first available port at or after `start_port`.
+///
+/// It is shared with [`crate::ccproxy::launcher`], which serves the loopback
+/// chat-completion proxy on the same listen address convention.
+pub(crate) async fn try_available_port(ip: &str, start_port: u16) -> Result<TcpListener, String> {
     let bind_ip: IpAddr = ip
         .parse()
         .map_err(|e| format!("Failed to parse listen address {ip}: {e}"))?;

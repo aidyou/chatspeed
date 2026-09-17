@@ -15,6 +15,35 @@ pub mod budget;
 pub mod campaign {
     pub use crate::workflow::react::campaign::*;
 }
+/// The Phase 2G+2H durable-schedule and benchmark-fixture contract, re-exported
+/// narrowly for the same reason as [`campaign`]: the `cs` CLI and the backend
+/// scheduler must share exactly one strict fixture resolver and one job-state
+/// machine, or a durable request could be accepted by one and rejected by the
+/// other.
+///
+/// Only pure contract items are exposed. The CLI still never opens SQLite,
+/// starts a scheduler, creates an owner or runs an executor (INV-1); the
+/// re-export is compile-time linkage of pure functions and value types only.
+pub mod experiment_schedule {
+    pub use crate::workflow::react::experiment_schedule::fixture;
+    pub use crate::workflow::react::experiment_schedule::scheduler;
+    pub use crate::workflow::react::experiment_schedule::types;
+}
+/// The Phase 2G isolated execution-owner contract, re-exported narrowly for the
+/// same reason as [`campaign`]: the `chatspeed-headless` binary, the scheduler
+/// (U-8) and the Harbor adapter must all drive exactly one owner contract, one
+/// patch/publication implementation and one bundle saga.
+///
+/// Only the owner contract is exposed. The owners never open the database and
+/// never run a workflow; they own a workspace, a container or a task sandbox.
+pub mod experiment_owner {
+    pub use crate::workflow::react::experiment_owner::bundle;
+    pub use crate::workflow::react::experiment_owner::capabilities;
+    pub use crate::workflow::react::experiment_owner::docker;
+    pub use crate::workflow::react::experiment_owner::harbor_task;
+    pub use crate::workflow::react::experiment_owner::patch;
+    pub use crate::workflow::react::experiment_owner::worktree;
+}
 mod builtin_agents;
 mod ccproxy;
 mod commands;
@@ -22,6 +51,10 @@ mod constants;
 mod db;
 mod environment;
 pub mod error;
+/// The Phase 2H headless runtime: experiment-domain layout/guard and the
+/// durable schedule store facade. Public so the `chatspeed-headless` binary and
+/// integration tests can drive the same authority the desktop app uses.
+pub mod headless;
 mod http;
 mod libs;
 mod logger;

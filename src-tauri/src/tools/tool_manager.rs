@@ -401,6 +401,25 @@ impl ToolManager {
         self.register_tool(Arc::new(crate::tools::WebFetch::new(app_handle.clone())))
             .await?;
 
+        self.register_core_tools(main_store.clone()).await
+    }
+
+    /// Registers every tool that needs no Tauri/window state.
+    ///
+    /// This is the AppHandle-free core of the tool surface: the file-system and
+    /// search tools. The desktop app calls it after the Tauri-bound web tools; a
+    /// headless process calls it directly, so it never has to fabricate a window
+    /// handle (INV-1/INV-4). Web tools are deliberately *not* part of this set: a
+    /// headless instance must refuse a web-tool requirement up front rather
+    /// than silently run without it.
+    ///
+    /// The system/workflow/interaction tools (shell execute, todo, skills,
+    /// task orchestration) remain unregistered for both runtimes, exactly as
+    /// before this split; enabling them is a separate change.
+    pub async fn register_core_tools(
+        self: Arc<Self>,
+        _main_store: Arc<MainStore>,
+    ) -> Result<(), ToolError> {
         // =================================================
         // FileSystem & Search tools
         // =================================================
@@ -416,71 +435,6 @@ impl ToolManager {
             .await?;
         self.register_tool(Arc::new(crate::tools::Grep::default()))
             .await?;
-
-        // =================================================
-        // System & Workflow tools
-        // =================================================
-        // let tsid = app_handle
-        //     .state::<Arc<crate::libs::tsid::TsidGenerator>>()
-        //     .inner()
-        //     .clone();
-        // let path_guard = Arc::new(std::sync::RwLock::new(
-        //     crate::workflow::react::security::PathGuard::new(vec![], vec![], vec![]),
-        // ));
-        // self.register_tool(Arc::new(crate::tools::ShellExecute::new(
-        //     path_guard,
-        //     tsid.clone(),
-        //     vec![],
-        //     false,
-        // )))
-        // .await?;
-
-        // self.register_tool(Arc::new(crate::tools::TodoCreateTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
-        // self.register_tool(Arc::new(crate::tools::TodoListTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
-        // self.register_tool(Arc::new(crate::tools::TodoUpdateTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
-        // self.register_tool(Arc::new(crate::tools::TodoGetTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
-
-        // let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
-        // let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
-        // let skills = scanner.scan().unwrap_or_default();
-        // self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
-        //     .await?;
-
-        // let factory = app_handle
-        //     .state::<Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory>>()
-        //     .inner()
-        //     .clone();
-        // self.register_tool(Arc::new(
-        //     crate::workflow::react::orchestrator::TaskTool::new(factory, tsid),
-        // ))
-        // .await?;
-        // self.register_tool(Arc::new(
-        //     crate::workflow::react::orchestrator::TaskOutputTool,
-        // ))
-        // .await?;
-        // self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
-        //     .await?;
-
-        // // Interaction tools
-        // self.register_tool(Arc::new(crate::tools::AskUser)).await?;
-        // self.register_tool(Arc::new(crate::tools::FinishTask))
-        //     .await?;
 
         Ok(())
     }

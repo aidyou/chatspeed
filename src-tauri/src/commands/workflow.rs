@@ -1491,6 +1491,7 @@ fn resolve_agent_sandbox_snapshot(
     store: &MainStore,
     agent: &Agent,
     config: &mut AgentConfig,
+    owner: Option<&OwnerExecutionContext>,
 ) -> Result<(), String> {
     let (execution_mode, scheme_id) = if config.sandbox_override == Some(true) {
         (
@@ -1511,7 +1512,7 @@ fn resolve_agent_sandbox_snapshot(
     config.sandbox_scheme_id = scheme_id.clone();
     config.sandbox_config = None;
 
-    match execution_mode {
+    let outcome: Result<(), String> = match execution_mode {
         crate::tools::ShellExecutionMode::HostOnly => Ok(()),
         crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly => {
             let scheme_id = scheme_id
@@ -1547,6 +1548,139 @@ fn resolve_agent_sandbox_snapshot(
                 host_rules: scheme.config.host_rules,
             });
             Ok(())
+        }
+    };
+    outcome?;
+
+    // A durable scheduled run is pinned to its owner's environment *after* the
+    // agent/scheme snapshot, so the owner always wins and the sandbox resolver
+    // can never fall back to host execution for it (AC-3/INV-4).
+    if let Some(owner) = owner {
+        owner.apply(config)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2H: the owner-confirmed execution context of a scheduled run
+// ---------------------------------------------------------------------------
+
+/// The owner-confirmed execution environment of one durable scheduled run.
+///
+/// The scheduler builds this from the owner it actually acquired, so it never
+/// comes from a caller, a candidate or a request body. Applying it to the run's
+/// resolved configuration is what stops a scheduled run from resolving its shell
+/// execution environment through the ordinary host-capable path (AC-3/INV-4).
+#[derive(Debug, Clone)]
+pub(crate) struct OwnerExecutionContext {
+    /// The owner kind that prepared the environment.
+    pub owner_kind: crate::workflow::react::experiment_schedule::types::OwnerKind,
+    /// The persistent instance the run's shell calls must execute in.
+    pub instance_name: Option<String>,
+    /// The digest-pinned image behind that instance.
+    pub image_reference: Option<String>,
+    /// The verified capability lease of this run, when the campaign declares
+    /// bundles.
+    ///
+    /// It is carried in memory only: a lease holds resolved secret values, which
+    /// must never reach the persisted workflow configuration (INV-6).
+    pub capabilities:
+        Option<crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease>,
+}
+
+impl OwnerExecutionContext {
+    /// The context of a container-owned run.
+    pub(crate) fn container(
+        instance_name: impl Into<String>,
+        image_reference: impl Into<String>,
+    ) -> Self {
+        Self {
+            owner_kind:
+                crate::workflow::react::experiment_schedule::types::OwnerKind::PersistentDocker,
+            instance_name: Some(instance_name.into()),
+            image_reference: Some(image_reference.into()),
+            capabilities: None,
+        }
+    }
+
+    /// Attaches the run's verified capability lease (in memory only).
+    pub(crate) fn with_capabilities(
+        mut self,
+        capabilities: Option<
+            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+        >,
+    ) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Pins one run's resolved configuration to this owner's environment.
+    ///
+    /// - a container owner pins the run to that persistent instance with
+    ///   `sandbox_only` resolution, so the sandbox resolver can never pick the
+    ///   host for it;
+    /// - a Harbor task owner runs on the "host" *of the proven task sandbox*,
+    ///   which is itself the isolation boundary;
+    /// - a filesystem-only owner is refused: it prepares a worktree but provides
+    ///   no isolated execution environment, so a scheduled run under it would
+    ///   execute on the user's host (INV-4).
+    pub(crate) fn apply(&self, config: &mut AgentConfig) -> Result<(), String> {
+        use crate::tools::{
+            AgentSandboxConfig, SandboxProfileConfig, SandboxRuntimePreference, ShellExecutionMode,
+        };
+
+        match self.owner_kind {
+            crate::workflow::react::experiment_schedule::types::OwnerKind::HostWorktree => Err(
+                "a filesystem-only execution owner provides no isolated execution \
+                     environment, so a scheduled run cannot be dispatched under it"
+                    .to_string(),
+            ),
+            crate::workflow::react::experiment_schedule::types::OwnerKind::HarborTask => {
+                // Inside a proven Harbor task environment the sandbox *is* the
+                // isolation boundary, so the run executes there directly.
+                config.sandbox_execution_mode = Some(ShellExecutionMode::HostOnly);
+                config.sandbox_scheme_id = None;
+                config.sandbox_config = None;
+                Ok(())
+            }
+            crate::workflow::react::experiment_schedule::types::OwnerKind::PersistentDocker => {
+                let instance_name = self
+                    .instance_name
+                    .clone()
+                    .ok_or_else(|| "the container owner acquired no instance name".to_string())?;
+                let image = self.image_reference.clone().ok_or_else(|| {
+                    "the container owner acquired no digest-pinned image".to_string()
+                })?;
+                let profile = SandboxProfileConfig {
+                    id: "owner".to_string(),
+                    name: "owner".to_string(),
+                    enabled: true,
+                    priority: 0,
+                    // A catch-all profile: every command of this run executes in
+                    // the owner's instance.
+                    command_patterns: Vec::new(),
+                    runtime_preference: SandboxRuntimePreference::Docker,
+                    image,
+                    instance_name: Some(instance_name),
+                    image_size_bytes: None,
+                    network: Default::default(),
+                    resources: Default::default(),
+                    workspace_access: Default::default(),
+                };
+                let mut profiles = std::collections::BTreeMap::new();
+                profiles.insert(profile.id.clone(), profile);
+                config.sandbox_execution_mode = Some(ShellExecutionMode::SandboxOnly);
+                config.sandbox_scheme_id = None;
+                config.sandbox_config = Some(AgentSandboxConfig {
+                    scheme_id: None,
+                    scheme_revision: None,
+                    execution_mode: ShellExecutionMode::SandboxOnly,
+                    runtime_preference: SandboxRuntimePreference::Docker,
+                    profiles,
+                    host_rules: Vec::new(),
+                });
+                Ok(())
+            }
         }
     }
 }
@@ -1593,7 +1727,7 @@ fn sync_workflow_agent_config_at_tool_boundary(
         merged.experiment_agent_prompt_hash = existing.experiment_agent_prompt_hash;
         merged.experiment_prompt_catalog_digest = existing.experiment_prompt_catalog_digest;
     }
-    resolve_agent_sandbox_snapshot(store, &agent, &mut merged)?;
+    resolve_agent_sandbox_snapshot(store, &agent, &mut merged, None)?;
     enforce_auto_approve_tool_visibility(&mut merged);
 
     let merged_json = merged.to_json();
@@ -1820,7 +1954,7 @@ pub(crate) async fn create_workflow_core(
         inherited_agent_config: request.inherited_agent_config.clone(),
     };
     let agent_config_json =
-        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request, None)?;
+        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request, None, None)?;
 
     // Use empty string for user_query if not provided (new workflow creation)
     let user_query = request.user_query.as_deref().unwrap_or("");
@@ -1873,6 +2007,7 @@ fn build_resolved_workflow_config(
     agent: &Agent,
     wire_request: &CreateWorkflowRequest,
     experiment_prompt: Option<&crate::workflow::react::campaign::ResolvedCandidatePrompt>,
+    owner: Option<&OwnerExecutionContext>,
 ) -> Result<String, ApplicationError> {
     let mut config = build_workflow_config_for_request(agent, wire_request);
     if let Some(resolved) = experiment_prompt {
@@ -1880,7 +2015,7 @@ fn build_resolved_workflow_config(
         config.experiment_agent_prompt_hash = Some(resolved.prompt_hash.clone());
         config.experiment_prompt_catalog_digest = Some(resolved.catalog_digest.clone());
     }
-    resolve_agent_sandbox_snapshot(store, agent, &mut config)?;
+    resolve_agent_sandbox_snapshot(store, agent, &mut config, owner)?;
     Ok(config.to_json())
 }
 
@@ -1913,6 +2048,11 @@ pub(crate) struct BudgetedRunSetup {
     pub experiment_prompt: Option<crate::workflow::react::campaign::ResolvedCandidatePrompt>,
     pub title_prefix: &'static str,
     pub scope: BudgetedRunScope,
+    /// The owner-confirmed execution context of a durable scheduled run.
+    ///
+    /// `None` for every immediate path (2C/2F), so their behaviour is unchanged;
+    /// `Some` only when the scheduler dispatches a job it prepared.
+    pub owner: Option<OwnerExecutionContext>,
 }
 
 /// Creates one backend-owned budgeted run atomically (workflow row plus its
@@ -1936,12 +2076,23 @@ async fn create_and_start_budgeted_run(
         &setup.agent,
         &setup.wire_request,
         setup.experiment_prompt.as_ref(),
+        setup.owner.as_ref(),
     )?;
 
     // Backend-owned identity: one TSID serves as session id, run id and the
     // request-scope id; the outer scopes are either the canonical 2C suffix
     // chain or the shared 2F campaign scopes.
     let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
+    // A scheduled run's verified capabilities travel in memory, keyed by the
+    // session they belong to: the run's executor injects them into that session's
+    // tool registry, and the terminal/failure path releases them (INV-6).
+    if let Some(lease) = setup
+        .owner
+        .as_ref()
+        .and_then(|owner| owner.capabilities.clone())
+    {
+        svc.register_prepared_lease(&session_id, lease);
+    }
     let title = format!("{} {session_id}", setup.title_prefix);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2124,6 +2275,8 @@ pub(crate) async fn run_experiment_core(
             experiment_prompt: None,
             title_prefix: "experiment",
             scope: BudgetedRunScope::Standalone(envelope),
+            // The 2C single-run path is never owner-pinned.
+            owner: None,
         },
     )
     .await
@@ -2306,6 +2459,22 @@ pub(crate) async fn campaign_run_core(
     campaign_id: &str,
     request: crate::workflow::react::campaign::CampaignRunRequestV1,
 ) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
+    campaign_run_core_with_owner(svc, campaign_id, request, None).await
+}
+
+/// The durable scheduler's entry point into the same run kernel.
+///
+/// Behaviour is identical to [`campaign_run_core`] except that the created run is
+/// pinned to the owner-confirmed execution context the scheduler prepared, so the
+/// run cannot resolve its shell execution environment through the host-capable
+/// path (AC-3/INV-4). The immediate 2C/2F paths pass `None`, so their behaviour
+/// is unchanged (INV-2).
+pub(crate) async fn campaign_run_core_with_owner(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    request: crate::workflow::react::campaign::CampaignRunRequestV1,
+    owner: Option<OwnerExecutionContext>,
+) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
     use crate::workflow::react::campaign::{self, CampaignSpecError, CampaignSpecErrorCode};
 
     request.validate().map_err(campaign_validation_error)?;
@@ -2377,6 +2546,8 @@ pub(crate) async fn campaign_run_core(
                 trial_key,
                 envelope,
             },
+            // Owner-pinned only when the durable scheduler dispatched this job.
+            owner,
         },
     )
     .await?;
@@ -4842,6 +5013,11 @@ pub(crate) async fn workflow_start_core(
         reset_workflow_planning_note(&allowed_roots)?;
     }
 
+    // A run the durable scheduler dispatched carries its verified capability
+    // bundle in the in-memory registry, keyed by this session; an immediate run
+    // finds none and behaves exactly as before (INV-2/INV-6).
+    let owned_capabilities = svc.prepared_lease(&session_id);
+
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
     > = if planning_mode {
@@ -4861,6 +5037,7 @@ pub(crate) async fn workflow_start_core(
                 global_tool_manager,
                 auto_compress_enabled,
                 policy,
+                owned_capabilities.clone(),
             ),
         ))
     } else {
@@ -4880,6 +5057,7 @@ pub(crate) async fn workflow_start_core(
                 global_tool_manager,
                 auto_compress_enabled,
                 policy,
+                owned_capabilities.clone(),
             ),
         ))
     };
@@ -4941,7 +5119,11 @@ pub(crate) async fn workflow_start_core(
     let main_store_for_spawn = main_store_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
-        if let Err(e) = guard.run_loop().await {
+        let run_result = guard.run_loop().await;
+        // The run is over, so its run-scoped capabilities are no longer needed:
+        // their servers are removed from this session's own tool manager.
+        guard.release_owned_capabilities().await;
+        if let Err(e) = run_result {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 let _ = persist_cancelled_workflow_state(
                     main_store_for_spawn.as_ref(),
@@ -6538,7 +6720,7 @@ pub async fn update_workflow_sandbox_config(
         config.sandbox_override = Some(true);
         config.sandbox_execution_mode = Some(execution_mode.clone());
         config.sandbox_scheme_id = sandbox_scheme_id;
-        resolve_agent_sandbox_snapshot(&store, &agent, &mut config)?;
+        resolve_agent_sandbox_snapshot(&store, &agent, &mut config, None)?;
         let sandbox_config = config.sandbox_config.clone();
         store
             .update_workflow_agent_config(&session_id, &config.to_json())
@@ -9536,5 +9718,438 @@ mod tests {
         assert_eq!(hydrated.state, RuntimeState::Cancelled);
         assert_eq!(hydrated.wait_reason, None);
         assert_eq!(hydrated.current_context_tokens, Some(128));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2G+2H durable campaign schedule facade
+// ---------------------------------------------------------------------------
+//
+// These cores are the transport-neutral half of the durable scheduling surface
+// (AC-2/AC-6). They are reached only through `WorkflowApplicationService`, so
+// the Tauri adapter, the loopback control plane and the CLI all share exactly
+// one implementation and one set of rejections (INV-1).
+//
+// Ordering is the safety contract for every entry point: validate the document,
+// prove the database is a marked experiment domain, resolve the server-side
+// execution profile, verify the fixture refs against the pinned catalog, check
+// the agent, and only then write. Nothing is persisted before every check
+// passes, and no caller can widen the resource set.
+
+/// Maps a durable-schedule rejection onto a stable application error. The
+/// machine code travels in the message exactly like the 2F
+/// `campaign_spec_rejected: <code>` contract, so a caller can branch without
+/// parsing prose.
+fn schedule_validation_error(
+    code: crate::workflow::react::experiment_schedule::types::ScheduleErrorCode,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("schedule_rejected: {}", code.as_str()))
+}
+
+/// Rejects a request with a stable `schedule_rejected: <code>` message, keeping
+/// the original 2F machine code verbatim.
+fn schedule_validation_error_text(code: &str, message: &str) -> ApplicationError {
+    log::warn!("[Workflow][phase=schedule] rejected: {code}: {message}");
+    ApplicationError::invalid_input(format!("schedule_rejected: {code}"))
+}
+
+/// Flattens a typed schedule error into the application error surface.
+fn schedule_error(
+    error: crate::workflow::react::experiment_schedule::types::ScheduleError,
+) -> ApplicationError {
+    match error.code {
+        crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownCampaign => {
+            ApplicationError::not_found(error.message)
+        }
+        crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownJob => {
+            ApplicationError::not_found(error.message)
+        }
+        code => schedule_validation_error(code),
+    }
+}
+
+fn durable_schedule_store(
+    svc: &WorkflowApplicationService,
+) -> crate::db::experiment_schedule::ExperimentScheduleStore {
+    crate::db::experiment_schedule::ExperimentScheduleStore::new(svc.main_store.clone())
+}
+
+fn require_experiment_domain(
+    store: &crate::db::experiment_schedule::ExperimentScheduleStore,
+) -> Result<(), ApplicationError> {
+    let marked = store.domain_is_marked().map_err(schedule_error)?;
+    if marked {
+        Ok(())
+    } else {
+        Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::DomainUnmarked,
+        ))
+    }
+}
+
+/// Persists one validated durable schedule request and its ordered job list.
+pub(crate) fn campaign_schedule_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment_schedule::types::CampaignScheduleRequestV1,
+    idempotency_key: &str,
+) -> Result<
+    crate::workflow::react::experiment_schedule::types::CampaignScheduleAcceptedV1,
+    ApplicationError,
+> {
+    use crate::headless::profiles::ExecutionProfileRegistry;
+    use crate::workflow::react::experiment_schedule::fixture::resolve_task_ref;
+    use crate::workflow::react::experiment_schedule::types::validate_campaign_schedule_request;
+
+    // 1. The document itself must be internally consistent, and the frozen plan
+    //    must satisfy the exact 2F rules (including the allowlisted candidate
+    //    surface). The durable queue therefore never holds a plan the run path
+    //    would reject later.
+    validate_campaign_schedule_request(&request).map_err(schedule_error)?;
+    request
+        .plan
+        .validate()
+        .map_err(|error| schedule_validation_error_text(error.code.as_str(), &error.message))?;
+    if idempotency_key.trim().is_empty() {
+        return Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::InvalidJobState,
+        ));
+    }
+
+    // 2. Only a marked experiment domain may enqueue durable work (AC-1).
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+
+    // 3. The execution profile is server-registered, never caller-supplied.
+    let registry = ExecutionProfileRegistry::new(&svc.app_data_dir);
+    let profile = registry
+        .load(&request.execution_profile_ref)
+        .map_err(schedule_error)?;
+    registry
+        .authorize_bundles(&profile, &request.bundle_refs)
+        .map_err(schedule_error)?;
+
+    // 4. The fixture refs must still resolve against the pinned catalog: a
+    //    drifted catalog is a pre-dispatch rejection, never a different run.
+    for reference in &request.fixture_refs {
+        resolve_task_ref(reference).map_err(|error| {
+            log::warn!(
+                "[Workflow][phase=schedule] fixture ref rejected: {}: {}",
+                error.code,
+                error.message
+            );
+            schedule_validation_error(
+                crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::FixtureDigestMismatch,
+            )
+        })?;
+    }
+
+    // 5. The agent must exist and be runnable as a top-level workflow agent.
+    let agent = svc
+        .main_store
+        .get_agent(&request.plan.agent_id)
+        .map_err(|e| ApplicationError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApplicationError::not_found(format!("Agent {} not found", request.plan.agent_id))
+        })?;
+    if agent.role.as_deref() == Some("child") {
+        return Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::InvalidAgentId,
+        ));
+    }
+
+    // 6. Persist the frozen plan and its ordered jobs in one transaction.
+    let outcome = store
+        .schedule_campaign(&request, idempotency_key, crate::headless::domain::now_ms())
+        .map_err(schedule_error)?;
+    log::info!(
+        "[Workflow][campaign={}][phase=schedule] Durable schedule {} ({} jobs, profile {})",
+        outcome.accepted.campaign_id,
+        if outcome.created {
+            "created"
+        } else {
+            "replayed"
+        },
+        outcome.accepted.job_ids.len(),
+        outcome.accepted.execution_profile_ref
+    );
+    Ok(outcome.accepted)
+}
+
+/// The durable job list of one campaign.
+pub(crate) fn campaign_jobs_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignJobListV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_schedule::types::CAMPAIGN_JOB_LIST_V1;
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let jobs = store
+        .list_jobs(campaign_id)
+        .map_err(schedule_error)?
+        .into_iter()
+        .map(|record| record.job)
+        .collect();
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignJobListV1 {
+            schema_version: CAMPAIGN_JOB_LIST_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            jobs,
+        },
+    )
+}
+
+/// One durable job by id.
+pub(crate) fn campaign_job_core(
+    svc: &WorkflowApplicationService,
+    job_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignJobV1, ApplicationError> {
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    store
+        .get_job(job_id)
+        .map(|record| record.job)
+        .map_err(schedule_error)
+}
+
+/// Cancels the campaign's pre-dispatch work and stops admitting new work.
+///
+/// Already-dispatched jobs are reported, never cancelled: their effect may have
+/// happened, so only the run kernel or an explicit reconciliation may resolve
+/// them (INV-5).
+pub(crate) async fn campaign_cancel_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    reason: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignCancelV1, ApplicationError>
+{
+    use crate::db::experiment_schedule::CampaignStatus;
+    use crate::workflow::react::experiment_schedule::types::{DispatchMarker, CAMPAIGN_CANCEL_V1};
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let now = crate::headless::domain::now_ms();
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let reason = if reason.trim().is_empty() {
+        "campaign_cancelled"
+    } else {
+        reason
+    };
+    let cancelled = store
+        .cancel_pre_dispatch_jobs(campaign_id, now)
+        .map_err(schedule_error)?;
+    let status = store
+        .set_campaign_status(campaign_id, CampaignStatus::Cancelled, now)
+        .map_err(schedule_error)?
+        .status;
+    // A dispatched job is never cancelled by the durable surface: its effect
+    // may have happened. A *known* running job is stopped through the existing
+    // run kernel instead, and anything uncertain is left for reconciliation
+    // (INV-5).
+    let mut dispatched_job_ids = Vec::new();
+    for record in store.list_jobs(campaign_id).map_err(schedule_error)? {
+        let job = record.job;
+        if job.state.is_terminal() || job.dispatch_marker == DispatchMarker::NotDispatched {
+            continue;
+        }
+        if let Some(run_id) = job.run_id.as_deref() {
+            match workflow_stop_core(svc, run_id.to_string()).await {
+                Ok(()) => log::info!(
+                    "[Workflow][campaign={}][job={}][phase=cancel] Stopped the running workflow {}",
+                    campaign.campaign_id,
+                    job.job_id,
+                    run_id
+                ),
+                Err(error) => log::warn!(
+                    "[Workflow][campaign={}][job={}][phase=cancel] Could not stop run {}: {}",
+                    campaign.campaign_id,
+                    job.job_id,
+                    run_id,
+                    error.message
+                ),
+            }
+        }
+        dispatched_job_ids.push(job.job_id);
+    }
+    log::info!(
+        "[Workflow][campaign={}][phase=cancel] Cancelled {} pre-dispatch job(s), reason={}",
+        campaign.campaign_id,
+        cancelled.len(),
+        reason
+    );
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignCancelV1 {
+            schema_version: CAMPAIGN_CANCEL_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            status: status.as_str().to_string(),
+            cancelled_job_ids: cancelled,
+            dispatched_job_ids,
+        },
+    )
+}
+
+/// Evidence-only reconciliation: re-read the durable state plus the workflow
+/// authority and apply the deterministic classifier.
+///
+/// It never requeues and never calls the run kernel. The only write it may
+/// perform is parking a job whose effect cannot be proven absent.
+pub(crate) fn campaign_reconcile_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignReconcileV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_schedule::types::{
+        classify_restart_recovery, RecoveryDecision, CAMPAIGN_RECONCILE_V1,
+    };
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let now = crate::headless::domain::now_ms();
+
+    let mut projections = Vec::new();
+    for record in store.list_jobs(campaign_id).map_err(schedule_error)? {
+        let job = record.job;
+        if job.state.is_terminal() {
+            continue;
+        }
+        // The workflow authority — not a log or a transcript — decides whether
+        // a recorded run is terminal.
+        let run_terminal = job.run_id.as_deref().map(|run_id| {
+            svc.main_store
+                .get_workflow_snapshot(run_id)
+                .map(|snapshot| is_terminal_workflow_status(&snapshot.workflow.status))
+                .unwrap_or(false)
+        });
+        let decision = classify_restart_recovery(
+            job.state,
+            job.dispatch_marker,
+            job.run_id.as_deref(),
+            run_terminal,
+        );
+        let mut parked = false;
+        if decision == RecoveryDecision::UnknownManual {
+            store
+                .park_unknown_manual(&job.job_id, run_terminal, "reconcile", now)
+                .map_err(schedule_error)?;
+            parked = true;
+            log::warn!(
+                "[Workflow][campaign={}][job={}][phase=reconcile] Parked as unknown_manual",
+                campaign.campaign_id,
+                job.job_id
+            );
+        }
+        let state = if parked {
+            crate::workflow::react::experiment_schedule::types::JobState::UnknownManual
+        } else {
+            job.state
+        };
+        projections.push(
+            crate::workflow::react::experiment_schedule::types::JobRecoveryProjectionV1 {
+                job_id: job.job_id,
+                state,
+                dispatch_marker: job.dispatch_marker,
+                run_id: job.run_id,
+                run_terminal,
+                decision,
+                parked,
+            },
+        );
+    }
+
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignReconcileV1 {
+            schema_version: CAMPAIGN_RECONCILE_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            jobs: projections,
+        },
+    )
+}
+
+#[cfg(test)]
+mod owner_execution_context_tests {
+    use super::*;
+    use crate::workflow::react::experiment_schedule::types::OwnerKind;
+
+    /// A container-owned scheduled run is pinned to the owner's instance, so the
+    /// sandbox resolver can never fall back to the host for it.
+    #[test]
+    fn a_container_owner_pins_the_run_to_its_instance() {
+        let mut config = AgentConfig::default();
+        OwnerExecutionContext::container("cs-run-job-1-g1", format!("sha256:{}", "a".repeat(64)))
+            .apply(&mut config)
+            .expect("container owner");
+
+        assert_eq!(
+            config.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::SandboxOnly),
+            "a scheduled run never resolves through Auto"
+        );
+        let sandbox = config.sandbox_config.expect("pinned sandbox config");
+        assert_eq!(
+            sandbox.execution_mode,
+            crate::tools::ShellExecutionMode::SandboxOnly
+        );
+        assert_eq!(
+            sandbox.runtime_preference,
+            crate::tools::SandboxRuntimePreference::Docker
+        );
+        let profile = sandbox.profiles.get("owner").expect("owner profile");
+        assert!(profile.enabled);
+        assert!(
+            profile.command_patterns.is_empty(),
+            "the owner profile must be a catch-all"
+        );
+        assert_eq!(profile.instance_name.as_deref(), Some("cs-run-job-1-g1"));
+    }
+
+    /// A filesystem-only owner prepares a worktree but no isolated execution
+    /// environment, so it can never carry a scheduled run (INV-4).
+    #[test]
+    fn a_filesystem_owner_cannot_carry_a_scheduled_run() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::HostWorktree,
+            instance_name: None,
+            image_reference: None,
+            capabilities: None,
+        };
+        let error = owner.apply(&mut config).expect_err("must refuse");
+        assert!(error.contains("no isolated execution environment"));
+    }
+
+    /// A container owner without its instance identity cannot be honoured.
+    #[test]
+    fn a_container_owner_without_an_instance_is_refused() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::PersistentDocker,
+            instance_name: None,
+            image_reference: Some(format!("sha256:{}", "a".repeat(64))),
+            capabilities: None,
+        };
+        let error = owner.apply(&mut config).expect_err("must refuse");
+        assert!(error.contains("instance name"));
+    }
+
+    /// Inside a proven Harbor task sandbox the sandbox itself is the isolation
+    /// boundary, so the run executes there directly.
+    #[test]
+    fn a_harbor_owner_runs_inside_the_proven_task_sandbox() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::HarborTask,
+            instance_name: None,
+            image_reference: None,
+            capabilities: None,
+        };
+        owner.apply(&mut config).expect("harbor owner");
+        assert_eq!(
+            config.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::HostOnly)
+        );
+        assert!(config.sandbox_config.is_none());
     }
 }
