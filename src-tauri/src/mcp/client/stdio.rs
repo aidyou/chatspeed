@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParams};
+use rmcp::model::{ClientCapabilities, ClientConfig, Implementation, InitializeRequestParams};
 use rmcp::{service::RunningService, transport::TokioChildProcess, RoleClient, ServiceExt as _};
 use rust_i18n::t;
 use tokio::{process::Command, sync::RwLock};
@@ -266,7 +266,7 @@ impl McpClient for StdioClient {
             }
         })?;
 
-        let mut client_info = ClientInfo::default();
+        let mut client_info = ClientConfig::default();
         client_info.protocol_version = Default::default();
         client_info.capabilities = ClientCapabilities::default();
         client_info.client_info =
