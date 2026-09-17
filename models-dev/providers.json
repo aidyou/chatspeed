@@ -71,6 +71,16 @@
       "responses": false
     },
     {
+      "api": "https://api.ai21.com/studio/v1",
+      "documentationUrl": "https://docs.ai21.com/docs/jamba-foundation-models",
+      "id": "ai21",
+      "logo": "https://models.dev/logos/ai21.svg",
+      "modelCount": 2,
+      "name": "AI21 Labs",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.aiand.com/v1",
       "documentationUrl": "https://docs.aiand.com/",
       "id": "aiand",
@@ -114,7 +124,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba",
       "logo": "https://models.dev/logos/alibaba.svg",
-      "modelCount": 55,
+      "modelCount": 56,
       "name": "Alibaba",
       "protocol": "openai",
       "responses": false
@@ -124,7 +134,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba-cn",
       "logo": "https://models.dev/logos/alibaba-cn.svg",
-      "modelCount": 88,
+      "modelCount": 89,
       "name": "Alibaba (China)",
       "protocol": "openai",
       "responses": false
@@ -572,7 +582,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 282,
+      "modelCount": 283,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -613,7 +623,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 34,
+      "modelCount": 33,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -692,7 +702,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/models",
       "id": "google-vertex",
       "logo": "https://models.dev/logos/google-vertex.svg",
-      "modelCount": 51,
+      "modelCount": 52,
       "name": "Vertex",
       "responses": false
     },
@@ -771,7 +781,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 34,
+      "modelCount": 23,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -798,7 +808,7 @@
     },
     {
       "api": "https://api.inceptionlabs.ai/v1/",
-      "documentationUrl": "https://platform.inceptionlabs.ai/docs",
+      "documentationUrl": "https://docs.inceptionlabs.ai/get-started/models",
       "id": "inception",
       "logo": "https://models.dev/logos/inception.svg",
       "modelCount": 3,
@@ -813,6 +823,16 @@
       "logo": "https://models.dev/logos/inceptron.svg",
       "modelCount": 4,
       "name": "Inceptron",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.inco.ai/v1",
+      "documentationUrl": "https://platform.inco.ai/docs",
+      "id": "inco",
+      "logo": "https://models.dev/logos/inco.svg",
+      "modelCount": 7,
+      "name": "Inco",
       "protocol": "openai",
       "responses": false
     },
@@ -871,7 +891,7 @@
       "documentationUrl": "https://iteracompute.com/docs.html",
       "id": "iteracompute",
       "logo": "https://models.dev/logos/iteracompute.svg",
-      "modelCount": 2,
+      "modelCount": 9,
       "name": "IteraCompute",
       "protocol": "openai",
       "responses": false
@@ -911,7 +931,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 376,
+      "modelCount": 377,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -981,7 +1001,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 194,
+      "modelCount": 193,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1336,8 +1356,18 @@
       "documentationUrl": "https://docs.api.nvidia.com/nim/",
       "id": "nvidia",
       "logo": "https://models.dev/logos/nvidia.svg",
-      "modelCount": 104,
+      "modelCount": 105,
       "name": "Nvidia",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
+      "documentationUrl": "https://docs.oracle.com/en-us/iaas/Content/generative-ai/pretrained-models.htm",
+      "id": "oci",
+      "logo": "https://models.dev/logos/oci.svg",
+      "modelCount": 9,
+      "name": "OCI Generative AI",
       "protocol": "openai",
       "responses": false
     },
@@ -1389,7 +1419,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 102,
+      "modelCount": 103,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1399,7 +1429,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 36,
+      "modelCount": 37,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1420,7 +1450,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 368,
+      "modelCount": 369,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1522,7 +1552,7 @@
       "documentationUrl": "https://docs.privatemode.ai/api/overview",
       "id": "privatemode-ai",
       "logo": "https://models.dev/logos/privatemode-ai.svg",
-      "modelCount": 9,
+      "modelCount": 11,
       "name": "Privatemode AI",
       "protocol": "openai",
       "responses": false
@@ -1790,7 +1820,7 @@
       "documentationUrl": "https://synthetic.new/pricing",
       "id": "synthetic",
       "logo": "https://models.dev/logos/synthetic.svg",
-      "modelCount": 9,
+      "modelCount": 10,
       "name": "Synthetic",
       "protocol": "openai",
       "responses": false
@@ -1924,7 +1954,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs/orgs",
       "id": "umans-ai",
       "logo": "https://models.dev/logos/umans-ai.svg",
-      "modelCount": 7,
+      "modelCount": 6,
       "name": "Umans AI",
       "protocol": "openai",
       "responses": false
@@ -1934,7 +1964,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs",
       "id": "umans-ai-coding-plan",
       "logo": "https://models.dev/logos/umans-ai-coding-plan.svg",
-      "modelCount": 8,
+      "modelCount": 7,
       "name": "Umans AI Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -1989,7 +2019,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 377,
+      "modelCount": 373,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2020,7 +2050,7 @@
       "documentationUrl": "https://www.volcengine.com/docs/82379/1330310",
       "id": "volcengine",
       "logo": "https://models.dev/logos/volcengine.svg",
-      "modelCount": 15,
+      "modelCount": 16,
       "name": "Volcengine Ark",
       "protocol": "openai",
       "responses": false
@@ -2067,11 +2097,11 @@
     },
     {
       "api": "https://api.inference.wandb.ai/v1",
-      "documentationUrl": "https://docs.wandb.ai/guides/integrations/inference/",
+      "documentationUrl": "https://docs.wandb.ai/inference",
       "id": "wandb",
       "logo": "https://models.dev/logos/wandb.svg",
       "modelCount": 27,
-      "name": "Weights & Biases",
+      "name": "CoreWeave",
       "protocol": "openai",
       "responses": false
     },
@@ -2218,9 +2248,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "3a85c2501ad87f2794296d36bb2bb6e7332e037511f20610b34d0dfc980d8f36",
-    "generatedAt": "2026-09-16T08:37:16Z",
+    "catalogSha256": "f20256d0f489aae6d3f2be2a63f07148a826d3782da88f38678411bf34912393",
+    "generatedAt": "2026-09-17T08:41:15Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "6f781d61a90d3a8c725ecea16a05092534d98a20"
+    "revision": "2a55dc9d9d710e4f17352a1b72cbdbb55aa3faa7"
   }
 }
