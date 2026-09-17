@@ -1781,3 +1781,40 @@ owner 把补丁发布到 capability 声明的 `/logs/artifacts` → 声明 artif
   通道；本任务的 smoke 脚本只从该库读取 `agents`，无任何任务路径写入它。因此审计把该库显式排除并写明理由，
   其余任务产出路径（`src`、`src-tauri/src`、`tools`、`work`、`dev_data/2gh-*` 与两个实验 domain）
   扫描结果为 **hits=0**。
+
+#### 11.8.11 2G+2H owner-bound capability audit remediation（2026-09-17，as built）
+
+本节是对既有 Implementation Record 的**追加勘误与验证记录**，不改写 11.1–11.8.10 的历史事实。它关闭
+2I 进入前针对 job-scoped verified bundle MCP/skill 生命周期、Docker owner 边界、失败清理和 secret log 的
+剩余审计项。
+
+- **Docker owner-bound MCP stdio**：scheduler 在 owner acquire 前建立 server-derived job bundle root；
+  `PersistentDockerOwner` 仅接受 profile 声明的单一只读 bundle bind mount，并将其记录在 fenced
+  `ContainerHandle`。持久 Docker owner 的 bundle MCP 被投影为
+  `docker exec -i -w <container-bundle-dir> [-e NAME] cs-run-<job>-g<generation> <program>`；程序、cwd、
+  文件系统与既有 network policy 都在已 label-fenced owner container 内。仅 env **变量名**进入 docker argv，
+  resolved secret value 继续只存在 session-local `McpServerConfig.env` 内存中。无 bundle 的 Docker job
+  不创建/挂载 bundle root。
+- **Harbor 与 desktop/CLI 不变**：Harbor target 保持原 verified stdio command/args，因当前进程已在
+  Harbor task sandbox 内；普通 run 仍无 capability target，global tool manager、用户 MCP 配置和 desktop/CLI
+  MCP fallback 均未改变。
+- **session capability lifecycle**：所有已验证 bundle lease 聚合为 `PreparedCapabilityLeaseSet`；重复 MCP
+  server name fail closed。MCP 仅注册到 executor 的 session-local manager，解析、dispatch、approval replay
+  和事件 metadata 均采用 session-local 优先、global fallback。global MCP refresh 不再清除/重启 owner-scoped
+  wrapper；verified owner server 仅在其由 session manager 解析到时可越过持久 global MCP allowlist，绝不放宽
+  同名 global server。skills 以 `RegisteredSkill.bundle_root` 注册并在 release 时对称移除。
+- **failure/recovery 与脱敏**：acquire、bundle verify、preflight 和 dispatch-refusal 的未派发 rollback 均
+  best-effort release job staging 与 owner；已确认终态的 collection 失败也进行该清理。终态但不可 adopt 的
+  recovery 只删除有界 `<bundles_root>/<job_id>` staging 并 park `unknown_manual`，不对未获 owner proof 的
+  容器猜测性 teardown。`ToolManager::register_mcp_server` debug logging 不再输出完整 config，避免 resolved
+  `env` secret 出现在日志。
+- **本轮验证（最后一次修改后）**：`cargo fmt --all`、`cargo check --lib`；
+  `cargo test --lib experiment_owner`（40 passed）、`cargo test --lib experiment_schedule`（82 passed）、
+  `cargo test --lib owner_execution_context_tests`（4 passed）；新增 owner capability allowlist、Docker/Harbor
+  config 投影、lease collision、terminal unadoptable staging cleanup 单测均通过。真实 Docker gate
+  `a_verified_bundle_mcp_executes_inside_the_owner_container` 通过：实际创建 fenced container，
+  `docker exec -i` 在容器内运行 bundle program，验证 container cwd、`-e NAME` secret forwarding 和只读
+  bundle mount。编译/测试仅保留与本轮无关的既有 `private_bounds`（及测试态 db visibility）warning。
+
+**阶段结论**：2G+2H 的 owner-bound capability audit remediation 已完成；无 pending remediation，`## 0` 的
+**下一个入口 2I** 维持有效。2I 的 promotion/apply 范围未在本轮实现。

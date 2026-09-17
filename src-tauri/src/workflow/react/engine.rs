@@ -173,7 +173,7 @@ pub struct WorkflowExecutor {
     /// `global_tool_manager`, so a run-scoped bundle can never leak into another
     /// session or into the user's global configuration (AC-4/INV-8).
     pub owned_capabilities:
-        Option<crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease>,
+        Option<crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities>,
     pub chat_state: Arc<ChatState>,
     pub gateway: Arc<dyn Gateway>,
     pub sub_agent_factory: Arc<dyn SubAgentFactory>,
@@ -815,6 +815,30 @@ impl WorkflowExecutor {
         Self::is_mcp_tool_allowed_by_config(configured_tools.as_ref(), tool_name)
     }
 
+    /// A verified capability lease is an explicit, session-scoped grant from
+    /// the scheduler. Callers may use this only after resolving the canonical
+    /// name through the executor's own manager; a same-named global MCP server
+    /// must remain governed by the persisted user allowlist.
+    fn is_verified_owned_mcp_tool(&self, tool_name: &str) -> bool {
+        self.owned_capabilities
+            .as_ref()
+            .is_some_and(|capabilities| {
+                tool_name
+                    .split_once(MCP_TOOL_NAME_SPLIT)
+                    .is_some_and(|(server_name, _)| {
+                        capabilities
+                            .leases
+                            .mcp_servers()
+                            .any(|server| server.name == server_name)
+                    })
+            })
+    }
+
+    fn is_selected_mcp_tool_allowed(&self, tool_name: &str, uses_session_manager: bool) -> bool {
+        (uses_session_manager && self.is_verified_owned_mcp_tool(tool_name))
+            || self.is_mcp_tool_allowed(tool_name)
+    }
+
     fn should_register_mcp_tool_expander(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
         mcp_tool_count > 0 && folded_tool_count > 0
     }
@@ -825,11 +849,73 @@ impl WorkflowExecutor {
     /// one; every immediate run keeps `None`.
     pub fn set_owned_capabilities(
         &mut self,
-        lease: Option<
-            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+        capabilities: Option<
+            crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities,
         >,
     ) {
-        self.owned_capabilities = lease;
+        self.owned_capabilities = capabilities;
+    }
+
+    fn owned_mcp_config(
+        server: &crate::workflow::react::experiment_owner::capabilities::RegisteredMcpServer,
+        target: &crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget,
+    ) -> Result<crate::mcp::client::McpServerConfig, String> {
+        use crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget;
+
+        let (command, args) = match target {
+            CapabilityExecutionTarget::InSandboxHost => (
+                server.command.to_string_lossy().to_string(),
+                server.args.clone(),
+            ),
+            CapabilityExecutionTarget::Docker {
+                instance_name,
+                host_bundle_root,
+                container_bundle_root,
+            } => {
+                let relative_program =
+                    server.command.strip_prefix(host_bundle_root).map_err(|_| {
+                        format!(
+                            "verified MCP program '{}' is outside its owner bundle root '{}'",
+                            server.command.display(),
+                            host_bundle_root.display()
+                        )
+                    })?;
+                let program = container_bundle_root.join(relative_program);
+                let relative_workdir = server
+                    .working_directory
+                    .strip_prefix(host_bundle_root)
+                    .map_err(|_| {
+                        format!(
+                            "verified MCP workdir '{}' is outside its owner bundle root '{}'",
+                            server.working_directory.display(),
+                            host_bundle_root.display()
+                        )
+                    })?;
+                let workdir = container_bundle_root.join(relative_workdir);
+                let mut args = vec![
+                    "exec".to_string(),
+                    "-i".to_string(),
+                    "-w".to_string(),
+                    workdir.to_string_lossy().to_string(),
+                ];
+                for (name, _) in &server.env {
+                    args.push("-e".to_string());
+                    args.push(name.clone());
+                }
+                args.push(instance_name.clone());
+                args.push(program.to_string_lossy().to_string());
+                args.extend(server.args.clone());
+                ("docker".to_string(), args)
+            }
+        };
+        Ok(crate::mcp::client::McpServerConfig {
+            name: server.name.clone(),
+            protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+            command: Some(command),
+            args: Some(args),
+            env: Some(server.env.clone()),
+            ..Default::default()
+        })
     }
 
     /// Registers this run's verified capability bundle into the **session-local**
@@ -841,17 +927,20 @@ impl WorkflowExecutor {
     /// into another session or the user's global configuration), with its
     /// resolved secret values held in memory only (AC-4/INV-6/INV-8).
     pub async fn register_owned_capabilities(&self) {
-        let Some(lease) = self.owned_capabilities.clone() else {
+        let Some(capabilities) = self.owned_capabilities.clone() else {
             return;
         };
-        for server in &lease.registration.mcp_servers {
-            let config = crate::mcp::client::McpServerConfig {
-                name: server.name.clone(),
-                protocol_type: crate::mcp::client::McpProtocolType::Stdio,
-                command: Some(server.command.to_string_lossy().to_string()),
-                args: Some(server.args.clone()),
-                env: Some(server.env.clone()),
-                ..Default::default()
+        for server in capabilities.leases.mcp_servers() {
+            let config = match Self::owned_mcp_config(server, &capabilities.execution_target) {
+                Ok(config) => config,
+                Err(error) => {
+                    log::error!(
+                        "[Workflow][session={}][capability={}] owner-bound MCP configuration failed: {error}",
+                        self.session_id,
+                        server.name
+                    );
+                    continue;
+                }
             };
             if let Err(error) = self.tool_manager.clone().register_mcp_server(config).await {
                 log::warn!(
@@ -867,7 +956,7 @@ impl WorkflowExecutor {
                 );
             }
         }
-        for skill in &lease.registration.skills {
+        for skill in capabilities.leases.skills() {
             // A skill becomes visible to this run only. The directory join is
             // applied by `apply_owned_capability_skills` (which needs `&mut self`)
             // right before the run loop starts.
@@ -886,29 +975,22 @@ impl WorkflowExecutor {
     /// [`Self::release_owned_capabilities`] when the run ends, so a run-scoped
     /// bundle never leaks into another session (AC-4).
     pub fn apply_owned_capability_skills(&mut self) {
-        let Some(lease) = self.owned_capabilities.clone() else {
+        let Some(capabilities) = self.owned_capabilities.clone() else {
             return;
         };
-        for skill in &lease.registration.skills {
-            // The scanner looks for skill *directories* (`<root>/<skill>/SKILL.md`),
-            // so the search path is the bundle directory that contains the
-            // skill's own directory, falling back to the skill directory itself.
-            let candidate = skill
-                .entry_path
-                .parent()
-                .and_then(|skill_dir| skill_dir.parent().map(|root| root.to_path_buf()))
-                .unwrap_or_else(|| lease.staged_root.clone());
-            self.skill_scanner.add_run_scoped_path(candidate);
+        for skill in capabilities.leases.skills() {
+            self.skill_scanner
+                .add_run_scoped_path(skill.bundle_root.clone());
         }
     }
 
     /// Removes this run's capability servers from the session manager and drops
     /// the lease. Idempotent, and never touches the global manager.
     pub async fn release_owned_capabilities(&mut self) {
-        let Some(lease) = self.owned_capabilities.take() else {
+        let Some(capabilities) = self.owned_capabilities.take() else {
             return;
         };
-        for server in &lease.registration.mcp_servers {
+        for server in capabilities.leases.mcp_servers() {
             if let Err(error) = self
                 .tool_manager
                 .clone()
@@ -922,10 +1004,9 @@ impl WorkflowExecutor {
                 );
             }
         }
-        for skill in &lease.registration.skills {
-            if let Some(root) = skill.entry_path.parent() {
-                self.skill_scanner.remove_run_scoped_path(root);
-            }
+        for skill in capabilities.leases.skills() {
+            self.skill_scanner
+                .remove_run_scoped_path(&skill.bundle_root);
         }
     }
 
@@ -960,28 +1041,41 @@ impl WorkflowExecutor {
                 (tool_name, args.clone())
             };
 
-        let Some(canonical_name) = self
-            .global_tool_manager
-            .resolve_mcp_tool_name(requested_name)
-            .await
-        else {
-            if crate::tools::is_mcp_tool_execute_tool(tool_name) {
-                return Err(crate::tools::ToolError::InvalidParams(format!(
-                    "MCP tool '{}' was not found",
-                    requested_name
-                )));
-            }
-            return Ok(None);
-        };
+        let (canonical_name, mcp_tool_manager, mcp_uses_session_manager) =
+            if let Some(canonical_name) = self
+                .tool_manager
+                .resolve_mcp_tool_name(requested_name)
+                .await
+            {
+                // Verified bundle MCP servers live only in this executor's manager.
+                (canonical_name, &self.tool_manager, true)
+            } else if let Some(canonical_name) = self
+                .global_tool_manager
+                .resolve_mcp_tool_name(requested_name)
+                .await
+            {
+                // Preserve all desktop/CLI MCP behavior as the fallback path.
+                (canonical_name, &self.global_tool_manager, false)
+            } else {
+                if crate::tools::is_mcp_tool_execute_tool(tool_name) {
+                    return Err(crate::tools::ToolError::InvalidParams(format!(
+                        "MCP tool '{}' was not found",
+                        requested_name
+                    )));
+                }
+                return Ok(None);
+            };
 
-        if !self.is_mcp_tool_allowed(&canonical_name) {
+        if !(mcp_uses_session_manager && self.is_verified_owned_mcp_tool(&canonical_name))
+            && !self.is_mcp_tool_allowed(&canonical_name)
+        {
             return Err(crate::tools::ToolError::Security(format!(
                 "MCP tool '{}' is not available in this workflow",
                 requested_name
             )));
         }
 
-        self.global_tool_manager
+        mcp_tool_manager
             .get_mcp_tool_declaration(&canonical_name)
             .await?;
         let server_name = canonical_name
@@ -992,7 +1086,7 @@ impl WorkflowExecutor {
                     "Invalid canonical MCP tool name".to_string(),
                 )
             })?;
-        let server = self.global_tool_manager.get_mcp_server(server_name).await?;
+        let server = mcp_tool_manager.get_mcp_server(server_name).await?;
         match server.status().await {
             crate::mcp::client::McpStatus::Connected | crate::mcp::client::McpStatus::Running => {}
             status => {
@@ -3968,14 +4062,24 @@ impl WorkflowExecutor {
                                     .await;
 
                                     let execution_started_at = Instant::now();
-                                    let canonical_mcp_tool_name = self
-                                        .global_tool_manager
-                                        .resolve_mcp_tool_name(&tool_name)
-                                        .await;
+                                    let session_mcp_tool_name =
+                                        self.tool_manager.resolve_mcp_tool_name(&tool_name).await;
+                                    let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                                    let canonical_mcp_tool_name = match session_mcp_tool_name {
+                                        Some(canonical_name) => Some(canonical_name),
+                                        None => {
+                                            self.global_tool_manager
+                                                .resolve_mcp_tool_name(&tool_name)
+                                                .await
+                                        }
+                                    };
                                     let mcp_tool_allowed = canonical_mcp_tool_name
                                         .as_ref()
                                         .is_none_or(|canonical_name| {
-                                            self.is_mcp_tool_allowed(canonical_name)
+                                            self.is_selected_mcp_tool_allowed(
+                                                canonical_name,
+                                                mcp_uses_session_manager,
+                                            )
                                         });
                                     let tool_manager = self.tool_manager.clone();
                                     let global_tool_manager = self.global_tool_manager.clone();
@@ -3986,7 +4090,12 @@ impl WorkflowExecutor {
                                         async move {
                                             if canonical_mcp_tool_name.is_some() {
                                                 if mcp_tool_allowed {
-                                                    global_tool_manager
+                                                    let mcp_tool_manager = if mcp_uses_session_manager {
+                                                        tool_manager
+                                                    } else {
+                                                        global_tool_manager
+                                                    };
+                                                    mcp_tool_manager
                                                         .tool_call(
                                                             &tool_name_for_call,
                                                             enriched_args,
@@ -4495,15 +4604,25 @@ impl WorkflowExecutor {
                             .await;
 
                             let execution_started_at = Instant::now();
-                            let canonical_mcp_tool_name = self
-                                .global_tool_manager
-                                .resolve_mcp_tool_name(&tool_name)
-                                .await;
+                            let session_mcp_tool_name =
+                                self.tool_manager.resolve_mcp_tool_name(&tool_name).await;
+                            let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                            let canonical_mcp_tool_name = match session_mcp_tool_name {
+                                Some(canonical_name) => Some(canonical_name),
+                                None => {
+                                    self.global_tool_manager
+                                        .resolve_mcp_tool_name(&tool_name)
+                                        .await
+                                }
+                            };
                             let mcp_tool_allowed =
                                 canonical_mcp_tool_name
                                     .as_ref()
                                     .is_none_or(|canonical_name| {
-                                        self.is_mcp_tool_allowed(canonical_name)
+                                        self.is_selected_mcp_tool_allowed(
+                                            canonical_name,
+                                            mcp_uses_session_manager,
+                                        )
                                     });
                             let tool_manager = self.tool_manager.clone();
                             let global_tool_manager = self.global_tool_manager.clone();
@@ -4512,7 +4631,12 @@ impl WorkflowExecutor {
                                 await_with_stop(&self.session_id, &mut signal_rx, async move {
                                     if canonical_mcp_tool_name.is_some() {
                                         if mcp_tool_allowed {
-                                            global_tool_manager
+                                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                                tool_manager
+                                            } else {
+                                                global_tool_manager
+                                            };
+                                            mcp_tool_manager
                                                 .tool_call(&tool_name_for_call, enriched_args)
                                                 .await
                                         } else {
@@ -5694,15 +5818,20 @@ impl WorkflowExecutor {
         &self,
         tool_name: &str,
     ) -> (Option<String>, Option<String>, Option<String>) {
-        let Some(canonical_tool_name) = self
+        let (canonical_tool_name, mcp_tool_manager) = if let Some(canonical_tool_name) =
+            self.tool_manager.resolve_mcp_tool_name(tool_name).await
+        {
+            (canonical_tool_name, &self.tool_manager)
+        } else if let Some(canonical_tool_name) = self
             .global_tool_manager
             .resolve_mcp_tool_name(tool_name)
             .await
-        else {
+        {
+            (canonical_tool_name, &self.global_tool_manager)
+        } else {
             return (None, None, None);
         };
-        let display_name = self
-            .global_tool_manager
+        let display_name = mcp_tool_manager
             .get_mcp_tool_declaration(&canonical_tool_name)
             .await
             .map(|declaration| declaration.name)
@@ -6588,10 +6717,21 @@ impl WorkflowExecutor {
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
                 started_tools.insert(id.clone(), name.clone());
 
-                let canonical_mcp_tool_name = gtm.resolve_mcp_tool_name(&name).await;
-                let mcp_tool_allowed = canonical_mcp_tool_name
-                    .as_ref()
-                    .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
+                let session_mcp_tool_name = tm.resolve_mcp_tool_name(&name).await;
+                let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                let canonical_mcp_tool_name = match session_mcp_tool_name {
+                    Some(canonical_name) => Some(canonical_name),
+                    None => gtm.resolve_mcp_tool_name(&name).await,
+                };
+                let mcp_tool_allowed =
+                    canonical_mcp_tool_name
+                        .as_ref()
+                        .is_none_or(|canonical_name| {
+                            self.is_selected_mcp_tool_allowed(
+                                canonical_name,
+                                mcp_uses_session_manager,
+                            )
+                        });
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -6611,7 +6751,12 @@ impl WorkflowExecutor {
                     // happen before owner entry and are proven no-effect.
                     let (final_res, dispatched) = if canonical_mcp_tool_name.is_some() {
                         if mcp_tool_allowed {
-                            let (result, dispatched) = gtm_clone
+                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                tm_clone
+                            } else {
+                                gtm_clone
+                            };
+                            let (result, dispatched) = mcp_tool_manager
                                 .tool_call_with_dispatch(
                                     &name,
                                     enriched_args,
@@ -6857,11 +7002,17 @@ impl WorkflowExecutor {
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
             let execution_started_at = Instant::now();
-            let canonical_mcp_tool_name =
-                self.global_tool_manager.resolve_mcp_tool_name(&name).await;
+            let session_mcp_tool_name = self.tool_manager.resolve_mcp_tool_name(&name).await;
+            let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+            let canonical_mcp_tool_name = match session_mcp_tool_name {
+                Some(canonical_name) => Some(canonical_name),
+                None => self.global_tool_manager.resolve_mcp_tool_name(&name).await,
+            };
             let mcp_tool_allowed = canonical_mcp_tool_name
                 .as_ref()
-                .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
+                .is_none_or(|canonical_name| {
+                    self.is_selected_mcp_tool_allowed(canonical_name, mcp_uses_session_manager)
+                });
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
@@ -6879,7 +7030,12 @@ impl WorkflowExecutor {
                 async move {
                     if canonical_mcp_tool_name.is_some() {
                         if mcp_tool_allowed {
-                            let (result, dispatched) = global_tool_manager
+                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                tool_manager
+                            } else {
+                                global_tool_manager
+                            };
+                            let (result, dispatched) = mcp_tool_manager
                                 .tool_call_with_dispatch(
                                     &tool_name_for_call,
                                     enriched_args,
@@ -8615,11 +8771,35 @@ impl WorkflowExecutor {
                 declaration
             })
             .collect::<Vec<_>>();
-        let expected_exposed_names = available_mcp_tools
+        let mut expected_exposed_names = available_mcp_tools
             .iter()
             .filter(|tool| exposed_mcp_tools.contains(&tool.canonical_name))
             .map(|tool| tool.declaration.name.clone())
             .collect::<Vec<_>>();
+        // Owner-scoped MCP wrappers are already registered on this session's
+        // manager. Include them in the expected set so a global MCP refresh
+        // cannot clear/restart a verified bundle server mid-run.
+        if let Some(capabilities) = self.owned_capabilities.as_ref() {
+            let owner_servers = capabilities
+                .leases
+                .mcp_servers()
+                .map(|server| server.name.as_str())
+                .collect::<HashSet<_>>();
+            expected_exposed_names.extend(
+                self.tool_manager
+                    .get_mcp_tool_specs(None)
+                    .await
+                    .into_iter()
+                    .filter(|tool| {
+                        tool.canonical_name
+                            .split_once(MCP_TOOL_NAME_SPLIT)
+                            .is_some_and(|(server_name, _)| owner_servers.contains(server_name))
+                    })
+                    .map(|tool| tool.declaration.name),
+            );
+            expected_exposed_names.sort();
+            expected_exposed_names.dedup();
+        }
         let expected_folded_names = refreshed_summaries
             .iter()
             .map(|tool| tool.name.clone())
@@ -10456,6 +10636,55 @@ mod recovery_tests {
                 .unwrap_err()
                 .code,
             crate::budget::errors::AdmissionErrorCode::ScopePaused
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_owner_mcp_is_allowed_without_widening_global_mcp_allowlist() {
+        use crate::workflow::react::experiment_owner::capabilities::{
+            CapabilityExecutionTarget, CapabilityRegistration, OwnedCapabilities,
+            PreparedCapabilityLease, PreparedCapabilityLeaseSet, RegisteredMcpServer,
+        };
+
+        let (_temp_dir, store) = create_test_store();
+        let mut executor = budget_test_executor(
+            &store,
+            "owner-mcp-allowlist",
+            Arc::new(ToolManager::new()),
+            Some("[]".to_string()),
+        );
+        let lease = PreparedCapabilityLease {
+            install_id: "install-1".to_string(),
+            job_id: "job-1".to_string(),
+            owner_token_hash: "a".repeat(64),
+            bundle_ref: "bundle-a".to_string(),
+            bundle_version: "1".to_string(),
+            content_digest: "b".repeat(64),
+            staged_root: PathBuf::from("/verified/bundle-a"),
+            registration: CapabilityRegistration {
+                mcp_servers: vec![RegisteredMcpServer {
+                    name: "bundle".to_string(),
+                    command: PathBuf::from("/verified/bundle-a/bin/server"),
+                    args: Vec::new(),
+                    working_directory: PathBuf::from("/verified/bundle-a"),
+                    env: Vec::new(),
+                }],
+                skills: Vec::new(),
+            },
+        };
+        executor.set_owned_capabilities(Some(OwnedCapabilities {
+            leases: PreparedCapabilityLeaseSet::new(vec![lease]).expect("unique lease"),
+            execution_target: CapabilityExecutionTarget::InSandboxHost,
+        }));
+
+        assert!(executor.is_selected_mcp_tool_allowed("bundle__MCP__tool", true));
+        assert!(
+            !executor.is_selected_mcp_tool_allowed("bundle__MCP__tool", false),
+            "a same-named global MCP server must remain governed by the persisted allowlist"
+        );
+        assert!(
+            !executor.is_selected_mcp_tool_allowed("browser__MCP__click", true),
+            "the verified lease must not widen the persisted global MCP allowlist"
         );
     }
 
@@ -12783,6 +13012,78 @@ mod recovery_tests {
             events.is_empty(),
             "failed transition must not emit state events"
         );
+    }
+
+    #[test]
+    fn docker_owned_mcp_config_executes_only_inside_the_owner_container() {
+        use crate::workflow::react::experiment_owner::capabilities::{
+            CapabilityExecutionTarget, RegisteredMcpServer,
+        };
+
+        let server = RegisteredMcpServer {
+            name: "bundle_mcp".to_string(),
+            command: PathBuf::from("/srv/bundles/job-1/bundle-a/bin/server"),
+            args: vec!["--stdio".to_string()],
+            working_directory: PathBuf::from("/srv/bundles/job-1/bundle-a"),
+            env: vec![("BUNDLE_TOKEN".to_string(), "resolved-secret".to_string())],
+        };
+        let config = WorkflowExecutor::owned_mcp_config(
+            &server,
+            &CapabilityExecutionTarget::Docker {
+                instance_name: "cs-run-job-1-g3".to_string(),
+                host_bundle_root: PathBuf::from("/srv/bundles/job-1"),
+                container_bundle_root: PathBuf::from("/opt/chatspeed/bundles"),
+            },
+        )
+        .expect("docker config");
+
+        assert_eq!(config.command.as_deref(), Some("docker"));
+        assert_eq!(
+            config.args,
+            Some(vec![
+                "exec".to_string(),
+                "-i".to_string(),
+                "-w".to_string(),
+                "/opt/chatspeed/bundles/bundle-a".to_string(),
+                "-e".to_string(),
+                "BUNDLE_TOKEN".to_string(),
+                "cs-run-job-1-g3".to_string(),
+                "/opt/chatspeed/bundles/bundle-a/bin/server".to_string(),
+                "--stdio".to_string(),
+            ])
+        );
+        assert_eq!(config.env, Some(server.env.clone()));
+        assert!(
+            !config
+                .args
+                .as_ref()
+                .expect("args")
+                .iter()
+                .any(|argument| argument == "resolved-secret"),
+            "resolved secrets must not enter docker argv"
+        );
+    }
+
+    #[test]
+    fn harbor_owned_mcp_config_preserves_the_verified_stdio_command() {
+        use crate::workflow::react::experiment_owner::capabilities::{
+            CapabilityExecutionTarget, RegisteredMcpServer,
+        };
+
+        let server = RegisteredMcpServer {
+            name: "bundle_mcp".to_string(),
+            command: PathBuf::from("/task/bundle/bin/server"),
+            args: vec!["--stdio".to_string()],
+            working_directory: PathBuf::from("/task/bundle"),
+            env: vec![("BUNDLE_TOKEN".to_string(), "resolved-secret".to_string())],
+        };
+        let config =
+            WorkflowExecutor::owned_mcp_config(&server, &CapabilityExecutionTarget::InSandboxHost)
+                .expect("harbor config");
+
+        assert_eq!(config.command.as_deref(), Some("/task/bundle/bin/server"));
+        assert_eq!(config.args, Some(vec!["--stdio".to_string()]));
+        assert_eq!(config.env, Some(server.env));
     }
 
     #[test]

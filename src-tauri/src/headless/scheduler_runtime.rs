@@ -29,7 +29,9 @@ use crate::workflow::react::campaign::{
     CampaignFixtureRefV1, CampaignPlanV1, CampaignRunRequestV1, CAMPAIGN_RUN_REQUEST_V1,
 };
 use crate::workflow::react::experiment_owner::bundle::BundleRegistry;
-use crate::workflow::react::experiment_owner::capabilities::SecretEnvironment;
+use crate::workflow::react::experiment_owner::capabilities::{
+    CapabilityExecutionTarget, SecretEnvironment,
+};
 use crate::workflow::react::experiment_owner::docker::{DockerOwnerConfig, PersistentDockerOwner};
 use crate::workflow::react::experiment_owner::harbor_task::{
     HarborTaskOwner, HARBOR_CAPABILITY_FILE_NAME,
@@ -345,6 +347,7 @@ fn owner_execution_context(
             instance_name: None,
             image_reference: None,
             capabilities: None,
+            capability_execution_target: Some(CapabilityExecutionTarget::InSandboxHost),
         }),
         OwnerKind::PersistentDocker => {
             let workspace = require_owner_workspace(request.workspace)?;
@@ -354,10 +357,26 @@ fn owner_execution_context(
                     "the container owner reported no owned instance to execute in",
                 )
             })?;
+            let capability_execution_target = if request.capabilities.is_some() {
+                let bundle_mount = container.bundle_mount.clone().ok_or_else(|| {
+                    runtime_error(
+                        ScheduleErrorCode::OwnerExecutionContextUnavailable,
+                        "the Docker owner provides no verified read-only bundle mount for MCP execution",
+                    )
+                })?;
+                Some(CapabilityExecutionTarget::Docker {
+                    instance_name: container.name.clone(),
+                    host_bundle_root: bundle_mount.host_root,
+                    container_bundle_root: bundle_mount.container_root,
+                })
+            } else {
+                None
+            };
             Ok(crate::commands::workflow::OwnerExecutionContext::container(
                 container.name,
                 container.image_reference,
-            ))
+            )
+            .with_capability_execution_target_opt(capability_execution_target))
         }
     }
 }
@@ -387,8 +406,11 @@ impl ScheduledRunKernel for ScheduledCampaignKernel {
         // Everything the backend can prepare was prepared before the intent was
         // recorded; a fixture problem is still reported as itself here.
         let run_request = Self::run_request(request)?;
-        let owner =
-            owner_execution_context(request)?.with_capabilities(request.capabilities.cloned());
+        let owner = owner_execution_context(request)?
+            .with_capabilities(request.capabilities.cloned())
+            .map_err(|message| {
+                runtime_error(ScheduleErrorCode::OwnerExecutionContextUnavailable, message)
+            })?;
 
         // The run is created by the same kernel the immediate 2F path uses, with
         // the owner-confirmed instance pinned into its sandbox plan (no Auto/Host

@@ -385,6 +385,7 @@ mod tests {
             fence: OwnerFence::new(owner_token, generation),
             base_revision: "HEAD".to_string(),
             input_patch: None,
+            bundle_source_root: None,
         }
     }
 

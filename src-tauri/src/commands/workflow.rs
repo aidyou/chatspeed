@@ -1579,13 +1579,16 @@ pub(crate) struct OwnerExecutionContext {
     pub instance_name: Option<String>,
     /// The digest-pinned image behind that instance.
     pub image_reference: Option<String>,
-    /// The verified capability lease of this run, when the campaign declares
-    /// bundles.
-    ///
-    /// It is carried in memory only: a lease holds resolved secret values, which
-    /// must never reach the persisted workflow configuration (INV-6).
+    /// The verified capability set of this run, when the campaign declares
+    /// bundles. Its resolved secrets stay in memory and never enter persisted
+    /// workflow configuration (INV-6).
     pub capabilities:
-        Option<crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease>,
+        Option<crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities>,
+    /// The target for verified bundle MCP stdio processes. Docker owners must
+    /// provide their read-only bundle mount; Harbor's proven task sandbox runs
+    /// directly on its own host.
+    pub capability_execution_target:
+        Option<crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget>,
 }
 
 impl OwnerExecutionContext {
@@ -1600,17 +1603,40 @@ impl OwnerExecutionContext {
             instance_name: Some(instance_name.into()),
             image_reference: Some(image_reference.into()),
             capabilities: None,
+            capability_execution_target: None,
         }
     }
 
-    /// Attaches the run's verified capability lease (in memory only).
+    /// Attaches the run's verified capability set and its owner-proven process
+    /// target. The pair remains in memory only.
     pub(crate) fn with_capabilities(
         mut self,
         capabilities: Option<
-            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLeaseSet,
+        >,
+    ) -> Result<Self, String> {
+        let Some(leases) = capabilities else {
+            return Ok(self);
+        };
+        let execution_target = self.capability_execution_target.clone().ok_or_else(|| {
+            "the owner provides no verified execution target for bundle MCP servers".to_string()
+        })?;
+        self.capabilities = Some(
+            crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities {
+                leases,
+                execution_target,
+            },
+        );
+        Ok(self)
+    }
+
+    pub(crate) fn with_capability_execution_target_opt(
+        mut self,
+        target: Option<
+            crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget,
         >,
     ) -> Self {
-        self.capabilities = capabilities;
+        self.capability_execution_target = target;
         self
     }
 
@@ -10115,6 +10141,7 @@ mod owner_execution_context_tests {
             instance_name: None,
             image_reference: None,
             capabilities: None,
+            capability_execution_target: None,
         };
         let error = owner.apply(&mut config).expect_err("must refuse");
         assert!(error.contains("no isolated execution environment"));
@@ -10129,6 +10156,7 @@ mod owner_execution_context_tests {
             instance_name: None,
             image_reference: Some(format!("sha256:{}", "a".repeat(64))),
             capabilities: None,
+            capability_execution_target: None,
         };
         let error = owner.apply(&mut config).expect_err("must refuse");
         assert!(error.contains("instance name"));
@@ -10144,6 +10172,7 @@ mod owner_execution_context_tests {
             instance_name: None,
             image_reference: None,
             capabilities: None,
+            capability_execution_target: None,
         };
         owner.apply(&mut config).expect("harbor owner");
         assert_eq!(

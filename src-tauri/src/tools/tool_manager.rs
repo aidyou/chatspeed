@@ -840,8 +840,7 @@ impl ToolManager {
     ) -> Result<(), ToolError> {
         #[cfg(debug_assertions)]
         {
-            log::debug!("Register MCP server {} ... ", &mcp_server_config.name,);
-            log::debug!("MCP server config: {:?}", &mcp_server_config);
+            log::debug!("Register MCP server {} ... ", &mcp_server_config.name);
         }
 
         // Clone for logging in case of early error

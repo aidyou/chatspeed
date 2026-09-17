@@ -48,6 +48,29 @@ pub struct CapabilityRegistration {
     pub skills: Vec<RegisteredSkill>,
 }
 
+/// Where one run-scoped MCP server must be started.
+///
+/// `InSandboxHost` means the current process is already inside the owner-proven
+/// Harbor task sandbox. A Docker target translates verified host staging paths
+/// into the single read-only bundle mount before it starts the stdio process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityExecutionTarget {
+    InSandboxHost,
+    Docker {
+        instance_name: String,
+        host_bundle_root: PathBuf,
+        container_bundle_root: PathBuf,
+    },
+}
+
+/// All verified bundle leases attached to one run, plus the environment where
+/// their MCP processes must execute. This is session-scoped and in-memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedCapabilities {
+    pub leases: PreparedCapabilityLeaseSet,
+    pub execution_target: CapabilityExecutionTarget,
+}
+
 /// The secret values a domain is allowed to resolve for a run.
 ///
 /// It is built from the restricted credential input (a config package or a key
@@ -207,6 +230,62 @@ impl PreparedCapabilityLease {
             &self.content_digest[..12.min(self.content_digest.len())],
             self.registration.mcp_servers.len(),
             self.registration.skills.len()
+        )
+    }
+}
+
+/// Aggregates every verified bundle a job declared.
+///
+/// The constructor rejects duplicate MCP names across bundles instead of
+/// delegating collision handling to the session tool manager, where one
+/// declared capability could otherwise silently replace another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedCapabilityLeaseSet {
+    pub leases: Vec<PreparedCapabilityLease>,
+}
+
+impl PreparedCapabilityLeaseSet {
+    pub fn new(leases: Vec<PreparedCapabilityLease>) -> Result<Self, ScheduleError> {
+        let mut names = std::collections::HashSet::new();
+        for server in leases
+            .iter()
+            .flat_map(|lease| lease.registration.mcp_servers.iter())
+        {
+            if !names.insert(server.name.clone()) {
+                return Err(owner_error(
+                    ScheduleErrorCode::BundleManifestInvalid,
+                    format!(
+                        "multiple verified bundles declare the MCP server '{}'",
+                        server.name
+                    ),
+                ));
+            }
+        }
+        Ok(Self { leases })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.leases.is_empty()
+    }
+
+    pub fn mcp_servers(&self) -> impl Iterator<Item = &RegisteredMcpServer> {
+        self.leases
+            .iter()
+            .flat_map(|lease| lease.registration.mcp_servers.iter())
+    }
+
+    pub fn skills(&self) -> impl Iterator<Item = &RegisteredSkill> {
+        self.leases
+            .iter()
+            .flat_map(|lease| lease.registration.skills.iter())
+    }
+
+    pub fn describe(&self) -> String {
+        format!(
+            "bundles={} mcp_servers={} skills={}",
+            self.leases.len(),
+            self.mcp_servers().count(),
+            self.skills().count()
         )
     }
 }
@@ -406,6 +485,24 @@ mod tests {
         );
         // The redacted summary never contains the secret value.
         assert!(!lease.describe().contains("s3cret"));
+    }
+
+    #[test]
+    fn aggregate_leases_reject_duplicate_mcp_server_names() {
+        let directory = tempdir().expect("tempdir");
+        let first = staged(directory.path(), false, "job-1");
+        let first = PreparedCapabilityLease::from_verified_bundle(
+            &first,
+            &"a".repeat(64),
+            &SecretEnvironment::default(),
+        )
+        .expect("first lease");
+        let second = first.clone();
+
+        let error = PreparedCapabilityLeaseSet::new(vec![first, second])
+            .expect_err("duplicate MCP server names must fail closed");
+        assert_eq!(error.code, ScheduleErrorCode::BundleManifestInvalid);
+        assert!(error.message.contains("multiple verified bundles"));
     }
 
     #[test]

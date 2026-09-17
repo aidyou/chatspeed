@@ -110,7 +110,7 @@ impl PlanningExecutor {
         auto_compress_enabled: bool,
         policy: ExecutionPolicy,
         owned_capabilities: Option<
-            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease,
+            crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities,
         >,
     ) -> Self {
         let mut executor = WorkflowExecutor::new(

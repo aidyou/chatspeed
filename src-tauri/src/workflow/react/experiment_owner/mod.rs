@@ -65,6 +65,10 @@ pub struct OwnerAcquireRequest {
     pub base_revision: String,
     /// The reviewed input patch, when the execution profile declares one.
     pub input_patch: Option<InputPatch>,
+    /// Server-derived root for this job's verified bundle staging tree. It is
+    /// never caller supplied and is mounted read-only only by owners whose
+    /// profile explicitly declares the bundle mount.
+    pub bundle_source_root: Option<PathBuf>,
 }
 
 /// Proof that one owner generation owns a workspace.
@@ -93,6 +97,13 @@ impl WorkspaceProof {
     }
 }
 
+/// A read-only verified bundle mount belonging to a container owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleMount {
+    pub host_root: PathBuf,
+    pub container_root: PathBuf,
+}
+
 /// The container an owner created or adopted, when the owner provides one.
 ///
 /// It is part of the ownership proof: cleanup and adoption both compare the
@@ -103,6 +114,9 @@ pub struct ContainerHandle {
     pub name: String,
     pub owner_token_hash: String,
     pub image_reference: String,
+    /// The verified bundle tree visible to this owner, when its profile
+    /// declared the dedicated read-only bundle mount.
+    pub bundle_mount: Option<BundleMount>,
 }
 
 /// A prepared, owned run workspace.

@@ -19,12 +19,13 @@
 //! - A network policy the local Docker cannot enforce (a domain allowlist) is a
 //!   pre-dispatch failure, matching the existing sandbox runner's behaviour; it
 //!   never degrades to an open network.
-//! - Only the run workspace is mounted; any other mount declaration is refused.
+//! - Only the run workspace and one profile-declared read-only verified bundle
+//!   root may be mounted; arbitrary host paths remain refused.
 
 use crate::workflow::react::experiment_owner::patch::PatchArtifact;
 use crate::workflow::react::experiment_owner::worktree::HostWorktreeOwner;
 use crate::workflow::react::experiment_owner::{
-    owner_error, ContainerHandle, ExecutionOwner, InputPatch, OwnerAcquireRequest,
+    owner_error, BundleMount, ContainerHandle, ExecutionOwner, InputPatch, OwnerAcquireRequest,
     PreparedWorkspace,
 };
 use crate::workflow::react::experiment_schedule::types::{
@@ -61,8 +62,8 @@ pub struct DockerOwnerConfig {
     pub resources: ResourceLimitsV1,
     /// Whether the mounted workspace is read-only inside the container.
     pub workspace_read_only: bool,
-    /// Mount declarations from the execution profile; only the workspace mount
-    /// is accepted.
+    /// Mount declarations from the execution profile. Exactly the workspace and
+    /// at most one read-only verified bundle root are accepted.
     pub mounts: Vec<MountSpecV1>,
 }
 
@@ -96,21 +97,70 @@ impl DockerOwnerConfig {
                 "Docker domain allowlist networking is not supported by this owner",
             ));
         }
+        let mut workspace_mounts = 0usize;
+        let mut bundle_mounts = 0usize;
         for mount in &self.mounts {
-            let is_workspace = mount.source_kind == MountSpecV1::SOURCE_WORKSPACE
-                && mount.container_path == WORKSPACE_MOUNT_PATH;
-            if !is_workspace {
-                return Err(owner_error(
-                    ScheduleErrorCode::InvalidExecutionProfile,
-                    format!(
-                        "the docker owner only mounts the run workspace at {WORKSPACE_MOUNT_PATH}; \
-                         refusing mount '{}' -> '{}'",
-                        mount.source_kind, mount.container_path
-                    ),
-                ));
+            match mount.source_kind.as_str() {
+                MountSpecV1::SOURCE_WORKSPACE
+                    if mount.container_path == WORKSPACE_MOUNT_PATH
+                        && mount.read_only == self.workspace_read_only =>
+                {
+                    workspace_mounts += 1;
+                }
+                MountSpecV1::SOURCE_BUNDLE
+                    if mount.read_only && mount.container_path.starts_with('/') =>
+                {
+                    bundle_mounts += 1;
+                }
+                _ => {
+                    return Err(owner_error(
+                        ScheduleErrorCode::InvalidExecutionProfile,
+                        format!(
+                            "the docker owner refuses mount '{}' -> '{}'",
+                            mount.source_kind, mount.container_path
+                        ),
+                    ));
+                }
             }
         }
+        if workspace_mounts != 1 || bundle_mounts > 1 {
+            return Err(owner_error(
+                ScheduleErrorCode::InvalidExecutionProfile,
+                "the docker owner requires exactly one workspace mount and at most one read-only bundle mount",
+            ));
+        }
         Ok(())
+    }
+
+    fn bundle_mount(
+        &self,
+        request: &OwnerAcquireRequest,
+    ) -> Result<Option<BundleMount>, ScheduleError> {
+        let Some(spec) = self
+            .mounts
+            .iter()
+            .find(|mount| mount.source_kind == MountSpecV1::SOURCE_BUNDLE)
+        else {
+            return Ok(None);
+        };
+        let Some(host_root) = request.bundle_source_root.clone() else {
+            // A profile may permit bundles without every job using one. In that
+            // case no additional host path is exposed to the container.
+            return Ok(None);
+        };
+        if !host_root.is_dir() {
+            return Err(owner_error(
+                ScheduleErrorCode::BundleNotVerifiable,
+                format!(
+                    "the verified bundle root '{}' does not exist",
+                    host_root.display()
+                ),
+            ));
+        }
+        Ok(Some(BundleMount {
+            host_root,
+            container_root: std::path::PathBuf::from(&spec.container_path),
+        }))
     }
 }
 
@@ -245,11 +295,17 @@ impl PersistentDockerOwner {
             && observed.label(LABEL_IMAGE) == Some(self.config.image_reference.as_str())
     }
 
-    fn handle(&self, name: &str, token_hash: String) -> ContainerHandle {
+    fn handle(
+        &self,
+        name: &str,
+        token_hash: String,
+        bundle_mount: Option<BundleMount>,
+    ) -> ContainerHandle {
         ContainerHandle {
             name: name.to_string(),
             owner_token_hash: token_hash,
             image_reference: self.config.image_reference.clone(),
+            bundle_mount,
         }
     }
 
@@ -308,6 +364,7 @@ impl ExecutionOwner for PersistentDockerOwner {
 
     fn acquire(&self, request: &OwnerAcquireRequest) -> Result<PreparedWorkspace, ScheduleError> {
         self.preflight()?;
+        let bundle_mount = self.config.bundle_mount(request)?;
         let mut workspace = self.worktree.acquire(request)?;
         let name = self.container_name(&request.job_id, request.fence.lease_generation)?;
         let token_hash = self.token_hash(request);
@@ -325,7 +382,7 @@ impl ExecutionOwner for PersistentDockerOwner {
             if !observed.running {
                 self.docker(&["start", name.as_str()])?;
             }
-            workspace.container = Some(self.handle(&name, token_hash));
+            workspace.container = Some(self.handle(&name, token_hash, bundle_mount));
             return Ok(workspace);
         }
 
@@ -393,6 +450,14 @@ impl ExecutionOwner for PersistentDockerOwner {
             "type=bind,src={},dst={WORKSPACE_MOUNT_PATH}{readonly}",
             workspace_arg
         ));
+        if let Some(bundle_mount) = &bundle_mount {
+            args.push("--mount".to_string());
+            args.push(format!(
+                "type=bind,src={},dst={},readonly",
+                bundle_mount.host_root.display(),
+                bundle_mount.container_root.display()
+            ));
+        }
         args.push(self.config.image_reference.clone());
         args.push("sleep".to_string());
         args.push("infinity".to_string());
@@ -401,7 +466,7 @@ impl ExecutionOwner for PersistentDockerOwner {
         self.docker(&argv)?;
         self.docker(&["start", name.as_str()])?;
 
-        workspace.container = Some(self.handle(&name, token_hash));
+        workspace.container = Some(self.handle(&name, token_hash, bundle_mount));
         Ok(workspace)
     }
 
@@ -419,7 +484,11 @@ impl ExecutionOwner for PersistentDockerOwner {
         let Some(mut workspace) = self.worktree.adopt(request)? else {
             return Ok(None);
         };
-        workspace.container = Some(self.handle(&name, self.token_hash(request)));
+        workspace.container = Some(self.handle(
+            &name,
+            self.token_hash(request),
+            self.config.bundle_mount(request)?,
+        ));
         Ok(Some(workspace))
     }
 
@@ -614,6 +683,7 @@ mod tests {
             fence: OwnerFence::new(token, generation),
             base_revision: "HEAD".to_string(),
             input_patch: None,
+            bundle_source_root: None,
         }
     }
 
@@ -631,13 +701,30 @@ mod tests {
         let error = allowlist.validate().expect_err("allowlist");
         assert_eq!(error.code, ScheduleErrorCode::NetworkPolicyUnsupported);
 
-        let mut host_mount = config(&format!("chatspeed/runner@sha256:{}", "a".repeat(64)));
-        host_mount.mounts.push(MountSpecV1 {
+        let mut bundle_mount = config(&format!("chatspeed/runner@sha256:{}", "a".repeat(64)));
+        bundle_mount.mounts.push(MountSpecV1 {
             source_kind: MountSpecV1::SOURCE_BUNDLE.to_string(),
             container_path: "/opt/bundle".to_string(),
             read_only: true,
         });
-        let error = host_mount.validate().expect_err("extra mount");
+        bundle_mount
+            .validate()
+            .expect("one read-only bundle mount is allowlisted");
+
+        let mut writable_bundle = bundle_mount.clone();
+        writable_bundle.mounts[1].read_only = false;
+        let error = writable_bundle
+            .validate()
+            .expect_err("writable bundle mount");
+        assert_eq!(error.code, ScheduleErrorCode::InvalidExecutionProfile);
+
+        let mut two_bundles = bundle_mount;
+        two_bundles.mounts.push(MountSpecV1 {
+            source_kind: MountSpecV1::SOURCE_BUNDLE.to_string(),
+            container_path: "/opt/another-bundle".to_string(),
+            read_only: true,
+        });
+        let error = two_bundles.validate().expect_err("two bundle mounts");
         assert_eq!(error.code, ScheduleErrorCode::InvalidExecutionProfile);
 
         // A locally built image pinned by its immutable id is acceptable.
@@ -768,6 +855,104 @@ mod tests {
         assert!(!workspace.proof.workspace_root.exists());
         // Cleanup is idempotent.
         owner.cleanup(&workspace).expect("cleanup again");
+    }
+
+    /// The 2H owner-bound MCP gate: a profile-declared verified bundle root is
+    /// mounted read-only and an stdio-shaped `docker exec -i` runs its program
+    /// in the label-fenced owner container, never on the host.
+    #[test]
+    fn a_verified_bundle_mcp_executes_inside_the_owner_container() {
+        if !docker_available() {
+            eprintln!("skipping: no docker daemon available");
+            return;
+        }
+        let Some(image) = available_image() else {
+            eprintln!("skipping: no local digest-pinned image available");
+            return;
+        };
+        let directory = tempdir().expect("tempdir");
+        let bundle_root = directory.path().join("verified-bundles");
+        let bundle = bundle_root.join("bundle-a");
+        std::fs::create_dir_all(bundle.join("bin")).expect("bundle bin");
+        let program = bundle.join("bin/mcp-server");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf 'mcp:%s:%s' \"$PWD\" \"$BUNDLE_TOKEN\"\n",
+        )
+        .expect("write bundle program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("make bundle program executable");
+        }
+
+        let mut owner_config = config(&image);
+        owner_config.mounts.push(MountSpecV1 {
+            source_kind: MountSpecV1::SOURCE_BUNDLE.to_string(),
+            container_path: "/opt/chatspeed/bundles".to_string(),
+            read_only: true,
+        });
+        let worktree = HostWorktreeOwner::new(
+            base_repo(directory.path()),
+            directory.path().join("worktrees"),
+        );
+        let owner = PersistentDockerOwner::new(worktree, owner_config);
+        let job_id = unique_job_id("p2h-mcp");
+        let mut acquire = request(&job_id, "worker-a", 1);
+        acquire.bundle_source_root = Some(bundle_root.clone());
+        let workspace = owner.acquire(&acquire).expect("acquire owner");
+        let handle = workspace.container.as_ref().expect("container handle");
+        assert_eq!(
+            handle
+                .bundle_mount
+                .as_ref()
+                .map(|mount| mount.host_root.as_path()),
+            Some(bundle_root.as_path())
+        );
+
+        let output = Command::new("docker")
+            .args([
+                "exec",
+                "-i",
+                "-w",
+                "/opt/chatspeed/bundles/bundle-a",
+                "-e",
+                "BUNDLE_TOKEN",
+                &handle.name,
+                "/opt/chatspeed/bundles/bundle-a/bin/mcp-server",
+            ])
+            .env("BUNDLE_TOKEN", "resolved-in-memory-secret")
+            .output()
+            .expect("docker exec MCP server");
+        assert!(
+            output.status.success(),
+            "bundle MCP execution failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "mcp:/opt/chatspeed/bundles/bundle-a:resolved-in-memory-secret"
+        );
+
+        let readonly = owner
+            .exec_capture(
+                &handle.name,
+                &[
+                    "sh",
+                    "-lc",
+                    "test -r /opt/chatspeed/bundles/bundle-a/bin/mcp-server && ! touch /opt/chatspeed/bundles/bundle-a/forbidden",
+                ],
+            )
+            .expect("bundle mount must be readable and read-only");
+        assert!(readonly.is_empty());
+        assert!(
+            !bundle.join("forbidden").exists(),
+            "the container must not write into the verified bundle root"
+        );
+
+        owner.cleanup(&workspace).expect("cleanup");
+        assert!(owner.inspect(&handle.name).expect("inspect").is_none());
     }
 
     /// A same-named container with foreign labels is never taken over, and it is

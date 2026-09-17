@@ -28,7 +28,7 @@ use crate::db::{Agent, MainStore, Workflow};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::client::hub::WorkflowRuntimeHub;
 use crate::workflow::react::events::WorkflowEventRecord;
-use crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLease;
+use crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities;
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 
@@ -164,7 +164,7 @@ pub struct WorkflowApplicationService {
     /// just dispatched, the run's executor injects it into that session's tool
     /// registry, and the terminal/failure path unregisters it again.
     pub(crate) prepared_leases:
-        std::sync::Mutex<std::collections::HashMap<String, PreparedCapabilityLease>>,
+        std::sync::Mutex<std::collections::HashMap<String, OwnedCapabilities>>,
 }
 
 impl WorkflowApplicationService {
@@ -193,7 +193,7 @@ impl WorkflowApplicationService {
     ///
     /// Registering an already-registered session replaces the lease, so a
     /// re-dispatch of the same job cannot accumulate capabilities.
-    pub(crate) fn register_prepared_lease(&self, session_id: &str, lease: PreparedCapabilityLease) {
+    pub(crate) fn register_prepared_lease(&self, session_id: &str, lease: OwnedCapabilities) {
         if let Ok(mut leases) = self.prepared_leases.lock() {
             leases.insert(session_id.to_string(), lease);
         }
@@ -201,7 +201,7 @@ impl WorkflowApplicationService {
 
     /// The verified capability lease of one session, when the durable scheduler
     /// registered one for the run it dispatched.
-    pub(crate) fn prepared_lease(&self, session_id: &str) -> Option<PreparedCapabilityLease> {
+    pub(crate) fn prepared_lease(&self, session_id: &str) -> Option<OwnedCapabilities> {
         self.prepared_leases
             .lock()
             .ok()
@@ -210,10 +210,7 @@ impl WorkflowApplicationService {
 
     /// Drops the session's capability lease. Idempotent: a session without a
     /// lease is left untouched.
-    pub(crate) fn release_prepared_lease(
-        &self,
-        session_id: &str,
-    ) -> Option<PreparedCapabilityLease> {
+    pub(crate) fn release_prepared_lease(&self, session_id: &str) -> Option<OwnedCapabilities> {
         self.prepared_leases
             .lock()
             .ok()

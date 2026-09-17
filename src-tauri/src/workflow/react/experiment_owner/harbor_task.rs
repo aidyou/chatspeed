@@ -350,6 +350,7 @@ mod tests {
             fence: crate::workflow::react::experiment_schedule::types::OwnerFence::new("harbor", 1),
             base_revision: "HEAD".to_string(),
             input_patch: None,
+            bundle_source_root: None,
         }
     }
 

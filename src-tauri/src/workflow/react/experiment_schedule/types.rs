@@ -1177,6 +1177,8 @@ impl ExecutionProfileV1 {
                 ));
             }
         }
+        let mut workspace_mounts = 0usize;
+        let mut bundle_mounts = 0usize;
         for mount in &self.mounts {
             if !mount.is_known_source() {
                 return Err(ScheduleError::new(
@@ -1196,6 +1198,23 @@ impl ExecutionProfileV1 {
                     ),
                 ));
             }
+            match mount.source_kind.as_str() {
+                MountSpecV1::SOURCE_WORKSPACE => workspace_mounts += 1,
+                MountSpecV1::SOURCE_BUNDLE if mount.read_only => bundle_mounts += 1,
+                MountSpecV1::SOURCE_BUNDLE => {
+                    return Err(ScheduleError::new(
+                        ScheduleErrorCode::InvalidExecutionProfile,
+                        "a bundle mount must be read-only",
+                    ));
+                }
+                _ => unreachable!("known mount sources were checked above"),
+            }
+        }
+        if workspace_mounts > 1 || bundle_mounts > 1 {
+            return Err(ScheduleError::new(
+                ScheduleErrorCode::InvalidExecutionProfile,
+                "an execution profile may declare at most one workspace mount and one read-only bundle mount",
+            ));
         }
         if (self.input_patch_ref.is_some()) != (self.input_patch_digest.is_some()) {
             return Err(ScheduleError::new(

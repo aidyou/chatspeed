@@ -38,7 +38,7 @@ use crate::db::experiment_schedule::{
 use crate::workflow::react::campaign::CampaignPlanV1;
 use crate::workflow::react::experiment_owner::bundle::{self, BundleRegistry, StagedBundle};
 use crate::workflow::react::experiment_owner::capabilities::{
-    PreparedCapabilityLease, SecretEnvironment,
+    PreparedCapabilityLease, PreparedCapabilityLeaseSet, SecretEnvironment,
 };
 use crate::workflow::react::experiment_owner::patch::PatchContext;
 use crate::workflow::react::experiment_owner::{
@@ -137,9 +137,10 @@ pub struct ScheduledDispatch<'a> {
     pub task_id: &'a str,
     pub suite: &'a str,
     pub plan: &'a CampaignPlanV1,
-    /// The verified capability lease of this job, when the campaign declares
-    /// bundles.
-    pub capabilities: Option<&'a PreparedCapabilityLease>,
+    /// The verified capability leases of this job, when the campaign declares
+    /// bundles. Every declared bundle is retained; collisions fail before a
+    /// dispatch intent exists.
+    pub capabilities: Option<&'a PreparedCapabilityLeaseSet>,
     /// The owned workspace the run executes against.
     pub workspace: Option<&'a PreparedWorkspace>,
     /// The kind of owner that prepared this environment.
@@ -403,22 +404,56 @@ impl CampaignScheduler {
             fence: fence.clone(),
             base_revision: self.resources.base_revision(&campaign),
             input_patch: None,
+            bundle_source_root: (!campaign.bundle_refs.is_empty())
+                .then(|| self.resources.bundles_root().join(&record.job.job_id)),
         };
-        let Some(workspace) = owner.adopt(&acquire)? else {
-            // The run finished but its owned environment is gone, so the output
-            // patch cannot be published. A false success is worse than an
-            // explicit, operator-visible terminal state.
-            log::warn!(
-                "[Scheduler][job={job_id}] run is terminal but its owned workspace cannot be \
-                 adopted; parking it instead of reporting an unverifiable success"
-            );
-            self.store.park_unknown_manual(
-                job_id,
-                Some(false),
-                "the run is terminal but its owned workspace cannot be adopted",
-                now_ms,
-            )?;
-            return Ok(true);
+        let workspace = match owner.adopt(&acquire) {
+            Ok(Some(workspace)) => workspace,
+            Ok(None) => {
+                // The run is provably terminal, so no process can still need
+                // this job's staged bundle tree. The owner itself is absent and
+                // therefore cannot be safely cleaned through its proof, but the
+                // job-scoped staging root has a bounded, idempotent cleanup.
+                if let Err(error) =
+                    bundle::release_job_staging(&self.resources.bundles_root(), job_id)
+                {
+                    log::warn!(
+                        "[Scheduler][job={job_id}] failed to release terminal job staging ({}): {}",
+                        error.code.as_str(),
+                        error.message
+                    );
+                }
+                // The run finished but its owned environment is gone, so the
+                // output patch cannot be published. A false success is worse
+                // than an explicit, operator-visible terminal state.
+                log::warn!(
+                    "[Scheduler][job={job_id}] run is terminal but its owned workspace cannot be \
+                     adopted; parking it instead of reporting an unverifiable success"
+                );
+                self.store.park_unknown_manual(
+                    job_id,
+                    Some(false),
+                    "the run is terminal but its owned workspace cannot be adopted",
+                    now_ms,
+                )?;
+                return Ok(true);
+            }
+            Err(error) => {
+                // A terminal verdict permits removal of only the bounded job
+                // staging root. Do not guess at owner cleanup without an
+                // adopted proof: an unavailable owner transport is not proof
+                // that an observed container is ours.
+                if let Err(release_error) =
+                    bundle::release_job_staging(&self.resources.bundles_root(), job_id)
+                {
+                    log::warn!(
+                        "[Scheduler][job={job_id}] failed to release terminal job staging after adopt error ({}): {}",
+                        release_error.code.as_str(),
+                        release_error.message
+                    );
+                }
+                return Err(error);
+            }
         };
         let outcome = self.collect_dispatched(
             &record,
@@ -527,14 +562,38 @@ impl CampaignScheduler {
         let owner = self.resources.owner_for(record, &campaign)?;
         owner.preflight()?;
 
-        // 2. Acquire the owned workspace.
+        // 2. Allocate the server-derived job bundle root before acquiring a
+        // Docker owner. A profile-declared read-only bundle mount must exist at
+        // container creation time; it never comes from the schedule request.
+        let bundle_source_root = (!campaign.bundle_refs.is_empty())
+            .then(|| self.resources.bundles_root().join(&job.job_id));
+        if let Some(root) = &bundle_source_root {
+            std::fs::create_dir_all(root).map_err(|error| {
+                ScheduleError::new(
+                    ScheduleErrorCode::BundleNotVerifiable,
+                    format!(
+                        "failed to create verified bundle root '{}': {error}",
+                        root.display()
+                    ),
+                )
+            })?;
+        }
+
+        // 3. Acquire the owned workspace.
         let acquire = OwnerAcquireRequest {
             job_id: job.job_id.clone(),
             fence: fence.clone(),
             base_revision: self.resources.base_revision(&campaign),
             input_patch: None,
+            bundle_source_root,
         };
-        let workspace = owner.acquire(&acquire)?;
+        let workspace = match owner.acquire(&acquire) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                let _ = bundle::release_job_staging(&self.resources.bundles_root(), &job.job_id);
+                return Err(error);
+            }
+        };
         self.store.record_stage(
             fence,
             &job.job_id,
@@ -543,10 +602,10 @@ impl CampaignScheduler {
             now_ms,
         )?;
 
-        // 3. Stage and verify the campaign's bundles, then mint the capability
-        //    lease. Nothing is registered before verification succeeds.
+        // 4. Stage and verify the campaign's bundles, then mint the capability
+        //    lease set. Nothing is registered before verification succeeds.
         let mut staged_bundles: Vec<StagedBundle> = Vec::new();
-        let lease_result = (|| -> Result<Option<PreparedCapabilityLease>, ScheduleError> {
+        let lease_result = (|| -> Result<Option<PreparedCapabilityLeaseSet>, ScheduleError> {
             if campaign.bundle_refs.is_empty() {
                 return Ok(None);
             }
@@ -558,7 +617,7 @@ impl CampaignScheduler {
             })?;
             let bundles_root = self.resources.bundles_root();
             let secrets = self.resources.secrets();
-            let mut lease = None;
+            let mut leases = Vec::with_capacity(campaign.bundle_refs.len());
             for bundle_ref in &campaign.bundle_refs {
                 let source = registry.acquire(bundle_ref)?;
                 let staged = bundle::stage_bundle(&source, &bundles_root, &job.job_id)?;
@@ -582,9 +641,9 @@ impl CampaignScheduler {
                     now_ms,
                 )?;
                 staged_bundles.push(staged);
-                lease = Some(minted);
+                leases.push(minted);
             }
-            Ok(lease)
+            PreparedCapabilityLeaseSet::new(leases).map(Some)
         })();
 
         let capabilities = match lease_result {
@@ -592,6 +651,7 @@ impl CampaignScheduler {
             Err(error) => {
                 // Nothing was dispatched, so the whole preparation rolls back.
                 release_all(&staged_bundles);
+                let _ = bundle::release_job_staging(&self.resources.bundles_root(), &job.job_id);
                 let _ = owner.cleanup(&workspace);
                 return Err(error);
             }
@@ -635,6 +695,7 @@ impl CampaignScheduler {
         //    to be parked as an unprovable effect on the next restart.
         if let Err(error) = self.kernel.preflight_dispatch(&dispatch) {
             release_all(&staged_bundles);
+            let _ = bundle::release_job_staging(&self.resources.bundles_root(), &job.job_id);
             let _ = owner.cleanup(&workspace);
             return Err(error);
         }
@@ -651,6 +712,7 @@ impl CampaignScheduler {
                 // recorded so a later tick re-classifies rather than silently
                 // re-dispatching.
                 release_all(&staged_bundles);
+                let _ = bundle::release_job_staging(&self.resources.bundles_root(), &job.job_id);
                 let _ = owner.cleanup(&workspace);
                 return Err(error);
             }
@@ -711,9 +773,15 @@ impl CampaignScheduler {
             dispatched.session_id.as_deref(),
             run_succeeded,
             now_ms,
-        )?;
+        );
+        if outcome.is_err() {
+            // The run is authoritatively terminal, so collection failure must
+            // not leave its capability staging or owner environment behind.
+            let _ = bundle::release_job_staging(&self.resources.bundles_root(), &job.job_id);
+            let _ = owner.cleanup(&workspace);
+        }
         release_all(&staged_bundles);
-        Ok(outcome)
+        outcome
     }
 
     /// Publishes the run's evidence and finalizes the job.
@@ -889,7 +957,9 @@ mod tests {
     use super::*;
     use crate::db::experiment_schedule::ExperimentScheduleStore;
     use crate::headless::domain::ExperimentDomain;
+    use crate::workflow::react::experiment_owner::patch::{PatchArtifact, PatchContext};
     use crate::workflow::react::experiment_owner::worktree::HostWorktreeOwner;
+    use crate::workflow::react::experiment_owner::{InputPatch, OwnerAcquireRequest};
     use crate::workflow::react::experiment_schedule::types::{
         parse_and_validate_campaign_schedule_request, CAMPAIGN_SCHEDULE_V1,
     };
@@ -972,12 +1042,62 @@ mod tests {
     }
 
     /// Server-side resources over a real, temporary base repository.
+    #[derive(Clone)]
     struct FakeResources {
         repo: PathBuf,
         worktrees: PathBuf,
         artifacts: PathBuf,
         bundles: PathBuf,
         unavailable: bool,
+        lose_adoption: bool,
+    }
+
+    struct LostAdoptionOwner {
+        inner: HostWorktreeOwner,
+    }
+
+    impl ExecutionOwner for LostAdoptionOwner {
+        fn kind(&self) -> OwnerKind {
+            self.inner.kind()
+        }
+
+        fn preflight(&self) -> Result<(), ScheduleError> {
+            self.inner.preflight()
+        }
+
+        fn acquire(
+            &self,
+            request: &OwnerAcquireRequest,
+        ) -> Result<PreparedWorkspace, ScheduleError> {
+            self.inner.acquire(request)
+        }
+
+        fn adopt(
+            &self,
+            _request: &OwnerAcquireRequest,
+        ) -> Result<Option<PreparedWorkspace>, ScheduleError> {
+            Ok(None)
+        }
+
+        fn apply_input_patch(
+            &self,
+            workspace: &PreparedWorkspace,
+            patch: &InputPatch,
+        ) -> Result<(), ScheduleError> {
+            self.inner.apply_input_patch(workspace, patch)
+        }
+
+        fn collect_output_patch(
+            &self,
+            workspace: &PreparedWorkspace,
+            context: &PatchContext,
+        ) -> Result<PatchArtifact, ScheduleError> {
+            self.inner.collect_output_patch(workspace, context)
+        }
+
+        fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<(), ScheduleError> {
+            self.inner.cleanup(workspace)
+        }
     }
 
     impl SchedulerResources for FakeResources {
@@ -992,10 +1112,12 @@ mod tests {
                     "the configured execution owner is unavailable",
                 ));
             }
-            Ok(Box::new(HostWorktreeOwner::new(
-                self.repo.clone(),
-                self.worktrees.clone(),
-            )))
+            let owner = HostWorktreeOwner::new(self.repo.clone(), self.worktrees.clone());
+            if self.lose_adoption {
+                Ok(Box::new(LostAdoptionOwner { inner: owner }))
+            } else {
+                Ok(Box::new(owner))
+            }
         }
 
         fn base_revision(&self, _campaign: &CampaignRecord) -> String {
@@ -1097,6 +1219,7 @@ mod tests {
             artifacts: directory.join("artifacts"),
             bundles: directory.join("bundles"),
             unavailable,
+            lose_adoption: false,
         })
     }
 
@@ -1319,6 +1442,48 @@ mod tests {
             kernel.dispatch_count(),
             2,
             "collecting a terminal run never dispatches again"
+        );
+    }
+
+    #[test]
+    fn terminal_run_with_unadoptable_owner_releases_job_staging_and_parks() {
+        let directory = tempdir().expect("tempdir");
+        let (_domain, store) = scheduled_domain(directory.path());
+        let resources = resources(directory.path(), false);
+        let mut recovery_resources = (*resources).clone();
+        recovery_resources.lose_adoption = true;
+        let resources = Arc::new(recovery_resources);
+        let kernel = FakeKernel::new(RunVerdict::Running);
+        let scheduler = scheduler_with_lease(store.clone(), resources.clone(), kernel.clone(), 1);
+
+        let first = scheduler
+            .tick(crate::headless::domain::now_ms())
+            .expect("dispatching tick");
+        let outcomes = match first {
+            TickOutcome::Processed(outcomes) => outcomes,
+            TickOutcome::Idle => panic!("the jobs must be dispatched"),
+        };
+        let job_id = &outcomes[0].job_id;
+        let staging = resources.bundles.join(job_id).join("bundle-a");
+        std::fs::create_dir_all(&staging).expect("staging");
+        std::fs::write(staging.join("marker"), "staged").expect("marker");
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        kernel.set_verdict(RunVerdict::Succeeded);
+        scheduler
+            .tick(crate::headless::domain::now_ms())
+            .expect("terminal recovery tick");
+
+        let record = store.get_job(job_id).expect("job");
+        assert_eq!(record.job.state, JobState::UnknownManual);
+        assert!(
+            !resources.bundles.join(job_id).exists(),
+            "terminal-but-unadoptable jobs must release their bounded staging root"
+        );
+        assert_eq!(
+            kernel.dispatch_count(),
+            2,
+            "recovery must never dispatch again"
         );
     }
 
