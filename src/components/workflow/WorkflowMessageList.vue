@@ -49,7 +49,7 @@
         :data-message-id="message.windowAnchorId || message.displayId || message.id || null"
         :data-window-anchor-id="message.windowAnchorId || null"
         :data-child-task-id="getMessageSubAgentId(message)"
-        :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
+        :class="[message.role, message.stepType?.toLowerCase()]">
         <div class="avatar" v-if="message.role === 'user'">
           <cs name="talk" class="user-icon" />
         </div>
