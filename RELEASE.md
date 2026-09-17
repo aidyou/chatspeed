@@ -2,6 +2,55 @@
 
 # Release Notes
 
+## [2.0.17]
+
+### 🚀 New Features
+
+- **ChatHub — docked web chat**:
+  - Added ChatHub: a dedicated settings page with a sidebar entry and tray/settings-menu entries, so you can chat with web-based AI services directly inside ChatSpeed. ChatHub entries are included when you export and import your configuration.
+  - Opening an entry docks its site beside the workflow UI in the Workflow window: the window grows to make room instead of squeezing the workflow UI, moves left when the extra width would leave the screen, and hands the width back when the page is hidden or closed.
+  - The entry of the docked site shows and hides its page, while the site list stays a pure entry picker.
+  - The page fits the window chrome: it keeps the rounded window corner and the full-width titlebar, and the workflow UI, its dialogs, menus and notifications stay clear of it.
+  - The embedded ChatHub page and the web scraper follow the configured network proxy, so they leave through the same proxy as the rest of the app (explicit HTTP proxies only; on macOS this requires macOS 14 or later).
+- **Workflow**:
+  - Added a collapsible navigation rail: the sidebar can collapse to a compact rail with top tab buttons, the running/recent workflow list, and the terminal entry at the bottom.
+  - The final code review now reviews only the dimensions that apply to the change and reports every in-scope blocker/major issue in one verdict.
+  - The context-compression indicator now shows elapsed seconds (for example, "Compressing context 12s…").
+- **Proxy statistics**:
+  - The statistics table now supports customizing which columns are displayed.
+
+### 🪄 Improvements
+
+- **Workflow and model settings**:
+  - Added a "max" thinking level to the Agent and Workflow model configuration alongside low/medium/high.
+  - Proxy server addresses entered as `ip:port` are now auto-normalized to `http://ip:port`.
+  - Hovering a truncated MCP tool row now shows the full "server · tool" name.
+  - The quick actions menu explains each approval level under its title, and scrolls inside the window when the list is longer than the space available.
+  - The message list keeps your reading position when the compression banner or queued messages appear.
+- **Documentation**:
+  - Restored the project rules that were accidentally lost when `GEMINI.md` was removed.
+
+### 🐞 Bug Fixes
+
+- **Workflow**:
+  - Terminal model errors are now surfaced as a durable error message in the conversation instead of a transient state change.
+  - MCP tools now expose only the tools you have configured as available, and expanded MCP tool access is preserved across turns.
+  - Todo tasks keep their full descriptions across context compression.
+  - Message links now open in the external browser instead of navigating the embedded view.
+  - Final-audit mode now turns itself off after a workflow completes, so it no longer carries into the next run.
+- **CCProxy**:
+  - Raw upstream error responses are now preserved rather than rewritten.
+  - Error requests are now recorded in the proxy statistics.
+- **Window**:
+  - Window size and position now persist correctly across restarts (the workflow window could previously reopen at its default size).
+  - The proxy switcher keeps a square window frame on Linux and Windows.
+- **Sandbox**:
+  - The installed-skills path is now preserved inside the sandbox.
+- **Dependencies**:
+  - Updated `rmcp` to 3.4.0 to clear MCP server security advisories, and dropped two unused frontend packages.
+
+---
+
 ## [2.0.16]
 
 ### 🚀 New Features
