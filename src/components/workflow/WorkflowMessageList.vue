@@ -1191,7 +1191,7 @@
       <div v-if="isCompressing" class="compression-status">
         <div class="compression-indicator">
           <cs name="loading" size="14px" class="rotating" />
-          <span class="compression-text">{{ compressionMessage }}</span>
+          <span class="compression-text">{{ compressionStatusText }}</span>
         </div>
       </div>
 
@@ -2908,6 +2908,49 @@ const streamingLayoutState = computed(() => {
     lastBlock?.content?.length || 0,
     props.chatState?.retryInfo?.nextRetryIn ?? ''
   ]
+})
+
+// The compression hint is backend-owned; this stopwatch only measures how long the
+// hint has been on screen, so it never becomes compression state.
+const compressionStartedAt = ref(0)
+const compressionNow = ref(0)
+let compressionTimer = null
+
+const stopCompressionTimer = () => {
+  if (compressionTimer) {
+    clearInterval(compressionTimer)
+    compressionTimer = null
+  }
+}
+
+watch(
+  () => props.isCompressing,
+  isCompressing => {
+    stopCompressionTimer()
+    compressionStartedAt.value = isCompressing ? Date.now() : 0
+    compressionNow.value = compressionStartedAt.value
+    if (!isCompressing) return
+
+    compressionTimer = setInterval(() => {
+      compressionNow.value = Date.now()
+    }, 1000)
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(stopCompressionTimer)
+
+const compressionElapsedSeconds = computed(() =>
+  compressionStartedAt.value
+    ? Math.max(0, Math.floor((compressionNow.value - compressionStartedAt.value) / 1000))
+    : 0
+)
+
+// The backend hint already ends with an ellipsis, so the timer goes before it to read
+// as "Compressing context 12s...".
+const compressionStatusText = computed(() => {
+  const hint = (props.compressionMessage || '').replace(/\s*(?:\.{3}|…)\s*$/, '')
+  return t('workflow.compressionElapsed', { text: hint, seconds: compressionElapsedSeconds.value }).trim()
 })
 
 const messageTailLayoutState = computed(() => [

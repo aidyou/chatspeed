@@ -720,6 +720,36 @@ test('message resize observer is hoisted for immediate watchers', async () => {
   )
 })
 
+test('compression indicator counts elapsed seconds while it is running', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /<span class="compression-text">\{\{ compressionStatusText \}\}<\/span>/,
+    'the compression indicator must render the timed status text'
+  )
+  assert.match(
+    messageList,
+    /watch\(\n  \(\) => props\.isCompressing,[\s\S]*?stopCompressionTimer\(\)[\s\S]*?setInterval\(\(\) => \{\n      compressionNow\.value = Date\.now\(\)\n    \}, 1000\)/,
+    'the elapsed counter must restart with the backend compression status and tick once per second'
+  )
+  assert.match(
+    messageList,
+    /onBeforeUnmount\(stopCompressionTimer\)/,
+    'the elapsed counter must stop when the message list unmounts'
+  )
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.match(locale.workflow.compressionElapsed, /\{text\}/)
+    assert.match(locale.workflow.compressionElapsed, /\{seconds\}/)
+  }
+})
+
 test('off-bottom readers preserve a message window anchor while new messages render', async () => {
   const [workflowSessionPane, workflowMessages, messageList] = await Promise.all([
     readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),

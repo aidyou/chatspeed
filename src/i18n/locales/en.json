@@ -1336,6 +1336,7 @@
     "awaitingApproval": "Awaiting approval",
     "awaitingExecution": "Awaiting execution...",
     "awaitingUser": "Awaiting user input",
+    "compressionElapsed": "{text} {seconds}s...",
     "statusNotifier": {
       "awaitingBashApproval": "Awaiting command approval: {command}",
       "awaitingCreateApproval": "Awaiting file creation approval: {path}",

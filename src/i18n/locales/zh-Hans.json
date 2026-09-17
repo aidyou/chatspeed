@@ -1335,6 +1335,7 @@
     "awaitingApproval": "等待用户审批",
     "awaitingExecution": "等待执行...",
     "awaitingUser": "等待用户输入",
+    "compressionElapsed": "{text} {seconds}s...",
     "statusNotifier": {
       "awaitingBashApproval": "等待执行命令审批: {command}",
       "awaitingCreateApproval": "等待创建文件审批: {path}",
