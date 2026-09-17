@@ -19,24 +19,63 @@
               <cs name="sidebar" />
             </div>
           </el-tooltip>
-          <el-tooltip
-            :content="$t('workflow.automation.createTitle')"
-            :hide-after="0"
-            :enterable="false"
-            placement="bottom">
-            <div class="icon-btn upperLayer" @click="openCreateAutomation">
-              <cs name="clock" />
+
+          <el-dropdown
+            v-if="globalPendingApprovalList.length > 0"
+            trigger="click"
+            @command="handleApprovalCommand">
+            <div class="icon-btn upperLayer approval-queue-btn blinking">
+              <cs name="approval" />
+              <span class="approval-queue-count">{{ approvalQueueCount }}</span>
             </div>
-          </el-tooltip>
-          <el-tooltip
-            :content="$t('workflow.newWorkflow')"
-            :hide-after="0"
-            :enterable="false"
-            placement="bottom">
-            <div class="icon-btn upperLayer" @click="createNewWorkflow()">
-              <cs name="new-chat" />
+            <template #dropdown>
+              <el-dropdown-menu class="approval-queue-menu">
+                <el-dropdown-item
+                  v-for="item in globalPendingApprovalList"
+                  :key="item.key"
+                  :command="item">
+                  <div class="approval-menu-item">
+                    <div class="approval-menu-title">
+                      <cs name="approval" size="var(--cs-font-size-md)" />
+                      {{ getPendingApprovalTitle(item) }}
+                    </div>
+                    <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
+                      {{ item.workflowTitle || item.action }}
+                    </div>
+                  </div>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown trigger="click">
+            <div class="icon-btn upperLayer">
+              <el-tooltip
+                :content="$t('workflow.notificationSound')"
+                :hide-after="0"
+                :enterable="false"
+                placement="bottom">
+                <cs :name="soundIcon" />
+              </el-tooltip>
             </div>
-          </el-tooltip>
+            <template #dropdown>
+              <el-dropdown-menu class="sound-dropdown-menu">
+                <el-dropdown-item>
+                  <el-checkbox
+                    :model-value="!workflowApprovalMuted"
+                    @change="toggleWorkflowApprovalMute">
+                    {{ $t('workflow.approvalSound') }}
+                  </el-checkbox>
+                </el-dropdown-item>
+                <el-dropdown-item>
+                  <el-checkbox
+                    :model-value="!workflowCompletionMuted"
+                    @change="toggleWorkflowCompletionMute">
+                    {{ $t('workflow.completionSound') }}
+                  </el-checkbox>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </template>
       <template #center>
@@ -60,39 +99,34 @@
         </div>
       </template>
       <template #right>
-        <el-dropdown
-          v-if="globalPendingApprovalList.length > 0"
-          trigger="click"
-          @command="handleApprovalCommand">
-          <div class="icon-btn upperLayer approval-queue-btn blinking">
-            <cs name="approval" />
-            <span class="approval-queue-count">{{ approvalQueueCount }}</span>
-          </div>
-          <template #dropdown>
-            <el-dropdown-menu class="approval-queue-menu">
-              <el-dropdown-item
-                v-for="item in globalPendingApprovalList"
-                :key="item.key"
-                :command="item">
-                <div class="approval-menu-item">
-                  <div class="approval-menu-title">
-                    <cs name="approval" size="var(--cs-font-size-md)" />
-                    {{ getPendingApprovalTitle(item) }}
-                  </div>
-                  <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
-                    {{ item.workflowTitle || item.action }}
-                  </div>
-                </div>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+      <el-tooltip
+        :content="$t('workflow.automation.createTitle')"
+        :hide-after="0"
+        :enterable="false"
+        placement="left"
+        popper-class="workflow-titlebar-tooltip">
+        <div class="icon-btn upperLayer" @click="openCreateAutomation">
+          <cs name="clock" />
+        </div>
+      </el-tooltip>
+      <el-tooltip
+        :content="$t('workflow.newWorkflow')"
+        :hide-after="0"
+        :enterable="false"
+        placement="left"
+        popper-class="workflow-titlebar-tooltip">
+        <div class="icon-btn upperLayer" @click="createNewWorkflow()">
+          <cs name="new-chat" />
+        </div>
+      </el-tooltip>
+
         <el-tooltip
           v-if="updateStore.isUpdateReady"
           :content="$t('common.newVersionReady')"
           :hide-after="0"
           :enterable="false"
-          placement="bottom">
+          placement="left"
+          popper-class="workflow-titlebar-tooltip">
           <div
             class="menu icon-btn upperLayer restart update-ready-btn"
             @click="updateStore.restartApp">
@@ -100,35 +134,8 @@
             {{ $t('common.updateButtonText') }}
           </div>
         </el-tooltip>
-        <el-dropdown trigger="click">
-          <div class="icon-btn upperLayer">
-            <el-tooltip
-              :content="$t('workflow.notificationSound')"
-              :hide-after="0"
-              :enterable="false"
-              placement="bottom">
-              <cs :name="soundIcon" />
-            </el-tooltip>
-          </div>
-          <template #dropdown>
-            <el-dropdown-menu class="sound-dropdown-menu">
-              <el-dropdown-item>
-                <el-checkbox
-                  :model-value="!workflowApprovalMuted"
-                  @change="toggleWorkflowApprovalMute">
-                  {{ $t('workflow.approvalSound') }}
-                </el-checkbox>
-              </el-dropdown-item>
-              <el-dropdown-item>
-                <el-checkbox
-                  :model-value="!workflowCompletionMuted"
-                  @change="toggleWorkflowCompletionMute">
-                  {{ $t('workflow.completionSound') }}
-                </el-checkbox>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+
+
         <div
           class="icon-btn upperLayer"
           :class="{ disabled: !canDeleteLastMessage }"
@@ -137,7 +144,8 @@
             :content="$t('workflow.deleteLastMessage')"
             :hide-after="0"
             :enterable="false"
-            placement="bottom">
+            placement="left"
+            popper-class="workflow-titlebar-tooltip">
             <cs name="undo" />
           </el-tooltip>
         </div>
@@ -146,7 +154,8 @@
             :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)"
             :hide-after="0"
             :enterable="false"
-            placement="bottom">
+            placement="left"
+            popper-class="workflow-titlebar-tooltip">
             <cs name="pin" />
           </el-tooltip>
         </div>
@@ -179,7 +188,6 @@
               :hubs="chatHubStore.list"
               :active-hub-id="chatHubStore.activeHubId"
               @select="onSelectChatHubEntry"
-              @open-current="onChatHubEntryOpened"
               @toggle="onChatHubEntryToggled"
               @close="onCloseChatHub" />
             <!-- The terminal entry only opens the terminal panel; the docked ChatHub page
@@ -220,7 +228,6 @@
           @select-workflow="onSelectWorkflowFromHistory"
           @select-automation="onSelectAutomation"
           @select-chat-hub="onSelectChatHubEntry"
-          @open-current-chat-hub="onChatHubEntryOpened"
           @toggle-chat-hub="onChatHubEntryToggled"
           @close-chat-hub="onCloseChatHub"
           @create-automation="openCreateAutomation"
@@ -2424,20 +2431,6 @@ const onSelectChatHubEntry = hub => {
 }
 
 /**
- * Clicking the chat entry restores the current page when it is currently hidden,
- * so the chat entry always brings the web page back into view.
- *
- * The restore is submitted through the ordered boundary instead of being guarded by
- * the applied visibility: a hide requested a moment earlier (terminal, task,
- * automation or sidebar tab) is still queued then, so the flag still reports the
- * page as visible and such a guard would drop the newest intent. The controller
- * supersedes the pending hide and de-dupes a restore of the already desired entry.
- */
-const onChatHubEntryOpened = () => {
-  restoreChatHubEntry(chatHubView, activeChatHub.value)
-}
-
-/**
  * Applies a width the splitter reported. The backend clamps it again, so the reserved
  * space and the page itself can never drift apart.
  */
@@ -3007,6 +3000,17 @@ onBeforeUnmount(() => {
 .app-container.macos .titlebar,
 .app-container.windows .titlebar{
     background: var(--cs-titlebar-bg-color);
+}
+
+/*
+ * The window paints its titlebar as an opaque fixed layer above the app, so a tooltip that
+ * stays inside that strip would be drawn under it. The tooltips of the buttons next to the
+ * docked ChatHub page point left for the same reason: the page is a native view over
+ * everything below the strip, which a tooltip pointing down would be hidden by.
+ */
+.workflow-titlebar-tooltip.el-popper {
+  /* The popper carries a layer of its own, so this one has to win over it. */
+  z-index: var(--cs-upper-layer-zindex) !important;
 }
 
 .main-container {

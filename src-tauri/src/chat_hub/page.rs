@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry};
 use wry::{NewWindowResponse, ProxyConfig, WebContext, WebViewBuilder};
 
 use super::types::{
@@ -53,6 +53,190 @@ pub fn clamp_width(window_width: f64, requested: f64) -> f64 {
 
     let maximum = (window_width - CHAT_HUB_MIN_HOST_WIDTH).max(CHAT_HUB_MIN_WIDTH);
     requested.clamp(CHAT_HUB_MIN_WIDTH, maximum)
+}
+
+/// Smallest window change worth a resize, in logical pixels.
+///
+/// A window that already fills the screen has nothing to add, and a rounding residue must
+/// not send a resize the platform would animate.
+const MIN_WINDOW_CHANGE: f64 = 0.5;
+
+/// Rounding residue a reported window width may carry, in logical pixels.
+///
+/// A window size is reported in physical pixels and scaled back to logical ones, so the width a
+/// layout started from can come back rounded.
+const REPORTED_WIDTH_TOLERANCE: f64 = 2.0;
+
+/// Whether a window report describes the geometry a layout this side asked for replaced.
+///
+/// A resize is reported before the window has applied the change it describes (the same
+/// behaviour window geometry is saved with, see `WINDOW_GEOMETRY_SAVE_DELAY`), so the report
+/// that follows a page docking carries the width the window had before the page made room for
+/// itself: the width the page was laid out for minus the width the page took, which is
+/// `layout_width - taken_width`. Laying the page out for that width would put it back over the
+/// workflow UI, so the layout is kept for such a report. Every other report describes a window
+/// the page has to follow, including one the user shrank.
+pub fn report_predates_layout(reported_width: f64, layout_width: f64, taken_width: f64) -> bool {
+    if !reported_width.is_finite() || !layout_width.is_finite() || !taken_width.is_finite() {
+        return false;
+    }
+
+    let previous_window_width = layout_width - taken_width;
+    (reported_width - previous_window_width).abs() <= REPORTED_WIDTH_TOLERANCE
+}
+
+/// Rectangle the host window takes so the workflow UI keeps its width next to the page.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HostWindowGeometry {
+    /// Left edge, in logical pixels.
+    pub left: f64,
+    /// Width, in logical pixels.
+    pub width: f64,
+}
+
+/// Room the screen gives a window, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenArea {
+    /// Left edge of the work area, in logical pixels.
+    pub left: f64,
+    /// Width of the work area, in logical pixels.
+    pub width: f64,
+}
+
+/// Rectangle the window needs to make room for the docked page.
+///
+/// The page is a second webview inside the workflow window, so the workflow UI can only
+/// keep its width if the window itself grows: the page takes the added space at the right
+/// edge while the workflow UI stays where it was.
+///
+/// The window never grows past the screen. A window that would stick out is capped at the
+/// width of the work area and moved left until its right edge lands on the right edge of
+/// the screen, so an expansion can never push a part of the window out of view.
+///
+/// `None` means the window cannot take the page without giving up workflow width, which is
+/// the case when it already fills the screen: the page then takes its space from the
+/// workflow UI, exactly as it did before.
+pub fn room_for_page(
+    window_left: f64,
+    window_width: f64,
+    screen: ScreenArea,
+    page_width: f64,
+) -> Option<HostWindowGeometry> {
+    let measured = window_left.is_finite() && window_width.is_finite() && page_width.is_finite();
+    if !measured || page_width <= 0.0 || !screen.width.is_finite() || screen.width <= 0.0 {
+        return None;
+    }
+
+    let width = (window_width + page_width).min(screen.width);
+    if width - window_width < MIN_WINDOW_CHANGE {
+        return None;
+    }
+
+    let left = window_left
+        .min(screen.left + screen.width - width)
+        .max(screen.left);
+
+    Some(HostWindowGeometry { left, width })
+}
+
+/// Makes room for the docked page by widening the host window.
+///
+/// Returns the width that was added, in logical pixels, which is the exact amount the page
+/// hands back when it goes away. A platform that cannot report the screen, or a window that
+/// already fills it, adds nothing and the page then opens the way it always has.
+pub fn widen_host_window(host: &WebviewWindow<Wry>, page_width: f64) -> f64 {
+    match try_widen_host_window(host, page_width) {
+        Ok(added) => added,
+        Err(error) => {
+            log::warn!(
+                "Failed to make room for the ChatHub page in the '{}' window: {}",
+                host.label(),
+                error
+            );
+            0.0
+        }
+    }
+}
+
+/// Hands the width the docked page took back to the workflow UI.
+///
+/// The window keeps its left edge, so closing the page undoes exactly the widening the
+/// opening performed. A narrower window than the platform allows is not this side's
+/// business: the platform keeps its own minimum width.
+pub fn narrow_host_window(host: &WebviewWindow<Wry>, added: f64) {
+    if let Err(error) = try_narrow_host_window(host, added) {
+        log::warn!(
+            "Failed to hand the ChatHub page width back in the '{}' window: {}",
+            host.label(),
+            error
+        );
+    }
+}
+
+fn try_widen_host_window(host: &WebviewWindow<Wry>, page_width: f64) -> Result<f64> {
+    let scale_factor = host.scale_factor()?;
+    let Some(screen) = screen_area(host, scale_factor) else {
+        return Ok(0.0);
+    };
+
+    let window_size = host.inner_size()?.to_logical::<f64>(scale_factor);
+    let position = host.outer_position()?.to_logical::<f64>(scale_factor);
+
+    let Some(geometry) = room_for_page(position.x, window_size.width, screen, page_width) else {
+        return Ok(0.0);
+    };
+
+    host.set_size(tauri::Size::Logical(LogicalSize::new(
+        geometry.width,
+        window_size.height,
+    )))?;
+
+    // The window is only moved when the page would have pushed it off the screen.
+    if (geometry.left - position.x).abs() >= MIN_WINDOW_CHANGE {
+        host.set_position(tauri::Position::Logical(LogicalPosition::new(
+            geometry.left,
+            position.y,
+        )))?;
+    }
+
+    Ok(geometry.width - window_size.width)
+}
+
+fn try_narrow_host_window(host: &WebviewWindow<Wry>, added: f64) -> Result<()> {
+    if !added.is_finite() || added < MIN_WINDOW_CHANGE {
+        return Ok(());
+    }
+
+    let scale_factor = host.scale_factor()?;
+    let window_size = host.inner_size()?.to_logical::<f64>(scale_factor);
+    let width = window_size.width - added;
+    if width < MIN_WINDOW_CHANGE {
+        return Ok(());
+    }
+
+    host.set_size(tauri::Size::Logical(LogicalSize::new(
+        width,
+        window_size.height,
+    )))?;
+
+    Ok(())
+}
+
+/// Work area of the screen the window is on, in logical pixels.
+///
+/// The work area is used instead of the full resolution so the window never grows under
+/// the menu bar or over a dock the user keeps at the side of the screen.
+fn screen_area(host: &WebviewWindow<Wry>, scale_factor: f64) -> Option<ScreenArea> {
+    let monitor = host.current_monitor().ok().flatten()?;
+    let work_area = monitor.work_area();
+    let left = work_area.position.x as f64 / scale_factor;
+    let width = work_area.size.width as f64 / scale_factor;
+
+    if !left.is_finite() || !width.is_finite() || width <= 0.0 {
+        return None;
+    }
+
+    Some(ScreenArea { left, width })
 }
 
 /// Largest corner radius the page accepts, so a bad measurement cannot eat into the page.
@@ -301,6 +485,136 @@ mod tests {
         // Nonsense input falls back to the default instead of poisoning the layout.
         assert_eq!(clamp_width(f64::NAN, 640.0), CHAT_HUB_DEFAULT_WIDTH);
         assert_eq!(clamp_width(1600.0, f64::NAN), CHAT_HUB_DEFAULT_WIDTH);
+    }
+
+    /// The window grows to the right, so the workflow UI keeps the width it had and the page
+    /// takes the added space at the right edge.
+    #[test]
+    fn the_window_grows_to_the_right_for_the_page() {
+        let screen = ScreenArea {
+            left: 0.0,
+            width: 1440.0,
+        };
+
+        assert_eq!(
+            room_for_page(100.0, 600.0, screen, 600.0),
+            Some(HostWindowGeometry {
+                left: 100.0,
+                width: 1200.0
+            })
+        );
+        // A screen that starts further right is measured in the same coordinate space.
+        assert_eq!(
+            room_for_page(
+                0.0,
+                1024.0,
+                ScreenArea {
+                    left: 1280.0,
+                    width: 1920.0
+                },
+                600.0
+            ),
+            Some(HostWindowGeometry {
+                left: 1280.0,
+                width: 1624.0
+            })
+        );
+    }
+
+    /// A window that would stick out of the screen is capped at the screen width and moved
+    /// left instead, so an expansion never leaves a part of the window out of view.
+    #[test]
+    fn a_window_that_would_stick_out_is_moved_back_onto_the_screen() {
+        let screen = ScreenArea {
+            left: 0.0,
+            width: 1440.0,
+        };
+
+        // 900 + 1024 + 600 reaches past the right edge, so the window takes the whole screen
+        // width and slides left until its right edge lands on the right edge of the screen.
+        assert_eq!(
+            room_for_page(900.0, 1024.0, screen, 600.0),
+            Some(HostWindowGeometry {
+                left: 0.0,
+                width: 1440.0
+            })
+        );
+        // A window that only reaches past the edge by a little moves by that little.
+        assert_eq!(
+            room_for_page(400.0, 800.0, screen, 600.0),
+            Some(HostWindowGeometry {
+                left: 40.0,
+                width: 1400.0
+            })
+        );
+        // A window that started off the left edge is pulled back onto the screen.
+        assert_eq!(
+            room_for_page(-300.0, 800.0, screen, 600.0),
+            Some(HostWindowGeometry {
+                left: 0.0,
+                width: 1400.0
+            })
+        );
+    }
+
+    /// A window that already fills the screen makes no room: the page then takes its space
+    /// from the workflow UI, which is what happened before the window could grow.
+    #[test]
+    fn a_window_that_fills_the_screen_makes_no_room() {
+        let screen = ScreenArea {
+            left: 0.0,
+            width: 1440.0,
+        };
+
+        assert_eq!(room_for_page(0.0, 1440.0, screen, 600.0), None);
+        assert_eq!(room_for_page(-200.0, 1440.0, screen, 600.0), None);
+        // A window that is already wider than the screen is never narrowed by this rule.
+        assert_eq!(room_for_page(0.0, 1600.0, screen, 600.0), None);
+    }
+
+    /// Nonsense measurements never move a window.
+    #[test]
+    fn unusable_measurements_leave_the_window_alone() {
+        let screen = ScreenArea {
+            left: 0.0,
+            width: 1440.0,
+        };
+
+        assert_eq!(room_for_page(f64::NAN, 1024.0, screen, 600.0), None);
+        assert_eq!(room_for_page(0.0, 1024.0, screen, f64::NAN), None);
+        assert_eq!(room_for_page(0.0, 1024.0, screen, 0.0), None);
+        assert_eq!(
+            room_for_page(
+                0.0,
+                1024.0,
+                ScreenArea {
+                    left: 0.0,
+                    width: 0.0
+                },
+                600.0
+            ),
+            None
+        );
+    }
+
+    /// A window that grew for the page keeps reporting the width it had before it grew, so the
+    /// layout the page was given is kept instead of being computed from that report.
+    #[test]
+    fn a_report_of_the_geometry_a_layout_replaced_is_recognized() {
+        // The window the page made room from is the width the page was laid out for minus the
+        // width the page took: exactly what the report after a docking carries.
+        assert!(report_predates_layout(871.0, 1471.0, 600.0));
+        // The report is rounded when a physical size is scaled back to logical pixels.
+        assert!(report_predates_layout(872.0, 1471.0, 600.0));
+        // The window caught up, so the report describes the window the page lives in.
+        assert!(!report_predates_layout(1471.0, 1471.0, 600.0));
+        assert!(!report_predates_layout(1512.0, 1471.0, 600.0));
+        // A window the user shrank is followed instead of ignored.
+        assert!(!report_predates_layout(900.0, 1471.0, 600.0));
+        assert!(!report_predates_layout(800.0, 1471.0, 600.0));
+        // Nonsense measurements never keep a layout alive.
+        assert!(!report_predates_layout(f64::NAN, 1471.0, 600.0));
+        assert!(!report_predates_layout(871.0, f64::NAN, 600.0));
     }
 
     #[test]

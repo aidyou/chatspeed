@@ -66,6 +66,12 @@ const windowInnerWidth = async () => {
 }
 
 const apply = event => {
+  // The window width is read asynchronously, so a pointer that moves before it arrives must
+  // not be clamped by a maximum that is not known yet.
+  if (!maxWidth) {
+    return
+  }
+
   cancelAnimationFrame(frame)
   const clientX = event.clientX
   frame = requestAnimationFrame(() => {
@@ -76,6 +82,9 @@ const apply = event => {
 
 const stop = () => {
   dragging = false
+  // The maximum of a finished drag is not reused: a move that arrives while the next drag is
+  // still reading the window width would be clamped by a maximum that does not belong to it.
+  maxWidth = 0
   cancelAnimationFrame(frame)
   window.removeEventListener('pointermove', apply)
   window.removeEventListener('pointerup', stop)

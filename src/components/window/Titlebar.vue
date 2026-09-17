@@ -128,7 +128,7 @@ const availableMenus = [
   'model',
   'agent',
   'proxy',
-  { name: 'chatHub', icon: 'skill-chat' },
+  { name: 'chatHub', icon: 'connected' },
   'mcp',
   'skill',
   'divider',

@@ -38,7 +38,8 @@ pub use gtk_panel::ChatHubPageState;
 pub use child_view::ChatHubPageState;
 
 pub use page::{
-    clamp_width, host_window, page_builder, page_data_directory, run_on_page_thread, view_mode,
+    clamp_width, host_window, narrow_host_window, page_builder, page_data_directory,
+    report_predates_layout, room_for_page, run_on_page_thread, view_mode, widen_host_window,
 };
 pub use proxy::page_proxy;
 pub use types::{

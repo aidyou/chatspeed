@@ -13,13 +13,16 @@
 
 use std::sync::Mutex;
 
-use tauri::{AppHandle, WebviewWindow, Wry};
+use tauri::{AppHandle, PhysicalSize, WebviewWindow, Wry};
 use wry::{
     dpi::{LogicalPosition, LogicalSize},
     Rect, WebContext, WebView,
 };
 
-use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
+use super::{
+    clamp_width, host_window, narrow_host_window, page_builder, page_data_directory, page_proxy,
+    report_predates_layout, widen_host_window,
+};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
 
@@ -38,6 +41,21 @@ struct Inner {
     width: Option<f64>,
     /// Space the frontend keeps free above the page, in logical pixels.
     top_inset: f64,
+    /// Width the docked page took from the host window, in logical pixels.
+    ///
+    /// The workflow UI keeps its width next to the page only because the window grows by
+    /// the width of the page, so the added width is remembered here and handed back when
+    /// the page goes away. Zero means the page holds no width of the window.
+    grown: f64,
+    /// Window width the rectangle of the page was computed for, in logical pixels.
+    layout_window_width: f64,
+    /// Whether the window still reports the geometry the page made room from.
+    ///
+    /// A resize is reported before the window has applied it, so the report that arrives right
+    /// after this carrier grew the window still describes the window it grew from. Laying the
+    /// page out for that width would put it back over the workflow UI, so the layout is kept
+    /// until the window reports something else.
+    layout_pending: bool,
 }
 
 /// The native handle of the docked page.
@@ -69,6 +87,11 @@ impl ChatHubPageState {
     /// the frontend chrome occupies, which a stacked page must not cover, and
     /// `corner_radius` is the radius of the rounded window border the page gives back
     /// at its bottom-right corner.
+    ///
+    /// A stacked page takes its width from the workflow UI, so the window is widened by
+    /// that width first (see [`super::room_for_page`]) and the workflow UI keeps the width
+    /// it had. A window that already fills the screen cannot grow and the page then takes
+    /// its space from the workflow UI, as it always did.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
@@ -79,10 +102,29 @@ impl ChatHubPageState {
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
-        let (bounds, width) = page_bounds(&host, width, top_inset)?;
+        let window_size = host_inner_size(&host)?;
+
+        // The page makes room for itself once: re-selecting an entry, or bringing a hidden
+        // page back, must not widen the window a second time. The window is resized outside
+        // the state lock, because a resize is reported back to this window.
+        let added = if self.grown_width() <= 0.0 {
+            widen_host_window(&host, width)
+        } else {
+            0.0
+        };
+
+        // The page is laid out against the window it is about to live in, so it never shows
+        // up at the right edge it would have had and jumps to the new one afterwards.
+        let window_size = LogicalSize::new(window_size.width + added, window_size.height);
+        let (bounds, width) = page_bounds(width, top_inset, window_size);
 
         let mut inner = self.inner.lock()?;
         inner.top_inset = top_inset;
+        inner.grown += added;
+        inner.layout_window_width = window_size.width;
+        // The window is asked for a width it reports as the one it had before, so the report
+        // that is about to arrive is told apart from a resize the user performs later.
+        inner.layout_pending = added > 0.0;
 
         if inner.page.is_none() {
             // The page is reused for every entry, so building it is the only moment a
@@ -121,19 +163,35 @@ impl ChatHubPageState {
     }
 
     /// Hides the page without destroying it, so its session survives.
-    pub fn hide(&self, _app: &AppHandle<Wry>) -> Result<()> {
-        let inner = self.inner.lock()?;
-        if let Some(page) = inner.page.as_ref() {
-            page.webview.set_visible(false)?;
-        }
-        Ok(())
+    ///
+    /// The width the page took from the window is handed back with it, so the workflow UI
+    /// keeps the width it has while the page is away.
+    pub fn hide(&self, app: &AppHandle<Wry>) -> Result<()> {
+        let grown = self.take_grown()?;
+
+        let hidden = {
+            let mut inner = self.inner.lock()?;
+            // The page is leaving the window, so no report has a layout left to keep.
+            inner.layout_pending = false;
+
+            match inner.page.as_ref() {
+                Some(page) => page.webview.set_visible(false).map_err(AppError::from),
+                None => Ok(()),
+            }
+        };
+
+        self.hand_width_back(app, grown);
+        hidden
     }
 
     /// Applies a new width to the docked page.
+    ///
+    /// A drag only changes how much of the window the page takes: the window itself is not
+    /// resized while the splitter moves, so the width it holds is left as the opening set it.
     pub fn set_width(&self, app: &AppHandle<Wry>, width: f64) -> Result<()> {
         let host = host_window(app)?;
         let top_inset = self.inner.lock()?.top_inset;
-        let (bounds, width) = page_bounds(&host, width, top_inset)?;
+        let (bounds, width) = page_bounds(width, top_inset, host_inner_size(&host)?);
 
         let mut inner = self.inner.lock()?;
         if let Some(page) = inner.page.as_ref() {
@@ -144,22 +202,54 @@ impl ChatHubPageState {
         Ok(())
     }
 
-    /// Re-applies the page rectangle after the host window changed size.
+    /// Re-applies the page rectangle after the host window reported a size.
     ///
     /// Moving the window needs no work here, because the platform moves a child view
     /// together with its parent; only a size change has to be forwarded.
-    pub fn sync_bounds(&self, app: &AppHandle<Wry>) -> Result<()> {
-        let inner = self.inner.lock()?;
-        let Some(page) = inner.page.as_ref() else {
-            return Ok(());
-        };
+    ///
+    /// `reported` is the size the window reported, and that is not always the size it has: a
+    /// resize reaches this handler before the window has applied the change it describes, so
+    /// the report of the resize this carrier asked for still describes the window the page grew
+    /// from. Laying the page out for that width would put it back over the workflow UI, so the
+    /// layout the page was given is kept for such a report.
+    pub fn sync_bounds(&self, app: &AppHandle<Wry>, reported: PhysicalSize<u32>) -> Result<()> {
+        let host = host_window(app)?;
+        let scale_factor = host.scale_factor()?;
+        let reported = reported.to_logical::<f64>(scale_factor);
+
+        let mut inner = self.inner.lock()?;
         let Some(width) = inner.width else {
             return Ok(());
         };
+        if inner.page.is_none() {
+            return Ok(());
+        }
         let top_inset = inner.top_inset;
 
-        let host = host_window(app)?;
-        let (bounds, _) = page_bounds(&host, width, top_inset)?;
+        let predates_layout = inner.layout_pending
+            && report_predates_layout(reported.width, inner.layout_window_width, inner.grown);
+
+        let window_size = if predates_layout {
+            #[cfg(debug_assertions)]
+            log::debug!(
+                "[ChatHub] kept the docked layout of {:.0} logical pixels while the '{}' window reports {:.0}",
+                inner.layout_window_width,
+                super::CHAT_HUB_HOST_WINDOW_LABEL,
+                reported.width
+            );
+
+            // The report describes the window the page made room from, so the layout that was
+            // computed for the width the page was given is kept instead.
+            LogicalSize::new(inner.layout_window_width, reported.height)
+        } else {
+            inner.layout_pending = false;
+            reported
+        };
+        let bounds = page_bounds(width, top_inset, window_size).0;
+
+        let page = inner.page.as_ref().ok_or_else(|| AppError::General {
+            message: "the ChatHub page is missing".to_string(),
+        })?;
 
         Ok(page.webview.set_bounds(bounds)?)
     }
@@ -168,14 +258,21 @@ impl ChatHubPageState {
     ///
     /// Only the explicit close action and application exit reach this, so switching
     /// entries or hiding the page keeps the site session alive.
-    pub fn destroy(&self, _app: &AppHandle<Wry>) -> Result<()> {
-        let mut inner = self.inner.lock()?;
+    pub fn destroy(&self, app: &AppHandle<Wry>) -> Result<()> {
+        let grown = self.take_grown()?;
 
-        // Dropping the handle is what destroys the embedded page.
-        inner.page = None;
-        inner.url = None;
-        inner.width = None;
+        {
+            let mut inner = self.inner.lock()?;
 
+            // Dropping the handle is what destroys the embedded page.
+            inner.page = None;
+            inner.url = None;
+            inner.width = None;
+            inner.layout_window_width = 0.0;
+            inner.layout_pending = false;
+        }
+
+        self.hand_width_back(app, grown);
         Ok(())
     }
 
@@ -185,15 +282,52 @@ impl ChatHubPageState {
             inner.page = None;
             inner.url = None;
             inner.width = None;
+            inner.grown = 0.0;
+            inner.layout_window_width = 0.0;
+            inner.layout_pending = false;
         }
     }
 
     /// Releases the page together with the window it was docked to.
+    ///
+    /// The window is going away with the page, so the width the page holds is dropped
+    /// instead of being handed back to a window that is closing anyway.
     pub fn release(&self, app: &AppHandle<Wry>) {
+        if let Err(error) = self.take_grown() {
+            log::warn!("Failed to read the ChatHub page width: {}", error);
+        }
+
         if let Err(error) = self.destroy(app) {
             log::warn!("Failed to release the ChatHub page: {}", error);
         }
         self.forget();
+    }
+
+    /// Width the docked page took from the host window, in logical pixels.
+    ///
+    /// A window size is remembered across runs, so the width the page holds is reported
+    /// here to be kept out of that record: reopening the app must not restore a window that
+    /// is wider than the workflow UI ever was.
+    pub fn grown_width(&self) -> f64 {
+        self.inner.lock().map(|inner| inner.grown).unwrap_or(0.0)
+    }
+
+    /// Takes the width the page holds out of the state, so it is handed back exactly once.
+    fn take_grown(&self) -> Result<f64> {
+        let mut inner = self.inner.lock()?;
+        Ok(std::mem::take(&mut inner.grown))
+    }
+
+    /// Gives the width the page took back to the window it was taken from.
+    fn hand_width_back(&self, app: &AppHandle<Wry>, grown: f64) {
+        if grown <= 0.0 {
+            return;
+        }
+
+        match host_window(app) {
+            Ok(host) => narrow_host_window(&host, grown),
+            Err(error) => log::warn!("Failed to reach the ChatHub host window: {}", error),
+        }
     }
 }
 
@@ -205,10 +339,11 @@ fn host_inner_size(host: &WebviewWindow<Wry>) -> Result<LogicalSize<f64>> {
 
 /// Rectangle of the docked page inside the host window, plus the width it uses.
 ///
-/// `top_inset` is the space the frontend chrome (the app titlebar, with the window
-/// controls) occupies, which a stacked page has to leave free.
-fn page_bounds(host: &WebviewWindow<Wry>, width: f64, top_inset: f64) -> Result<(Rect, f64)> {
-    let window_size = host_inner_size(host)?;
+/// `window_size` is the window the page is laid out in. While the page is making room for
+/// itself that is the widened window rather than the one still on screen, so the page never
+/// shows up at the wrong edge. `top_inset` is the space the frontend chrome (the app
+/// titlebar, with the window controls) occupies, which a stacked page has to leave free.
+fn page_bounds(width: f64, top_inset: f64, window_size: LogicalSize<f64>) -> (Rect, f64) {
     let width = clamp_width(window_size.width, width);
     let top = top_inset.clamp(0.0, window_size.height);
 
@@ -217,7 +352,7 @@ fn page_bounds(host: &WebviewWindow<Wry>, width: f64, top_inset: f64) -> Result<
         size: LogicalSize::new(width, (window_size.height - top).max(1.0)).into(),
     };
 
-    Ok((bounds, width))
+    (bounds, width)
 }
 
 #[cfg(test)]
@@ -257,8 +392,37 @@ mod tests {
         let source = include_str!("child_view.rs");
         let sync = implementation(source, "pub fn sync_bounds", "pub fn destroy");
 
-        assert!(sync.contains("page_bounds(&host, width, top_inset)"));
+        assert!(sync.contains("page_bounds(width, top_inset, window_size).0"));
         assert!(sync.contains("page.webview.set_bounds(bounds)"));
+        // A resize is reported before the window has applied it, so the layout the page was
+        // given is kept for the report that still describes the window it grew from.
+        assert!(sync.contains("report_predates_layout("));
+        assert!(sync.contains("inner.layout_pending = false;"));
+    }
+
+    /// Guard for the window width: the page takes its width from the workflow UI, so the
+    /// window has to be widened when the page opens and to hand exactly that width back when
+    /// the page goes away.
+    #[test]
+    fn the_page_makes_room_in_the_window_once_and_hands_it_back() {
+        let source = include_str!("child_view.rs");
+        let show = implementation(source, "pub fn show", "pub fn hide");
+        let hide = implementation(source, "pub fn hide", "pub fn set_width");
+        let destroy = implementation(source, "pub fn destroy", "pub fn forget");
+        let release = implementation(source, "pub fn release", "pub fn grown_width");
+
+        // The page is widened once, never once per entry selection.
+        assert!(show.contains("if self.grown_width() <= 0.0 {"));
+        assert!(show.contains("widen_host_window(&host, width)"));
+        // The rectangle is measured against the widened window, not the one still on screen.
+        assert!(show.contains("window_size.width + added"));
+        // Hiding and closing both give the width back.
+        assert!(hide.contains("take_grown()"));
+        assert!(hide.contains("hand_width_back(app, grown)"));
+        assert!(destroy.contains("take_grown()"));
+        assert!(destroy.contains("hand_width_back(app, grown)"));
+        // Closing the window releases the page without resizing a window that is going away.
+        assert!(release.contains("take_grown()"));
     }
 
     /// Guard for the session lifetime: hiding the page must keep its webview.

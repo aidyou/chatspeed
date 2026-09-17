@@ -14,10 +14,13 @@
 use std::sync::Mutex;
 
 use gtk::prelude::*;
-use tauri::{AppHandle, WebviewWindow, Wry};
+use tauri::{AppHandle, PhysicalSize, WebviewWindow, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix};
 
-use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
+use super::{
+    clamp_width, host_window, narrow_host_window, page_builder, page_data_directory, page_proxy,
+    widen_host_window,
+};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
 
@@ -34,6 +37,12 @@ struct Inner {
     url: Option<String>,
     /// Width currently applied to the page column.
     width: Option<f64>,
+    /// Width the docked page took from the host window, in logical pixels.
+    ///
+    /// The workflow webview keeps its width next to the page only because the window grows
+    /// by the width of the page, so the added width is remembered here and handed back when
+    /// the page goes away. Zero means the page holds no width of the window.
+    grown: f64,
 }
 
 /// The native handles of the docked page.
@@ -69,6 +78,11 @@ impl ChatHubPageState {
     /// of the workflow webview, which already contains the app titlebar itself.
     /// `_corner_radius` is ignored for the same reason: this window is not drawn with a
     /// rounded border the page could paint over.
+    ///
+    /// The page takes its width from the workflow webview, so the window is widened by that
+    /// width first (see [`super::room_for_page`]) and the workflow UI keeps the width it had.
+    /// A window that already fills the screen cannot grow and the page then takes its space
+    /// from the workflow UI, as it always did.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
@@ -79,9 +93,23 @@ impl ChatHubPageState {
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
-        let width = clamp_width(host_inner_width(&host)?, width);
+        let window_width = host_inner_width(&host)?;
+
+        // The page makes room for itself once: re-selecting an entry, or bringing a hidden
+        // page back, must not widen the window a second time. The window is resized outside
+        // the state lock, because a resize is reported back to this window.
+        let added = if self.grown_width() <= 0.0 {
+            widen_host_window(&host, width)
+        } else {
+            0.0
+        };
+
+        // The width limits are checked against the window the page will have, so the page
+        // never has to be laid out inside the window it is leaving behind.
+        let width = clamp_width(window_width + added, width);
 
         let mut inner = self.inner.lock()?;
+        inner.grown += added;
 
         if inner.page.is_none() {
             inner.page = Some(Page::create(app, &host, &url, width)?);
@@ -117,15 +145,27 @@ impl ChatHubPageState {
     ///
     /// A hidden child is skipped by the window box, so the workflow UI gets the full
     /// window width back.
-    pub fn hide(&self, _app: &AppHandle<Wry>) -> Result<()> {
-        let inner = self.inner.lock()?;
-        if let Some(page) = inner.page.as_ref() {
-            page.column.hide();
+    ///
+    /// The width the page took from the window is handed back with it, so the workflow UI
+    /// keeps the width it has while the page is away.
+    pub fn hide(&self, app: &AppHandle<Wry>) -> Result<()> {
+        let grown = self.take_grown()?;
+
+        {
+            let inner = self.inner.lock()?;
+            if let Some(page) = inner.page.as_ref() {
+                page.column.hide();
+            }
         }
+
+        self.hand_width_back(app, grown);
         Ok(())
     }
 
     /// Applies a new width to the docked page.
+    ///
+    /// A drag only changes how much of the window the page takes: the window itself is not
+    /// resized while the splitter moves, so the width it holds is left as the opening set it.
     pub fn set_width(&self, app: &AppHandle<Wry>, width: f64) -> Result<()> {
         let host = host_window(app)?;
         let width = clamp_width(host_inner_width(&host)?, width);
@@ -141,7 +181,10 @@ impl ChatHubPageState {
 
     /// Nothing to do on this platform: GTK resizes the page column with the window
     /// itself, so only a width the user asked for has to be applied explicitly.
-    pub fn sync_bounds(&self, _app: &AppHandle<Wry>) -> Result<()> {
+    ///
+    /// The reported size is therefore not needed either: the column follows the window
+    /// without a rectangle of its own being recomputed here.
+    pub fn sync_bounds(&self, _app: &AppHandle<Wry>, _reported: PhysicalSize<u32>) -> Result<()> {
         Ok(())
     }
 
@@ -149,27 +192,32 @@ impl ChatHubPageState {
     ///
     /// Only the explicit close action and application exit reach this, so switching
     /// entries or hiding the page keeps the site session alive.
-    pub fn destroy(&self, _app: &AppHandle<Wry>) -> Result<()> {
-        let mut inner = self.inner.lock()?;
+    pub fn destroy(&self, app: &AppHandle<Wry>) -> Result<()> {
+        let grown = self.take_grown()?;
 
-        if let Some(page) = inner.page.take() {
-            // Hiding first gives the workflow UI its full width back before the widgets
-            // go away; dropping the webview is what destroys the embedded page.
-            page.column.hide();
-            drop(page.webview);
+        {
+            let mut inner = self.inner.lock()?;
 
-            // The column is the last reference of its own widget, so detaching it from
-            // the window box and dropping the handle releases it as well.
-            if let Some(parent) = page.column.parent() {
-                if let Ok(container) = parent.downcast::<gtk::Container>() {
-                    container.remove(&page.column);
+            if let Some(page) = inner.page.take() {
+                // Hiding first gives the workflow UI its full width back before the widgets
+                // go away; dropping the webview is what destroys the embedded page.
+                page.column.hide();
+                drop(page.webview);
+
+                // The column is the last reference of its own widget, so detaching it from
+                // the window box and dropping the handle releases it as well.
+                if let Some(parent) = page.column.parent() {
+                    if let Ok(container) = parent.downcast::<gtk::Container>() {
+                        container.remove(&page.column);
+                    }
                 }
             }
+
+            inner.url = None;
+            inner.width = None;
         }
 
-        inner.url = None;
-        inner.width = None;
-
+        self.hand_width_back(app, grown);
         Ok(())
     }
 
@@ -179,15 +227,50 @@ impl ChatHubPageState {
             inner.page = None;
             inner.url = None;
             inner.width = None;
+            inner.grown = 0.0;
         }
     }
 
     /// Releases the page together with the window it was docked to.
+    ///
+    /// The window is going away with the page, so the width the page holds is dropped
+    /// instead of being handed back to a window that is closing anyway.
     pub fn release(&self, app: &AppHandle<Wry>) {
+        if let Err(error) = self.take_grown() {
+            log::warn!("Failed to read the ChatHub page width: {}", error);
+        }
+
         if let Err(error) = self.destroy(app) {
             log::warn!("Failed to release the ChatHub page: {}", error);
         }
         self.forget();
+    }
+
+    /// Width the docked page took from the host window, in logical pixels.
+    ///
+    /// A window size is remembered across runs, so the width the page holds is reported
+    /// here to be kept out of that record: reopening the app must not restore a window that
+    /// is wider than the workflow UI ever was.
+    pub fn grown_width(&self) -> f64 {
+        self.inner.lock().map(|inner| inner.grown).unwrap_or(0.0)
+    }
+
+    /// Takes the width the page holds out of the state, so it is handed back exactly once.
+    fn take_grown(&self) -> Result<f64> {
+        let mut inner = self.inner.lock()?;
+        Ok(std::mem::take(&mut inner.grown))
+    }
+
+    /// Gives the width the page took back to the window it was taken from.
+    fn hand_width_back(&self, app: &AppHandle<Wry>, grown: f64) {
+        if grown <= 0.0 {
+            return;
+        }
+
+        match host_window(app) {
+            Ok(host) => narrow_host_window(&host, grown),
+            Err(error) => log::warn!("Failed to reach the ChatHub host window: {}", error),
+        }
     }
 }
 
@@ -261,6 +344,20 @@ mod tests {
 
         assert!(hide.contains("page.column.hide()"));
         assert!(!hide.contains("destroy"));
+    }
+
+    /// Guard for the window width: the page takes its width from the workflow webview, so
+    /// the window has to be widened when the page opens and to hand exactly that width back
+    /// when the page goes away.
+    #[test]
+    fn the_page_makes_room_in_the_window_once_and_hands_it_back() {
+        let source = include_str!("gtk_panel.rs");
+
+        assert!(source.contains("if self.grown_width() <= 0.0 {"));
+        assert!(source.contains("widen_host_window(&host, width)"));
+        assert!(source.contains("narrow_host_window(&host, grown)"));
+        // The width limits are checked against the window the page will have.
+        assert!(source.contains("clamp_width(window_width + added, width)"));
     }
 
     /// Guard for the isolation boundary: the page is built by wry, so it gets no

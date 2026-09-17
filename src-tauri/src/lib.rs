@@ -518,7 +518,7 @@ pub async fn run() -> crate::error::Result<()> {
                     }
                 }
             }
-            tauri::WindowEvent::Resized(_size) => {
+            tauri::WindowEvent::Resized(size) => {
                 // Do nothing if the window is not yet fully initialized.
                 if !WINDOW_READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
@@ -530,11 +530,16 @@ pub async fn run() -> crate::error::Result<()> {
 
                     // The page is docked inside the workflow window, so a window resize
                     // has to be forwarded to the carriers that place the page themselves.
+                    // The reported size is passed on, because a resize is reported before the
+                    // window has applied it: only the carrier knows whether the page may be
+                    // laid out for that geometry.
                     if window_label == chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
                         if let Some(chat_hub_state) =
                             window.try_state::<chat_hub::ChatHubPageState>()
                         {
-                            if let Err(e) = chat_hub_state.sync_bounds(window.app_handle()) {
+                            if let Err(e) =
+                                chat_hub_state.sync_bounds(window.app_handle(), *size)
+                            {
                                 warn!("Failed to resize the ChatHub page: {}", e);
                             }
                         }
@@ -1057,20 +1062,57 @@ fn save_current_window_size(window: &tauri::Window, config_store: &Arc<MainStore
         return;
     }
 
+    // The window may be holding the docked ChatHub page, which widened it by the width that
+    // page needs. That width belongs to the page rather than to the window, so it is handed
+    // back here and kept out of the record: reopening the app must not restore a window that
+    // is wider than the workflow UI ever was.
+    let width = width_without_docked_page(window, logical_size.width);
+
     let saved_size =
         get_saved_window_size(config_store.clone(), window.label()).unwrap_or_default();
-    if saved_size.width == logical_size.width && saved_size.height == logical_size.height {
+    if saved_size.width == width && saved_size.height == logical_size.height {
         return;
     }
 
     if let Err(e) = config_store.set_window_size(
         WindowSize {
-            width: logical_size.width,
+            width,
             height: logical_size.height,
         },
         window.label(),
     ) {
         error!("Failed to set window size: {}", e);
+    }
+}
+
+/// Width of a window without the space the docked ChatHub page is holding.
+///
+/// The page is docked inside the workflow window and widens it by the width the page needs,
+/// so a remembered size has to leave that width out. A window that does not host the page,
+/// or one whose page is hidden, keeps the width it was measured with.
+fn width_without_docked_page(window: &tauri::Window, measured_width: f64) -> f64 {
+    if window.label() != chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
+        return measured_width;
+    }
+
+    let docked_width = window
+        .try_state::<chat_hub::ChatHubPageState>()
+        .map(|state| state.inner().grown_width())
+        .unwrap_or(0.0);
+
+    remembered_width(measured_width, docked_width)
+}
+
+/// Width a window is remembered with, leaving the width of a docked page out.
+///
+/// The workflow UI always keeps [`chat_hub::CHAT_HUB_MIN_HOST_WIDTH`] next to a page, so a
+/// remembered width below it cannot describe a window the user could have had the page open
+/// in: it can only come from a window that was shrunk by hand while the page was docked.
+pub(crate) fn remembered_width(measured_width: f64, docked_width: f64) -> f64 {
+    if docked_width > 0.0 && docked_width < measured_width {
+        (measured_width - docked_width).max(chat_hub::CHAT_HUB_MIN_HOST_WIDTH)
+    } else {
+        measured_width
     }
 }
 

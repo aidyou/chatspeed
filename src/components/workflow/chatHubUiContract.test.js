@@ -85,7 +85,6 @@ test('showing a chat entry only drives the ordered view commands', () => {
   // The visible flag follows the applied native state instead of a local guess.
   assert.match(workflowView, /onVisibleChange: visible => \{\s*chatHubVisible\.value = visible\s*\}/)
   assert.match(workflowView, /const hideChatHub = \(\) => \{\s*chatHubView\.hide\(\)\s*\}/)
-  assert.match(workflowView, /const onChatHubEntryOpened = \(\) => \{\s*restoreChatHubEntry\(chatHubView, activeChatHub\.value\)\s*\}/)
   // Failures only report a message and keep the original workflow UI usable.
   assert.match(workflowView, /onError: \(error, action\) => \{[\s\S]*?workflow\.chatHub\.\$\{key\}/)
 
@@ -159,7 +158,7 @@ test('the entry of the shown site toggles the page and the entry list releases i
   assert.match(entry, /class="chat-hub-entry__current-surface" @click="emit\('toggle'\)"/)
   assert.doesNotMatch(entry, /chat-hub-entry__current-close/)
   assert.doesNotMatch(entry, /@click\.stop/)
-  assert.match(entry, /const emit = defineEmits\(\['select', 'open-current', 'close', 'toggle'\]\)/)
+  assert.match(entry, /const emit = defineEmits\(\['select', 'close', 'toggle'\]\)/)
   assert.match(workflowView, /@toggle="onChatHubEntryToggled"/)
   assert.match(sidebar, /@toggle="\$emit\('toggle-chat-hub'\)"/)
   assert.match(workflowView, /@toggle-chat-hub="onChatHubEntryToggled"/)
@@ -194,31 +193,47 @@ test('the entry of the shown site toggles the page and the entry list releases i
   assert.match(chatHubViewController, /const close = \(\) => \{\s*hideNow\(\)[\s\S]*?await destroy\(\)/)
 })
 
-test('the chat entry menu restores the current page', () => {
-  // Opening the entry list is the "show the page again" gesture.
+test('the titlebar buttons next to the docked page point their tooltips left', () => {
+  const right = section(workflowView, '<template #right>', '    </Titlebar>')
+  const tooltips = right.match(/<el-tooltip/g) || []
+
+  assert.ok(tooltips.length > 0, 'the titlebar right side has no tooltips to guard')
+  // The page is a native view over everything below the titlebar, so a tooltip pointing down
+  // would be hidden by it as soon as the page is open.
+  assert.equal((right.match(/placement="left"/g) || []).length, tooltips.length)
+  assert.doesNotMatch(right, /placement="bottom"/)
+  // The window paints its titlebar as an opaque layer above the app, so a tooltip that stays
+  // inside that strip has to be given a layer above it.
+  assert.equal(
+    (right.match(/popper-class="workflow-titlebar-tooltip"/g) || []).length,
+    tooltips.length
+  )
   assert.match(
     workflowView,
-    /<div class="workflow-side-rail__bottom">\s*<ChatHubEntry[\s\S]*?@open-current="onChatHubEntryOpened"/
+    /\.workflow-titlebar-tooltip\.el-popper \{\s*\/\*[\s\S]*?\*\/\s*z-index: var\(--cs-upper-layer-zindex\) !important;/
   )
-  assert.match(entry, /@visible-change="onMenuVisibleChange"/)
-  assert.match(
-    entry,
-    /const onMenuVisibleChange = visible => \{\s*if \(visible\) \{\s*emit\('open-current'\)/
-  )
-  // The open action submits a restore to the ordered boundary instead of checking
-  // the lagging applied visibility, which would drop the newest intent while a
-  // hide is still queued.
-  assert.match(
-    workflowView,
-    /const onChatHubEntryOpened = \(\) => \{\s*restoreChatHubEntry\(chatHubView, activeChatHub\.value\)\s*\}/
-  )
-  // The collapsed sidebar uses the same contract.
-  assert.match(sidebar, /@open-current="\$emit\('open-current-chat-hub'\)"/)
-  assert.match(workflowView, /@open-current-chat-hub="onChatHubEntryOpened"/)
+})
+
+test('the chat entry icon only opens the entry list', () => {
+  // The icon is the entry list and nothing else: opening it must not show or hide the docked
+  // page, so the list stays a pure entry picker.
+  assert.doesNotMatch(entry, /@visible-change/)
+  assert.doesNotMatch(entry, /onMenuVisibleChange/)
+  assert.doesNotMatch(entry, /'open-current'/)
+  assert.doesNotMatch(workflowView, /onChatHubEntryOpened/)
+  assert.doesNotMatch(workflowView, /open-current-chat-hub/)
+  assert.doesNotMatch(sidebar, /open-current/)
+
   // Selecting an entry from the menu still shows that entry.
   assert.match(entry, /@command="onSelectCommand"/)
   assert.match(workflowView, /@select-chat-hub="onSelectChatHubEntry"/)
   assert.match(workflowView, /const onSelectChatHubEntry = hub => \{\s*showChatHub\(hub\)\s*\}/)
+
+  // The entry of the site that is docked stays the page control, which is what keeps the page
+  // reachable now that the icon no longer brings it back.
+  assert.match(entry, /class="chat-hub-entry__current-surface" @click="emit\('toggle'\)"/)
+  assert.match(workflowView, /@toggle-chat-hub="onChatHubEntryToggled"/)
+  assert.match(sidebar, /@toggle="\$emit\('toggle-chat-hub'\)"/)
 })
 
 test('the docked page is created by the carrier without Tauri IPC', () => {

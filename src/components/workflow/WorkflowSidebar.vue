@@ -162,7 +162,6 @@
           :hubs="chatHubs"
           :active-hub-id="activeChatHubId"
           @select="$emit('select-chat-hub', $event)"
-          @open-current="$emit('open-current-chat-hub')"
           @toggle="$emit('toggle-chat-hub')"
           @close="$emit('close-chat-hub')" />
 
@@ -440,7 +439,6 @@ const emit = defineEmits([
   'open-editor-file',
   'open-terminal',
   'select-chat-hub',
-  'open-current-chat-hub',
   'toggle-chat-hub',
   'close-chat-hub',
   'update:navigationTab'

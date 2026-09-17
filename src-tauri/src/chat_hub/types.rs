@@ -7,10 +7,11 @@ pub const CHAT_HUB_HOST_WINDOW_LABEL: &str = "workflow";
 
 /// Width the docked page opens with, in logical pixels.
 ///
-/// The page opens at a phone width, so a chat site starts in the layout it is designed
-/// around; the same value is the narrowest width a carrier accepts (see
-/// [`CHAT_HUB_MIN_WIDTH`]).
-pub const CHAT_HUB_DEFAULT_WIDTH: f64 = CHAT_HUB_MIN_WIDTH;
+/// A chat site is used at a comfortable reading width instead of the narrowest width a
+/// carrier accepts. The workflow window is widened by this width when the page opens, so the
+/// workflow UI keeps the width it had; dragging the splitter can still take the page down to
+/// [`CHAT_HUB_MIN_WIDTH`].
+pub const CHAT_HUB_DEFAULT_WIDTH: f64 = 600.0;
 
 /// Narrowest page width, in logical pixels.
 ///

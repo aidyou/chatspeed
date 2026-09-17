@@ -86,7 +86,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.model'), icon: 'model', id: 'model' },
   { label: t('settings.type.agent'), icon: 'agent', id: 'agent' },
   { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
-  { label: t('settings.type.chatHub'), icon: 'skill-chat', id: 'chatHub' },
+  { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },

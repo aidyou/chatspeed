@@ -1,13 +1,14 @@
 <template>
   <div class="chat-hub-entry">
+    <!-- The icon is the entry list and nothing else: the page is shown and hidden by the entry
+         of the site that is currently docked, below this list. -->
     <el-dropdown
       trigger="click"
       placement="right"
-      @command="onSelectCommand"
-      @visible-change="onMenuVisibleChange">
+      @command="onSelectCommand">
       <div class="chat-hub-entry__button" :class="{ active: !!activeHub }">
         <el-tooltip :content="$t('workflow.chatHub.title')" placement="right" :hide-after="0" :enterable="false">
-          <cs name="skill-chat" size="var(--cs-font-size-lg)" />
+          <cs name="connected" size="var(--cs-font-size-lg)" />
         </el-tooltip>
       </div>
       <template #dropdown>
@@ -78,7 +79,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['select', 'open-current', 'close', 'toggle'])
+const emit = defineEmits(['select', 'close', 'toggle'])
 
 /** Menu command that closes the docked page instead of selecting an entry. */
 const CLOSE_COMMAND = 'close'
@@ -104,16 +105,6 @@ const onSelectCommand = command => {
     emit('select', hub)
   }
 }
-
-/**
- * Opening the entry list is also the "show the chat" gesture: the parent uses it
- * to restore the current entry when its page is hidden.
- */
-const onMenuVisibleChange = visible => {
-  if (visible) {
-    emit('open-current')
-  }
-}
 </script>
 
 <style lang="scss">
@@ -122,7 +113,7 @@ const onMenuVisibleChange = visible => {
   flex-direction: column;
   flex-shrink: 0;
   align-items: center;
-  gap: var(--cs-space-xs);
+  // gap: var(--cs-space-xs);
 
   .chat-hub-entry__button {
     display: flex;
@@ -153,8 +144,8 @@ const onMenuVisibleChange = visible => {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 36px;
+    height: 36px;
     position: relative;
   }
 
@@ -176,8 +167,8 @@ const onMenuVisibleChange = visible => {
 }
 
 .chat-hub-entry__logo {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   margin-right: var(--cs-space-xs);
   border-radius: var(--cs-border-radius-round);
   object-fit: contain;

@@ -25,11 +25,13 @@ const reportError = (action, error) => {
 /**
  * Width the docked page opens with, in logical pixels.
  *
- * A chat site starts at a phone width, which is also the narrowest width the backend
- * accepts. The backend owns the authoritative limits and is asked for them on mount;
- * this value only covers the moment before they arrive.
+ * A chat site opens at the width it is comfortable to read in, and the workflow window is
+ * widened by that width so the workflow UI keeps the width it had. The splitter can still
+ * drag the page down to the narrowest width the backend accepts. The backend owns the
+ * authoritative limits and is asked for them on mount; this value only covers the moment
+ * before they arrive.
  */
-const DEFAULT_PAGE_WIDTH = 375
+const DEFAULT_PAGE_WIDTH = 600
 
 /**
  * useChatHubStore holds the independent list of ChatHub (web chat entry)
