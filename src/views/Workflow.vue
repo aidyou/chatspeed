@@ -1,5 +1,5 @@
 <template>
-  <div class="workflow-layout" :style="chatHubLayoutStyle">
+  <div class="workflow-layout">
     <ChatHubSplitter
       v-if="chatHubVisible"
       :right="chatHubReservedWidth"
@@ -400,7 +400,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { homeDir } from '@tauri-apps/api/path'
@@ -2326,18 +2326,25 @@ const chatHubReservedWidth = computed(() =>
 )
 
 /**
- * Space the docked page reserves, handed to the layout as a custom property rather than as
- * a padding of the layout itself.
+ * Space the docked page reserves, published on the document root.
  *
  * The page starts below the app titlebar, so the titlebar keeps the full window width and
- * only the workflow content has to stay clear of the page. A carrier that lays the page out
- * itself reserves nothing, and the content then keeps its full width.
+ * only the workflow content has to stay clear of the page. The width is published on the
+ * document root rather than on this layout, because the overlays and popovers Element Plus
+ * teleports to the document body have to find it outside this component as well. A carrier
+ * that lays the page out itself reserves nothing, and the content then keeps its full width.
  */
-const chatHubLayoutStyle = computed(() =>
-  chatHubReservedWidth.value
-    ? { '--cs-chathub-reserved-width': `${chatHubReservedWidth.value}px` }
-    : undefined
-)
+watchEffect(() => {
+  const reserved = chatHubReservedWidth.value
+  const root = document.documentElement
+
+  if (reserved > 0) {
+    root.style.setProperty('--cs-chathub-reserved-width', `${reserved}px`)
+    return
+  }
+
+  root.style.removeProperty('--cs-chathub-reserved-width')
+})
 
 /**
  * Height of the app titlebar, which a stacked page has to stay below so it can never

@@ -12,6 +12,7 @@ const chatHubViewController = read('../../libs/chatHubView.js')
 const chatHubStore = read('../../stores/chatHub.js')
 const page = read('../../../src-tauri/src/chat_hub/page.rs')
 const layoutStyles = read('../../styles/workflow/layout.scss')
+const globalStyles = read('../../style/chatspeed/style.scss')
 
 /** Text between two markers, so assertions stay inside one block of a file. */
 const section = (text, start, end) => {
@@ -50,7 +51,9 @@ test('workflow sidebar keeps the chat entry directly above the terminal entry', 
 })
 
 test('chat entry renders logos with the shared avatar fallback and current entry', () => {
-  assert.match(entry, /<cs name="skill-chat" size="var\(--cs-font-size-lg\)" \/>/)
+  // The entry uses the shared icon component at the large size; the glyph itself is a
+  // presentation choice and stays free to change.
+  assert.match(entry, /<cs name="[a-z-]+" size="var\(--cs-font-size-lg\)" \/>/)
   assert.match(entry, /v-for="hub in hubs"[\s\S]*?:command="hub\.id"/)
   assert.match(entry, /<img[\s\S]*?v-if="logoOf\(hub\)"[\s\S]*?@error="markLogoBroken\(hub\)"/)
   assert.match(entry, /<avatar v-else :text="hub\.name" :size="16" \/>/)
@@ -128,11 +131,14 @@ test('stacked carriers keep the page inside the reserved space, splitting carrie
     workflowView,
     /const chatHubReservedWidth = computed\(\(\) =>\s*chatHubStore\.viewMode === 'reserve' && chatHubVisible\.value \? chatHubStore\.pageWidth : 0\s*\)/
   )
+  // The reserved width is published on the document root, because the overlays and popovers
+  // Element Plus teleports to the document body have to find it outside this component.
   assert.match(
     workflowView,
-    /const chatHubLayoutStyle = computed\(\(\) =>\s*chatHubReservedWidth\.value\s*\? \{ '--cs-chathub-reserved-width': `\$\{chatHubReservedWidth\.value\}px` \}\s*: undefined\s*\)/
+    /watchEffect\(\(\) => \{\s*const reserved = chatHubReservedWidth\.value[\s\S]*?root\.style\.setProperty\('--cs-chathub-reserved-width'[\s\S]*?root\.style\.removeProperty\('--cs-chathub-reserved-width'\)/
   )
-  assert.match(workflowView, /<div class="workflow-layout" :style="chatHubLayoutStyle">/)
+  assert.doesNotMatch(workflowView, /chatHubLayoutStyle/)
+  assert.match(workflowView, /<div class="workflow-layout">/)
   // The page starts below the app titlebar, so the reserved space narrows the workflow
   // content only and the titlebar keeps the full window width.
   assert.match(
@@ -149,6 +155,29 @@ test('stacked carriers keep the page inside the reserved space, splitting carrie
   // rectangular there.
   assert.match(workflowView, /getComputedStyle\(container\)\.borderBottomRightRadius/)
   assert.match(workflowView, /cornerRadius: chatHubCornerRadius\(\)/)
+})
+
+test('overlays and toasts stay inside the workflow UI while the page is docked', () => {
+  // A dialog, a message box and a drawer center or slide within the window, so their right part
+  // would end up under the native page: every layer that positions itself in the window is given
+  // the width the page reserves.
+  assert.match(
+    globalStyles,
+    /\.el-overlay \{[\s\S]*?width: calc\(100% - var\(--cs-chathub-reserved-width, 0px\)\) !important;/
+  )
+  assert.match(
+    globalStyles,
+    /\.el-overlay-dialog,\s*\.el-overlay-message-box \{\s*width: calc\(100% - var\(--cs-chathub-reserved-width, 0px\)\) !important;/
+  )
+  // A toast centers itself on the window and a notification is anchored to its right edge.
+  assert.match(
+    globalStyles,
+    /\.el-message\.is-center \{\s*left: calc\(\(100% - var\(--cs-chathub-reserved-width, 0px\)\) \/ 2\) !important;/
+  )
+  assert.match(
+    globalStyles,
+    /\.el-notification\.right \{\s*right: calc\(16px \+ var\(--cs-chathub-reserved-width, 0px\)\) !important;/
+  )
 })
 
 test('the entry of the shown site toggles the page and the entry list releases it', () => {
