@@ -12,7 +12,6 @@
     "test:workflow": "node --test src/components/workflow/approvalVisibility.test.js src/components/workflow/chatHubUiContract.test.js src/composables/workflow/codeEditorContract.test.js src/composables/workflow/messageProjectionRules.test.js src/composables/workflow/modelConfigSelection.test.js src/composables/workflow/planApproval.test.js src/composables/workflow/terminalContract.test.js src/composables/workflow/toolClassification.test.js src/composables/workflow/workflowConstitution.test.js src/composables/workflow/workflowInputDraftCache.test.js src/composables/workflow/workflowSessionHydration.test.js src/composables/workflow/workflowUiContract.test.js src/composables/workflow/useWorkflowMessageScroll.test.js src/libs/chatHubView.test.js src/stores/workflowApprovalRecovery.test.js src/constants/executionStyle.test.js"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.26",
     "@antv/g2plot": "2.4.34",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.4",
@@ -48,7 +47,6 @@
     "@vueuse/shared": "^12.0.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "ai": "^6.0.78",
     "codemirror": "^6.0.2",
     "diff": "^8.0.3",
     "element-plus": "^2.8.10",
