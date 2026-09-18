@@ -30,6 +30,8 @@ mod evaluate;
 mod experiment;
 #[path = "cs/output.rs"]
 mod output;
+#[path = "cs/promotion.rs"]
+mod promotion;
 #[path = "cs/schedule.rs"]
 mod schedule;
 #[path = "cs/sse.rs"]
@@ -39,7 +41,7 @@ mod verifier;
 
 use args::{
     AgentCommand, BenchmarkCommand, CampaignCommand, Cli, Command, ExperimentCommand, OutputFormat,
-    WorkflowCommand,
+    PromotionCommand, WorkflowCommand,
 };
 use clap::Parser as _;
 use client::ControlPlaneClient;
@@ -100,6 +102,12 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 command: CampaignCommand::Inspect { out },
             } => return campaign::inspect(cli, out),
             ExperimentCommand::Campaign { .. } => {}
+            // Promotion inspect is offline; submit/status/reconcile/audit need
+            // the client.
+            ExperimentCommand::Promotion {
+                command: PromotionCommand::Inspect { out },
+            } => return promotion::inspect(cli, out),
+            ExperimentCommand::Promotion { .. } => {}
         }
     }
 
@@ -190,6 +198,22 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
                 }
                 CampaignCommand::Reconcile { campaign_id } => {
                     schedule::reconcile(cli, &client, campaign_id).await
+                }
+            },
+            ExperimentCommand::Promotion { command } => match command {
+                // Inspect is handled above before discovery loading.
+                PromotionCommand::Inspect { .. } => Ok(()),
+                PromotionCommand::Run { evidence, out } => {
+                    promotion::run(cli, &client, evidence, out).await
+                }
+                PromotionCommand::Status { promotion_id } => {
+                    promotion::status(cli, &client, promotion_id).await
+                }
+                PromotionCommand::Reconcile { promotion_id } => {
+                    promotion::reconcile(cli, &client, promotion_id).await
+                }
+                PromotionCommand::Audit { promotion_id, out } => {
+                    promotion::audit(cli, &client, promotion_id, out).await
                 }
             },
         },

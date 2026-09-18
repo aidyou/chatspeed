@@ -21,8 +21,9 @@ use crate::commands::workflow::{
     campaign_cancel_core, campaign_close_core, campaign_create_core, campaign_get_core,
     campaign_job_core, campaign_jobs_core, campaign_reconcile_core, campaign_run_core,
     campaign_run_core_with_owner, campaign_schedule_core, create_workflow_core,
-    get_workflow_events_core, get_workflow_snapshot_core, list_workflows_core, run_experiment_core,
-    workflow_signal_core, workflow_start_core, workflow_stop_core,
+    get_workflow_events_core, get_workflow_snapshot_core, list_workflows_core,
+    promotion_audit_core, promotion_get_core, promotion_reconcile_core, promotion_submit_core,
+    run_experiment_core, workflow_signal_core, workflow_start_core, workflow_stop_core,
 };
 use crate::db::{Agent, MainStore, Workflow};
 use crate::libs::tsid::TsidGenerator;
@@ -426,5 +427,62 @@ impl WorkflowApplicationService {
         ApplicationError,
     > {
         campaign_reconcile_core(self, campaign_id)
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2I promotion surface
+    // -----------------------------------------------------------------------
+    //
+    // Additive to the durable schedule surface: a promotion is submitted, read,
+    // reconciled and audited through this facade, and every server-side resource
+    // (target registry, execution profile, base repository, domain directories)
+    // is resolved by the backend. The caller supplies opaque references only
+    // (AC-8/INV-2/INV-4).
+
+    /// Persists one validated promotion submission. The promotion id, the request
+    /// hash and the evidence hash are all re-derived server-side.
+    pub fn promotion_submit(
+        &self,
+        request: crate::workflow::react::experiment_promotion::types::PromotionRequestV1,
+        idempotency_key: &str,
+    ) -> Result<
+        crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+        ApplicationError,
+    > {
+        promotion_submit_core(self, request, idempotency_key)
+    }
+
+    /// One promotion by its backend-minted id.
+    pub fn promotion_get(
+        &self,
+        promotion_id: &str,
+    ) -> Result<
+        crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+        ApplicationError,
+    > {
+        promotion_get_core(self, promotion_id)
+    }
+
+    /// Evidence-only reconciliation: what the durable intents and recorded state
+    /// imply, plus the ordered journal. It performs no effect.
+    pub fn promotion_reconcile(
+        &self,
+        promotion_id: &str,
+    ) -> Result<
+        crate::workflow::react::experiment_promotion::types::PromotionReconcileV1,
+        ApplicationError,
+    > {
+        promotion_reconcile_core(self, promotion_id)
+    }
+
+    /// The offline-verifiable audit bundle of one promotion.
+    pub fn promotion_audit(
+        &self,
+        promotion_id: &str,
+    ) -> Result<
+        crate::workflow::react::experiment_promotion::types::PromotionAuditV1,
+        ApplicationError,
+    > {
+        promotion_audit_core(self, promotion_id)
     }
 }

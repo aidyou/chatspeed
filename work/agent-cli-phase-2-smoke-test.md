@@ -523,3 +523,94 @@ catalog 漂移 fail-closed。
   扫描器实现为 `dev_data/2gh-smoke/scan_secrets.py`，其检测能力由阳性对照
   `dev_data/2gh-smoke/audit-selftest.sh` 验证（植入凭据可被发现、capability 文件名不误报、
   未提供 token 时拒绝报告干净），因此该 `0 命中` 是有检测能力背书的结论。
+
+## 8. 2I Promotion / Paired Canary Smoke（2026-09-17，真实 local Git + 真实容器 canary）
+
+**范围与口径**：2I 的自我改进闭环不含 LLM/tool/network effect（INV-9），候选生成仍在 2B/2F 边界之后，
+因此本轮 smoke 是**确定性的端到端验证**：真实临时 Git 仓库 + 真实实验 domain（v20 库、真实 target/profile/
+allowlisted bundle 注册）+ 真实 supervisor tick + 真实 checkpoint owner + 真实 digest-pinned 容器
+paired canary。可执行形式为 `src-tauri/src/workflow/react/experiment_promotion/smoke.rs`（`cargo test --lib
+experiment_promotion::smoke`），容器不可用或无本地 digest-pinned 镜像时**显式 skip**，不伪造通过。
+
+**场景与结果**（本机 Docker + 本地 digest 镜像可用，实际执行，非 skip）：
+
+1. `smoke_two_promotions_form_linear_commits_and_a_failure_does_not_advance`
+   - 三个 candidate：prompt-a / prompt-b 改进（各加一个 improvement 文件）、prompt-c 回退第一个改进。
+   - #1、#2 均走完 `queued → evidence_validating → checkpointing → checkpointed → canary_running →
+     ready_to_advance → advancing → promoted`，实验分支 `refs/heads/experiment/2i` 两次前移，
+     `rev-parse <head>^` 证明**连续成功节点形成线性本地 commits**。
+   - checkpoint commit 为英文 subject `experiment(promotion): checkpoint <promotion_id>`，含全部
+     trailers（Promotion-Id / Evidence-Hash / Patch-Sha256 / Base-Revision / Target-Ref）；
+     `refs/chatspeed/checkpoints/<promotion_id>` 与分支一致。
+   - #3 的 campaign 指标显示改进，但 workspace canary 实测回退 → `canary_failed`
+     （machine code `canary_stage_failed`），**分支保持不动**，且其 checkpoint commit/ref
+     **保留不删**（失败证据不丢失，INV-6）。
+   - 审计：仓库无任何 `remote.*` 配置（无 push/remote effect 可能），`git status --porcelain` 干净，
+     base repo 的 HEAD/index 未被 promotion 触碰（canary 与 checkpoint 均在独立 worktree/容器内）。
+2. `smoke_a_restart_recreates_the_checkpoint_exactly_once`
+   - 第一个 tick 后停在 `checkpointing`（intent 已持久、effect 未发生、ref 不存在，可证明未发生），
+     丢弃 supervisor（模拟崩溃/重启），新 supervisor 继续 → 达到 `promoted`。
+   - `rev-list --count base..head == 1`：**checkpoint commit 恰好一次**；journal 中
+     `checkpoint_intent` 与 `checkpoint_created` 各恰好一条（INV-7）。
+3. `smoke_the_audit_scanner_has_a_positive_control`
+   - 密钥扫描阳性对照：植入 `sk-…` 的文件被发现（1 hit），干净目录 0 hit——扫描能力有背书，
+     而非未验证的 grep。本轮任务产物（smoke 目录/日志/audit 文档）扫描 0 hit。
+
+**本轮聚焦验证（全部通过）**：`cargo test --lib experiment_promotion`(41)、`experiment_owner`(51)、
+`db::experiment_promotion`(8)、`db::sql::migrations`(15)、`db::experiment_schedule`(15)、`headless`(34)、
+`workflow::react::campaign`(20)；`cargo fmt --all -- --check` 通过；三 binary
+`chatspeed / chatspeed-headless / cs` check 0 error（仅存与本轮无关的既有 `private_bounds` warning）。
+
+**未执行项（如实说明）**：真实进程级 SIGKILL 矩阵未跑（本轮以“丢弃 supervisor + 新 supervisor 继续”的
+进程内重启覆盖同一恢复路径）；`pnpm tauri dev` + 真实模型的桌面端全链路未跑——2I 自身不新增 LLM effect，
+真实模型链路属于 2B/2C/2F 的既有验证范围，用户提供的 `cs@qwen3.8-flash` 通道可用于后续候选生成侧验证。
+
+### 8.1 终审修复（2026-09-17，canary 收敛 / CLI 等待预算 / 真实 SIGKILL 矩阵）
+
+终审指出三项必须修复，全部已落实并以真实执行验证：
+
+**1. canary 非成功结果全部收敛终态**（`scheduler.rs::converge_canary_failure`）：
+
+- 门禁类失败（stage 回退、超时、结构化结果不可信——malformed/oversize/字段不匹配）→
+  `canary_failed`（machine code 稳定：`canary_stage_failed` / `canary_result_invalid`），
+  分支不动、checkpoint 证据保留；
+- 环境类失败（容器运行时不可用等）→ `unknown_manual`（park），绝不盲目重试。
+- 验证：`a_canary_that_cannot_be_trusted_converges_without_touching_the_branch`——
+  (a) canary 程序输出垃圾 → `canary_failed`/`canary_result_invalid`，分支保持 base_head，
+  error_code/branch_intent=not_started/checkpoint 保留；后续 tick 不再 re-claim（attempt 不变，终态收敛）；
+  (b) 镜像 digest 本地不存在（owner 永不 pull）→ `unknown_manual`/`executor_unavailable`，分支不动。
+
+**2. CLI `promotion run` 等待预算与服务器上界一致**（`promotion.rs`）：
+
+- 新 `minimum_wait_budget_secs()` = `MAX_CANARY_STAGES(8) × MAX_CANARY_TIMEOUT_MS(900s) × 2 arms + 300s`
+  覆盖开销 = 14,700s（原固定 900s 会在合法 canary 仍运行时提前放弃，导致 audit 不导出）；
+  调用方只能上调不能缩短（`resolve_wait_budget_secs`）；轮询循环抽为
+  `wait_for_terminal(initial, fetch, budget, poll)`（首次使用提交返回值，不重复请求；终态即返；
+  超时报错携带 promotion_id 便于后续 `status` 查询）。
+- 验证：`promotion::tests` 4 项（预算覆盖上界且 >900s、override 只能上调、终态立即返回不轮询、
+  非终态轮询至终态、预算耗尽报超时且携带 id）。
+
+**3. 真实进程 SIGKILL/restart 矩阵**（`experiment_promotion/sigkill.rs`，真实 headless 子进程 +
+真实 SIGKILL；Docker 不可用或无本地 digest 镜像时显式 skip）：
+
+- **checkpoint 边界**：child#1 启动真实 headless → 父进程轮询 DB 至 `checkpointing` → **SIGKILL** →
+  等域/促销租约过期 → child#2 重建 → `promoted`；`rev-list --count base..branch == 1`
+  （checkpoint 恰一次）、journal `checkpoint_intent`/`checkpoint_created`/`branch_advanced` 各恰一条、
+  无孤儿容器/worktree、仓库无 remote。
+- **canary 中途 SIGKILL**：慢速 canary 程序（sleep 8s）给出确定窗口 → `canary_running` 后 3s **SIGKILL**
+  （双臂容器运行中）→ 重启 → `promoted`；重启侧 `cleanup_stale_arms` 回收死亡尝试的
+  容器/registered worktree/未注册目录（命名由 backend-minted promotion id 派生，ownership 可证明），
+  `rev-list --count == 1`，无孤儿。
+- **branch 边界三态**（真实子进程执行恢复）：CAS 已应用但未记录（`advancing`+intent，分支已在
+  checkpoint）→ **roll-forward**，分支不再移动，`branch_advanced` 恰一条；CAS 未应用（分支仍在 old）→
+  **恰一次 CAS** 后 `promoted`；分支被外部移到第三值（`commit-tree` 生成孤儿提交对象）→
+  **park `unknown_manual`**，分支绝不被覆盖，checkpoint 证据保留。
+- 实现要点：子进程 = 测试二进制自执行（`--exact` 全限定名）并 `bootstrap::start` 真实 headless；
+  `CHATSPEED_PROMOTION_LEASE_MS` 运维环境变量可缩短死实例租约窗口（默认 15min 不变）；
+  各场景 patch 内容加 scenario 盐，避免 content-derived promotion id 在全局 docker 命名空间互相污染；
+  Docker 密集测试用 `DOCKER_GATE` 串行化。
+
+**修复后回归（全部通过）**：`experiment_promotion` 46、`experiment_owner` 51、
+`db::experiment_promotion` 8、`db::sql::migrations` 15、`db::experiment_schedule` 15、`headless` 34、
+`workflow::react::campaign` 20、CLI `promotion::tests` 4；`cargo fmt --all -- --check` 通过；
+三 binary check 0 error。

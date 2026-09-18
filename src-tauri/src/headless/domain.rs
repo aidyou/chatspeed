@@ -30,8 +30,18 @@ pub const DOMAIN_ID_DOMAIN: &str = "cs-experiment-domain:id";
 
 /// The fixed directory layout of an experiment domain. Everything a run writes
 /// lives under these directories and nowhere else.
-pub const DOMAIN_DIRECTORIES: &[&str] =
-    &["runtime", "worktrees", "bundles", "artifacts", "journals"];
+///
+/// `promotion-targets` was added by Phase 2I. The layout is created with
+/// `create_dir_all`, so an experiment domain provisioned by an earlier binary
+/// simply gains the empty directory on its next open; nothing else changes.
+pub const DOMAIN_DIRECTORIES: &[&str] = &[
+    "runtime",
+    "worktrees",
+    "bundles",
+    "artifacts",
+    "journals",
+    "promotion-targets",
+];
 
 /// Default domain-lease length. The headless heartbeat renews it well inside
 /// this window; an expired lease is a recoverable crash, not a live owner.

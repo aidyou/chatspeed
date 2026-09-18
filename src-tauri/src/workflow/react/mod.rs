@@ -14,6 +14,7 @@ pub mod error;
 pub mod events;
 pub mod experiment;
 pub mod experiment_owner;
+pub mod experiment_promotion;
 pub mod experiment_schedule;
 pub mod file_preview;
 pub mod gateway;

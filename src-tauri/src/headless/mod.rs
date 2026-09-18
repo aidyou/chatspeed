@@ -19,6 +19,8 @@ pub mod bootstrap;
 pub mod domain;
 pub mod logging;
 pub mod profiles;
+pub mod promotion_runtime;
+pub mod promotion_targets;
 pub mod scheduler_runtime;
 
 /// Re-exported for the `chatspeed-headless` binary's `--config-category` flag.
@@ -26,14 +28,28 @@ pub mod scheduler_runtime;
 /// instance through [`HeadlessRuntime`]'s accessors, so the private persistence
 /// and workflow internals never become part of a public surface.
 pub use crate::db::config_transfer::ConfigCategory;
+pub use crate::db::experiment_promotion::{
+    decision_metrics, evaluate_record_policy, promotion_error, CanaryStageRow,
+    ExperimentPromotionStore, PromotionClaimOutcome, PromotionDecisionRecord, PromotionRecord,
+    SubmitOutcome,
+};
 pub use crate::db::experiment_schedule::{
     classify_recovery, job_digests_are_well_formed, job_transition_allowed, owner_fence,
     persistence_error, store_error, validate_job_row, validate_job_transition, verify_job_fixture,
     CampaignRecord, CampaignStatus, ClaimOutcome, ExperimentScheduleStore, JobRecord,
     RecoveryRecord, ScheduleOutcome, TransitionRequest,
 };
+pub use crate::workflow::react::experiment_promotion::binding::{
+    verify_artifact_file, verify_promotion_binding, BoundArtifactV1, CampaignBindingV1,
+    JobBindingV1, TargetBindingV1, VerifiedPromotionBinding,
+};
 pub use bootstrap::{start, HeadlessError, HeadlessOptions, HeadlessRuntime};
 pub use domain::{
     ExperimentDomain, ExperimentDomainLease, ExperimentDomainPaths, DOMAIN_DIRECTORIES,
 };
 pub use profiles::{ExecutionProfileRegistry, EXECUTION_PROFILE_DIR};
+pub use promotion_runtime::{
+    server_promotion_supervisor, spawn_promotion_supervisor, PromotionSupervisorHandle,
+    DEFAULT_PROMOTION_POLL_MS, MIN_PROMOTION_POLL_MS, PROMOTION_LEASE_MS,
+};
+pub use promotion_targets::{PromotionTargetRegistry, PROMOTION_TARGET_DIR};

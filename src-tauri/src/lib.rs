@@ -42,7 +42,28 @@ pub mod experiment_owner {
     pub use crate::workflow::react::experiment_owner::docker;
     pub use crate::workflow::react::experiment_owner::harbor_task;
     pub use crate::workflow::react::experiment_owner::patch;
+    /// The Phase 2I promotion checkpoint owner: the only component that mutates
+    /// a persistent Git ref. It is a separate contract from the run-scoped
+    /// [`ExecutionOwner`] precisely so the ordinary scheduler can never obtain
+    /// branch-mutation capability.
+    pub use crate::workflow::react::experiment_owner::promotion;
     pub use crate::workflow::react::experiment_owner::worktree;
+}
+/// The Phase 2I promotion contract, re-exported narrowly for the same reason as
+/// [`campaign`]: the `cs` CLI must build exactly the same strict evidence
+/// projection, the same canonical evidence hash and the same promotion id the
+/// backend will re-derive, or a submission could be accepted by one and
+/// rejected by the other.
+///
+/// Only pure contract items are exposed: the promotion documents, the FSM, the
+/// target/policy validators and the gate evaluation. The CLI still never opens
+/// SQLite, starts a scheduler, resolves a Git repository or runs a container
+/// (INV-2); the re-export is compile-time linkage of pure functions and value
+/// types only.
+pub mod experiment_promotion {
+    pub use crate::workflow::react::experiment_promotion::binding;
+    pub use crate::workflow::react::experiment_promotion::policy;
+    pub use crate::workflow::react::experiment_promotion::types;
 }
 mod builtin_agents;
 mod ccproxy;

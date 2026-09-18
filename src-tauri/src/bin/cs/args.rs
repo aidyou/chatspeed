@@ -163,6 +163,16 @@ pub enum ExperimentCommand {
         #[command(subcommand)]
         command: CampaignCommand,
     },
+    /// Phase 2I promotion: apply a verified code candidate to a
+    /// server-registered experiment target, run the paired canary gate and
+    /// audit the result.
+    ///
+    /// `run`/`status`/`reconcile`/`audit` talk to the control plane; `inspect`
+    /// is fully offline and never loads discovery.
+    Promotion {
+        #[command(subcommand)]
+        command: PromotionCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,6 +260,55 @@ pub enum CampaignCommand {
         /// Optional human-readable close reason recorded on the scope.
         #[arg(long)]
         reason: Option<String>,
+    },
+}
+
+/// Phase 2I promotion operations.
+///
+/// `run` and `audit` talk to the control plane; `inspect` is fully offline and
+/// never loads discovery. The CLI is an evidence/HTTP adapter only: it never
+/// opens the database, starts a runtime or touches Git.
+#[derive(Debug, Subcommand)]
+pub enum PromotionCommand {
+    /// Submit one strict `promotion_request.v1` document, wait for the
+    /// backend's terminal state and export the audit bundle under `--out`.
+    Run {
+        /// Path to the strict `promotion_request.v1` JSON file.
+        #[arg(long)]
+        evidence: PathBuf,
+        /// Audit output root; the bundle is written under
+        /// `<out>/promotion-audit` atomically.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Read the promotion status projection.
+    Status {
+        /// Backend-minted promotion id (`promo-...`).
+        #[arg(long = "promotion-id")]
+        promotion_id: String,
+    },
+    /// Evidence-only reconciliation: what the durable intents and recorded
+    /// state imply, plus the ordered journal. It performs no effect.
+    Reconcile {
+        /// Backend-minted promotion id (`promo-...`).
+        #[arg(long = "promotion-id")]
+        promotion_id: String,
+    },
+    /// Export the offline-verifiable audit bundle of one promotion.
+    Audit {
+        /// Backend-minted promotion id (`promo-...`).
+        #[arg(long = "promotion-id")]
+        promotion_id: String,
+        /// Audit output root.
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Re-verify the exported audit bundle fully offline (no discovery,
+    /// network, DB or Git) and print the recomputed canonical facts.
+    Inspect {
+        /// Audit output root created by `promotion run`/`promotion audit`.
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 

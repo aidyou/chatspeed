@@ -137,6 +137,12 @@ impl HeadlessOptions {
             base_repo: None,
         }
     }
+
+    /// Sets the operator-configured base repository.
+    pub fn with_base_repo(mut self, base_repo: impl Into<PathBuf>) -> Self {
+        self.base_repo = Some(base_repo.into());
+        self
+    }
 }
 
 /// A running headless instance.
@@ -150,6 +156,8 @@ pub struct HeadlessRuntime {
     ccproxy: crate::ccproxy::launcher::CcproxyServer,
     heartbeat: tokio::task::JoinHandle<()>,
     scheduler: SchedulerSupervisor,
+    /// The supervised Phase 2I promotion loop.
+    promotion: crate::headless::promotion_runtime::PromotionSupervisorHandle,
 }
 
 /// The supervised durable-schedule loop.
@@ -203,11 +211,13 @@ impl HeadlessRuntime {
             ccproxy,
             heartbeat,
             scheduler,
+            promotion,
             ..
         } = self;
         // Stop admitting new scheduled work, then release everything else.
         let _ = scheduler.shutdown.send(true);
         scheduler.task.abort();
+        promotion.stop();
         heartbeat.abort();
         control_plane.shutdown();
         ccproxy.shutdown().await;
@@ -413,6 +423,13 @@ pub async fn start(options: HeadlessOptions) -> Result<HeadlessRuntime, Headless
 
     let heartbeat = spawn_domain_heartbeat(domain.store().clone(), domain.lease().clone());
     let scheduler = spawn_scheduler(&options, domain.paths().root.clone(), application.clone());
+    let promotion = crate::headless::promotion_runtime::spawn_promotion_supervisor(
+        domain.paths().root.clone(),
+        options.base_repo.clone(),
+        domain.store().clone(),
+        owner_id(),
+        crate::headless::promotion_runtime::DEFAULT_PROMOTION_POLL_MS,
+    );
 
     // The instance's own loopback chat-completion proxy. A `group@alias` model is
     // resolved through this listener with a process-local key, so a runtime that
@@ -428,6 +445,7 @@ pub async fn start(options: HeadlessOptions) -> Result<HeadlessRuntime, Headless
         Err(error) => {
             let _ = scheduler.shutdown.send(true);
             scheduler.task.abort();
+            promotion.stop();
             heartbeat.abort();
             control_plane.shutdown();
             release_domain_lease(&domain);
@@ -456,6 +474,7 @@ pub async fn start(options: HeadlessOptions) -> Result<HeadlessRuntime, Headless
         ccproxy,
         heartbeat,
         scheduler,
+        promotion,
     })
 }
 

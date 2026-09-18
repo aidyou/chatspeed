@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v3, v4,
-    v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v20, v3,
+    v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -25,6 +25,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v17::MIGRATION,
     v18::MIGRATION,
     v19::MIGRATION,
+    v20::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -376,7 +377,7 @@ mod tests {
             get_db_version(&conn).expect("version"),
             latest_migration_version()
         );
-        assert_eq!(latest_migration_version(), 19);
+        assert_eq!(latest_migration_version(), 20);
         // The pre-existing row survived untouched.
         let name: String = conn
             .query_row("SELECT name FROM agents WHERE id = 'agent-1'", [], |row| {
@@ -402,5 +403,64 @@ mod tests {
             })
             .expect("count markers");
         assert_eq!(markers, 0, "an upgraded database is never auto-marked");
+    }
+
+    /// Phase 2I adds v20. It must be purely additive for the same reason: an
+    /// existing v19 database keeps every row, every job and every marker, and
+    /// simply gains the promotion tables.
+    #[test]
+    fn v19_database_upgrades_to_v20_without_touching_existing_rows() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        build_at_version(&mut conn, 19);
+        assert_eq!(get_db_version(&conn).expect("version"), 19);
+        assert!(!table_exists(&conn, "experiment_promotions"));
+        assert!(!table_exists(&conn, "experiment_promotion_journal"));
+        assert!(!table_exists(&conn, "experiment_promotion_canary_results"));
+
+        conn.execute(
+            "INSERT INTO experiment_domain (
+                domain_id, domain_kind, marker_schema_version, singleton, created_at_ms
+             ) VALUES ('domain-kept', 'experiment.v1', 'experiment_domain_marker.v1', 1, 7)",
+            [],
+        )
+        .expect("seed a v19 domain marker");
+
+        run_migrations(&mut conn).expect("v19 -> v20 should succeed");
+
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            latest_migration_version()
+        );
+        let domain_id: String = conn
+            .query_row("SELECT domain_id FROM experiment_domain", [], |row| {
+                row.get(0)
+            })
+            .expect("existing marker survives");
+        assert_eq!(domain_id, "domain-kept");
+        for table in [
+            "experiment_promotions",
+            "experiment_promotion_journal",
+            "experiment_promotion_canary_results",
+        ] {
+            assert!(table_exists(&conn, table), "missing v20 table {table}");
+        }
+        // The promotion tables start empty, so an upgrade never fabricates a
+        // promotion.
+        let promotions: i64 = conn
+            .query_row("SELECT COUNT(1) FROM experiment_promotions", [], |row| {
+                row.get(0)
+            })
+            .expect("count promotions");
+        assert_eq!(promotions, 0);
+        // The single-flight partial unique index is part of the additive schema.
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index'
+                   AND name = 'experiment_promotions_target_active_idx'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query index");
+        assert_eq!(index, 1, "the partial unique index must exist");
     }
 }

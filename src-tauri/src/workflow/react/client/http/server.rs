@@ -413,6 +413,19 @@ fn build_router(state: ControlPlaneState) -> Router {
             post(reconcile_campaign),
         )
         .route("/control/v1/campaign-jobs/{job_id}", get(get_campaign_job))
+        // Phase 2I promotion surface. Additive: the schedule routes above keep
+        // their exact semantics, and these only accept a marked experiment
+        // domain (AC-8/INV-1).
+        .route("/control/v1/promotions", post(submit_promotion))
+        .route("/control/v1/promotions/{promotion_id}", get(get_promotion))
+        .route(
+            "/control/v1/promotions/{promotion_id}/reconcile",
+            post(reconcile_promotion),
+        )
+        .route(
+            "/control/v1/promotions/{promotion_id}/audit",
+            get(get_promotion_audit),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -888,6 +901,88 @@ async fn get_campaign_job(
     match state.svc.campaign_job(&job_id) {
         Ok(job) => snake_json_response(serde_json::to_value(&job)),
         Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/promotions` — submits one promotion projection.
+///
+/// Bearer-protected and idempotency-required: the same `Idempotency-Key` with
+/// the same body executes exactly once and replays the recorded result, which is
+/// what makes a CLI retry safe (AC-8). The caller names a campaign, a candidate
+/// and an opaque target reference only; the path carries no authority.
+async fn submit_promotion(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("promotions:submit");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let request: crate::workflow::react::experiment_promotion::types::PromotionRequestV1 =
+            match serde_json::from_str(&body) {
+                Ok(request) => request,
+                Err(error) => {
+                    return dto::error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_input",
+                        format!("Invalid promotion request: {error}"),
+                    )
+                }
+            };
+        match state.svc.promotion_submit(request, &key) {
+            Ok(projection) => (StatusCode::CREATED, Json(snake(&projection))).into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `GET /control/v1/promotions/{promotion_id}` — the status projection.
+async fn get_promotion(
+    State(state): State<ControlPlaneState>,
+    Path(promotion_id): Path<String>,
+) -> Response {
+    match state.svc.promotion_get(&promotion_id) {
+        Ok(projection) => Json(snake(&projection)).into_response(),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/promotions/{promotion_id}/reconcile` — evidence-only
+/// reconciliation. It performs no effect, so it needs no Idempotency-Key.
+async fn reconcile_promotion(
+    State(state): State<ControlPlaneState>,
+    Path(promotion_id): Path<String>,
+) -> Response {
+    match state.svc.promotion_reconcile(&promotion_id) {
+        Ok(reconcile) => Json(snake(&reconcile)).into_response(),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/promotions/{promotion_id}/audit` — the offline-verifiable
+/// audit bundle.
+async fn get_promotion_audit(
+    State(state): State<ControlPlaneState>,
+    Path(promotion_id): Path<String>,
+) -> Response {
+    match state.svc.promotion_audit(&promotion_id) {
+        Ok(audit) => Json(snake(&audit)).into_response(),
+        Err(error) => dto::application_error_response(&error),
+    }
+}
+
+/// Serialises one promotion document with snake_case keys, keeping the wire
+/// shape consistent with every other control-plane response.
+fn snake<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    match serde_json::to_value(value) {
+        Ok(value) => dto::to_snake_case_keys(value),
+        Err(error) => {
+            log::error!("[control-plane] promotion serialization failed: {error}");
+            serde_json::json!({})
+        }
     }
 }
 

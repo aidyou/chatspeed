@@ -40,6 +40,8 @@ pub mod capabilities;
 pub mod docker;
 pub mod harbor_task;
 pub mod patch;
+pub mod promotion;
+pub mod promotion_canary;
 pub mod worktree;
 
 use crate::workflow::react::experiment_owner::patch::{PatchArtifact, PatchContext};

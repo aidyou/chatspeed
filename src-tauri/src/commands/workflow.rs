@@ -10094,6 +10094,274 @@ pub(crate) fn campaign_reconcile_core(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2I promotion surface
+// ---------------------------------------------------------------------------
+//
+// Additive to the 2G+2H schedule surface above: a promotion is submitted,
+// read, reconciled and audited through exactly those four operations, and every
+// one of them resolves its server-side resources here. The CLI and the HTTP
+// control plane both delegate to this module; neither opens the database,
+// starts a runtime or touches Git (INV-2).
+
+/// Maps a promotion rejection onto a stable `promotion_rejected: <code>`
+/// message, so a caller can branch without parsing prose.
+fn promotion_validation_error(
+    code: crate::workflow::react::experiment_promotion::types::PromotionErrorCode,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("promotion_rejected: {}", code.as_str()))
+}
+
+/// Flattens a typed promotion error into the application error surface.
+fn promotion_error(
+    error: crate::workflow::react::experiment_promotion::types::PromotionError,
+) -> ApplicationError {
+    use crate::workflow::react::experiment_promotion::types::PromotionErrorCode::*;
+    match error.code {
+        UnknownPromotion => ApplicationError::not_found(error.message),
+        IdempotencyConflict | PromotionInFlight => {
+            ApplicationError::conflict(format!("promotion_rejected: {}", error.code.as_str()))
+        }
+        code => promotion_validation_error(code),
+    }
+}
+
+fn durable_promotion_store(
+    svc: &WorkflowApplicationService,
+) -> crate::db::experiment_promotion::ExperimentPromotionStore {
+    crate::db::experiment_promotion::ExperimentPromotionStore::new(svc.main_store.clone())
+}
+
+/// Projects one durable promotion row (plus its stages) for the operator
+/// surface. It carries refs, digests and typed state only (INV-8).
+fn promotion_projection(
+    store: &crate::db::experiment_promotion::ExperimentPromotionStore,
+    record: &crate::db::experiment_promotion::PromotionRecord,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    use crate::workflow::react::experiment_promotion::types::{
+        PromotionDecisionProjectionV1, PromotionProjectionV1, PromotionStageProjectionV1,
+        PROMOTION_PROJECTION_V1,
+    };
+    let stages = store
+        .canary_stage_results(&record.promotion_id)
+        .map_err(promotion_error)?
+        .into_iter()
+        .map(|stage| PromotionStageProjectionV1 {
+            stage_index: stage.stage_index,
+            stage_id: stage.stage_id,
+            metric: stage.metric,
+            samples: stage.samples,
+            baseline_passed: stage.baseline_passed,
+            candidate_passed: stage.candidate_passed,
+            baseline_mean: stage.baseline_mean,
+            candidate_mean: stage.candidate_mean,
+            declared_status: stage.declared_status,
+            recomputed_status: stage.recomputed_status,
+            output_sha256: stage.output_sha256,
+        })
+        .collect();
+    Ok(PromotionProjectionV1 {
+        schema_version: PROMOTION_PROJECTION_V1.to_string(),
+        promotion_id: record.promotion_id.clone(),
+        campaign_id: record.campaign_id.clone(),
+        candidate_key: record.candidate_key.clone(),
+        target_ref: record.target_ref.clone(),
+        state: record.state.as_str().to_string(),
+        request_hash: record.request_hash.clone(),
+        evidence_hash: record.evidence_hash.clone(),
+        target_hash: record.target_hash.clone(),
+        policy_hash: record.policy_hash.clone(),
+        base_revision: record.base_revision.clone(),
+        patch_sha256: record.patch_sha256.clone(),
+        patch_manifest_hash: record.patch_manifest_hash.clone(),
+        expected_old_head: record.expected_old_head.clone(),
+        observed_head: record.observed_head.clone(),
+        checkpoint_commit: record.checkpoint_commit.clone(),
+        checkpoint_ref: record.checkpoint_ref.clone(),
+        checkpoint_intent: record.checkpoint_intent.as_str().to_string(),
+        branch_intent: record.branch_intent.as_str().to_string(),
+        canary_result_hash: record.canary_result_hash.clone(),
+        decision: record
+            .decision
+            .as_ref()
+            .map(|decision| PromotionDecisionProjectionV1 {
+                outcome: decision.outcome.clone(),
+                code: decision.code.clone(),
+                detail: decision.detail.clone(),
+            }),
+        error_code: record.error_code.clone(),
+        lease_generation: record.lease_generation,
+        attempt: record.attempt,
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+        stages,
+    })
+}
+
+/// Persists one validated promotion submission.
+///
+/// The request hash, the evidence hash and the promotion id are all re-derived
+/// by the store, so a caller cannot mint a promotion identity: the id it
+/// computes is only a hint and a mismatch is rejected.
+pub(crate) fn promotion_submit_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment_promotion::types::PromotionRequestV1,
+    idempotency_key: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    use crate::db::experiment_promotion::SubmitOutcome;
+    use crate::workflow::react::experiment_promotion::types::PROMOTION_REQUEST_V1;
+
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    if request.schema_version != PROMOTION_REQUEST_V1 {
+        return Err(promotion_validation_error(
+            crate::workflow::react::experiment_promotion::types::PromotionErrorCode::UnsupportedVersion,
+        ));
+    }
+    if idempotency_key.trim().is_empty() {
+        return Err(promotion_validation_error(
+            crate::workflow::react::experiment_promotion::types::PromotionErrorCode::IdempotencyConflict,
+        ));
+    }
+    request.validate().map_err(promotion_error)?;
+    let promotion_id = request.promotion_id();
+    let now = crate::headless::domain::now_ms();
+    let outcome = store
+        .submit(&request, &promotion_id, idempotency_key, now)
+        .map_err(promotion_error)?;
+    let record = match outcome {
+        SubmitOutcome::Created(record) | SubmitOutcome::Existing(record) => record,
+    };
+    promotion_projection(&store, &record)
+}
+
+/// One promotion by its backend-minted id.
+pub(crate) fn promotion_get_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    promotion_projection(&store, &record)
+}
+
+/// Evidence-only reconciliation of one promotion.
+///
+/// It performs no effect and needs no repository: the recovery decision is
+/// derived from the durable intents and the recorded checkpoint/branch state,
+/// so it is always answerable, even on a host that does not own the repository.
+/// The daemon's own startup classification additionally re-observes the real
+/// repository before it acts.
+pub(crate) fn promotion_reconcile_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionReconcileV1,
+    ApplicationError,
+> {
+    use crate::workflow::react::experiment_promotion::types::{
+        BranchObservation, CheckpointObservation, EffectIntent, PROMOTION_RECONCILE_V1,
+    };
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    let checkpoint = if record.checkpoint_intent == EffectIntent::Completed {
+        CheckpointObservation::PresentConsistent
+    } else {
+        CheckpointObservation::Absent
+    };
+    let branch = if record.branch_intent == EffectIntent::Completed {
+        BranchObservation::AtCheckpoint
+    } else {
+        BranchObservation::AtOld
+    };
+    let recovery = record.recovery_decision(checkpoint, branch);
+    let journal = store.journal(promotion_id).map_err(promotion_error)?;
+    let journal_digest = store
+        .journal_digest(promotion_id)
+        .map_err(promotion_error)?;
+    Ok(
+        crate::workflow::react::experiment_promotion::types::PromotionReconcileV1 {
+            schema_version: PROMOTION_RECONCILE_V1.to_string(),
+            promotion: promotion_projection(&store, &record)?,
+            recovery: recovery.as_str().to_string(),
+            journal,
+            journal_digest,
+        },
+    )
+}
+
+/// The offline-verifiable audit bundle of one promotion.
+pub(crate) fn promotion_audit_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<crate::workflow::react::experiment_promotion::types::PromotionAuditV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_promotion::types::{
+        audit_hash, AuditIntegrityV1, PromotionAuditV1, HASH_ALGORITHM, PROMOTION_AUDIT_V1,
+    };
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    let promotion = promotion_projection(&store, &record)?;
+    let journal = store.journal(promotion_id).map_err(promotion_error)?;
+    let journal_digest = store
+        .journal_digest(promotion_id)
+        .map_err(promotion_error)?;
+    // The registered branch is server-owned, so it is read from the registry
+    // when the target is still present; it is never taken from a caller.
+    let branch_ref =
+        crate::headless::promotion_targets::PromotionTargetRegistry::new(&svc.app_data_dir)
+            .load(&record.target_ref)
+            .ok()
+            .map(|target| target.branch_ref);
+    let decision = promotion.decision.clone();
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    // The integrity digest covers everything except `created_at` and the digest
+    // block itself, so a reader can verify the claim offline without trusting
+    // the producer's clock.
+    let unsigned = serde_json::json!({
+        "schema_version": PROMOTION_AUDIT_V1,
+        "promotion": promotion.clone(),
+        "evidence": record.evidence.clone(),
+        "decision": decision.clone(),
+        "branch_ref": branch_ref.clone(),
+        "journal": journal.clone(),
+        "journal_digest": journal_digest.clone(),
+        "created_at": created_at.clone(),
+    });
+    let audit_hash = audit_hash(&unsigned);
+    Ok(PromotionAuditV1 {
+        schema_version: PROMOTION_AUDIT_V1.to_string(),
+        promotion,
+        evidence: record.evidence,
+        decision,
+        branch_ref,
+        journal,
+        journal_digest,
+        integrity: AuditIntegrityV1 {
+            algorithm: HASH_ALGORITHM.to_string(),
+            audit_hash,
+        },
+        created_at,
+    })
+}
+
 #[cfg(test)]
 mod owner_execution_context_tests {
     use super::*;

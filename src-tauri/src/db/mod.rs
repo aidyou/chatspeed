@@ -8,6 +8,7 @@ pub mod chat;
 pub mod config;
 pub mod config_transfer;
 pub mod error;
+pub mod experiment_promotion;
 pub mod experiment_schedule;
 pub mod main_store;
 pub mod runtime;

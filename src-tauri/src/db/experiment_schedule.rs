@@ -85,6 +85,20 @@ pub struct JobRecord {
     pub heartbeat_at_ms: Option<u64>,
 }
 
+/// A durable artifact row recorded for a job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobArtifactRecord {
+    pub artifact_id: String,
+    pub kind: String,
+    pub relative_path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub base_revision: Option<String>,
+    pub run_id: Option<String>,
+    pub session_id: Option<String>,
+    pub candidate_key: Option<String>,
+}
+
 /// One classified non-terminal job from the restart sweep.
 #[derive(Debug, Clone)]
 pub struct RecoveryRecord {
@@ -416,6 +430,52 @@ impl ExperimentScheduleStore {
             .map_err(|error| persistence_error(error))?;
         let job_id = job_id.to_string();
         flatten(runtime.read_blocking(move |conn| Ok(load_job(conn, &job_id))))
+    }
+
+    /// The durable artifact rows recorded for one job, oldest first.
+    ///
+    /// The Phase 2I promotion binding reads this instead of trusting a caller's
+    /// projection: the digest the CLI advertises for the candidate patch must
+    /// equal the digest the scheduler itself recorded when it published the
+    /// artifact (AC-2/INV-2).
+    pub fn job_artifacts(&self, job_id: &str) -> Result<Vec<JobArtifactRecord>, ScheduleError> {
+        let runtime = self
+            .store
+            .db_runtime()
+            .map_err(|error| persistence_error(error))?;
+        let job_id = job_id.to_string();
+        flatten(runtime.read_blocking(move |conn| {
+            let inner = (|| -> Result<Vec<JobArtifactRecord>, ScheduleError> {
+                let mut statement = conn
+                    .prepare(
+                        "SELECT artifact_id, kind, relative_path, sha256, size_bytes,
+                                base_revision, run_id, session_id, candidate_key
+                           FROM experiment_job_artifacts
+                          WHERE job_id = ?1
+                          ORDER BY created_at_ms ASC, artifact_id ASC",
+                    )
+                    .map_err(persistence_error)?;
+                let rows = statement
+                    .query_map(params![job_id], |row| {
+                        Ok(JobArtifactRecord {
+                            artifact_id: row.get(0)?,
+                            kind: row.get(1)?,
+                            relative_path: row.get(2)?,
+                            sha256: row.get(3)?,
+                            size_bytes: row.get::<_, i64>(4)? as u64,
+                            base_revision: row.get(5)?,
+                            run_id: row.get(6)?,
+                            session_id: row.get(7)?,
+                            candidate_key: row.get(8)?,
+                        })
+                    })
+                    .map_err(persistence_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(persistence_error)?;
+                Ok(rows)
+            })();
+            Ok(inner)
+        }))
     }
 
     /// Closes or cancels a campaign. Closing never rewrites an existing job
@@ -2160,7 +2220,9 @@ mod tests {
                 Ok((version, markers, jobs))
             })
             .expect("read");
-        assert_eq!(version, 19);
+        // Phase 2I raises the latest schema to v20; the point of this test is
+        // that a desktop database merely gains the empty experiment tables.
+        assert_eq!(version, 20);
         assert_eq!(markers, 0, "a desktop database is never auto-marked");
         assert_eq!(jobs, 0);
     }

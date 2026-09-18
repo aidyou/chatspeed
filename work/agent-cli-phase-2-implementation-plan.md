@@ -15,11 +15,11 @@
   2A/2C/2F 含真实 desktop smoke，2B 预算 gate 的端到端触发由 2C/2F smoke 覆盖；2D+2E 含离线 CLI 进程
   smoke 与真实 desktop 固定免费模型全链 smoke；2F 含三个独立 campaign 的真实免费模型
   baseline+candidate 交付、负向与退出审计，见该记录与 `work/agent-cli-phase-2-smoke-test.md` `## 6`）。
-- **下一个入口**：`2I`（promotion / apply 边界）。`2G+2H` 已于 2026-09-17 完成并推进指针：
-  该阶段的 AC-1..AC-9 与 INV-1..INV-9 均有结构化证据（见 `## 11.8`，最新为 11.8.9 真实 Harbor trial 通过
-  与 11.8.10 凭据通道修复），U-1..U-10 全部完成、todo 无 pending。`2G+2H` 的 Implementation Record
-  按规则**不改写**；2I 的范围仍为 promotion/apply/candidate promotion（本阶段明确未提供）。
-  2F 的契约与 campaign 身份规则见 `## 9` 的 2F Implementation Record。
+- **下一个入口**：无（Phase 2 的 2A–2I 已全部完成）。`2I` 已于 2026-09-17 完成并推进指针：
+  promotion/apply/受控灰度/审计闭环（代码 patch 候选、自动 policy、实验分支本地 commit 不 push、
+  paired canary、audit bundle）的 AC-1..AC-9 与 INV-1..INV-10 均有证据（见 `## 12` 的 2I
+  Implementation Record 与 `work/agent-cli-phase-2-smoke-test.md` `## 8`）。2G+2H 的 Implementation
+  Record 按规则**不改写**。
 - **后续交付口径**：2C 之后的实现按 `2C → 2D+2E → 2F → 2G+2H → 2I` 的顺序成组交付。该口径只用于
   规划后续阶段的打包与推进顺序，属于准备工作，不作为任何阶段的功能验收证据；各阶段仍须各自满足其
   Acceptance Criteria、Protected Invariants、Execution Units 与 Verification 后才可推进指针。
@@ -1818,3 +1818,200 @@ owner 把补丁发布到 capability 声明的 `/logs/artifacts` → 声明 artif
 
 **阶段结论**：2G+2H 的 owner-bound capability audit remediation 已完成；无 pending remediation，`## 0` 的
 **下一个入口 2I** 维持有效。2I 的 promotion/apply 范围未在本轮实现。
+
+## 12. 2I Active Plan（promotion / apply / 受控灰度闭环，当前执行范围）
+
+> 本节是 2I 的**当前 active plan**，只登记本轮实现的契约、边界与验证口径，不改写 `## 9` 与 `## 11`
+> 的任何历史 Implementation Record。`## 0` 的指针**只有在本节所有 Acceptance Criteria、Protected
+> Invariants、Execution Units 与 Verification 均有真实证据后才允许推进**。
+
+### 12.1 目标与交付物
+
+把 durable campaign 中隔离 owner 产出的代码 `patch.diff` 作为**代码候选**，经过独立 verdict 事实绑定、
+server-owned 自动 policy、隔离 checkpoint apply、分阶段 paired canary、实验分支本地 commit，形成
+`verdict → apply → controlled canary → audit` 闭环。
+
+目标命令形态：
+
+```text
+cs experiment promotion run \
+  --campaign-id <durable-campaign> \
+  --candidate <candidate-key> \
+  --target <server-registered-target-ref> \
+  --out <audit-dir>
+```
+
+CLI 自动定位同一 campaign 的 baseline/candidate jobs，复用并重验 2A/2D/2E evidence，提交严格 projection；
+backend 交叉绑定 durable job/fixture/patch、执行自动 policy、创建 checkpoint commit、依序跑 paired canary，
+最后 CAS 推进实验分支或收敛为 `rejected | canary_failed | rolled_back | unknown_manual`。CLI 等待终态并导出
+可离线重验的 audit bundle。
+
+### 12.2 范围边界与非目标
+
+**本阶段明确不做**：
+
+- 不修改 Agent defaults、候选 prompt catalog、产品主分支或用户当前工作树/index；
+- 不执行 `git push/fetch/pull`、remote 管理、merge/rebase/cherry-pick，也不自动快进其他分支；
+- 不改变 2A artifact、2E verdict 或既有 campaign/schedule schema（v20 纯 additive）；
+- 不允许候选控制 verifier、policy、target、secret、sandbox 或 budget ledger；
+- 不实现 GEPA/DGM proposer、远端发布或生产流量控制；
+- 本阶段“灰度”定义为对同一 immutable checkpoint 逐级执行 backend 注册的 deterministic paired canary
+  gates，**不是生产流量分配**；首版 canary 为 no-network、无 LLM/tool effect。
+
+### 12.3 验收契约（AC）与不变量（INV）
+
+- **AC-1**：路线文件新增 2I active plan（本节），历史 record 不改写。
+- **AC-2**：strict versioned contracts 完整绑定 campaign/plan/schedule/candidate/job/run/session、artifact
+  chain、verdict/verifier/fixture、budget、patch/base、profile、target/policy/canary digests；缺失、漂移、
+  篡改或 caller/candidate 注入 trust 字段均在 effect 前拒绝。
+- **AC-3**：v20 store/FSM 是 promotion 唯一 authority，具备幂等、单 target 单飞、lease/fence、事务 CAS、
+  journal 和 restart reconcile；CLI 不直接访问 DB、owner 或 Git。
+- **AC-4**：server-owned 自动 policy 以 safety/provenance/budget/infra 为 hard gates，再比较 baseline/candidate
+  与 canary structured metrics；无改善、样本不足、unknown/partial/cost unknown、预算拒绝或关键回归不晋级。
+- **AC-5**：在 server-derived detached worktree 应用 digest-bound patch，创建**英语** local checkpoint commit
+  和 immutable ref；绝不调用 remote Git，也不修改 base worktree/index/HEAD。
+- **AC-6**：old HEAD 与 checkpoint 在相同 digest-pinned profile、verified bundle、no-network/resource/time caps
+  下跑有序 paired stages；只接受 strict structured result，失败立即停止且 branch 不动。
+- **AC-7**：通过后仅以 expected-old CAS 更新注册实验 branch；并发移动拒绝；崩溃按 old/new/third-value ref
+  observation 收敛；历史 commit/journal 不删除或覆盖。
+- **AC-8**：CLI 提供 `run/status/reconcile/audit/inspect`；mutation 使用 bearer + Idempotency-Key；run 自动导出
+  atomic audit sidecar，可离线重建全链且无敏感数据。
+- **AC-9**：聚焦测试和真实 local Git smoke 证明连续成功节点形成线性 commits、失败节点不推进 branch、
+  无 remote effect；按真实证据回写 Implementation Record 和 smoke 文档。
+
+不变量（INV-1..INV-10）与本节 AC 一一对应，重申其中四条最容易在实现中走样的：
+
+- **INV-2**：backend MainStore/promotion scheduler/promotion owner 是唯一 authority；CLI 不直开 SQLite、
+  不启动 runtime/scheduler、不执行 Git mutation。
+- **INV-3**：2E verdict 继续 facts-only；promotion policy 独立，candidate/model 文本与 program 自报
+  `status` 都不能满足 gate（runner 必须从配对数字重算）。
+- **INV-5**：Git effect 只允许 promotion worktree、`refs/chatspeed/checkpoints/*` 与注册的本地实验 branch；
+  绝无 push/remote effect。
+- **INV-7**：每次 effect 前先写 durable intent；无法证明的 effect 进入 `unknown_manual`，绝不盲目重试。
+
+### 12.4 关键设计（server-owned target 与 FSM）
+
+- **target 由 server registry 提供**：experiment domain 下的 `promotion-targets/<target_ref>.json`
+  （`promotion_target.v1`）声明 base repo ref、full `refs/heads/*` 实验分支、command-level Git identity、
+  canary profile/bundle/executable/stages 与 policy。caller 只提交 opaque `target_ref`，不提供路径、branch、
+  命令、阈值或 secret。
+- **FSM**：
+
+  ```text
+  queued → evidence_validating → rejected
+                               ↘ checkpointing → checkpointed
+                                                  → canary_running → canary_failed
+                                                                   → ready_to_advance
+                                                                      → advancing → promoted
+  ```
+
+  异常终态：`rolled_back | unknown_manual`。每个 effect 前有 durable intent：
+  checkpoint intent → ref 不存在且可证明未发生时重试、存在且 trailers/bindings 一致时 adopt、不一致
+  `unknown_manual`；branch intent → target=old 重试 CAS、target=checkpoint roll-forward journal、
+  第三值绝不覆盖。
+- **checkpoint commit 契约**（U-4）：
+  - subject：`experiment(promotion): checkpoint <promotion_id>`（英语）
+  - trailers：`Promotion-Id`、`Evidence-Hash`、`Patch-Sha256`、`Base-Revision`、`Target-Ref`
+  - ref：`refs/chatspeed/checkpoints/<promotion_id>`
+  - 不写用户 Git config，不 checkout target branch，永不调用 remote/merge/rebase/cherry-pick。
+- **canary**：从 verified read-only bundle 解析相对 executable，在 digest-pinned/no-network/container limits 下
+  对 old/checkpoint 运行相同 stages；显式 argv、无 shell、无 candidate-owned verifier；输出必须是单一 strict
+  `canary_result.v1`，原始输出只做 hash 和 bounded diagnostics。
+- **失败语义**：canary 失败发生在 advance 前，branch 自然保持 old，checkpoint 仍保留（“每个进步节点保存成果”）。
+
+### 12.5 执行单元与验证映射
+
+| 单元 | 内容 | Covers | 验证 |
+|---|---|---|---|
+| U-1 | 冻结 2I active plan、strict promotion contracts/FSM/hash domains 与 server-owned target registry | AC-1/2/4/5/6 | V-1 |
+| U-2 | v20 纯 additive promotion tables、事务性 store、lease/fenced CAS、幂等提交、canary result 与 append-only journal | AC-3/7/8 | V-2/V-6 |
+| U-3 | 桥接 durable baseline/candidate jobs、2A/2D/2E verified evidence、immutable patch manifest 与自动 policy | AC-2/4/8 | V-1/V-3 |
+| U-4 | 独立 `PromotionCheckpointOwner`：detached worktree、local checkpoint commit/ref、`update-ref` CAS | AC-5/7 | V-4/V-6/V-8 |
+| U-5 | paired staged canary runner（digest-pinned、verified bundle、no-network、严格结构化结果） | AC-4/6/7 | V-3/V-5/V-8 |
+| U-6 | bounded promotion supervisor 与崩溃恢复（intent-first、fence、ref observation） | AC-3/6/7 | V-2/V-5/V-6 |
+| U-7 | additive promotion HTTP routes 与 CLI `run/status/reconcile/audit/inspect` 及 audit sidecar | AC-8 | V-7/V-8 |
+| U-8 | 聚焦回归、真实 local Git/容器 smoke、SIGKILL 恢复矩阵、secret/no-remote 审计与文档回写 | 全部 | V-1..V-9 |
+
+### 12.6 Stop conditions（命中即停止并请求用户确认）
+
+- 需要 push/remote/自动合并主分支；
+- 需要修改 2A/2E schema 或放宽旧 promotion denylist；
+- 需要让 caller/candidate 提交 target path/branch/command/policy；
+- 需要 network/LLM canary 却没有新的 admission/recovery 设计；
+- 需要新依赖、写用户 Git config、改普通 workflow/Tauri/ccproxy；
+- 需要保存 transcript/private holdout/secret；
+- 需要 destructive reset 覆盖未证明 ownership 的 ref/worktree。
+
+### 12.7 完成回写规则
+
+2I 完成时在本文件 `## 9` 末尾**追加** `### 2I Implementation Record (as built)`，并把 `## 0` 的指针推进；
+在 `work/agent-cli-phase-2-smoke-test.md` 追加 2I smoke 记录。历史 11.x 与 `## 9` 既有段落一律不改写。
+
+### 12.8 2I Implementation Record (as built，2026-09-17)
+
+**本轮交付**：U-1..U-8 全部完成，`verdict → 自动 policy → checkpoint → paired canary → 分支 CAS → 审计`
+闭环可用，且所有 Git effect 限于 promotion worktree、`refs/chatspeed/checkpoints/*` 与注册的本地实验分支。
+
+- **U-1（V-1）**：`experiment_promotion/{mod,types,policy,smoke}.rs` + `headless/promotion_targets.rs`。
+  strict `promotion_evidence.v1` / `promotion_request.v1` / `promotion_target.v1` / `promotion_policy.v1` /
+  `canary_result.v1` / `canary_arm_sample.v1` / `promotion_projection.v1` / `promotion_reconcile.v1` /
+  `promotion_audit.v1`；12 态 FSM + 纯 recovery classifier；server-owned target registry
+  （full `refs/heads/*`、bundle-relative executable、profile/bundle 交叉授权、digest-pinned 镜像）。
+  旧 2F/2G promotion denylist 未放宽。
+- **U-2（V-2）**：纯 additive v20（promotions / promotion_journal / promotion_canary_results +
+  “每 target 至多一个非终态” partial unique index）；事务 store：幂等 submit、单 target 单飞、
+  lease generation fence、事务 CAS、intent-first checkpoint/advance、append-only journal（含顺序 digest）。
+- **U-3（V-3）**：`binding.rs` 对 durable campaign/job、fixture、profile、run/session、2A artifact 行、
+  immutable patch manifest 逐字段交叉绑定 + `verify_artifact_file` 逐字节复验；
+  `ExperimentScheduleStore::job_artifacts` 暴露 scheduler 自己记录的 artifact 行。
+  如实边界：操作者本地的 2D/2E sidecar 链无法由 backend 重放，其 digest 作为 adapter 事实
+  （结构严格校验 + 其挂靠的 durable 半边全量交叉验证），已写入 `binding.rs` 文档。
+- **U-4（V-4）**：`PromotionCheckpointOwner`：argv allowlist（push/fetch/pull/remote/merge/rebase/
+  cherry-pick/reset/clone 等 spawn 前拒绝）、硬化子进程环境、detached worktree、`git apply --check`/apply、
+  固定 identity 的英文 checkpoint commit + trailers、`refs/chatspeed/checkpoints/<id>`（空 old-value 防并发覆盖）、
+  仅 expected-old CAS、checkpoint→old 补偿、cleanup 保留 checkpoint；普通 `ExecutionOwner` 未获得任何
+  分支变更能力。
+- **U-5（V-5）**：`promotion_canary.rs` + docker `exec_capture_bounded`（wall-clock + 输出上限）。
+  canary program 每次只报**单臂单 stage** 的严格 `canary_arm_sample.v1`（无 status 字段，
+  程序无法自报通过），runner 装配配对结果并用与 policy 共享的 `canary_stage_passes` 规则重算；
+  非 `none` 网络策略直接 `canary_effect_forbidden`；失败/超时/越界立即停止、双臂资源清理。
+- **U-6（V-6 部分）**：`experiment_promotion/scheduler.rs` supervisor + `headless/promotion_runtime.rs`
+  + `bootstrap.rs` 接线（bounded tick、shutdown-aware loop）；claim→gate→checkpoint→canary→CAS，
+  intent-first，恢复按 checkpoint/branch 观察分类（absent 重做 / 一致 adopt / 不一致或 third-value park）。
+- **U-7（V-7）**：application facade + additive HTTP `POST /control/v1/promotions`（bearer+Idempotency-Key）、
+  `GET /promotions/{id}`、`POST /promotions/{id}/reconcile`、`GET /promotions/{id}/audit`；
+  CLI `cs experiment promotion run/status/reconcile/audit/inspect`（run 等待终态并原子导出 audit sidecar，
+  inspect 全离线验证 manifest + integrity + journal digest）。
+- **U-8（V-8/V-9）**：真实 local Git + 真实容器 canary 的端到端 smoke
+  （`experiment_promotion/smoke.rs`，详见 `work/agent-cli-phase-2-smoke-test.md` `## 8`）：
+  连续两个成功节点线性推进分支、失败节点分支不动且 checkpoint 保留、重启后 checkpoint 恰好一次、
+  无 remote effect、secret 扫描阳性对照有效。
+
+**验证汇总（全部通过）**：`cargo test --lib experiment_promotion`(41) / `experiment_owner`(51) /
+`db::experiment_promotion`(8) / `db::sql::migrations`(15) / `db::experiment_schedule`(15) / `headless`(34) /
+`workflow::react::campaign`(20)；`cargo fmt --all -- --check`；三 binary check 0 error。
+
+**未执行项（如实说明）**：桌面端 `pnpm tauri dev` + 真实模型全链路未跑——
+2I 不新增 LLM effect（INV-9），模型链路属 2B/2C/2F 既有范围；操作者本地 2D/2E sidecar 链无法由 backend
+重放（见 U-3 边界说明）。
+
+**终审修复（2026-09-17，全部落实并验证）**：
+
+- **canary 非成功结果全部收敛终态**：`converge_canary_failure` 把门禁类失败（stage 回退/超时/
+  结果不可信——malformed/oversize/不匹配）持久化为 `canary_failed`（`canary_stage_failed` /
+  `canary_result_invalid`），环境类失败 park `unknown_manual`；不再出现停在 `canary_running`
+  被反复重试的情况。回归：垃圾输出 → `canary_failed` 且分支不动、终态不再 re-claim；
+  本地不存在的镜像 digest → park `executor_unavailable`。
+- **CLI `run` 等待预算**：`minimum_wait_budget_secs` = 8 stages × 900s × 2 arms + 300s = 14,700s
+  （覆盖服务器允许的 canary 上界；原 900s 固定预算会在合法运行中提前放弃）；override 只能上调；
+  `wait_for_terminal` 抽出并可脱离 HTTP 测试（4 项 CLI tests）。
+- **真实 SIGKILL/restart 矩阵**（`experiment_promotion/sigkill.rs`，真实 headless 子进程 +
+  真实 SIGKILL）：checkpoint 边界 SIGKILL → 重启收敛且 checkpoint 恰一次（`rev-list --count == 1`，
+  journal 各 stage 恰一条）；canary 中途 SIGKILL → 重启侧 `cleanup_stale_arms` 回收死亡尝试的
+  容器/worktree 后再跑一次并恰一次推进；branch 边界三态（roll-forward / 恰一次 CAS / 第三值 park
+  `unknown_manual`）。配套修复：重启侧 stale arm/checkpoint worktree 回收（ownership 可证明的命名），
+  `CHATSPEED_PROMOTION_LEASE_MS` 运维变量，`DOCKER_GATE` 串行化容器测试，
+  scenario patch 加盐避免跨场景 promotion id 冲突。
+
+**指针推进**：Phase 2 的 2A–2I 全部完成，`## 0` 指针由“下一个入口 2I”推进为“Phase 2 完成”。
+

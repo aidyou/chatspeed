@@ -329,6 +329,159 @@ impl PersistentDockerOwner {
         args.extend_from_slice(argv);
         self.docker(&args)
     }
+
+    /// Runs one command inside a container with an enforced wall-clock limit and
+    /// a hard cap on captured output.
+    ///
+    /// The Phase 2I canary uses this instead of [`Self::exec_capture`]: a stage
+    /// that hangs must be *stopped*, not waited on, and a stage that floods
+    /// stdout must be *rejected*, not buffered. Both pipes are drained on
+    /// dedicated threads so a large stream can never deadlock the child.
+    pub fn exec_capture_bounded(
+        &self,
+        name: &str,
+        argv: &[&str],
+        timeout_ms: u64,
+        max_output_bytes: u64,
+    ) -> Result<BoundedExec, ScheduleError> {
+        let mut args: Vec<String> = vec!["exec".to_string(), name.to_string()];
+        args.extend(argv.iter().map(|arg| (*arg).to_string()));
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_bounded(&self.executable, &argv, timeout_ms, max_output_bytes)
+    }
+}
+
+/// The bounded outcome of one container exec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedExec {
+    /// The exit code, when the process exited on its own.
+    pub exit_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    /// The wall-clock limit was reached and the process was killed.
+    pub timed_out: bool,
+    /// More output was produced than the cap allowed, so it was discarded.
+    pub truncated: bool,
+}
+
+impl BoundedExec {
+    pub fn succeeded(&self) -> bool {
+        !self.timed_out && !self.truncated && self.exit_code == Some(0)
+    }
+
+    /// A bounded, non-secret diagnostic. The raw stream is never retained: only
+    /// a truncated stderr excerpt travels with an error.
+    pub fn diagnostic(&self) -> String {
+        if self.timed_out {
+            return "the command exceeded its wall-clock limit".to_string();
+        }
+        if self.truncated {
+            return "the command produced more output than the cap allows".to_string();
+        }
+        let stderr = String::from_utf8_lossy(&self.stderr).trim().to_string();
+        let excerpt: String = stderr.chars().take(300).collect();
+        match self.exit_code {
+            Some(code) => format!("exit {code}: {excerpt}"),
+            None => format!("terminated by signal: {excerpt}"),
+        }
+    }
+}
+
+/// Reads a pipe up to `cap` bytes, reporting whether more was available.
+fn read_capped<R: std::io::Read>(mut reader: R, cap: u64) -> (Vec<u8>, bool) {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                let remaining = cap.saturating_sub(buffer.len() as u64) as usize;
+                if read > remaining {
+                    buffer.extend_from_slice(&chunk[..remaining]);
+                    truncated = true;
+                    // Keep draining so the child never blocks on a full pipe.
+                    continue;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            Err(_) => break,
+        }
+    }
+    (buffer, truncated)
+}
+
+/// Runs one bounded child process. Used only for container exec.
+fn run_bounded(
+    executable: &str,
+    args: &[&str],
+    timeout_ms: u64,
+    max_output_bytes: u64,
+) -> Result<BoundedExec, ScheduleError> {
+    let mut child = Command::new(executable)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            owner_error(
+                ScheduleErrorCode::ExecutorUnavailable,
+                format!("failed to run {executable}: {error}"),
+            )
+        })?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader =
+        std::thread::spawn(move || stdout.map(|pipe| read_capped(pipe, max_output_bytes)));
+    let stderr_reader =
+        std::thread::spawn(move || stderr.map(|pipe| read_capped(pipe, max_output_bytes)));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.max(1));
+    let mut timed_out = false;
+    let mut exit_code = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                exit_code = status.code();
+                break;
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(owner_error(
+                    ScheduleErrorCode::ExecutorUnavailable,
+                    format!("failed to wait for {executable}: {error}"),
+                ));
+            }
+        }
+    }
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| (Vec::new(), false));
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| (Vec::new(), false));
+    Ok(BoundedExec {
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+        truncated: stdout_truncated || stderr_truncated,
+    })
 }
 
 impl ExecutionOwner for PersistentDockerOwner {
