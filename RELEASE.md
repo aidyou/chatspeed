@@ -7,7 +7,7 @@
 ### 🚀 New Features
 
 - **ChatHub — docked web chat**:
-  - Added ChatHub: a dedicated settings page with a sidebar entry and tray/settings-menu entries, so you can chat with web-based AI services directly inside ChatSpeed. ChatHub entries are included when you export and import your configuration.
+  - Added ChatHub: a dedicated settings page with a sidebar entry and tray/settings-menu entries, so you can chat with web-based AI services directly inside ChatSpeed. The page comes with preset entries and lets you add, edit, delete and drag to reorder entries, each with its own name, URL and icon, falling back to a letter avatar when no icon is set. ChatHub entries are included when you export and import your configuration.
   - Opening an entry docks its site beside the workflow UI in the Workflow window: the window grows to make room instead of squeezing the workflow UI, moves left when the extra width would leave the screen, and hands the width back when the page is hidden or closed.
   - The entry of the docked site shows and hides its page, while the site list stays a pure entry picker.
   - The page fits the window chrome: it keeps the rounded window corner and the full-width titlebar, and the workflow UI, its dialogs, menus and notifications stay clear of it.
@@ -38,6 +38,7 @@
   - Todo tasks keep their full descriptions across context compression.
   - Message links now open in the external browser instead of navigating the embedded view.
   - Final-audit mode now turns itself off after a workflow completes, so it no longer carries into the next run.
+  - A failed tool call no longer turns its whole tool group red; the tool's own status, the group error count and the error alert already report the failure.
 - **CCProxy**:
   - Raw upstream error responses are now preserved rather than rewritten.
   - Error requests are now recorded in the proxy statistics.
