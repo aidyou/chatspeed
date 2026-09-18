@@ -45,7 +45,9 @@ use crate::workflow::react::experiment_promotion::types::{
     checkpoint_ref_for, BranchObservation, CheckpointObservation, PromotionError,
     PromotionErrorCode, PromotionFence, PromotionState,
 };
-use crate::workflow::react::experiment_schedule::types::{OwnerKind, ScheduleError};
+use crate::workflow::react::experiment_schedule::types::{
+    ExecutionProfileV1, OwnerKind, ScheduleError,
+};
 use std::path::PathBuf;
 
 fn promotion_error(code: PromotionErrorCode, message: impl Into<String>) -> PromotionError {
@@ -178,7 +180,14 @@ impl PromotionSupervisor {
         let Some(base_repo) = self.base_repo.clone() else {
             return Ok(PromotionRecoveryDecision::ParkUnknown);
         };
-        let checkpoint_request = self.checkpoint_request(record, &target, &"0".repeat(40));
+        let checkpoint_request = self.checkpoint_request(
+            record,
+            &target,
+            &record
+                .expected_old_head
+                .clone()
+                .unwrap_or_else(|| "0".repeat(40)),
+        );
         let owner = PromotionCheckpointOwner::new(base_repo, &self.worktrees_root);
         let checkpoint = match &checkpoint_request {
             Ok(request) => owner
@@ -298,26 +307,81 @@ impl PromotionSupervisor {
         fence: &PromotionFence,
         now_ms: u64,
     ) -> Result<PromotionTickOutcome, PromotionError> {
-        let target = self.targets.load(&record.target_ref)?;
-        let expected_old_head = record.expected_old_head.clone().ok_or_else(|| {
-            promotion_error(
-                PromotionErrorCode::InvalidPromotionState,
-                "the promotion reached checkpointing without a recorded expected head",
-            )
-        })?;
-        let request = self.checkpoint_request(record, &target, &expected_old_head)?;
-        let base_repo = self.require_base_repo()?;
+        let target = match self.targets.load(&record.target_ref) {
+            Ok(target) => target,
+            Err(error) => {
+                let record = self.promotions.park_unknown_manual(
+                    fence,
+                    &record.promotion_id,
+                    PromotionState::Checkpointing,
+                    error.code,
+                    &error.message,
+                    now_ms,
+                )?;
+                return Ok(PromotionTickOutcome::Parked {
+                    promotion_id: record.promotion_id,
+                    code: error.code.as_str().to_string(),
+                });
+            }
+        };
+        if let Err(error) = self.ensure_target_binding(record, &target) {
+            let code = error.code;
+            let record = self.promotions.park_unknown_manual(
+                fence,
+                &record.promotion_id,
+                PromotionState::Checkpointing,
+                code,
+                &error.message,
+                now_ms,
+            )?;
+            return Ok(PromotionTickOutcome::Parked {
+                promotion_id: record.promotion_id,
+                code: code.as_str().to_string(),
+            });
+        }
+        let expected_old_head = match record.expected_old_head.clone() {
+            Some(expected_old_head) => expected_old_head,
+            None => {
+                return self.converge_checkpoint_failure(
+                    record,
+                    fence,
+                    promotion_error(
+                        PromotionErrorCode::InvalidPromotionState,
+                        "the promotion reached checkpointing without a recorded expected head",
+                    ),
+                    now_ms,
+                )
+            }
+        };
+        let request = match self.checkpoint_request(record, &target, &expected_old_head) {
+            Ok(request) => request,
+            Err(error) => return self.converge_checkpoint_failure(record, fence, error, now_ms),
+        };
+        let base_repo = match self.require_base_repo() {
+            Ok(base_repo) => base_repo,
+            Err(error) => return self.converge_checkpoint_failure(record, fence, error, now_ms),
+        };
         let owner = PromotionCheckpointOwner::new(base_repo, &self.worktrees_root);
 
-        let proof = match owner.observe_checkpoint(&request)? {
-            // The effect provably happened for this attempt: adopt it.
-            CheckpointObservation::PresentConsistent => {
-                let commit = owner.checkpoint_commit(&request)?.ok_or_else(|| {
-                    promotion_error(
-                        PromotionErrorCode::CheckpointFailed,
-                        "the checkpoint ref vanished between observation and adoption",
-                    )
-                })?;
+        let proof = match owner.observe_checkpoint(&request) {
+            Ok(CheckpointObservation::PresentConsistent) => {
+                let commit = match owner.checkpoint_commit(&request) {
+                    Ok(Some(commit)) => commit,
+                    Ok(None) => {
+                        return self.converge_checkpoint_failure(
+                            record,
+                            fence,
+                            promotion_error(
+                                PromotionErrorCode::CheckpointFailed,
+                                "the checkpoint ref vanished between observation and adoption",
+                            ),
+                            now_ms,
+                        )
+                    }
+                    Err(error) => {
+                        return self.converge_checkpoint_failure(record, fence, error, now_ms)
+                    }
+                };
                 CheckpointProof {
                     promotion_id: record.promotion_id.clone(),
                     checkpoint_commit: commit,
@@ -325,7 +389,8 @@ impl PromotionSupervisor {
                     workspace_root: PathBuf::new(),
                 }
             }
-            CheckpointObservation::PresentInconsistent => {
+            Err(error) => return self.converge_checkpoint_failure(record, fence, error, now_ms),
+            Ok(CheckpointObservation::PresentInconsistent) => {
                 let record = self.promotions.park_unknown_manual(
                     fence,
                     &record.promotion_id,
@@ -339,32 +404,63 @@ impl PromotionSupervisor {
                     code: "effect_uncertain".to_string(),
                 });
             }
-            CheckpointObservation::Absent => {
-                let patch = self.candidate_patch(record)?;
-                // A pre-effect rejection (a drifted branch, a patch that no
-                // longer applies) leaves the row in `checkpointing` with a
-                // durable intent, so the next tick re-observes instead of
-                // guessing; only an uncertain effect parks.
-                let patch_digest = record.patch_sha256.clone();
+            Ok(CheckpointObservation::Absent) => {
+                let patch = match self.candidate_patch(record) {
+                    Ok(patch) => patch,
+                    Err(error) => {
+                        return self.converge_checkpoint_failure(record, fence, error, now_ms)
+                    }
+                };
                 if crate::workflow::react::experiment_owner::patch::digest_hex(&patch)
-                    != patch_digest
+                    != record.patch_sha256
                 {
-                    return Err(promotion_error(
-                        PromotionErrorCode::PatchApplyFailed,
+                    let code = PromotionErrorCode::PatchApplyFailed;
+                    let record = self.promotions.reject(
+                        fence,
+                        &record.promotion_id,
+                        PromotionState::Checkpointing,
+                        code,
                         "the durable patch artifact no longer matches its recorded digest",
-                    ));
+                        now_ms,
+                    )?;
+                    return Ok(PromotionTickOutcome::Terminal {
+                        promotion_id: record.promotion_id,
+                        state: record.state,
+                        code: code.as_str().to_string(),
+                    });
                 }
-                let patch_row = self
-                    .candidate_patch_row(record)?
-                    .ok_or_else(|| {
-                        promotion_error(
-                            PromotionErrorCode::PatchUnbound,
-                            "the candidate patch artifact row disappeared",
-                        )
-                    })?
-                    .0;
-                let _ = patch_row;
-                owner.create_checkpoint(&request, &patch)?
+                let proof = match owner.create_checkpoint(&request, &patch) {
+                    Ok(proof) => proof,
+                    Err(error)
+                        if matches!(
+                            error.code,
+                            PromotionErrorCode::BranchHeadDrift
+                                | PromotionErrorCode::PatchApplyFailed
+                                | PromotionErrorCode::PatchUnbound
+                                | PromotionErrorCode::BranchCheckedOut
+                                | PromotionErrorCode::CheckpointFailed
+                        ) =>
+                    {
+                        let code = error.code;
+                        let record = self.promotions.reject(
+                            fence,
+                            &record.promotion_id,
+                            PromotionState::Checkpointing,
+                            code,
+                            &error.message,
+                            now_ms,
+                        )?;
+                        return Ok(PromotionTickOutcome::Terminal {
+                            promotion_id: record.promotion_id,
+                            state: record.state,
+                            code: code.as_str().to_string(),
+                        });
+                    }
+                    Err(error) => {
+                        return self.converge_checkpoint_failure(record, fence, error, now_ms)
+                    }
+                };
+                proof
             }
         };
 
@@ -382,6 +478,61 @@ impl PromotionSupervisor {
             promotion_id: record.promotion_id,
             state: record.state,
         })
+    }
+
+    /// Maps checkpoint-phase errors onto a durable terminal result. A local
+    /// checkpoint rejection is final; repository/runtime availability remains
+    /// manual because the effect boundary cannot be safely retried blindly.
+    fn converge_checkpoint_failure(
+        &self,
+        record: &PromotionRecord,
+        fence: &PromotionFence,
+        error: PromotionError,
+        now_ms: u64,
+    ) -> Result<PromotionTickOutcome, PromotionError> {
+        let code = error.code;
+        if matches!(
+            code,
+            PromotionErrorCode::CheckpointFailed
+                | PromotionErrorCode::PatchApplyFailed
+                | PromotionErrorCode::PatchUnbound
+                | PromotionErrorCode::BranchHeadDrift
+                | PromotionErrorCode::BranchCheckedOut
+                | PromotionErrorCode::ArtifactUnbound
+                | PromotionErrorCode::MalformedDigest
+                | PromotionErrorCode::UnsafeTargetRef
+                | PromotionErrorCode::InvalidPromotionState
+                | PromotionErrorCode::UnknownPromotion
+        ) {
+            let record = self.promotions.reject(
+                fence,
+                &record.promotion_id,
+                PromotionState::Checkpointing,
+                code,
+                &error.message,
+                now_ms,
+            )?;
+            return Ok(PromotionTickOutcome::Terminal {
+                promotion_id: record.promotion_id,
+                state: record.state,
+                code: code.as_str().to_string(),
+            });
+        }
+        if code == PromotionErrorCode::RepositoryUnavailable {
+            let record = self.promotions.park_unknown_manual(
+                fence,
+                &record.promotion_id,
+                PromotionState::Checkpointing,
+                code,
+                &error.message,
+                now_ms,
+            )?;
+            return Ok(PromotionTickOutcome::Parked {
+                promotion_id: record.promotion_id,
+                code: code.as_str().to_string(),
+            });
+        }
+        Err(error)
     }
 
     /// The paired canary. Inherently idempotent: it always re-measures both
@@ -418,7 +569,9 @@ impl PromotionSupervisor {
         // with the branch untouched.
         if matches!(
             error.code,
-            PromotionErrorCode::CanaryStageFailed | PromotionErrorCode::CanaryResultInvalid
+            PromotionErrorCode::CanaryStageFailed
+                | PromotionErrorCode::CanaryResultInvalid
+                | PromotionErrorCode::InsufficientSamples
         ) {
             let record = self.promotions.record_canary_result(
                 fence,
@@ -463,28 +616,8 @@ impl PromotionSupervisor {
         now_ms: u64,
     ) -> Result<PromotionTickOutcome, PromotionError> {
         let target = self.targets.load(&record.target_ref)?;
-        self.targets.authorize_canary(&target)?;
-        let profile = self
-            .profiles
-            .load(&target.canary.execution_profile_ref)
-            .map_err(|error| {
-                promotion_error(
-                    PromotionErrorCode::UnknownExecutionProfile,
-                    format!(
-                        "canary profile '{}' is not registered: {}",
-                        target.canary.execution_profile_ref, error.message
-                    ),
-                )
-            })?;
-        if profile.owner_kind != OwnerKind::PersistentDocker {
-            return Err(promotion_error(
-                PromotionErrorCode::InvalidCanarySpec,
-                format!(
-                    "the canary profile '{}' must use the digest-pinned container owner",
-                    profile.profile_ref
-                ),
-            ));
-        }
+        self.ensure_target_binding(record, &target)?;
+        let profile = self.load_bound_canary_profile(record, &target)?;
         let config = self.canary_config(&profile)?;
         let base_repo = self.require_base_repo()?;
         let bundle_root = self.stage_canary_bundle(record, &target)?;
@@ -545,7 +678,46 @@ impl PromotionSupervisor {
         now_ms: u64,
         begin: bool,
     ) -> Result<PromotionTickOutcome, PromotionError> {
-        let target = self.targets.load(&record.target_ref)?;
+        let target = match self.targets.load(&record.target_ref) {
+            Ok(target) => target,
+            Err(error) => {
+                let record = self.promotions.park_unknown_manual(
+                    fence,
+                    &record.promotion_id,
+                    if begin {
+                        PromotionState::ReadyToAdvance
+                    } else {
+                        PromotionState::Advancing
+                    },
+                    error.code,
+                    &error.message,
+                    now_ms,
+                )?;
+                return Ok(PromotionTickOutcome::Parked {
+                    promotion_id: record.promotion_id,
+                    code: error.code.as_str().to_string(),
+                });
+            }
+        };
+        if let Err(error) = self.ensure_target_binding(record, &target) {
+            let code = error.code;
+            let record = self.promotions.park_unknown_manual(
+                fence,
+                &record.promotion_id,
+                if begin {
+                    PromotionState::ReadyToAdvance
+                } else {
+                    PromotionState::Advancing
+                },
+                code,
+                &error.message,
+                now_ms,
+            )?;
+            return Ok(PromotionTickOutcome::Parked {
+                promotion_id: record.promotion_id,
+                code: code.as_str().to_string(),
+            });
+        }
         let expected_old_head = record.expected_old_head.clone().ok_or_else(|| {
             promotion_error(
                 PromotionErrorCode::InvalidPromotionState,
@@ -661,6 +833,17 @@ impl PromotionSupervisor {
                 ),
             )));
         }
+        if record.evidence.execution_profile_ref != profile.profile_ref
+            || record.evidence.execution_profile_hash != profile.profile_hash()
+        {
+            return Ok(Gate::reject(promotion_error(
+                PromotionErrorCode::EvidenceMismatch,
+                format!(
+                    "execution profile '{}' does not match the submitted evidence",
+                    profile.profile_ref
+                ),
+            )));
+        }
         // A-1: the target and the canary profile must agree on which repository
         // the effect happens in, and the runtime must own that repository.
         if target.base_repo_ref != profile.base_repo_ref {
@@ -694,6 +877,14 @@ impl PromotionSupervisor {
                 ))
             }
         };
+        if campaign.execution_profile_hash.is_none()
+            || campaign.execution_profile_hash.as_deref() != Some(profile.profile_hash().as_str())
+        {
+            return Ok(Gate::reject(promotion_error(
+                PromotionErrorCode::EvidenceMismatch,
+                "the durable campaign profile digest does not match the registered profile",
+            )));
+        }
         let jobs = match self.schedule.list_jobs(&record.campaign_id) {
             Ok(jobs) => jobs,
             Err(error) => {
@@ -722,6 +913,7 @@ impl PromotionSupervisor {
             campaign_status: campaign.status.as_str().to_string(),
             plan_hash: campaign.plan_hash.clone(),
             execution_profile_ref: campaign.execution_profile_ref.clone(),
+            execution_profile_hash: campaign.execution_profile_hash.clone(),
             job_ids: campaign.job_ids.clone(),
             fixture_digests: campaign
                 .fixture_refs
@@ -803,6 +995,7 @@ impl PromotionSupervisor {
             run_id: job.job.run_id.clone(),
             session_id: job.session_id.clone(),
             execution_profile_ref: job.job.execution_profile_ref.clone(),
+            execution_profile_hash: job.execution_profile_hash.clone(),
             fixture_digest: job.job.manifest_digest.clone(),
             task_id: job.job.task_id.clone(),
             suite: job.job.suite.clone(),
@@ -821,9 +1014,65 @@ impl PromotionSupervisor {
         })
     }
 
-    // -----------------------------------------------------------------------
-    // Server-derived effects
-    // -----------------------------------------------------------------------
+    fn ensure_target_binding(
+        &self,
+        record: &PromotionRecord,
+        target: &crate::workflow::react::experiment_promotion::policy::PromotionTargetV1,
+    ) -> Result<(), PromotionError> {
+        let target_hash = target.target_hash();
+        let policy_hash = target.policy.policy_hash();
+        if record.target_hash != target_hash || record.policy_hash != policy_hash {
+            return Err(promotion_error(
+                PromotionErrorCode::EvidenceMismatch,
+                format!(
+                    "registered target '{}' or policy changed after the promotion gate",
+                    target.target_ref
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn load_bound_canary_profile(
+        &self,
+        record: &PromotionRecord,
+        target: &crate::workflow::react::experiment_promotion::policy::PromotionTargetV1,
+    ) -> Result<ExecutionProfileV1, PromotionError> {
+        self.targets.authorize_canary(target)?;
+        let profile = self
+            .profiles
+            .load(&target.canary.execution_profile_ref)
+            .map_err(|error| {
+                promotion_error(
+                    PromotionErrorCode::UnknownExecutionProfile,
+                    format!(
+                        "canary profile '{}' is not registered: {}",
+                        target.canary.execution_profile_ref, error.message
+                    ),
+                )
+            })?;
+        if profile.owner_kind != OwnerKind::PersistentDocker {
+            return Err(promotion_error(
+                PromotionErrorCode::InvalidCanarySpec,
+                format!(
+                    "the canary profile '{}' must use the digest-pinned container owner",
+                    profile.profile_ref
+                ),
+            ));
+        }
+        if record.evidence.execution_profile_ref != profile.profile_ref
+            || record.evidence.execution_profile_hash != profile.profile_hash()
+        {
+            return Err(promotion_error(
+                PromotionErrorCode::EvidenceMismatch,
+                format!(
+                    "execution profile '{}' no longer matches the promotion evidence",
+                    profile.profile_ref
+                ),
+            ));
+        }
+        Ok(profile)
+    }
 
     fn require_base_repo(&self) -> Result<PathBuf, PromotionError> {
         self.base_repo.clone().ok_or_else(|| {
@@ -1107,7 +1356,11 @@ mod tests {
     }
 
     fn profile_json(base_repo_ref: &str) -> String {
-        let profile = ExecutionProfileV1 {
+        serde_json::to_string_pretty(&test_profile(base_repo_ref)).expect("serialize")
+    }
+
+    fn test_profile(base_repo_ref: &str) -> ExecutionProfileV1 {
+        ExecutionProfileV1 {
             schema_version: EXECUTION_PROFILE_V1.to_string(),
             profile_ref: "canary".to_string(),
             owner_kind: OwnerKind::PersistentDocker,
@@ -1139,8 +1392,7 @@ mod tests {
             allowed_bundle_refs: vec!["smoke-tools".to_string()],
             input_patch_ref: None,
             input_patch_digest: None,
-        };
-        serde_json::to_string_pretty(&profile).expect("serialize")
+        }
     }
 
     fn target(profile_base_repo_ref: &str, branch_ref: &str) -> String {
@@ -1237,7 +1489,7 @@ mod tests {
                 dataset_version: 2,
                 split: "smoke".to_string(),
                 execution_profile_ref: "canary".to_string(),
-                execution_profile_hash: "4".repeat(64),
+                execution_profile_hash: test_profile("repo:primary").profile_hash(),
                 patch_manifest_hash: "5".repeat(64),
                 patch_sha256: "6".repeat(64),
                 base_revision: base_revision.to_string(),
@@ -1397,6 +1649,84 @@ mod tests {
             PromotionTickOutcome::Idle
         );
         assert!(supervisor.reconcile(T0).expect("reconcile").is_empty());
+    }
+
+    #[test]
+    fn insufficient_canary_samples_converge_to_a_terminal_failure() {
+        let directory = tempdir().expect("tempdir");
+        let store = Arc::new(MainStore::new(directory.path().join("promotion.db")).expect("store"));
+        let supervisor = PromotionSupervisor::new(
+            ExperimentPromotionStore::new(store.clone()),
+            ExperimentScheduleStore::new(store),
+            PromotionSupervisorConfig {
+                domain_root: directory.path().to_path_buf(),
+                base_repo: None,
+                owner_id: "promotion-supervisor".to_string(),
+                lease_ms: 30_000,
+            },
+        );
+        let submission = request(0.5, 1.0, "refs/heads/experiment/2i");
+        let promotion_id = submission.promotion_id();
+        supervisor
+            .promotions
+            .submit(&submission, &promotion_id, "key-1", T0)
+            .expect("submit");
+        let claimed = match supervisor
+            .promotions
+            .claim_next("worker-a", T0, 30_000)
+            .expect("claim")
+        {
+            PromotionClaimOutcome::Claimed(record) => *record,
+            PromotionClaimOutcome::Idle => panic!("expected claim"),
+        };
+        let fence = claimed.fence().expect("fence");
+        supervisor
+            .promotions
+            .begin_checkpoint(&fence, &promotion_id, T0)
+            .expect("checkpoint intent");
+        supervisor
+            .promotions
+            .complete_checkpoint(
+                &fence,
+                &promotion_id,
+                &"c".repeat(40),
+                "refs/chatspeed/checkpoints/test",
+                T0,
+            )
+            .expect("checkpoint");
+        let canary = supervisor
+            .promotions
+            .begin_canary(&fence, &promotion_id, T0)
+            .expect("canary intent");
+        let outcome = supervisor
+            .converge_canary_failure(
+                &canary,
+                &fence,
+                PromotionError::new(
+                    PromotionErrorCode::InsufficientSamples,
+                    "paired canary supplied too few samples",
+                ),
+                T0,
+            )
+            .expect("terminal convergence");
+        assert_eq!(
+            outcome,
+            PromotionTickOutcome::Terminal {
+                promotion_id: promotion_id.clone(),
+                state: PromotionState::CanaryFailed,
+                code: "insufficient_samples".to_string(),
+            }
+        );
+        let record = supervisor.promotions.get(&promotion_id).expect("record");
+        assert_eq!(record.error_code.as_deref(), Some("insufficient_samples"));
+        assert!(record.owner_id.is_none());
+        assert!(matches!(
+            supervisor
+                .promotions
+                .claim_next("worker-b", T0 + 60_000, 30_000)
+                .expect("claim"),
+            PromotionClaimOutcome::Idle
+        ));
     }
 
     /// The pure stage rule the runner and the policy share, exercised here so a

@@ -305,6 +305,7 @@ pub fn write_target(domain: &Path) {
 /// published artifacts, exactly as the 2G scheduler leaves them.
 pub struct SmokeCampaign {
     pub campaign_id: String,
+    pub execution_profile_hash: String,
     /// The digest-bound fixture identity the schedule pinned.
     fixture: FixtureFacts,
     /// candidate key → (job id, run id, session id, patch digest)
@@ -398,8 +399,18 @@ pub fn smoke_campaign(
         "bundle_refs": [BUNDLE_REF],
     }))
     .expect("the smoke schedule request is valid");
+    let profile_hash = serde_json::from_slice::<ExecutionProfileV1>(
+        &std::fs::read(
+            domain
+                .join(crate::headless::profiles::EXECUTION_PROFILE_DIR)
+                .join(format!("{PROFILE_REF}.json")),
+        )
+        .expect("profile bytes"),
+    )
+    .expect("profile")
+    .profile_hash();
     let outcome = schedule
-        .schedule_campaign(&request, "smoke-key", T0)
+        .schedule_campaign(&request, "smoke-key", &profile_hash, T0)
         .expect("schedule");
     let campaign_id = outcome.accepted.campaign_id.clone();
 
@@ -554,6 +565,16 @@ pub fn smoke_campaign(
     let _ = repo;
     SmokeCampaign {
         campaign_id,
+        execution_profile_hash: serde_json::from_slice::<ExecutionProfileV1>(
+            &std::fs::read(
+                domain
+                    .join(crate::headless::profiles::EXECUTION_PROFILE_DIR)
+                    .join(format!("{PROFILE_REF}.json")),
+            )
+            .expect("profile bytes"),
+        )
+        .expect("profile")
+        .profile_hash(),
         fixture,
         arms,
     }
@@ -589,7 +610,7 @@ pub fn evidence(
         dataset_version: campaign.fixture.dataset_version,
         split: campaign.fixture.split.clone(),
         execution_profile_ref: PROFILE_REF.to_string(),
-        execution_profile_hash: "4".repeat(64),
+        execution_profile_hash: campaign.execution_profile_hash.clone(),
         patch_manifest_hash: arm.manifest_sha256.clone(),
         patch_sha256: arm.patch_sha256.clone(),
         base_revision: BRANCH.to_string(),
@@ -997,6 +1018,54 @@ fn scan_directory(root: &Path) -> usize {
         }
     }
     hits
+}
+
+/// A deterministic checkpoint failure is recorded as a terminal rejection rather
+/// than leaving the promotion in `checkpointing` to retry forever.
+#[test]
+fn a_checkpoint_failure_converges_without_touching_the_branch() {
+    let directory = tempdir().expect("tempdir");
+    let domain = directory.path().to_path_buf();
+    let (repo, base_head) = repository(&domain);
+    write_profile(
+        &domain,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    write_target(&domain);
+    write_bundle(&domain);
+    let store = Arc::new(MainStore::new(domain.join("chatspeed.db")).expect("store"));
+    let schedule = ExperimentScheduleStore::new(store.clone());
+    let campaign = smoke_campaign(
+        &store,
+        &schedule,
+        &domain,
+        &repo,
+        &[(
+            "prompt-a",
+            Some(b"--- /dev/null\n+++ b/improvement.txt\n@@ -0,0 +1 @@\n+better\n".to_vec()),
+        )],
+    );
+    let promotions = ExperimentPromotionStore::new(store.clone());
+    let request = PromotionRequestV1 {
+        schema_version: PROMOTION_REQUEST_V1.to_string(),
+        campaign_id: campaign.campaign_id.clone(),
+        candidate_key: "prompt-a".to_string(),
+        target_ref: TARGET_REF.to_string(),
+        evidence: evidence(&campaign, "prompt-a", BASE_MEAN, IMPROVED_MEAN),
+    };
+    std::fs::write(domain.join("worktrees"), "not a directory\n")
+        .expect("seed deterministic checkpoint failure");
+    let (code, state) = run_promotion(&supervisor(&store, &domain, &repo), &promotions, &request);
+    assert_eq!(state, PromotionState::Rejected);
+    assert_eq!(code, "checkpoint_failed");
+    assert_eq!(git_ok(&repo, &["rev-parse", BRANCH]), base_head);
+    let record = promotions.get(&request.promotion_id()).expect("record");
+    assert_eq!(record.error_code.as_deref(), Some("checkpoint_failed"));
+    assert_eq!(record.checkpoint_intent.as_str(), "intent_recorded");
+    assert!(
+        record.owner_id.is_none(),
+        "terminal rejection releases the lease"
+    );
 }
 
 /// Every canary non-success converges to a terminal state and never touches the

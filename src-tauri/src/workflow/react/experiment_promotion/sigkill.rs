@@ -98,7 +98,6 @@ fn mark_domain(store: &Arc<MainStore>, domain: &Path) {
 /// effect and the durable row.
 struct MatrixOutcome {
     state: String,
-    error_code: Option<String>,
     branch_head: String,
     checkpoint_ref_target: Option<String>,
     journal_intent_count: usize,
@@ -113,8 +112,6 @@ struct MatrixOutcome {
 /// A real headless child process running this crate's bootstrap.
 struct HeadlessChild {
     child: Child,
-    domain: PathBuf,
-    repo: PathBuf,
     stop_file: PathBuf,
 }
 
@@ -141,12 +138,7 @@ impl HeadlessChild {
             ))
             .spawn()
             .expect("spawn the headless child");
-        let mut child = Self {
-            child,
-            domain: domain.to_path_buf(),
-            repo: repo.to_path_buf(),
-            stop_file,
-        };
+        let mut child = Self { child, stop_file };
         // Fail fast (with the child's own log) when the child cannot boot, so a
         // broken environment is reported instead of a slow timeout.
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -186,14 +178,6 @@ impl HeadlessChild {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
-    }
-
-    fn repo(&self) -> &Path {
-        &self.repo
-    }
-
-    fn domain(&self) -> &Path {
-        &self.domain
     }
 }
 
@@ -417,7 +401,6 @@ fn collect_outcome(
     };
     MatrixOutcome {
         state: record.state.as_str().to_string(),
-        error_code: record.error_code.clone(),
         branch_head,
         checkpoint_ref_target,
         journal_intent_count: count("checkpoint_intent"),

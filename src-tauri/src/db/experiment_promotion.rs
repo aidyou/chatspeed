@@ -1692,8 +1692,8 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let store =
             Arc::new(MainStore::new(directory.path().join("promotion.db")).expect("main store"));
-        // The promotion schema only exists from v20 onwards; a fresh database
-        // installs the latest schema in one pass.
+        // The promotion schema is part of the consolidated v18 CLI migration;
+        // a fresh database installs the latest schema in one pass.
         let version = store
             .db_runtime()
             .expect("runtime")
@@ -1701,7 +1701,7 @@ mod tests {
                 crate::db::sql::migrations::manager::get_db_version(conn)
             })
             .expect("version read");
-        assert_eq!(version, 20);
+        assert_eq!(version, 18);
         (ExperimentPromotionStore::new(store), directory)
     }
 

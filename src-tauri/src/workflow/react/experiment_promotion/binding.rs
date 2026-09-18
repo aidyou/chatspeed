@@ -45,6 +45,7 @@ pub struct CampaignBindingV1 {
     pub campaign_status: String,
     pub plan_hash: String,
     pub execution_profile_ref: String,
+    pub execution_profile_hash: Option<String>,
     pub job_ids: Vec<String>,
     /// The `manifest_digest` of every fixture ref the campaign was scheduled
     /// with.
@@ -83,6 +84,7 @@ pub struct JobBindingV1 {
     pub run_id: Option<String>,
     pub session_id: Option<String>,
     pub execution_profile_ref: String,
+    pub execution_profile_hash: Option<String>,
     pub fixture_digest: String,
     pub task_id: String,
     pub suite: String,
@@ -252,9 +254,24 @@ pub fn verify_promotion_binding(
     }
 
     // Execution profile and fixture identity.
+    let Some(campaign_profile_hash) = campaign.execution_profile_hash.as_deref() else {
+        return Err(reject(
+            PromotionErrorCode::EvidenceMismatch,
+            "the durable campaign has no historical execution profile digest",
+        ));
+    };
+    if !is_sha256_hex(campaign_profile_hash)
+        || campaign_profile_hash != evidence.execution_profile_hash
+    {
+        return Err(reject(
+            PromotionErrorCode::EvidenceMismatch,
+            "the promotion evidence does not match the durable campaign profile digest",
+        ));
+    }
     for job in [baseline, candidate] {
         if job.execution_profile_ref != evidence.execution_profile_ref
             || job.execution_profile_ref != campaign.execution_profile_ref
+            || job.execution_profile_hash.as_deref() != Some(campaign_profile_hash)
         {
             return Err(reject(
                 PromotionErrorCode::EvidenceMismatch,
@@ -492,6 +509,7 @@ mod tests {
             campaign_status: "closed".to_string(),
             plan_hash: "8".repeat(64),
             execution_profile_ref: "smoke-local".to_string(),
+            execution_profile_hash: Some("4".repeat(64)),
             job_ids: vec!["job-baseline".to_string(), "job-candidate".to_string()],
             fixture_digests: vec!["3".repeat(64)],
         }
@@ -511,6 +529,7 @@ mod tests {
             run_id: Some(run_id.to_string()),
             session_id: Some(format!("session-{run_id}")),
             execution_profile_ref: "smoke-local".to_string(),
+            execution_profile_hash: Some("4".repeat(64)),
             fixture_digest: "3".repeat(64),
             task_id: "task-a".to_string(),
             suite: "chatspeed-smoke".to_string(),
@@ -643,6 +662,36 @@ mod tests {
                 &target()
             )
             .expect_err("run")
+            .code,
+            PromotionErrorCode::EvidenceMismatch
+        );
+
+        let mut legacy_campaign = campaign();
+        legacy_campaign.execution_profile_hash = None;
+        assert_eq!(
+            verify_promotion_binding(
+                &evidence(),
+                &legacy_campaign,
+                &baseline(),
+                &candidate(),
+                &target()
+            )
+            .expect_err("legacy profile binding")
+            .code,
+            PromotionErrorCode::EvidenceMismatch
+        );
+
+        // A durable job whose historical profile digest differs never promotes.
+        let drifted_hash = mutation(&|job| job.execution_profile_hash = Some("5".repeat(64)));
+        assert_eq!(
+            verify_promotion_binding(
+                &evidence(),
+                &campaign(),
+                &baseline(),
+                &drifted_hash,
+                &target()
+            )
+            .expect_err("profile digest")
             .code,
             PromotionErrorCode::EvidenceMismatch
         );

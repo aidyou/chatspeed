@@ -138,12 +138,270 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_budget_reservations_lease
          ON experiment_budget_reservations(state, lease_expires_at_ms)",
     ),
+    (
+        "experiment_domain",
+        "CREATE TABLE IF NOT EXISTS experiment_domain (
+            domain_id TEXT PRIMARY KEY,
+            domain_kind TEXT NOT NULL CHECK (domain_kind IN ('experiment.v1')),
+            marker_schema_version TEXT NOT NULL,
+            singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1),
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE (singleton)
+        )",
+    ),
+    (
+        "experiment_domain_lease",
+        "CREATE TABLE IF NOT EXISTS experiment_domain_lease (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            owner_id TEXT NOT NULL,
+            lease_generation INTEGER NOT NULL CHECK (lease_generation >= 1),
+            pid INTEGER NOT NULL,
+            lease_expires_at_ms INTEGER NOT NULL,
+            heartbeat_at_ms INTEGER NOT NULL,
+            started_at_ms INTEGER NOT NULL
+        )",
+    ),
+    (
+        "experiment_campaign_schedules",
+        "CREATE TABLE IF NOT EXISTS experiment_campaign_schedules (
+            campaign_id TEXT PRIMARY KEY,
+            campaign_key TEXT NOT NULL,
+            plan_hash TEXT NOT NULL,
+            schedule_hash TEXT NOT NULL,
+            plan_json TEXT NOT NULL,
+            fixture_refs_json TEXT NOT NULL,
+            execution_profile_ref TEXT NOT NULL,
+            bundle_refs_json TEXT NOT NULL,
+            concurrency INTEGER NOT NULL CHECK (concurrency = 1),
+            status TEXT NOT NULL CHECK (status IN ('active','closed','cancelled')),
+            idempotency_key TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            profile_hash TEXT,
+            UNIQUE (campaign_key),
+            UNIQUE (idempotency_key)
+        )",
+    ),
+    (
+        "experiment_campaign_jobs",
+        "CREATE TABLE IF NOT EXISTS experiment_campaign_jobs (
+            job_id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL REFERENCES experiment_campaign_schedules(campaign_id),
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            candidate_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            suite TEXT NOT NULL,
+            dataset_id TEXT NOT NULL,
+            dataset_version INTEGER NOT NULL,
+            split TEXT NOT NULL,
+            manifest_digest TEXT NOT NULL,
+            task_digest TEXT NOT NULL,
+            instruction_hash TEXT NOT NULL,
+            execution_profile_ref TEXT NOT NULL,
+            profile_hash TEXT,
+            state TEXT NOT NULL CHECK (state IN (
+                'queued','preparing','prepared','dispatching','running','collecting',
+                'succeeded','failed_precondition','failed','cancelled','unknown_manual'
+            )),
+            dispatch_marker TEXT NOT NULL CHECK (dispatch_marker IN (
+                'not_dispatched','intent_recorded','confirmed'
+            )),
+            run_id TEXT,
+            session_id TEXT,
+            attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+            owner_id TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+            lease_expires_at_ms INTEGER,
+            heartbeat_at_ms INTEGER,
+            last_stage TEXT,
+            error_code TEXT,
+            artifact_dir TEXT,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE (campaign_id, ordinal),
+            CHECK (
+                (dispatch_marker = 'confirmed' AND run_id IS NOT NULL)
+                OR (dispatch_marker != 'confirmed' AND run_id IS NULL)
+            )
+        )",
+    ),
+    (
+        "experiment_campaign_jobs_claim_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_campaign_jobs_claim_idx
+            ON experiment_campaign_jobs (state, lease_expires_at_ms, campaign_id, ordinal)",
+    ),
+    (
+        "experiment_campaign_jobs_campaign_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_campaign_jobs_campaign_idx
+            ON experiment_campaign_jobs (campaign_id, ordinal)",
+    ),
+    (
+        "experiment_job_journal",
+        "CREATE TABLE IF NOT EXISTS experiment_job_journal (
+            journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL REFERENCES experiment_campaign_jobs(job_id),
+            stage TEXT NOT NULL,
+            owner_id TEXT,
+            lease_generation INTEGER NOT NULL CHECK (lease_generation >= 0),
+            detail_json TEXT,
+            created_at_ms INTEGER NOT NULL
+        )",
+    ),
+    (
+        "experiment_job_journal_job_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_job_journal_job_idx
+            ON experiment_job_journal (job_id, journal_id)",
+    ),
+    (
+        "experiment_job_bundles",
+        "CREATE TABLE IF NOT EXISTS experiment_job_bundles (
+            bundle_install_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES experiment_campaign_jobs(job_id),
+            bundle_ref TEXT NOT NULL,
+            bundle_version TEXT NOT NULL,
+            content_digest TEXT NOT NULL,
+            staged_dir TEXT NOT NULL,
+            verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0,1)),
+            registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0,1)),
+            owner_id TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE (job_id, bundle_ref)
+        )",
+    ),
+    (
+        "experiment_job_artifacts",
+        "CREATE TABLE IF NOT EXISTS experiment_job_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES experiment_campaign_jobs(job_id),
+            kind TEXT NOT NULL CHECK (kind IN (
+                'output_patch','patch_manifest','bundle_manifest','job_summary'
+            )),
+            relative_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+            base_revision TEXT,
+            run_id TEXT,
+            session_id TEXT,
+            candidate_key TEXT,
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE (job_id, kind)
+        )",
+    ),
+    (
+        "experiment_promotions",
+        "CREATE TABLE IF NOT EXISTS experiment_promotions (
+            promotion_id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL,
+            candidate_key TEXT NOT NULL,
+            target_ref TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN (
+                'queued','evidence_validating','rejected','checkpointing','checkpointed',
+                'canary_running','canary_failed','ready_to_advance','advancing','promoted',
+                'rolled_back','unknown_manual'
+            )),
+            request_hash TEXT NOT NULL,
+            evidence_hash TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            target_hash TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            base_revision TEXT NOT NULL,
+            patch_sha256 TEXT NOT NULL,
+            patch_manifest_hash TEXT NOT NULL,
+            expected_old_head TEXT,
+            observed_head TEXT,
+            checkpoint_commit TEXT,
+            checkpoint_ref TEXT,
+            checkpoint_intent TEXT NOT NULL DEFAULT 'not_started' CHECK (checkpoint_intent IN (
+                'not_started','intent_recorded','completed'
+            )),
+            branch_intent TEXT NOT NULL DEFAULT 'not_started' CHECK (branch_intent IN (
+                'not_started','intent_recorded','completed'
+            )),
+            canary_result_hash TEXT,
+            canary_result_json TEXT,
+            decision_outcome TEXT,
+            decision_code TEXT,
+            decision_detail TEXT,
+            decision_json TEXT,
+            error_code TEXT,
+            owner_id TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+            lease_expires_at_ms INTEGER,
+            heartbeat_at_ms INTEGER,
+            attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+            idempotency_key TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL,
+            UNIQUE (idempotency_key)
+        )",
+    ),
+    (
+        "experiment_promotions_target_active_idx",
+        "CREATE UNIQUE INDEX IF NOT EXISTS experiment_promotions_target_active_idx
+            ON experiment_promotions (target_ref)
+            WHERE state NOT IN (
+                'rejected','canary_failed','promoted','rolled_back','unknown_manual'
+            )",
+    ),
+    (
+        "experiment_promotions_claim_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_promotions_claim_idx
+            ON experiment_promotions (state, lease_expires_at_ms, created_at_ms)",
+    ),
+    (
+        "experiment_promotions_campaign_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_promotions_campaign_idx
+            ON experiment_promotions (campaign_id, candidate_key)",
+    ),
+    (
+        "experiment_promotion_journal",
+        "CREATE TABLE IF NOT EXISTS experiment_promotion_journal (
+            journal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            promotion_id TEXT NOT NULL REFERENCES experiment_promotions(promotion_id),
+            stage TEXT NOT NULL,
+            owner_id TEXT,
+            lease_generation INTEGER NOT NULL CHECK (lease_generation >= 0),
+            detail_json TEXT,
+            created_at_ms INTEGER NOT NULL
+        )",
+    ),
+    (
+        "experiment_promotion_journal_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_promotion_journal_idx
+            ON experiment_promotion_journal (promotion_id, journal_id)",
+    ),
+    (
+        "experiment_promotion_canary_results",
+        "CREATE TABLE IF NOT EXISTS experiment_promotion_canary_results (
+            result_id TEXT PRIMARY KEY,
+            promotion_id TEXT NOT NULL REFERENCES experiment_promotions(promotion_id),
+            stage_index INTEGER NOT NULL CHECK (stage_index >= 0),
+            stage_id TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            samples INTEGER NOT NULL CHECK (samples >= 0),
+            baseline_passed INTEGER NOT NULL CHECK (baseline_passed >= 0),
+            candidate_passed INTEGER NOT NULL CHECK (candidate_passed >= 0),
+            baseline_mean REAL NOT NULL,
+            candidate_mean REAL NOT NULL,
+            declared_status TEXT NOT NULL CHECK (declared_status IN ('pass','fail')),
+            recomputed_status TEXT NOT NULL CHECK (recomputed_status IN ('pass','fail')),
+            output_sha256 TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            UNIQUE (promotion_id, stage_id)
+        )",
+    ),
+    (
+        "experiment_promotion_canary_results_idx",
+        "CREATE INDEX IF NOT EXISTS experiment_promotion_canary_results_idx
+            ON experiment_promotion_canary_results (promotion_id, stage_index)",
+    ),
 ];
 
 pub const MIGRATION: MigrationDefinition = MigrationDefinition {
     version: 18,
-    description:
-        "v18 migration: Add experiment budget scopes, reservations and append-only ledger entries",
+    description: "v18 migration: Add CLI experiment budget, schedule and promotion schemas",
     sql: MIGRATION_SQL,
     ensure: None,
     apply: None,

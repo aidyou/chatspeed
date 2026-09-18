@@ -134,7 +134,7 @@ pub async fn run(
     let projection = wait_for_terminal(
         submitted,
         || {
-            let client = client.clone();
+            let client = client;
             let promotion_id = promotion_id_for_fetch.clone();
             async move {
                 client

@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v20, v3,
-    v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2, v3, v4, v5,
+    v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -24,8 +24,6 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v16::MIGRATION,
     v17::MIGRATION,
     v18::MIGRATION,
-    v19::MIGRATION,
-    v20::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -237,10 +235,16 @@ mod tests {
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
         assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
-        // Phase 2B budget ledger tables ship with the latest schema.
-        assert!(table_exists(&conn, "experiment_budget_scopes"));
-        assert!(table_exists(&conn, "experiment_budget_reservations"));
-        assert!(table_exists(&conn, "experiment_budget_ledger_entries"));
+        assert!(has_column(
+            &conn,
+            "experiment_campaign_schedules",
+            "profile_hash"
+        ));
+        assert!(has_column(
+            &conn,
+            "experiment_campaign_jobs",
+            "profile_hash"
+        ));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))
@@ -338,8 +342,8 @@ mod tests {
     }
 
     /// Builds a database at exactly `version` by replaying the historical
-    /// statements, which is how the pre-v19 shape is reproduced for the
-    /// additive-upgrade test.
+    /// statements, which is how the pre-v18 shape is reproduced for the
+    /// consolidated CLI upgrade test.
     fn build_at_version(conn: &mut Connection, version: i32) {
         let mut statements: Vec<(&'static str, &'static str)> = Vec::new();
         statements.extend_from_slice(v1::INIT_SQL);
@@ -353,14 +357,13 @@ mod tests {
             .expect("historical schema should build");
     }
 
-    /// Phase 2G+2H adds v19. It must be purely additive: an existing v18
-    /// database keeps every row and simply gains the new empty tables, so an
-    /// older binary can still open it (no down migration, no drop).
+    /// The v18 CLI migration is consolidated and therefore upgrades an older
+    /// v17 database directly to the complete CLI schema.
     #[test]
-    fn v18_database_upgrades_to_v19_without_touching_existing_rows() {
+    fn v17_database_upgrades_to_v18_without_touching_existing_rows() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
-        build_at_version(&mut conn, 18);
-        assert_eq!(get_db_version(&conn).expect("version"), 18);
+        build_at_version(&mut conn, 17);
+        assert_eq!(get_db_version(&conn).expect("version"), 17);
         assert!(!table_exists(&conn, "experiment_campaign_jobs"));
         assert!(!table_exists(&conn, "experiment_domain"));
 
@@ -371,13 +374,9 @@ mod tests {
         )
         .expect("seed an existing row");
 
-        run_migrations(&mut conn).expect("v18 -> v19 should succeed");
+        run_migrations(&mut conn).expect("v17 -> v18 should succeed");
 
-        assert_eq!(
-            get_db_version(&conn).expect("version"),
-            latest_migration_version()
-        );
-        assert_eq!(latest_migration_version(), 20);
+        assert_eq!(get_db_version(&conn).expect("version"), 18);
         // The pre-existing row survived untouched.
         let name: String = conn
             .query_row("SELECT name FROM agents WHERE id = 'agent-1'", [], |row| {
@@ -385,7 +384,6 @@ mod tests {
             })
             .expect("existing row survives");
         assert_eq!(name, "kept");
-        // The new tables exist and are empty; nothing is auto-marked.
         for table in [
             "experiment_domain",
             "experiment_domain_lease",
@@ -394,73 +392,30 @@ mod tests {
             "experiment_job_journal",
             "experiment_job_bundles",
             "experiment_job_artifacts",
+            "experiment_promotions",
+            "experiment_promotion_journal",
+            "experiment_promotion_canary_results",
         ] {
-            assert!(table_exists(&conn, table), "missing v19 table {table}");
+            assert!(
+                table_exists(&conn, table),
+                "missing consolidated v18 table {table}"
+            );
         }
+        assert!(has_column(
+            &conn,
+            "experiment_campaign_schedules",
+            "profile_hash"
+        ));
+        assert!(has_column(
+            &conn,
+            "experiment_campaign_jobs",
+            "profile_hash"
+        ));
         let markers: i64 = conn
             .query_row("SELECT COUNT(1) FROM experiment_domain", [], |row| {
                 row.get(0)
             })
             .expect("count markers");
         assert_eq!(markers, 0, "an upgraded database is never auto-marked");
-    }
-
-    /// Phase 2I adds v20. It must be purely additive for the same reason: an
-    /// existing v19 database keeps every row, every job and every marker, and
-    /// simply gains the promotion tables.
-    #[test]
-    fn v19_database_upgrades_to_v20_without_touching_existing_rows() {
-        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
-        build_at_version(&mut conn, 19);
-        assert_eq!(get_db_version(&conn).expect("version"), 19);
-        assert!(!table_exists(&conn, "experiment_promotions"));
-        assert!(!table_exists(&conn, "experiment_promotion_journal"));
-        assert!(!table_exists(&conn, "experiment_promotion_canary_results"));
-
-        conn.execute(
-            "INSERT INTO experiment_domain (
-                domain_id, domain_kind, marker_schema_version, singleton, created_at_ms
-             ) VALUES ('domain-kept', 'experiment.v1', 'experiment_domain_marker.v1', 1, 7)",
-            [],
-        )
-        .expect("seed a v19 domain marker");
-
-        run_migrations(&mut conn).expect("v19 -> v20 should succeed");
-
-        assert_eq!(
-            get_db_version(&conn).expect("version"),
-            latest_migration_version()
-        );
-        let domain_id: String = conn
-            .query_row("SELECT domain_id FROM experiment_domain", [], |row| {
-                row.get(0)
-            })
-            .expect("existing marker survives");
-        assert_eq!(domain_id, "domain-kept");
-        for table in [
-            "experiment_promotions",
-            "experiment_promotion_journal",
-            "experiment_promotion_canary_results",
-        ] {
-            assert!(table_exists(&conn, table), "missing v20 table {table}");
-        }
-        // The promotion tables start empty, so an upgrade never fabricates a
-        // promotion.
-        let promotions: i64 = conn
-            .query_row("SELECT COUNT(1) FROM experiment_promotions", [], |row| {
-                row.get(0)
-            })
-            .expect("count promotions");
-        assert_eq!(promotions, 0);
-        // The single-flight partial unique index is part of the additive schema.
-        let index: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index'
-                   AND name = 'experiment_promotions_target_active_idx'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query index");
-        assert_eq!(index, 1, "the partial unique index must exist");
     }
 }

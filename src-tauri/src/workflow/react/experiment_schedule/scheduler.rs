@@ -529,6 +529,20 @@ impl CampaignScheduler {
     ) -> Result<JobOutcome, ScheduleError> {
         let job = &record.job;
         let campaign = self.store.get_campaign(&job.campaign_id)?;
+        if campaign.execution_profile_hash.as_deref() != record.execution_profile_hash.as_deref()
+            || record.execution_profile_hash.is_none()
+            || record
+                .execution_profile_hash
+                .as_deref()
+                .is_some_and(|hash| {
+                    !crate::workflow::react::experiment_schedule::types::is_sha256_hex(hash)
+                })
+        {
+            return Err(ScheduleError::new(
+                ScheduleErrorCode::InvalidExecutionProfile,
+                "the durable job and campaign do not carry the same historical execution profile digest",
+            ));
+        }
 
         // A campaign that stopped accepting work ends its claimable jobs here.
         if !campaign.status.accepts_new_work() {
@@ -1207,7 +1221,12 @@ mod tests {
         let request =
             parse_and_validate_campaign_schedule_request(&schedule_request()).expect("request");
         store
-            .schedule_campaign(&request, "idem-1", crate::headless::domain::now_ms())
+            .schedule_campaign(
+                &request,
+                "idem-1",
+                &"a".repeat(64),
+                crate::headless::domain::now_ms(),
+            )
             .expect("schedule");
         (domain, store)
     }

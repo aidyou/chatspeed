@@ -9854,6 +9854,7 @@ pub(crate) fn campaign_schedule_core(
         .authorize_bundles(&profile, &request.bundle_refs)
         .map_err(schedule_error)?;
 
+    let profile_hash = profile.profile_hash();
     // 4. The fixture refs must still resolve against the pinned catalog: a
     //    drifted catalog is a pre-dispatch rejection, never a different run.
     for reference in &request.fixture_refs {
@@ -9885,7 +9886,12 @@ pub(crate) fn campaign_schedule_core(
 
     // 6. Persist the frozen plan and its ordered jobs in one transaction.
     let outcome = store
-        .schedule_campaign(&request, idempotency_key, crate::headless::domain::now_ms())
+        .schedule_campaign(
+            &request,
+            idempotency_key,
+            &profile_hash,
+            crate::headless::domain::now_ms(),
+        )
         .map_err(schedule_error)?;
     log::info!(
         "[Workflow][campaign={}][phase=schedule] Durable schedule {} ({} jobs, profile {})",

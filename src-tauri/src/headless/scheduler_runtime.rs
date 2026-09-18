@@ -113,12 +113,21 @@ impl DomainSchedulerResources {
 impl SchedulerResources for DomainSchedulerResources {
     fn owner_for(
         &self,
-        _job: &JobRecord,
+        job: &JobRecord,
         campaign: &CampaignRecord,
     ) -> Result<Box<dyn ExecutionOwner>, ScheduleError> {
         // The profile is resolved from the domain's own registry: a job can
         // never name a different one, and an unregistered profile fails closed.
         let profile = self.profiles.load(&campaign.execution_profile_ref)?;
+        let profile_hash = profile.profile_hash();
+        if campaign.execution_profile_hash.as_deref() != Some(profile_hash.as_str())
+            || job.execution_profile_hash.as_deref() != campaign.execution_profile_hash.as_deref()
+        {
+            return Err(runtime_error(
+                ScheduleErrorCode::InvalidExecutionProfile,
+                "the registered execution profile no longer matches the durable schedule digest",
+            ));
+        }
         match profile.owner_kind {
             OwnerKind::HostWorktree => Ok(Box::new(HostWorktreeOwner::new(
                 self.require_base_repo()?,

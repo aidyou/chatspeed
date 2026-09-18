@@ -68,6 +68,10 @@ pub struct CampaignRecord {
     pub schedule_hash: String,
     pub status: CampaignStatus,
     pub execution_profile_ref: String,
+    /// The digest of the server-registered profile used when the campaign was scheduled.
+    /// `None` is retained only for legacy rows created before the consolidated
+    /// v18 CLI schema; such rows are rejected before dispatch or promotion.
+    pub execution_profile_hash: Option<String>,
     pub plan: CampaignPlanV1,
     pub fixture_refs: Vec<FixtureTaskRefV1>,
     pub bundle_refs: Vec<String>,
@@ -78,6 +82,10 @@ pub struct CampaignRecord {
 #[derive(Debug, Clone)]
 pub struct JobRecord {
     pub job: CampaignJobV1,
+    /// The digest of the server-registered profile used when the job was scheduled.
+    /// `None` is retained only for legacy rows created before the consolidated
+    /// v18 CLI schema; such rows are rejected before dispatch or promotion.
+    pub execution_profile_hash: Option<String>,
     pub session_id: Option<String>,
     pub artifact_dir: Option<String>,
     pub owner_id: Option<String>,
@@ -210,8 +218,15 @@ impl ExperimentScheduleStore {
         &self,
         request: &CampaignScheduleRequestV1,
         idempotency_key: &str,
+        execution_profile_hash: &str,
         now_ms: u64,
     ) -> Result<ScheduleOutcome, ScheduleError> {
+        if !is_sha256_hex(execution_profile_hash) {
+            return Err(store_error(
+                ScheduleErrorCode::InvalidExecutionProfile,
+                "the durable schedule requires a valid execution profile digest",
+            ));
+        }
         let plan = request.plan.clone();
         let plan_hash = plan.plan_hash();
         let campaign_id = campaign_id_for_plan(&plan_hash);
@@ -219,6 +234,7 @@ impl ExperimentScheduleStore {
             crate::workflow::react::experiment_schedule::types::schedule_request_hash(request);
         let request = request.clone();
         let idempotency_key = idempotency_key.to_string();
+        let execution_profile_hash = execution_profile_hash.to_string();
 
         let runtime = self
             .store
@@ -230,21 +246,34 @@ impl ExperimentScheduleStore {
                 let tx = conn.transaction().map_err(persistence_error)?;
 
                 // Idempotent replay: same key and same schedule hash.
-                let existing: Option<(String, String, String)> = tx
+                let existing: Option<(String, String, String, Option<String>)> = tx
                     .query_row(
-                        "SELECT campaign_id, schedule_hash, status
+                        "SELECT campaign_id, schedule_hash, status, profile_hash
                            FROM experiment_campaign_schedules
                           WHERE idempotency_key = ?1",
                         params![idempotency_key],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                            ))
+                        },
                     )
                     .optional()
                     .map_err(persistence_error)?;
-                if let Some((existing_id, existing_hash, _status)) = existing {
+                if let Some((existing_id, existing_hash, _status, existing_profile_hash)) = existing {
                     if existing_hash != schedule_hash {
                         return Err(store_error(
                             ScheduleErrorCode::IdempotencyConflict,
                             "the idempotency key was already used for a different schedule body",
+                        ));
+                    }
+                    if existing_profile_hash.as_deref() != Some(execution_profile_hash.as_str()) {
+                        return Err(store_error(
+                            ScheduleErrorCode::InvalidExecutionProfile,
+                            "the idempotent schedule is not bound to the current execution profile digest",
                         ));
                     }
                     let record = load_campaign(&tx, &existing_id)?;
@@ -296,9 +325,9 @@ impl ExperimentScheduleStore {
                 tx.execute(
                     "INSERT INTO experiment_campaign_schedules (
                         campaign_id, campaign_key, plan_hash, schedule_hash, plan_json,
-                        fixture_refs_json, execution_profile_ref, bundle_refs_json,
+                        fixture_refs_json, execution_profile_ref, profile_hash, bundle_refs_json,
                         concurrency, status, idempotency_key, created_at_ms, updated_at_ms
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active', ?10, ?11, ?11)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active', ?11, ?12, ?12)",
                     params![
                         campaign_id_for_closure,
                         plan.campaign_key,
@@ -307,6 +336,7 @@ impl ExperimentScheduleStore {
                         plan_json,
                         fixture_json,
                         request.execution_profile_ref,
+                        execution_profile_hash,
                         bundle_json,
                         SCHEDULE_CONCURRENCY,
                         idempotency_key,
@@ -330,10 +360,10 @@ impl ExperimentScheduleStore {
                         "INSERT INTO experiment_campaign_jobs (
                             job_id, campaign_id, ordinal, candidate_key, task_id, suite,
                             dataset_id, dataset_version, split, manifest_digest, task_digest,
-                            instruction_hash, execution_profile_ref, state, dispatch_marker,
+                            instruction_hash, execution_profile_ref, profile_hash, state, dispatch_marker,
                             attempt, lease_generation, created_at_ms, updated_at_ms
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                                   'queued', 'not_dispatched', 0, 0, ?14, ?14)",
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                                   'queued', 'not_dispatched', 0, 0, ?15, ?15)",
                         params![
                             job_id,
                             campaign_id_for_closure,
@@ -348,6 +378,7 @@ impl ExperimentScheduleStore {
                             fixture_task_digest(&request)?,
                             fixture_instruction_hash(&request)?,
                             request.execution_profile_ref,
+                            execution_profile_hash,
                             now_ms as i64,
                         ],
                     )
@@ -400,10 +431,9 @@ impl ExperimentScheduleStore {
                     .prepare(
                         "SELECT job_id, campaign_id, ordinal, candidate_key, task_id, suite,
                             dataset_id, dataset_version, split, manifest_digest, task_digest,
-                            instruction_hash, execution_profile_ref, state, dispatch_marker,
+                            instruction_hash, execution_profile_ref, profile_hash, state, dispatch_marker,
                             run_id, session_id, attempt, owner_id, lease_generation,
-                            lease_expires_at_ms, heartbeat_at_ms, last_stage, error_code,
-                            artifact_dir
+                            lease_expires_at_ms, heartbeat_at_ms, last_stage, error_code, artifact_dir
                        FROM experiment_campaign_jobs
                       WHERE campaign_id = ?1
                       ORDER BY ordinal ASC",
@@ -1323,11 +1353,11 @@ fn fixture_ref(request: &CampaignScheduleRequestV1) -> Result<&FixtureTaskRefV1,
 }
 
 fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
-    let state_raw: String = row.get(13)?;
-    let marker_raw: String = row.get(14)?;
+    let state_raw: String = row.get(14)?;
+    let marker_raw: String = row.get(15)?;
     let state = JobState::parse(&state_raw).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            13,
+            14,
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1337,7 +1367,7 @@ fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
     })?;
     let dispatch_marker = DispatchMarker::parse(&marker_raw).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            14,
+            15,
             rusqlite::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1363,23 +1393,24 @@ fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
             execution_profile_ref: row.get(12)?,
             state,
             dispatch_marker,
-            run_id: row.get(15)?,
-            attempt: row.get::<_, i64>(17)? as u32,
-            lease_generation: row.get(19)?,
-            last_stage: row.get(22)?,
-            error_code: row.get(23)?,
+            run_id: row.get(16)?,
+            attempt: row.get::<_, i64>(18)? as u32,
+            lease_generation: row.get(20)?,
+            last_stage: row.get(23)?,
+            error_code: row.get(24)?,
         },
-        session_id: row.get(16)?,
-        artifact_dir: row.get(24)?,
-        owner_id: row.get(18)?,
-        lease_expires_at_ms: row.get::<_, Option<i64>>(20)?.map(|value| value as u64),
-        heartbeat_at_ms: row.get::<_, Option<i64>>(21)?.map(|value| value as u64),
+        execution_profile_hash: row.get(13)?,
+        session_id: row.get(17)?,
+        artifact_dir: row.get(25)?,
+        owner_id: row.get(19)?,
+        lease_expires_at_ms: row.get::<_, Option<i64>>(21)?.map(|value| value as u64),
+        heartbeat_at_ms: row.get::<_, Option<i64>>(22)?.map(|value| value as u64),
     })
 }
 
 const JOB_COLUMNS: &str = "job_id, campaign_id, ordinal, candidate_key, task_id, suite,
         dataset_id, dataset_version, split, manifest_digest, task_digest,
-        instruction_hash, execution_profile_ref, state, dispatch_marker,
+        instruction_hash, execution_profile_ref, profile_hash, state, dispatch_marker,
         run_id, session_id, attempt, owner_id, lease_generation,
         lease_expires_at_ms, heartbeat_at_ms, last_stage, error_code, artifact_dir";
 
@@ -1406,7 +1437,7 @@ fn load_campaign(
     let row = conn
         .query_row(
             "SELECT campaign_id, campaign_key, plan_hash, schedule_hash, status,
-                    execution_profile_ref, plan_json, fixture_refs_json, bundle_refs_json
+                    execution_profile_ref, profile_hash, plan_json, fixture_refs_json, bundle_refs_json
                FROM experiment_campaign_schedules
               WHERE campaign_id = ?1",
             params![campaign_id],
@@ -1418,9 +1449,10 @@ fn load_campaign(
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             },
         )
@@ -1439,19 +1471,19 @@ fn load_campaign(
             "durable campaign has an unrecognized status",
         )
     })?;
-    let plan: CampaignPlanV1 = serde_json::from_str(&row.6).map_err(|error| {
+    let plan: CampaignPlanV1 = serde_json::from_str(&row.7).map_err(|error| {
         store_error(
             ScheduleErrorCode::PersistenceFailure,
             format!("durable plan is not a valid campaign plan: {error}"),
         )
     })?;
-    let fixture_refs: Vec<FixtureTaskRefV1> = serde_json::from_str(&row.7).map_err(|error| {
+    let fixture_refs: Vec<FixtureTaskRefV1> = serde_json::from_str(&row.8).map_err(|error| {
         store_error(
             ScheduleErrorCode::PersistenceFailure,
             format!("durable fixture refs are malformed: {error}"),
         )
     })?;
-    let bundle_refs: Vec<String> = serde_json::from_str(&row.8).map_err(|error| {
+    let bundle_refs: Vec<String> = serde_json::from_str(&row.9).map_err(|error| {
         store_error(
             ScheduleErrorCode::PersistenceFailure,
             format!("durable bundle refs are malformed: {error}"),
@@ -1474,6 +1506,7 @@ fn load_campaign(
         schedule_hash: row.3,
         status,
         execution_profile_ref: row.5,
+        execution_profile_hash: row.6,
         plan,
         fixture_refs,
         bundle_refs,
@@ -1673,7 +1706,12 @@ mod tests {
 
     fn schedule(store: &ExperimentScheduleStore, campaign_key: &str, key: &str) -> ScheduleOutcome {
         store
-            .schedule_campaign(&request(campaign_key, two_candidate_plan()), key, T0)
+            .schedule_campaign(
+                &request(campaign_key, two_candidate_plan()),
+                key,
+                &"a".repeat(64),
+                T0,
+            )
             .expect("schedule")
     }
 
@@ -1690,6 +1728,10 @@ mod tests {
             .expect("campaign");
         assert_eq!(campaign.status, CampaignStatus::Active);
         assert_eq!(campaign.job_ids, outcome.accepted.job_ids);
+        assert_eq!(
+            campaign.execution_profile_hash.as_deref(),
+            Some("a".repeat(64).as_str())
+        );
 
         let jobs = store.list_jobs(&campaign.campaign_id).expect("jobs");
         assert_eq!(jobs.len(), 2);
@@ -1698,6 +1740,10 @@ mod tests {
         assert_eq!(jobs[1].job.candidate_key, "cand-a");
         assert_eq!(jobs[1].job.ordinal, 1);
         for job in &jobs {
+            assert_eq!(
+                job.execution_profile_hash.as_deref(),
+                Some("a".repeat(64).as_str())
+            );
             assert_eq!(job.job.state, JobState::Queued);
             assert_eq!(job.job.dispatch_marker, DispatchMarker::NotDispatched);
             assert_eq!(job.job.attempt, 0);
@@ -1755,11 +1801,31 @@ mod tests {
     }
 
     #[test]
+    fn replaying_a_key_with_a_different_profile_digest_is_rejected() {
+        let (store, _dir) = harness();
+        schedule(&store, "p2gh-a", "idem-1");
+        let error = store
+            .schedule_campaign(
+                &request("p2gh-a", two_candidate_plan()),
+                "idem-1",
+                &"b".repeat(64),
+                T0,
+            )
+            .expect_err("profile drift");
+        assert_eq!(error.code, ScheduleErrorCode::InvalidExecutionProfile);
+    }
+
+    #[test]
     fn replaying_a_key_with_a_different_body_is_rejected() {
         let (store, _dir) = harness();
         schedule(&store, "p2gh-a", "idem-1");
         let error = store
-            .schedule_campaign(&request("p2gh-b", two_candidate_plan()), "idem-1", T0)
+            .schedule_campaign(
+                &request("p2gh-b", two_candidate_plan()),
+                "idem-1",
+                &"a".repeat(64),
+                T0,
+            )
             .expect_err("conflict");
         assert_eq!(error.code, ScheduleErrorCode::IdempotencyConflict);
     }
@@ -1781,6 +1847,7 @@ mod tests {
                     ]),
                 ),
                 "idem-2",
+                &"a".repeat(64),
                 T0,
             )
             .expect_err("key conflict");
@@ -2220,9 +2287,9 @@ mod tests {
                 Ok((version, markers, jobs))
             })
             .expect("read");
-        // Phase 2I raises the latest schema to v20; the point of this test is
-        // that a desktop database merely gains the empty experiment tables.
-        assert_eq!(version, 20);
+        // The consolidated v18 CLI schema is installed, but a desktop database
+        // still gains only empty experiment tables and remains unmarked.
+        assert_eq!(version, 18);
         assert_eq!(markers, 0, "a desktop database is never auto-marked");
         assert_eq!(jobs, 0);
     }
