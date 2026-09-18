@@ -270,6 +270,9 @@ test('the docked page is created by the carrier without Tauri IPC', () => {
   // inside this window would inherit from the workflow capabilities.
   assert.match(page, /WebViewBuilder::new_with_web_context/)
   assert.match(page, /NewWindowResponse::Deny/)
+  // A new window request is handed to the platform browser from the Rust side instead of being
+  // given a window of its own, which is still no IPC: the page stays a plain wry webview.
+  assert.match(page, /open_in_browser\(&opener, &url\)/)
   assert.match(page, /matches!\(url\.split\(':'\)\.next\(\), Some\("http"\) \| Some\("https"\)\)/)
   assert.doesNotMatch(workflowView, /show_chat_hub_webview/)
 })

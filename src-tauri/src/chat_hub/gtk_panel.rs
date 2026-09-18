@@ -308,7 +308,7 @@ impl Page {
         // shared corner script is left out (`0.0`) for that reason: one implementation rounds all
         // four corners here, so they cannot drift apart.
         let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-        let mut builder = page_builder(&mut web_context, url, page_proxy(app), 0.0);
+        let mut builder = page_builder(&mut web_context, url, page_proxy(app), 0.0, app);
         if radius > 0.0 {
             builder = builder
                 .with_transparent(true)
@@ -642,7 +642,7 @@ mod tests {
         // The shared corner script rounds one window corner, which is not what the page needs here,
         // so this carrier leaves it out and rounds the four corners itself.
         let source = include_str!("gtk_panel.rs");
-        assert!(source.contains("page_builder(&mut web_context, url, page_proxy(app), 0.0)"));
+        assert!(source.contains("page_builder(&mut web_context, url, page_proxy(app), 0.0, app)"));
         assert!(source.contains(".with_initialization_script(page_corners_script(radius))"));
     }
 }

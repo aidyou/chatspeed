@@ -130,7 +130,7 @@ impl ChatHubPageState {
             // The page is reused for every entry, so building it is the only moment a
             // proxy can be applied: the settings are read here.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
-            let webview = page_builder(&mut web_context, &url, page_proxy(app), corner_radius)
+            let webview = page_builder(&mut web_context, &url, page_proxy(app), corner_radius, app)
                 .with_bounds(bounds)
                 .build_as_child(&host)?;
 
