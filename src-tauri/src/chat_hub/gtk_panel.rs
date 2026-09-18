@@ -276,7 +276,12 @@ impl ChatHubPageState {
 
 impl Page {
     /// Creates the page column inside the workflow window and builds the page in it.
-    fn create(app: &AppHandle<Wry>, host: &WebviewWindow<Wry>, url: &str, width: f64) -> Result<Self> {
+    fn create(
+        app: &AppHandle<Wry>,
+        host: &WebviewWindow<Wry>,
+        url: &str,
+        width: f64,
+    ) -> Result<Self> {
         let window_box = host.default_vbox()?;
 
         // The workflow webview and the page are siblings in the window box, so the box
@@ -293,7 +298,8 @@ impl Page {
         let mut web_context = WebContext::new(Some(page_data_directory(app)));
         // The page is packed next to the workflow webview instead of being stacked over
         // it, so it paints over no window border and has no corner to give back.
-        let webview = page_builder(&mut web_context, url, page_proxy(app), 0.0).build_gtk(&column)?;
+        let webview =
+            page_builder(&mut web_context, url, page_proxy(app), 0.0).build_gtk(&column)?;
 
         Ok(Self { webview, column })
     }

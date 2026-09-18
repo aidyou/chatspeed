@@ -1174,10 +1174,9 @@ fn import_in_transaction(
             .insert(ConfigCategory::Agents, payload.rows.len());
     }
     if selected.contains(&ConfigCategory::ChatHubs) {
-        let payload = package
-            .chat_hubs
-            .as_ref()
-            .ok_or_else(|| StoreError::InvalidData("package is missing chat hubs payload".into()))?;
+        let payload = package.chat_hubs.as_ref().ok_or_else(|| {
+            StoreError::InvalidData("package is missing chat hubs payload".into())
+        })?;
         replace_auto_table(transaction, super::chat_hub::CHAT_HUB_TABLE, payload)?;
         result
             .imported_counts

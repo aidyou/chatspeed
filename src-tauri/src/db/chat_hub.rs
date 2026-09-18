@@ -152,7 +152,8 @@ impl MainStore {
 
     /// Returns every ChatHub entry ordered by `sort_index`.
     pub fn get_all_chat_hubs(&self) -> Result<Vec<ChatHub>, StoreError> {
-        self.db_runtime()?.read_blocking(|conn| Self::chat_hub_list(conn))
+        self.db_runtime()?
+            .read_blocking(|conn| Self::chat_hub_list(conn))
     }
 
     /// Appends a new ChatHub entry at the end of the list.
@@ -251,7 +252,10 @@ impl MainStore {
             let tx = conn.transaction()?;
             for (index, id) in hub_ids.iter().enumerate() {
                 tx.execute(
-                    &format!("UPDATE {} SET sort_index = ?1 WHERE id = ?2", CHAT_HUB_TABLE),
+                    &format!(
+                        "UPDATE {} SET sort_index = ?1 WHERE id = ?2",
+                        CHAT_HUB_TABLE
+                    ),
                     params![index as i64, id],
                 )?;
             }
@@ -278,7 +282,10 @@ mod tests {
         let (_dir, store) = create_test_store();
         let hubs = store.get_all_chat_hubs().expect("failed to list chat hubs");
 
-        assert!(!hubs.is_empty(), "fresh database should seed preset entries");
+        assert!(
+            !hubs.is_empty(),
+            "fresh database should seed preset entries"
+        );
         assert!(
             hubs.iter().all(|hub| hub.is_default),
             "seeded entries should be marked as presets"
@@ -318,12 +325,20 @@ mod tests {
             .expect("expected a preset entry");
 
         let updated = store
-            .update_chat_hub(preset.id, "Renamed", "https://cdn.example.com/logo.png", "https://example.org/")
+            .update_chat_hub(
+                preset.id,
+                "Renamed",
+                "https://cdn.example.com/logo.png",
+                "https://example.org/",
+            )
             .expect("failed to update chat hub");
         assert_eq!(updated.name, "Renamed");
         assert_eq!(updated.logo, "https://cdn.example.com/logo.png");
         assert_eq!(updated.url, "https://example.org/");
-        assert!(updated.is_default, "updating a preset keeps its origin marker");
+        assert!(
+            updated.is_default,
+            "updating a preset keeps its origin marker"
+        );
 
         store
             .delete_chat_hub(preset.id)
@@ -375,11 +390,15 @@ mod tests {
     #[test]
     fn rejects_empty_names_and_unknown_ids() {
         let (_dir, store) = create_test_store();
-        assert!(store.add_chat_hub("  ", "", "https://example.com/").is_err());
+        assert!(store
+            .add_chat_hub("  ", "", "https://example.com/")
+            .is_err());
         assert!(store
             .update_chat_hub(999_999, "Name", "", "https://example.com/")
             .is_err());
-        assert!(store.add_chat_hub("Name", "", "ftp://example.com/").is_err());
+        assert!(store
+            .add_chat_hub("Name", "", "ftp://example.com/")
+            .is_err());
     }
 
     #[test]
@@ -410,7 +429,9 @@ mod tests {
         duplicate[0] = duplicate[1];
         assert!(store.update_chat_hub_order(duplicate).is_err());
 
-        assert!(store.update_chat_hub_order(ids[..ids.len() - 1].to_vec()).is_err());
+        assert!(store
+            .update_chat_hub_order(ids[..ids.len() - 1].to_vec())
+            .is_err());
 
         let mut unknown = ids.clone();
         unknown[0] = 999_999;
@@ -419,6 +440,9 @@ mod tests {
         assert!(store.update_chat_hub_order(Vec::new()).is_err());
 
         let unchanged = store.get_all_chat_hubs().expect("failed to list chat hubs");
-        assert_eq!(unchanged, hubs, "a rejected reorder must not change stored data");
+        assert_eq!(
+            unchanged, hubs,
+            "a rejected reorder must not change stored data"
+        );
     }
 }

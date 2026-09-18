@@ -1,7 +1,7 @@
 mod ai;
 mod builtin_agents;
-pub mod chat_hub;
 mod ccproxy;
+pub mod chat_hub;
 mod commands;
 mod constants;
 mod db;

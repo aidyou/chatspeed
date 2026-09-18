@@ -786,9 +786,10 @@ impl LocalSessionWorker {
                 ..
             }) => {
                 // rmcp 3.x makes the cancellation request id optional; only route when present.
-                let matched = request_id
-                    .as_ref()
-                    .and_then(|rid| self.resource_router.get(&ResourceKey::McpRequestId(rid.clone())));
+                let matched = request_id.as_ref().and_then(|rid| {
+                    self.resource_router
+                        .get(&ResourceKey::McpRequestId(rid.clone()))
+                });
                 if let Some(id) = matched {
                     OutboundChannel::RequestWise {
                         id: *id,

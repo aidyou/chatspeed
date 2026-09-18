@@ -10,8 +10,7 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry
 use wry::{NewWindowResponse, ProxyConfig, WebContext, WebViewBuilder};
 
 use super::types::{
-    CHAT_HUB_DEFAULT_WIDTH, CHAT_HUB_HOST_WINDOW_LABEL, CHAT_HUB_MIN_HOST_WIDTH,
-    CHAT_HUB_MIN_WIDTH,
+    CHAT_HUB_DEFAULT_WIDTH, CHAT_HUB_HOST_WINDOW_LABEL, CHAT_HUB_MIN_HOST_WIDTH, CHAT_HUB_MIN_WIDTH,
 };
 use super::ChatHubPageState;
 use crate::error::{AppError, Result};
@@ -261,7 +260,9 @@ pub fn page_builder<'a>(
     let builder = WebViewBuilder::new_with_web_context(web_context)
         .with_url(url)
         .with_clipboard(true)
-        .with_navigation_handler(|url| matches!(url.split(':').next(), Some("http") | Some("https")))
+        .with_navigation_handler(|url| {
+            matches!(url.split(':').next(), Some("http") | Some("https"))
+        })
         .with_new_window_req_handler(|url, _features| {
             log::debug!("ChatHub refused a new window request for '{}'", url);
             NewWindowResponse::Deny
@@ -414,7 +415,10 @@ pub fn page_data_directory(app: &AppHandle<Wry>) -> PathBuf {
         .app_data_dir()
         .map(|dir| dir.join("chat_hub_page"))
         .unwrap_or_else(|error| {
-            log::warn!("Failed to resolve the ChatHub page data directory: {}", error);
+            log::warn!(
+                "Failed to resolve the ChatHub page data directory: {}",
+                error
+            );
             PathBuf::from("chat_hub_page")
         });
 
@@ -477,7 +481,10 @@ mod tests {
         // A request below the phone width is raised to it.
         assert_eq!(clamp_width(1600.0, 100.0), CHAT_HUB_MIN_WIDTH);
         // A request that would squeeze the workflow UI out is capped.
-        assert_eq!(clamp_width(1600.0, 1500.0), 1600.0 - CHAT_HUB_MIN_HOST_WIDTH);
+        assert_eq!(
+            clamp_width(1600.0, 1500.0),
+            1600.0 - CHAT_HUB_MIN_HOST_WIDTH
+        );
         // A usable request is kept as it is, so dragging the splitter is exact.
         assert_eq!(clamp_width(1600.0, 640.0), 640.0);
         // A window that is too narrow still yields the minimum page width.

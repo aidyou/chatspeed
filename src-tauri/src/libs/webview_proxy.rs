@@ -266,10 +266,7 @@ mod tests {
         let socks = WebviewProxy::from_settings("http", "socks5://127.0.0.1:1080")
             .expect("a SOCKSv5 proxy has to be accepted");
         assert_eq!(socks.scheme, ProxyScheme::Socks5);
-        assert!(matches!(
-            socks.wry_config(),
-            ProxyConfig::Socks5(_)
-        ));
+        assert!(matches!(socks.wry_config(), ProxyConfig::Socks5(_)));
 
         // A server without a port falls back to the default one of its scheme.
         let default_port = WebviewProxy::from_settings("http", "http://proxy.local")
