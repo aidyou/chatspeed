@@ -45,6 +45,10 @@ fn configure_no_window(command: &mut std::process::Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_no_window(_command: &mut std::process::Command) {}
 
+pub(crate) fn budgeted_from_scope_lookup<T, E>(result: Result<Option<T>, E>) -> bool {
+    matches!(result, Ok(Some(_)))
+}
+
 pub struct LlmProcessor {
     pub session_id: String,
     pub agent_config: Agent,
@@ -512,14 +516,14 @@ impl LlmProcessor {
     ) -> Self {
         // A durable backend-created scope chain marks this session as a
         // budgeted experiment. Ordinary workflows resolve to `None` and keep
-        // the normal retry behavior (INV-4).
-        let budgeted = match chat_state
-            .main_store
-            .get_budget_scope_chain(&root_session_id)
-        {
-            Ok(Some(_)) | Err(_) => true,
-            Ok(None) => false,
-        };
+        // the normal retry behavior (INV-4). A lookup failure must not change
+        // a normal workflow into an experiment; the scope is authoritative
+        // only when it was read successfully.
+        let budgeted = budgeted_from_scope_lookup(
+            chat_state
+                .main_store
+                .get_budget_scope_chain(&root_session_id),
+        );
         let (cached_global_agents, cached_project_agents) =
             AgentsMdScanner::scan(project_root.clone());
         let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());
@@ -1638,7 +1642,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 
 #[cfg(test)]
 mod tests {
-    use super::LlmProcessor;
+    use super::{budgeted_from_scope_lookup, LlmProcessor};
     use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType};
     use crate::db::WorkflowMessage;
     use crate::db::{Agent, ThinkingConfig};
@@ -1660,6 +1664,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
+    #[test]
+    fn budget_scope_lookup_only_marks_successful_scope_as_budgeted() {
+        assert!(budgeted_from_scope_lookup::<_, ()>(Ok(Some("scope"))));
+        assert!(!budgeted_from_scope_lookup::<&str, ()>(Ok(None)));
+        assert!(!budgeted_from_scope_lookup::<&str, _>(Err("database unavailable")));
+    }
     #[test]
     fn required_tool_choice_is_disabled_for_thinking_requests() {
         let thinking = ThinkingConfig {

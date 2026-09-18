@@ -6,6 +6,7 @@ use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::llm::budgeted_from_scope_lookup;
 
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -549,14 +550,15 @@ impl IntelligenceManager {
         // attempt: each retry would issue a fresh admitted LLM effect under a
         // new identity, which 2C forbids (AC-4). Ordinary workflows keep the
         // 3-attempt best-effort behavior (INV-4).
-        let max_detection_attempts = match self
-            .chat_state
-            .main_store
-            .get_budget_scope_chain(&self.root_session_id)
-        {
-            Ok(Some(_)) | Err(_) => 1,
-            Ok(None) => 3,
-        };
+        // A durable budget scope is the only marker for experiment behavior.
+        // Lookup errors must preserve ordinary workflow retries rather than
+        // silently changing the workflow type.
+        let is_budgeted = budgeted_from_scope_lookup(
+            self.chat_state
+                .main_store
+                .get_budget_scope_chain(&self.root_session_id),
+        );
+        let max_detection_attempts = if is_budgeted { 1 } else { 3 };
 
         let trimmed = user_input.trim();
         if trimmed.is_empty() {
