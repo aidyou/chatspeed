@@ -399,6 +399,18 @@ body {
     }
   }
 
+  // Linux rounds the window frame the same way macOS does; the border and the shadow below keep
+  // the edge of this undecorated window visible against the desktop. The window is rounded with
+  // it: the radius cuts every child, so the titlebar strip cannot paint a square corner over it.
+  // These declarations mirror the macOS rule above.
+  &.linux {
+    border-radius: var(--cs-border-radius-lg);
+
+    .titlebar {
+      border-radius: var(--cs-border-radius-lg) var(--cs-border-radius-lg) 0 0;
+    }
+  }
+
   &.linux,
   &.windows {
     // Correct border syntax and apply a subtle shadow

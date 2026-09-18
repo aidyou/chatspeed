@@ -76,8 +76,9 @@ impl ChatHubPageState {
     /// cookies and session while navigating between entries. `_top_inset` is only used
     /// by carriers that stack the page over the workflow UI: here the page is a sibling
     /// of the workflow webview, which already contains the app titlebar itself.
-    /// `_corner_radius` is ignored for the same reason: this window is not drawn with a
-    /// rounded border the page could paint over.
+    /// `corner_radius` is the radius the window draws, which the page gives back at both
+    /// right corners: the page owns the window's right edge from top to bottom, so the
+    /// top-right corner belongs to it as well.
     ///
     /// The page takes its width from the workflow webview, so the window is widened by that
     /// width first (see [`super::room_for_page`]) and the workflow UI keeps the width it had.
@@ -89,7 +90,7 @@ impl ChatHubPageState {
         url: &str,
         width: f64,
         _top_inset: f64,
-        _corner_radius: f64,
+        corner_radius: f64,
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
@@ -112,7 +113,7 @@ impl ChatHubPageState {
         inner.grown += added;
 
         if inner.page.is_none() {
-            inner.page = Some(Page::create(app, &host, &url, width)?);
+            inner.page = Some(Page::create(app, &host, &url, width, corner_radius)?);
             inner.url = Some(url.clone());
             #[cfg(debug_assertions)]
             log::info!(
@@ -276,11 +277,15 @@ impl ChatHubPageState {
 
 impl Page {
     /// Creates the page column inside the workflow window and builds the page in it.
+    ///
+    /// `corner_radius` is the radius the window draws at its right edge, which the page covers
+    /// at both of its right corners.
     fn create(
         app: &AppHandle<Wry>,
         host: &WebviewWindow<Wry>,
         url: &str,
         width: f64,
+        corner_radius: f64,
     ) -> Result<Self> {
         let window_box = host.default_vbox()?;
 
@@ -296,10 +301,20 @@ impl Page {
         // The page is reused for every entry, so building it is the only moment a proxy
         // can be applied: the settings are read here.
         let mut web_context = WebContext::new(Some(page_data_directory(app)));
-        // The page is packed next to the workflow webview instead of being stacked over
-        // it, so it paints over no window border and has no corner to give back.
-        let webview =
-            page_builder(&mut web_context, url, page_proxy(app), 0.0).build_gtk(&column)?;
+
+        // A page that gives a window corner back also has to be see-through, so the radius only
+        // reaches a window that draws one.
+        let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
+        let mut builder = page_builder(&mut web_context, url, page_proxy(app), radius);
+        if radius > 0.0 {
+            // The page is packed next to the workflow webview instead of being stacked over it,
+            // which is what makes it own the window's right edge from top to bottom: the shared
+            // corner script gives the bottom-right corner back, and the top-right one, which a
+            // stacked page never covers, is rounded on top of it.
+            builder = builder.with_initialization_script(top_corner_script(radius));
+        }
+
+        let webview = builder.build_gtk(&column)?;
 
         Ok(Self { webview, column })
     }
@@ -308,6 +323,129 @@ impl Page {
     fn set_width(&self, width: f64) {
         self.column.set_size_request(width.round() as i32, -1);
     }
+}
+
+/// Largest corner radius the page accepts, so a bad measurement cannot eat into the page.
+///
+/// It repeats the bound the shared corner script applies, which only has to cover the
+/// bottom-right corner: the top-right corner is rounded by [`top_corner_script`].
+const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
+
+/// Script that leaves the top-right corner of the window unpainted.
+///
+/// The shared corner script ([`super::page`]) rounds the bottom-right corner, which is the one
+/// every carrier covers. The workflow UI keeps its own titlebar *beside* the page on this
+/// platform instead of above it, so the page owns the window's right edge from top to bottom and
+/// covers the top-right corner as well. That corner therefore has to come back from the page
+/// here, and the rules are the ones that hold at the other corner:
+///
+/// - The corner is given back by every element that paints it. A decorative layer carries
+///   `pointer-events: none`, so it never shows up in a hit test and the document is inspected by
+///   geometry instead: an element is rounded when it covers the top-right point of the viewport
+///   and paints something there.
+/// - A pseudo element paints a box of its own, which the radius of its host does not cut, so a
+///   host that paints the corner through one is marked and the corner reaches it through a rule.
+/// - The corner is applied again for a short while after the page load, because a site can build
+///   the layer that paints it later than the load event.
+fn top_corner_script(radius: f64) -> String {
+    format!(
+        r#"(function () {{
+  var radius = '{radius}px';
+  var transparent = 'rgba(0, 0, 0, 0)';
+  var pending = 0;
+  var ruled = false;
+  function opaque(background) {{
+    return !!background && background !== 'transparent' && background !== transparent;
+  }}
+  function paints(style) {{
+    return style.backgroundImage !== 'none' || opaque(style.backgroundColor);
+  }}
+  function addPseudoRule() {{
+    if (ruled) {{
+      return;
+    }}
+    ruled = true;
+    var rule = '[data-cs-top-corner]::before,[data-cs-top-corner]::after'
+      + '{{border-top-right-radius:' + radius + ' !important}}';
+    try {{
+      if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {{
+        var sheet = new CSSStyleSheet();
+        sheet.insertRule(rule, 0);
+        document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        return;
+      }}
+    }} catch (error) {{}}
+    var sheets = document.styleSheets;
+    for (var sheet = 0; sheet < sheets.length; sheet += 1) {{
+      try {{
+        sheets[sheet].insertRule(rule, sheets[sheet].cssRules.length);
+        return;
+      }} catch (error) {{}}
+    }}
+    try {{
+      var element = document.createElement('style');
+      element.textContent = rule;
+      (document.head || document.documentElement).appendChild(element);
+    }} catch (error) {{}}
+  }}
+  function roundCorner() {{
+    var x = window.innerWidth - 2;
+    var y = 2;
+    var elements = document.querySelectorAll('*');
+    var targets = [];
+    for (var index = 0; index < elements.length; index += 1) {{
+      var element = elements[index];
+      var rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) {{
+        continue;
+      }}
+      if (rect.left > x || rect.top > y || rect.right < x || rect.bottom < y) {{
+        continue;
+      }}
+      var style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden'
+        || Number(style.opacity) === 0) {{
+        continue;
+      }}
+      if (paints(style)) {{
+        targets.push(element);
+      }}
+      for (var part = 0; part < 2; part += 1) {{
+        var pseudo = window.getComputedStyle(element, part ? '::after' : '::before');
+        if (pseudo.content && pseudo.content !== 'none' && paints(pseudo)) {{
+          element.setAttribute('data-cs-top-corner', '');
+          addPseudoRule();
+        }}
+      }}
+    }}
+    for (var target = 0; target < targets.length; target += 1) {{
+      targets[target].style.setProperty('border-top-right-radius', radius, 'important');
+    }}
+    document.documentElement.style.setProperty('border-top-right-radius', radius, 'important');
+  }}
+  roundCorner();
+  document.addEventListener('DOMContentLoaded', roundCorner);
+  window.addEventListener('load', roundCorner);
+  window.addEventListener('resize', function () {{
+    if (pending) {{
+      return;
+    }}
+    pending = window.setTimeout(function () {{
+      pending = 0;
+      roundCorner();
+    }}, 200);
+  }});
+  var attempts = 0;
+  var retry = window.setInterval(function () {{
+    attempts += 1;
+    if (attempts > 15) {{
+      window.clearInterval(retry);
+      return;
+    }}
+    roundCorner();
+  }}, 400);
+}})();"#
+    )
 }
 
 /// Logical width of the host window client area.
