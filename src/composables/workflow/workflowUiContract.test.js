@@ -123,6 +123,44 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
+test('workflow terminal model errors use structured localized alert titles', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling',[\s\S]*?llm_retry_exhausted: 'workflow\.errorTypes\.llmRetryExhausted'[\s\S]*?\}/
+  )
+  assert.match(messageList, /const rawType = String\(message\?\.metadata\?\.error_type \|\| message\?\.errorType \|\| ''\)/)
+  const errorContentStart = messageList.indexOf('const getErrorAlertContent = message =>')
+  const errorContentEnd = messageList.indexOf(
+    'const getExplorationBatchSummary = message =>',
+    errorContentStart
+  )
+  const errorContentSource = messageList.slice(errorContentStart, errorContentEnd)
+  assert.match(
+    errorContentSource,
+    /normalizeWorkflowErrorAlertContent\(message\?\.message\)[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
+  )
+  assert.doesNotMatch(errorContentSource, /props\.getParsedMessage\(message\)/)
+  assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.equal(typeof locale.workflow.errorTypes.llmAuthentication, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmBilling, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmRetryExhausted, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.retryAttemptsExhausted, 'string')
+    assert.ok(locale.workflow.errorTypes.llmAuthentication.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmRetryExhausted.length > 0)
+    assert.ok(locale.workflow.errorTypes.retryAttemptsExhausted.length > 0)
+  }
+})
+
 test('workflow uses a persistent navigation rail beside the collapsible task list', async () => {
   const [workflowView, sidebar] = await Promise.all([
     readFile('src/views/Workflow.vue', 'utf8'),
@@ -642,6 +680,16 @@ test('workflow composer keeps Tab as four spaces outside suggestion selection', 
   )
 })
 
+test('sending a workflow message forces the message list back to the latest content', async () => {
+  const workflowView = await readFile('src/views/Workflow.vue', 'utf8')
+
+  assert.match(
+    workflowView,
+    /inputComposable\.onSendMessage\.value = async \(\) => \{[\s\S]*?scrollMessageListToBottom\(true\)[\s\S]*?await coreOnSendMessage/,
+    'an explicit user send must leave history-reading mode before message rendering starts'
+  )
+})
+
 test('applied compression clears the indicator and updates context usage', async () => {
   const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
 
@@ -662,9 +710,44 @@ test('message resize observer is hoisted for immediate watchers', async () => {
   )
   assert.match(
     messageList,
-    /watch\(\n  \[visibleMessages, collapsedMessages\][\s\S]*?syncMessageContentResizeObserver\(\)/,
-    'the immediate message watcher must call the hoisted resize observer helper'
+    /const messageTailLayoutState = computed\(\(\) => \[[\s\S]*?props\.isCompressing[\s\S]*?props\.compressionMessage[\s\S]*?props\.queuedMessages[\s\S]*?\]\)/,
+    'tail status blocks must participate in message layout tracking'
   )
+  assert.match(
+    messageList,
+    /watch\(\n  \[visibleMessages, collapsedMessages, messageTailLayoutState\][\s\S]*?scrollController\.beforeContentChange\(\)[\s\S]*?nextTick\(\(\) => \{[\s\S]*?syncMessageContentResizeObserver\(\)[\s\S]*?scrollController\.requestContentChange\(\)/,
+    'message, queue, and compression changes must share the centralized layout reconciliation path'
+  )
+})
+
+test('compression indicator counts elapsed seconds while it is running', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /<span class="compression-text">\{\{ compressionStatusText \}\}<\/span>/,
+    'the compression indicator must render the timed status text'
+  )
+  assert.match(
+    messageList,
+    /watch\(\n  \(\) => props\.isCompressing,[\s\S]*?stopCompressionTimer\(\)[\s\S]*?setInterval\(\(\) => \{\n      compressionNow\.value = Date\.now\(\)\n    \}, 1000\)/,
+    'the elapsed counter must restart with the backend compression status and tick once per second'
+  )
+  assert.match(
+    messageList,
+    /onBeforeUnmount\(stopCompressionTimer\)/,
+    'the elapsed counter must stop when the message list unmounts'
+  )
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.match(locale.workflow.compressionElapsed, /\{text\}/)
+    assert.match(locale.workflow.compressionElapsed, /\{seconds\}/)
+  }
 })
 
 test('off-bottom readers preserve a message window anchor while new messages render', async () => {
@@ -719,6 +802,18 @@ test('switching workflows clears an unobserved compression indicator from the pr
     /if \(previousWorkflowId && previousWorkflowId !== id\) \{\s*setCompressionStatus\(previousWorkflowId, false, ''\)[\s\S]*?currentSessionId\.value = id/,
     'switching away must discard compression UI state whose completion event is no longer observed'
   )
+})
+
+test('workflow completion tool is presented as a finished state', async () => {
+  const [enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.equal(enLocale.workflow.finishTask, 'Task finished')
+  assert.equal(zhHansLocale.workflow.finishTask, '任务完成')
+  assert.equal(zhHantLocale.workflow.finishTask, '任務完成')
 })
 
 test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {

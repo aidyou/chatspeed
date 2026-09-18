@@ -5,6 +5,7 @@ pub mod backup;
 pub mod backup_crypto;
 pub mod budget;
 pub mod chat;
+pub mod chat_hub;
 pub mod config;
 pub mod config_transfer;
 pub mod error;
@@ -29,6 +30,7 @@ pub use automation::{
     WorkflowAutomationUpsert,
 };
 pub use backup::{BackupConfig, DbBackup};
+pub use chat_hub::ChatHub;
 pub use error::StoreError;
 pub use main_store::MainStore;
 pub use mcp::Mcp;

@@ -1633,6 +1633,40 @@ impl WorkflowExecutor {
             (next_failures, next_retry_step),
         );
     }
+    async fn publish_terminal_error(&mut self, error: &WorkflowEngineError) {
+        let terminal = error.terminal_error();
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::TerminalError,
+            terminal.metadata.clone(),
+        );
+        if let (Some(target), Some(fields)) =
+            (metadata.as_object_mut(), terminal.metadata.as_object())
+        {
+            for (key, value) in fields {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+
+        if let Err(publish_error) = self
+            .add_message_and_notify_internal(
+                "assistant".to_string(),
+                terminal.content,
+                None,
+                None,
+                Some(StepType::Observe),
+                true,
+                Some(terminal.error_type.to_string()),
+                Some(metadata),
+            )
+            .await
+        {
+            log::error!(
+                "[Workflow][session={}][phase=terminal_error][event=message_publish_failed] {}",
+                self.session_id,
+                publish_error
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -1663,6 +1697,7 @@ impl ReActExecutor for WorkflowExecutor {
                     self.session_id,
                     error
                 );
+                self.publish_terminal_error(error).await;
                 self.update_state(WorkflowState::Error).await?;
             }
         }
@@ -11637,17 +11672,73 @@ mod recovery_tests {
                 .status,
             "error"
         );
-        assert!(observed_payloads
-            .lock()
-            .expect("payload lock")
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load terminal snapshot");
+        let durable_error = snapshot
+            .messages
             .iter()
-            .any(|payload| matches!(
-                payload,
-                GatewayPayload::State {
-                    state: WorkflowState::Error,
-                    wait_reason: None
-                }
-            )));
+            .find(|message| message.is_error)
+            .expect("terminal error message must be durable");
+        assert!(durable_error.id.is_some());
+        assert_eq!(durable_error.error_type.as_deref(), Some("engine"));
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("observation_type"))
+                .and_then(Value::as_str),
+            Some("terminal_error")
+        );
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("llm_visibility"))
+                .and_then(Value::as_str),
+            Some("hide")
+        );
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("ui_visibility"))
+                .and_then(Value::as_str),
+            Some("show")
+        );
+        assert!(executor
+            .context
+            .get_messages_for_llm()
+            .iter()
+            .all(|message| message.id != durable_error.id));
+
+        let payloads = observed_payloads.lock().expect("payload lock");
+        let error_message_index = payloads
+            .iter()
+            .position(|payload| {
+                matches!(
+                    payload,
+                    GatewayPayload::Message {
+                        is_error: true,
+                        error_type: Some(error_type),
+                        ..
+                    } if error_type == "engine"
+                )
+            })
+            .expect("terminal error message must be dispatched");
+        let error_state_index = payloads
+            .iter()
+            .position(|payload| {
+                matches!(
+                    payload,
+                    GatewayPayload::State {
+                        state: WorkflowState::Error,
+                        wait_reason: None
+                    }
+                )
+            })
+            .expect("terminal error state must be dispatched");
+        assert!(error_message_index < error_state_index);
     }
 
     #[tokio::test]

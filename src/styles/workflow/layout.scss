@@ -87,11 +87,18 @@
     min-height: 0;
     display: flex;
     flex-direction: row;
+    // The docked ChatHub page covers the right edge of the window while the app titlebar
+    // above it keeps the full width, so only this content gives the page its space.
+    margin-right: var(--cs-chathub-reserved-width, 0px);
 
     .workflow-sidebar-region {
       display: flex;
       flex-direction: row;
       flex: 0 0 auto;
+      // The automatic content width under-measures the fixed rail plus the
+      // variable-width aside, so the aside would overflow this box and push the
+      // resize handle off the sidebar border. Pin it to rail (50px) + sidebar width.
+      width: calc(50px + var(--sidebar-width, 300px));
       min-width: 0;
       min-height: 0;
     }

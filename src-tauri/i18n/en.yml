@@ -292,6 +292,7 @@ tray:
   agent: Agent
   assistant: Assistant
   chat: Chat
+  chathub: Chat Hub
   mcp: MCP
   model: AI Provider
   note: Note

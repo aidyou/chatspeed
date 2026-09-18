@@ -21,6 +21,10 @@
       <model />
     </el-main>
 
+    <el-main v-show="settingType === 'chatHub'" class="main">
+      <chatHub />
+    </el-main>
+
     <el-main v-show="settingType === 'skill'" class="main">
       <skill />
     </el-main>
@@ -61,6 +65,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import about from '@/components/setting/About.vue'
 import general from '@/components/setting/General.vue'
+import chatHub from '@/components/setting/ChatHub.vue'
 import mcp from '@/components/setting/Mcp.vue'
 import model from '@/components/setting/Model.vue'
 import proxy from '@/components/setting/Proxy.vue'
@@ -79,13 +84,14 @@ const settingLabel = ref(t('settings.type.general'))
 const menuItems = computed(() => [
   { label: t('settings.type.general'), icon: 'setting', id: 'general' },
   { label: t('settings.type.model'), icon: 'model', id: 'model' },
-  { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
-  { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
-  { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
   { label: t('settings.type.agent'), icon: 'agent', id: 'agent' },
-  { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true },
+  { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
+  { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
+  { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
+  { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
-  { label: t('settings.type.about'), icon: 'about', id: 'about' }
+  { label: t('settings.type.about'), icon: 'about', id: 'about' },
+  { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }
 ])
 
 let unlistenFromRust = null

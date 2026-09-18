@@ -49,7 +49,7 @@
         :data-message-id="message.windowAnchorId || message.displayId || message.id || null"
         :data-window-anchor-id="message.windowAnchorId || null"
         :data-child-task-id="getMessageSubAgentId(message)"
-        :class="[message.role, message.stepType?.toLowerCase(), { 'is-error': message.isError }]">
+        :class="[message.role, message.stepType?.toLowerCase()]">
         <div class="avatar" v-if="message.role === 'user'">
           <cs name="talk" class="user-icon" />
         </div>
@@ -1191,7 +1191,7 @@
       <div v-if="isCompressing" class="compression-status">
         <div class="compression-indicator">
           <cs name="loading" size="14px" class="rotating" />
-          <span class="compression-text">{{ compressionMessage }}</span>
+          <span class="compression-text">{{ compressionStatusText }}</span>
         </div>
       </div>
 
@@ -1259,6 +1259,7 @@ import {
   isWorkflowManualClearContextMessage,
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
+  normalizeWorkflowErrorAlertContent,
   isWorkflowToolRunningForDisplay,
   projectWorkflowMessageList,
   shouldRenderSubAgentCard
@@ -1419,6 +1420,7 @@ const userMessageCollapsedHeightMap = ref({})
 let userMessageResizeObserver = null
 let messageContentResizeObserver = null
 let observedMessageListWidth = 0
+let observedMessageListHeight = 0
 let componentUnmounted = false
 let userMessageMeasureScheduled = false
 let userMessageMeasureFrameId = null
@@ -2137,6 +2139,14 @@ const getErrorAlertTitle = message => {
   }
 
   const rawType = String(message?.metadata?.error_type || message?.errorType || '').trim()
+  const localizedErrorTitles = {
+    llm_authentication: 'workflow.errorTypes.llmAuthentication',
+    llm_billing: 'workflow.errorTypes.llmBilling',
+    llm_retry_exhausted: 'workflow.errorTypes.llmRetryExhausted'
+  }
+  if (localizedErrorTitles[rawType]) {
+    return t(localizedErrorTitles[rawType])
+  }
   if (rawType) {
     return rawType.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
   }
@@ -2145,15 +2155,19 @@ const getErrorAlertTitle = message => {
 }
 
 const getErrorAlertContent = message => {
-  const parsed = props.getParsedMessage(message)
-  const rawContent = String(
-    parsed?.content || props.removeSystemReminder(message?.message || '')
-  ).trim()
+  const content = normalizeWorkflowErrorAlertContent(message?.message)
+  const metadata = message?.metadata || {}
+  if (metadata.retry_exhausted !== true) return content
 
-  return rawContent
-    .replace(/^critical error:\s*/i, '')
-    .replace(/^\[?error\]?:\s*/i, '')
-    .trim()
+  const attempt = Number(metadata.retry_attempt)
+  const maxAttempts = Number(metadata.retry_max_attempts)
+  if (!Number.isFinite(attempt) || !Number.isFinite(maxAttempts)) return content
+
+  const retrySummary = t('workflow.errorTypes.retryAttemptsExhausted', {
+    attempt,
+    maxAttempts
+  })
+  return [content, retrySummary].filter(Boolean).join('\n\n')
 }
 
 const getExplorationBatchSummary = message => {
@@ -2897,8 +2911,65 @@ const streamingLayoutState = computed(() => {
   ]
 })
 
+// The compression hint is backend-owned; this stopwatch only measures how long the
+// hint has been on screen, so it never becomes compression state.
+const compressionStartedAt = ref(0)
+const compressionNow = ref(0)
+let compressionTimer = null
+
+const stopCompressionTimer = () => {
+  if (compressionTimer) {
+    clearInterval(compressionTimer)
+    compressionTimer = null
+  }
+}
+
 watch(
-  [visibleMessages, collapsedMessages],
+  () => props.isCompressing,
+  isCompressing => {
+    stopCompressionTimer()
+    compressionStartedAt.value = isCompressing ? Date.now() : 0
+    compressionNow.value = compressionStartedAt.value
+    if (!isCompressing) return
+
+    compressionTimer = setInterval(() => {
+      compressionNow.value = Date.now()
+    }, 1000)
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(stopCompressionTimer)
+
+const compressionElapsedSeconds = computed(() =>
+  compressionStartedAt.value
+    ? Math.max(0, Math.floor((compressionNow.value - compressionStartedAt.value) / 1000))
+    : 0
+)
+
+// The backend hint already ends with an ellipsis, so the timer goes before it to read
+// as "Compressing context 12s...".
+const compressionStatusText = computed(() => {
+  const hint = (props.compressionMessage || '').replace(/\s*(?:\.{3}|…)\s*$/, '')
+  return t('workflow.compressionElapsed', { text: hint, seconds: compressionElapsedSeconds.value }).trim()
+})
+
+const messageTailLayoutState = computed(() => [
+  props.isCompressing ? 1 : 0,
+  props.compressionMessage?.length || 0,
+  props.queuedMessages
+    .map(item => [
+      item.id,
+      item.status,
+      item.content?.length || 0,
+      item.statusText?.length || 0,
+      item.attachments?.length || 0
+    ].join(':'))
+    .join('|')
+])
+
+watch(
+  [visibleMessages, collapsedMessages, messageTailLayoutState],
   () => {
     scrollController.beforeContentChange()
     scheduleMeasureUserMessageOverflow()
@@ -2948,17 +3019,26 @@ onMounted(() => {
     })
     userMessageResizeObserver = new ResizeObserver(entries => {
       const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0
+      const nextHeight = entries[0]?.contentRect?.height || messagesRef.value?.clientHeight || 0
+      // A shorter pane leaves a bottom-following list short of its newest content, and
+      // only the scroll controller may decide what that means.
+      if (nextHeight !== observedMessageListHeight) {
+        observedMessageListHeight = nextHeight
+        scrollController.onContainerResize()
+      }
       if (nextWidth === observedMessageListWidth) return
       observedMessageListWidth = nextWidth
       scheduleMeasureUserMessageOverflow()
     })
     if (messagesRef.value) {
       observedMessageListWidth = messagesRef.value.clientWidth
+      observedMessageListHeight = messagesRef.value.clientHeight
       userMessageResizeObserver.observe(messagesRef.value)
       syncMessageContentResizeObserver()
     }
   } else if (typeof window !== 'undefined') {
     window.addEventListener('resize', scheduleMeasureUserMessageOverflow)
+    window.addEventListener('resize', scrollController.onContainerResize)
   }
 
   scheduleMeasureUserMessageOverflow()
@@ -2977,6 +3057,7 @@ onBeforeUnmount(() => {
   }
   if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
     window.removeEventListener('resize', scheduleMeasureUserMessageOverflow)
+    window.removeEventListener('resize', scrollController.onContainerResize)
   }
   if (userMessageMeasureFrameId !== null) {
     cancelAnimationFrame(userMessageMeasureFrameId)

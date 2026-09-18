@@ -721,9 +721,10 @@ impl LocalSessionWorker {
         notification: &JsonRpcNotification<ClientNotification>,
     ) {
         if let ClientNotification::CancelledNotification(n) = &notification.notification {
-            let request_id = n.params.request_id.clone();
-            let resource = ResourceKey::McpRequestId(request_id);
-            self.unregister_resource(&resource);
+            if let Some(request_id) = n.params.request_id.clone() {
+                let resource = ResourceKey::McpRequestId(request_id);
+                self.unregister_resource(&resource);
+            }
         }
     }
     fn next_http_request_id(&mut self) -> HttpRequestId {
@@ -784,10 +785,12 @@ impl LocalSessionWorker {
                     }),
                 ..
             }) => {
-                if let Some(id) = self
-                    .resource_router
-                    .get(&ResourceKey::McpRequestId(request_id.clone()))
-                {
+                // rmcp 3.x makes the cancellation request id optional; only route when present.
+                let matched = request_id.as_ref().and_then(|rid| {
+                    self.resource_router
+                        .get(&ResourceKey::McpRequestId(rid.clone()))
+                });
+                if let Some(id) = matched {
                     OutboundChannel::RequestWise {
                         id: *id,
                         close: false,

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use reqwest::{header, Client};
 use rmcp::{
-    model::{ClientCapabilities, ClientInfo, Implementation, InitializeRequestParams},
+    model::{ClientCapabilities, ClientConfig, Implementation, InitializeRequestParams},
     service::RunningService,
     transport::{
         common::client_side_sse::ExponentialBackoff,
@@ -132,7 +132,7 @@ impl McpClient for StreamableHttpClient {
         transport_config.auth_header = config.bearer_token.clone();
         let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
 
-        let mut client_info = ClientInfo::default();
+        let mut client_info = ClientConfig::default();
         client_info.protocol_version = Default::default();
         client_info.capabilities = ClientCapabilities::default();
         client_info.client_info =

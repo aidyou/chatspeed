@@ -990,43 +990,6 @@
       opacity: 0.9;
       font-size: 0.95em;
     }
-
-    &.is-error {
-      margin: 0 0 var(--cs-space);
-
-      .ai-content {
-        background: transparent !important;
-        color: var(--el-text-color-primary);
-
-        .reasoning-container {
-          background: color-mix(in srgb, var(--el-color-danger) 5%, transparent);
-          border-color: var(--el-color-danger-light-7);
-        }
-
-        .markdown-body {
-          background: transparent !important;
-        }
-      }
-
-      /* &::before {
-        content: "!";
-        position: absolute;
-        left: -10px;
-        top: 10px;
-        width: 20px;
-        height: 20px;
-        background: var(--el-color-danger);
-        color: white;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        font-size: var(--cs-font-size-sm);
-        z-index: 10;
-        box-shadow: 0 2px 4px var(--cs-shadow-strong-color);
-      } */
-    }
   }
 
   .queued-list {

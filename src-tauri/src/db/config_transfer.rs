@@ -51,6 +51,7 @@ pub enum ConfigCategory {
     Proxy,
     Agents,
     Sandbox,
+    ChatHubs,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -71,6 +72,10 @@ pub struct ConfigTransferPackage {
     pub agents: Option<TablePayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<TablePayload>,
+    /// Optional ChatHub payload. It stays optional so packages written before
+    /// ChatHub existed keep loading, and it is never implied by another category.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_hubs: Option<TablePayload>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -141,6 +146,7 @@ pub fn export_config_package(
         proxy: None,
         agents: None,
         sandbox: None,
+        chat_hubs: None,
     };
 
     if categories.contains(&ConfigCategory::AiModels) {
@@ -199,6 +205,16 @@ pub fn export_config_package(
             config: BTreeMap::new(),
         });
     }
+    if categories.contains(&ConfigCategory::ChatHubs) {
+        package.chat_hubs = Some(TablePayload {
+            rows: read_package_rows(
+                conn,
+                ConfigCategory::ChatHubs,
+                "SELECT * FROM chat_hubs ORDER BY sort_index, id",
+            )?,
+            config: BTreeMap::new(),
+        });
+    }
 
     let preview = validate_package(&package)?;
     write_atomic(path.as_ref(), &serde_json::to_vec_pretty(&package)?)?;
@@ -240,6 +256,7 @@ pub fn validate_package(
         (ConfigCategory::Proxy, &package.proxy),
         (ConfigCategory::Agents, &package.agents),
         (ConfigCategory::Sandbox, &package.sandbox),
+        (ConfigCategory::ChatHubs, &package.chat_hubs),
     ];
     let mut counts = BTreeMap::new();
     for (category, payload) in payloads {
@@ -457,6 +474,7 @@ fn validate_rows(
                 | ConfigCategory::Skills
                 | ConfigCategory::Mcp
                 | ConfigCategory::Proxy
+                | ConfigCategory::ChatHubs
         ) {
             let id = id.as_i64().ok_or_else(|| {
                 StoreError::InvalidData("auto-increment id must be an integer".into())
@@ -480,7 +498,10 @@ fn validate_rows(
             .and_then(Value::as_str)
             .filter(|name| !name.trim().is_empty())
             .ok_or_else(|| StoreError::InvalidData(format!("{category:?} row is missing name")))?;
-        if !names.insert(name.to_string()) {
+        let is_duplicate_name = !names.insert(name.to_string());
+        // ChatHub entries have no unique name constraint in the database, so two
+        // entries sharing a display name must stay importable.
+        if is_duplicate_name && category != ConfigCategory::ChatHubs {
             return Err(StoreError::InvalidData(format!(
                 "duplicate {category:?} name"
             )));
@@ -609,6 +630,15 @@ fn validate_row_contract(
             let scheme: super::SandboxScheme = serde_json::from_value(scheme_value)?;
             scheme.validate()?;
             require_boolean_fields(row, &["disabled"])?;
+        }
+        ConfigCategory::ChatHubs => {
+            require_string(row, &["logo", "url"])?;
+            require_integer_fields(row, &["sort_index"])?;
+            require_boolean_fields(row, &["is_default"])?;
+            // Reuse the same url rules as the command layer so an imported entry
+            // can never point the embedded webview outside http/https.
+            super::chat_hub::parse_chat_hub_url(row["url"].as_str().unwrap_or_default())?;
+            super::chat_hub::normalize_chat_hub_logo(row["logo"].as_str().unwrap_or_default())?;
         }
     }
     Ok(())
@@ -920,6 +950,7 @@ fn package_columns(category: ConfigCategory) -> BTreeSet<&'static str> {
             "created_at",
             "updated_at",
         ],
+        ConfigCategory::ChatHubs => &["id", "name", "logo", "url", "sort_index", "is_default"],
     };
     columns.iter().copied().collect()
 }
@@ -948,6 +979,7 @@ fn required_columns(category: ConfigCategory) -> &'static [&'static str] {
         ],
         ConfigCategory::Agents => &["id", "name", "system_prompt"],
         ConfigCategory::Sandbox => &["id", "name", "description", "config", "disabled"],
+        ConfigCategory::ChatHubs => &["id", "name", "url"],
     }
 }
 
@@ -1140,6 +1172,15 @@ fn import_in_transaction(
         result
             .imported_counts
             .insert(ConfigCategory::Agents, payload.rows.len());
+    }
+    if selected.contains(&ConfigCategory::ChatHubs) {
+        let payload = package.chat_hubs.as_ref().ok_or_else(|| {
+            StoreError::InvalidData("package is missing chat hubs payload".into())
+        })?;
+        replace_auto_table(transaction, super::chat_hub::CHAT_HUB_TABLE, payload)?;
+        result
+            .imported_counts
+            .insert(ConfigCategory::ChatHubs, payload.rows.len());
     }
 
     sanitize_missing_agent_parents(transaction)?;
@@ -1707,6 +1748,7 @@ mod tests {
             proxy: None,
             agents: None,
             sandbox: None,
+            chat_hubs: None,
         };
         assert!(validate_package(&package).is_ok());
     }
@@ -1735,6 +1777,7 @@ mod tests {
             proxy: None,
             agents: None,
             sandbox: None,
+            chat_hubs: None,
         };
         assert!(validate_package(&package).is_err());
     }
@@ -1782,6 +1825,7 @@ mod tests {
             }),
             agents: None,
             sandbox: None,
+            chat_hubs: None,
         };
         assert!(validate_package(&package).is_ok());
 
@@ -2273,6 +2317,8 @@ mod tests {
             connection.execute("INSERT INTO ai_skill (id, name, prompt) VALUES (12, 'Skill', 'prompt')", [])?;
             connection.execute("INSERT INTO mcp (id, name, description, config, disabled) VALUES (13, 'Server', 'MCP', '{\"name\":\"Server\",\"type\":\"stdio\"}', 0)", [])?;
             connection.execute("INSERT INTO proxy_group (id, name, description, prompt_injection, prompt_text, tool_filter, temperature, disabled) VALUES (14, 'Proxy', '', '', '', '', 1.0, 0)", [])?;
+            connection.execute("DELETE FROM chat_hubs", [])?;
+            connection.execute("INSERT INTO chat_hubs (id, name, logo, url, sort_index, is_default) VALUES (15, 'Chat', '', 'https://example.test/chat', 0, 0)", [])?;
             Ok(())
         }).unwrap();
         let export_path = package_path.clone();
@@ -2286,6 +2332,7 @@ mod tests {
                         ConfigCategory::Skills,
                         ConfigCategory::Mcp,
                         ConfigCategory::Proxy,
+                        ConfigCategory::ChatHubs,
                     ],
                 )
             })
@@ -2300,12 +2347,13 @@ mod tests {
                 ConfigCategory::Skills,
                 ConfigCategory::Mcp,
                 ConfigCategory::Proxy,
+                ConfigCategory::ChatHubs,
             ],
         )
         .unwrap();
         let destination_runtime = destination.db_runtime().unwrap();
         let sequences: Vec<(String, i64)> = destination_runtime.read_blocking(|connection| {
-            let mut statement = connection.prepare("SELECT name, seq FROM sqlite_sequence WHERE name IN ('ai_model', 'ai_skill', 'mcp', 'proxy_group') ORDER BY name")?;
+            let mut statement = connection.prepare("SELECT name, seq FROM sqlite_sequence WHERE name IN ('ai_model', 'ai_skill', 'mcp', 'proxy_group', 'chat_hubs') ORDER BY name")?;
             let sequences = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
             Ok(sequences)
         }).unwrap();
@@ -2314,6 +2362,7 @@ mod tests {
             vec![
                 ("ai_model".into(), 11),
                 ("ai_skill".into(), 12),
+                ("chat_hubs".into(), 15),
                 ("mcp".into(), 13),
                 ("proxy_group".into(), 14),
             ]
@@ -2632,6 +2681,7 @@ mod tests {
                 config: BTreeMap::new(),
             }),
             sandbox: Some(TablePayload::default()),
+            chat_hubs: None,
         };
         fs::write(&package_path, serde_json::to_vec(&package).unwrap()).unwrap();
 
@@ -2684,6 +2734,7 @@ mod tests {
                 config: BTreeMap::new(),
             }),
             sandbox: Some(TablePayload::default()),
+            chat_hubs: None,
         };
         fs::write(&package_path, serde_json::to_vec(&package).unwrap()).unwrap();
         assert!(import_config_package(&store, &package_path, [ConfigCategory::Agents]).is_err());
@@ -2741,6 +2792,7 @@ mod tests {
                 config: BTreeMap::new(),
             }),
             sandbox: Some(TablePayload::default()),
+            chat_hubs: None,
         };
         assert!(validate_package(&package).is_ok());
     }
@@ -2785,7 +2837,176 @@ mod tests {
             proxy: None,
             agents: None,
             sandbox: None,
+            chat_hubs: None,
         };
         assert!(validate_package(&package).is_err());
+    }
+
+    #[test]
+    fn chat_hubs_are_an_independent_optional_category() {
+        // Neither the Agents closure nor any other category may pull ChatHub in.
+        assert!(!category_closure([ConfigCategory::Agents]).contains(&ConfigCategory::ChatHubs));
+        assert!(!category_closure([ConfigCategory::AiModels]).contains(&ConfigCategory::ChatHubs));
+        assert_eq!(
+            category_closure([ConfigCategory::ChatHubs]),
+            BTreeSet::from([ConfigCategory::ChatHubs])
+        );
+    }
+
+    #[test]
+    fn chat_hubs_export_and_import_round_trip_in_one_transaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("config-transfer.sqlite");
+        let package_path = directory.path().join("configuration.json");
+        let store = super::super::MainStore::new(&database_path).unwrap();
+        let runtime = store.db_runtime().unwrap();
+
+        // Replace the seeded presets with one custom entry so the round trip is
+        // unambiguous.
+        runtime
+            .write_blocking(|connection| {
+                connection.execute("DELETE FROM chat_hubs", [])?;
+                connection.execute(
+                    "INSERT INTO chat_hubs (id, name, logo, url, sort_index, is_default)
+                     VALUES (5, 'Exported', 'https://cdn.example.test/logo.png', 'https://example.test/chat', 0, 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let export_path = package_path.clone();
+        let preview = runtime
+            .read_blocking(move |connection| {
+                export_config_package(connection, &export_path, [ConfigCategory::ChatHubs])
+            })
+            .unwrap();
+        assert_eq!(preview.categories, vec![ConfigCategory::ChatHubs]);
+        assert_eq!(preview.counts.get(&ConfigCategory::ChatHubs), Some(&1));
+        let exported = fs::read_to_string(&package_path).unwrap();
+        assert!(exported.contains("chatHubs"));
+        assert!(!exported.contains("aiModels"));
+
+        runtime
+            .write_blocking(|connection| {
+                connection.execute("DELETE FROM chat_hubs", [])?;
+                connection.execute(
+                    "INSERT INTO chat_hubs (id, name, logo, url, sort_index, is_default)
+                     VALUES (9, 'Local', '', 'https://local.test/chat', 0, 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let result =
+            import_config_package(&store, &package_path, [ConfigCategory::ChatHubs]).unwrap();
+        assert_eq!(
+            result.imported_counts.get(&ConfigCategory::ChatHubs),
+            Some(&1)
+        );
+
+        let hubs = store.get_all_chat_hubs().unwrap();
+        assert_eq!(hubs.len(), 1);
+        assert_eq!(hubs[0].id, 5);
+        assert_eq!(hubs[0].name, "Exported");
+        assert_eq!(hubs[0].logo, "https://cdn.example.test/logo.png");
+        assert_eq!(hubs[0].url, "https://example.test/chat");
+        assert!(!hubs[0].is_default);
+
+        // The imported empty/removed state must survive later startups, which is
+        // guaranteed by the one-time seed migration.
+        assert_eq!(
+            runtime
+                .read_blocking(|connection| super::super::MainStore::chat_hub_list(connection))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn chat_hubs_import_rejects_non_http_urls_and_rolls_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("config-transfer.sqlite");
+        let store = super::super::MainStore::new(&database_path).unwrap();
+
+        let package = ConfigTransferPackage {
+            format_version: FORMAT_VERSION,
+            exported_at: "now".into(),
+            categories: vec![ConfigCategory::ChatHubs],
+            ai_models: None,
+            skills: None,
+            mcp: None,
+            proxy: None,
+            agents: None,
+            sandbox: None,
+            chat_hubs: Some(TablePayload {
+                rows: vec![BTreeMap::from([
+                    ("id".into(), Value::from(1)),
+                    ("name".into(), Value::from("Unsafe")),
+                    ("logo".into(), Value::from("")),
+                    ("url".into(), Value::from("file:///etc/passwd")),
+                    ("sort_index".into(), Value::from(0)),
+                    ("is_default".into(), Value::from(0)),
+                ])],
+                config: BTreeMap::new(),
+            }),
+        };
+        assert!(validate_package(&package).is_err());
+
+        let package_path = directory.path().join("unsafe.json");
+        fs::write(&package_path, serde_json::to_vec(&package).unwrap()).unwrap();
+        let before = store.get_all_chat_hubs().unwrap();
+        assert!(import_config_package(&store, &package_path, [ConfigCategory::ChatHubs]).is_err());
+        assert_eq!(
+            store.get_all_chat_hubs().unwrap(),
+            before,
+            "a rejected import must not change stored entries"
+        );
+
+        let mut rolled_back = package.clone();
+        rolled_back.chat_hubs = Some(TablePayload {
+            rows: vec![BTreeMap::from([
+                ("id".into(), Value::from(1)),
+                ("name".into(), Value::from("Valid")),
+                ("logo".into(), Value::from("")),
+                ("url".into(), Value::from("https://example.test/chat")),
+                ("sort_index".into(), Value::from(0)),
+                ("is_default".into(), Value::from(0)),
+            ])],
+            config: BTreeMap::new(),
+        });
+        validate_package(&rolled_back).expect("valid chat hub rows should pass validation");
+
+        // A validated payload imports cleanly and replaces the stored rows.
+        let valid_path = directory.path().join("valid.json");
+        fs::write(&valid_path, serde_json::to_vec(&rolled_back).unwrap()).unwrap();
+        import_config_package(&store, &valid_path, [ConfigCategory::ChatHubs]).unwrap();
+        assert_eq!(store.get_all_chat_hubs().unwrap().len(), 1);
+
+        // An empty payload is a legitimate "no entries" state and clears the table.
+        let empty_path = directory.path().join("empty-payload.json");
+        let mut empty_package = rolled_back.clone();
+        empty_package.chat_hubs = Some(TablePayload::default());
+        fs::write(&empty_path, serde_json::to_vec(&empty_package).unwrap()).unwrap();
+        import_config_package(&store, &empty_path, [ConfigCategory::ChatHubs]).unwrap();
+        assert!(store.get_all_chat_hubs().unwrap().is_empty());
+
+        // A package that selects ChatHub without a payload is rejected and leaves
+        // the stored rows untouched.
+        let missing_path = directory.path().join("missing-payload.json");
+        fs::write(
+            &missing_path,
+            serde_json::json!({
+                "formatVersion": FORMAT_VERSION,
+                "exportedAt": "now",
+                "categories": ["chatHubs"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(import_config_package(&store, &missing_path, [ConfigCategory::ChatHubs]).is_err());
+        assert!(store.get_all_chat_hubs().unwrap().is_empty());
     }
 }

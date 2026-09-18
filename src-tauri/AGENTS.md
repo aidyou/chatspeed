@@ -37,9 +37,13 @@ src-tauri/
 
 ## CONVENTIONS
 
-- **Error handling**: `Result<T, AppError>` via `?`. No `unwrap()` in production.
+- **Error handling**: `Result<T, AppError>` via `?`. `unwrap_or()` and `unwrap_or_default()` are fine; `unwrap()` and `expect()` are allowed only in test code, regex compilation, and fatal initialization, and then need a clear message.
 - **i18n**: All user-facing strings via `t!` macro from `rust_i18n`
-- **Module structure**: `mod.rs` for exports, `types.rs` for structs, `errors.rs` for errors
+- **Module structure**:
+  - `mod.rs` only declares modules (`mod my_module;`) and re-exports (`pub use ...`); it holds no logic of its own.
+  - Public structs go in `types.rs`, public traits in `traits.rs`, public errors in `errors.rs`.
+- **Naming**: `snake_case` for variables and functions, `PascalCase` for structs and enums.
+- **Documentation**: file level with `//!` at the top of the file, item level with `///` on functions and types.
 - **Commands**: Use `#[tauri::command]` macro, inject `State` for shared state
 
 ## ANTI-PATTERNS

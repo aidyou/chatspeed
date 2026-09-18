@@ -200,7 +200,8 @@
               ref="quickActionsDropdownRef"
               trigger="click"
               :hide-on-click="false"
-              @command="handleQuickActionCommand">
+              @command="handleQuickActionCommand"
+              @visible-change="onQuickActionsVisibleChange">
               <label
                 class="icon-btn upperLayer quick-actions-badge"
                 :class="{ 'has-active-options': activeRuntimeOptionCount > 0 }">
@@ -210,7 +211,7 @@
                 </span>
               </label>
               <template #dropdown>
-                <el-dropdown-menu class="workflow-quick-actions-dropdown">
+                <el-dropdown-menu class="workflow-quick-actions-dropdown" :style="quickActionsMenuStyle">
                   <el-dropdown-item v-if="canAttachImages" command="attachment">
                     <cs name="attachment" size="14px" class="dropdown-icon" />
                     <span class="dropdown-content">
@@ -601,6 +602,9 @@
                           size="14px"
                           class="dropdown-check" />
                       </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelDefaultDescription') }}
+                      </span>
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item command="approvalSmart" :class="{ active: approvalLevel === 'smart' }">
@@ -613,6 +617,9 @@
                           name="check"
                           size="14px"
                           class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelSmartDescription') }}
                       </span>
                     </span>
                   </el-dropdown-item>
@@ -629,6 +636,9 @@
                           name="check"
                           size="14px"
                           class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelFullDescription') }}
                       </span>
                     </span>
                   </el-dropdown-item>
@@ -1646,6 +1656,40 @@ const quickActionsDropdownRef = ref(null)
 const createWorkflowDialogVisible = ref(false)
 const createWorkflowInheritCurrent = ref(true)
 
+/** Space kept between the quick actions list and the control it opens from. */
+const QUICK_ACTIONS_MENU_GAP = 16
+
+/**
+ * Room the quick actions list may use, measured when it opens.
+ *
+ * The list is longer than the room between the titlebar and the control it opens from, and the
+ * dropdown opens upward, so the list is capped to that room and scrolls instead of growing past
+ * the window. The titlebar is left out because the window paints it above the list.
+ */
+const quickActionsMenuStyle = ref({})
+
+const onQuickActionsVisibleChange = visible => {
+  if (!visible) {
+    quickActionsMenuStyle.value = {}
+    return
+  }
+
+  const trigger = quickActionsDropdownRef.value?.$el
+  if (!trigger?.getBoundingClientRect) {
+    return
+  }
+
+  const titlebar = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--cs-titlebar-height')
+  )
+  const room = Math.round(
+    trigger.getBoundingClientRect().top -
+      (Number.isFinite(titlebar) ? titlebar : 0) -
+      QUICK_ACTIONS_MENU_GAP
+  )
+  quickActionsMenuStyle.value = room > 0 ? { maxHeight: `${room}px` } : {}
+}
+
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 const isInputExpanded = ref(false)
 const directoryRemovalPanelVisible = ref(false)
@@ -2376,6 +2420,16 @@ defineExpose({
   color: var(--cs-text-color-secondary);
   font-size: var(--cs-font-size-xs);
   line-height: 1.4;
+}
+
+.workflow-quick-actions-dropdown {
+  /*
+   * The list is longer than the room under the control it opens from, so it scrolls. This cap
+   * keeps it inside the window when that room could not be measured; the measured room is
+   * handed in as an inline style.
+   */
+  max-height: calc(100vh - var(--cs-titlebar-height));
+  overflow-y: auto;
 }
 
 .workflow-quick-actions-dropdown :deep(.el-dropdown-menu__item) {

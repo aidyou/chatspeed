@@ -22,6 +22,7 @@ import {
   mergeManualClearContextMarkersIntoPreviousGroups,
   mergeWorkflowMessagePages,
   normalizeVisibleCompletionReport,
+  normalizeWorkflowErrorAlertContent,
   projectWorkflowMessageList,
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
@@ -31,6 +32,19 @@ import {
   selectVisibleWorkflowTaskGroups,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
+
+assert.equal(
+  normalizeWorkflowErrorAlertContent(
+    '{"error":{"message":"quota exhausted"}}<SYSTEM_REMINDER>internal</SYSTEM_REMINDER>'
+  ),
+  'quota exhausted',
+  'terminal error JSON must expose the server message instead of being parsed as an assistant envelope'
+)
+assert.equal(
+  normalizeWorkflowErrorAlertContent('Critical Error: provider failed'),
+  'provider failed',
+  'terminal error display should remove only the generic presentation prefix'
+)
 
 const interleavedToolGroupOrders = getWorkflowToolGroupRenderOrders(
   [{ groupOrder: 0 }, { groupOrder: 2 }],

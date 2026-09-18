@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2, v3, v4, v5,
-    v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v3, v4,
+    v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -24,6 +24,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v16::MIGRATION,
     v17::MIGRATION,
     v18::MIGRATION,
+    v19::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {

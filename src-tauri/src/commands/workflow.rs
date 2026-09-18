@@ -416,39 +416,6 @@ fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Resu
     Ok(())
 }
 
-fn workflow_error_message(error: &crate::workflow::react::error::WorkflowEngineError) -> String {
-    match error {
-        crate::workflow::react::error::WorkflowEngineError::Ai(
-            crate::ai::error::AiError::RawApiRequestFailed { details, .. },
-        ) => details.clone(),
-        _ => error.to_string(),
-    }
-}
-
-fn is_raw_upstream_workflow_error(
-    error: &crate::workflow::react::error::WorkflowEngineError,
-) -> bool {
-    matches!(
-        error,
-        crate::workflow::react::error::WorkflowEngineError::Ai(
-            crate::ai::error::AiError::RawApiRequestFailed { .. }
-        )
-    )
-}
-
-fn format_workflow_terminal_error(
-    error: &crate::workflow::react::error::WorkflowEngineError,
-) -> String {
-    if is_raw_upstream_workflow_error(error) {
-        workflow_error_message(error)
-    } else {
-        format!(
-            "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
-            workflow_error_message(error)
-        )
-    }
-}
-
 fn persist_failed_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
     store
         .update_workflow_status(session_id, &WorkflowState::Error.to_string())
@@ -4371,42 +4338,30 @@ async fn try_resume_completed_live_session(
                 session_id_for_spawn,
                 e
             );
-            if let Err(error) =
-                persist_failed_workflow_state(main_store_for_spawn.as_ref(), &session_id_for_spawn)
-            {
-                log::error!(
-                    "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state after completed-session resume: {}",
-                    session_id_for_spawn,
-                    error
-                );
+            let core_terminalized = matches!(guard.state(), WorkflowState::Error);
+            if !core_terminalized {
+                if let Err(error) = persist_failed_workflow_state(
+                    main_store_for_spawn.as_ref(),
+                    &session_id_for_spawn,
+                ) {
+                    log::error!(
+                        "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state after completed-session resume: {}",
+                        session_id_for_spawn,
+                        error
+                    );
+                }
+                let _ = gateway_for_spawn
+                    .send(
+                        &session_id_for_spawn,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Error,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
             }
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::State {
-                        state: WorkflowState::Error,
-                        wait_reason: None,
-                    },
-                )
-                .await;
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::Message {
-                        message_id: None,
-                        role: "assistant".to_string(),
-                        content: format_workflow_terminal_error(&e),
-                        reasoning: None,
-                        step_type: None,
-                        step_index: 0,
-                        is_error: true,
-                        error_type: Some("engine".to_string()),
-                        metadata: None,
-                    },
-                )
-                .await;
         }
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
@@ -5190,43 +5145,30 @@ pub(crate) async fn workflow_start_core(
                 session_id_for_spawn,
                 e
             );
-            if let Err(error) =
-                persist_failed_workflow_state(main_store_for_spawn.as_ref(), &session_id_for_spawn)
-            {
-                log::error!(
-                    "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state: {}",
-                    session_id_for_spawn,
-                    error
-                );
+            let core_terminalized = matches!(guard.state(), WorkflowState::Error);
+            if !core_terminalized {
+                if let Err(error) = persist_failed_workflow_state(
+                    main_store_for_spawn.as_ref(),
+                    &session_id_for_spawn,
+                ) {
+                    log::error!(
+                        "[Workflow][session={}][phase=run_loop][event=failed_state_persist] Could not persist failed workflow state: {}",
+                        session_id_for_spawn,
+                        error
+                    );
+                }
+                let _ = gateway_for_spawn
+                    .send(
+                        &session_id_for_spawn,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Error,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
             }
             let _ = manager_for_spawn
                 .update_session_status(&session_id_for_spawn, ManagedSessionStatus::Failed);
-
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::State {
-                        state: WorkflowState::Error,
-                        wait_reason: None,
-                    },
-                )
-                .await;
-            let _ = gateway_for_spawn
-                .send(
-                    &session_id_for_spawn,
-                    crate::workflow::react::types::GatewayPayload::Message {
-                        message_id: None,
-                        role: "assistant".to_string(),
-                        content: format_workflow_terminal_error(&e),
-                        reasoning: None,
-                        step_type: None,
-                        step_index: 0,
-                        is_error: true,
-                        error_type: Some("engine".to_string()),
-                        metadata: None,
-                    },
-                )
-                .await;
         }
         if matches!(guard.state(), WorkflowState::Completed) {
             let _ = manager_for_spawn
@@ -7127,8 +7069,9 @@ mod tests {
             },
         );
 
-        assert_eq!(format_workflow_terminal_error(&error), raw_body);
-        assert!(!format_workflow_terminal_error(&error).contains("Critical Error:"));
+        let terminal = error.terminal_error();
+        assert_eq!(terminal.content, raw_body);
+        assert!(!terminal.content.contains("Critical Error:"));
     }
 
     #[test]
@@ -7163,9 +7106,9 @@ mod tests {
             "engine failure".to_string(),
         );
 
-        let message = format_workflow_terminal_error(&error);
-        assert!(message.starts_with("Critical Error: "));
-        assert!(message.contains("engine failure"));
+        let terminal = error.terminal_error();
+        assert!(terminal.content.starts_with("Critical Error: "));
+        assert!(terminal.content.contains("engine failure"));
     }
     #[test]
     fn workflow_auto_compression_defaults_to_disabled() {

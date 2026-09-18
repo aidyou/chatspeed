@@ -578,6 +578,11 @@ import { createDefaultPricing, normalizePricing } from '@/libs/modelPricing'
 import { getProviderLogo, providerLogoFallback } from '@/libs/logo'
 import { useModelStore } from '@/stores/model'
 
+const normalizeProxyServerAddress = value => {
+  const server = String(value || '').trim()
+  return /^(?:\d{1,3}\.){3}\d{1,3}:\d+$/.test(server) ? `http://${server}` : server
+}
+
 const isValidUrl = url => {
   if (!url) return false
 
@@ -766,7 +771,7 @@ const editProxyServer = server => {
 }
 
 const saveProxyServer = () => {
-  const server = proxyServerForm.value.server.trim()
+  const server = normalizeProxyServerAddress(proxyServerForm.value.server)
   if (!server) {
     showMessage(t('settings.model.proxyServerRequired'), 'error')
     return
@@ -1011,6 +1016,10 @@ const updateModel = () => {
     }
 
     if (modelForm.value.proxyType === 'http') {
+      modelForm.value.proxyServers = modelForm.value.proxyServers.map(server => ({
+        ...server,
+        server: normalizeProxyServerAddress(server.server)
+      }))
       if (!modelForm.value.proxyServers.length) {
         showMessage(t('settings.model.proxyServerRequired'), 'error')
         return

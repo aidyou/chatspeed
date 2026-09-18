@@ -1,5 +1,12 @@
 <template>
   <div class="workflow-layout">
+    <ChatHubSplitter
+      v-if="chatHubVisible"
+      :right="chatHubReservedWidth"
+      :width="chatHubStore.pageWidth"
+      :min-width="chatHubStore.pageMinWidth"
+      :min-host-width="chatHubStore.pageMinHostWidth"
+      @resize="onChatHubPageResize" />
     <Titlebar :show-menu-button="settingStore.settings.showMenuButton">
       <template #left>
         <div class="workflow-titlebar-left-actions">
@@ -12,24 +19,63 @@
               <cs name="sidebar" />
             </div>
           </el-tooltip>
-          <el-tooltip
-            :content="$t('workflow.automation.createTitle')"
-            :hide-after="0"
-            :enterable="false"
-            placement="bottom">
-            <div class="icon-btn upperLayer" @click="openCreateAutomation">
-              <cs name="clock" />
+
+          <el-dropdown
+            v-if="globalPendingApprovalList.length > 0"
+            trigger="click"
+            @command="handleApprovalCommand">
+            <div class="icon-btn upperLayer approval-queue-btn blinking">
+              <cs name="approval" />
+              <span class="approval-queue-count">{{ approvalQueueCount }}</span>
             </div>
-          </el-tooltip>
-          <el-tooltip
-            :content="$t('workflow.newWorkflow')"
-            :hide-after="0"
-            :enterable="false"
-            placement="bottom">
-            <div class="icon-btn upperLayer" @click="createNewWorkflow()">
-              <cs name="new-chat" />
+            <template #dropdown>
+              <el-dropdown-menu class="approval-queue-menu">
+                <el-dropdown-item
+                  v-for="item in globalPendingApprovalList"
+                  :key="item.key"
+                  :command="item">
+                  <div class="approval-menu-item">
+                    <div class="approval-menu-title">
+                      <cs name="approval" size="var(--cs-font-size-md)" />
+                      {{ getPendingApprovalTitle(item) }}
+                    </div>
+                    <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
+                      {{ item.workflowTitle || item.action }}
+                    </div>
+                  </div>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown trigger="click">
+            <div class="icon-btn upperLayer">
+              <el-tooltip
+                :content="$t('workflow.notificationSound')"
+                :hide-after="0"
+                :enterable="false"
+                placement="bottom">
+                <cs :name="soundIcon" />
+              </el-tooltip>
             </div>
-          </el-tooltip>
+            <template #dropdown>
+              <el-dropdown-menu class="sound-dropdown-menu">
+                <el-dropdown-item>
+                  <el-checkbox
+                    :model-value="!workflowApprovalMuted"
+                    @change="toggleWorkflowApprovalMute">
+                    {{ $t('workflow.approvalSound') }}
+                  </el-checkbox>
+                </el-dropdown-item>
+                <el-dropdown-item>
+                  <el-checkbox
+                    :model-value="!workflowCompletionMuted"
+                    @change="toggleWorkflowCompletionMute">
+                    {{ $t('workflow.completionSound') }}
+                  </el-checkbox>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </template>
       <template #center>
@@ -53,39 +99,34 @@
         </div>
       </template>
       <template #right>
-        <el-dropdown
-          v-if="globalPendingApprovalList.length > 0"
-          trigger="click"
-          @command="handleApprovalCommand">
-          <div class="icon-btn upperLayer approval-queue-btn blinking">
-            <cs name="approval" />
-            <span class="approval-queue-count">{{ approvalQueueCount }}</span>
-          </div>
-          <template #dropdown>
-            <el-dropdown-menu class="approval-queue-menu">
-              <el-dropdown-item
-                v-for="item in globalPendingApprovalList"
-                :key="item.key"
-                :command="item">
-                <div class="approval-menu-item">
-                  <div class="approval-menu-title">
-                    <cs name="approval" size="var(--cs-font-size-md)" />
-                    {{ getPendingApprovalTitle(item) }}
-                  </div>
-                  <div class="approval-menu-summary" :title="item.workflowTitle || item.action">
-                    {{ item.workflowTitle || item.action }}
-                  </div>
-                </div>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+      <el-tooltip
+        :content="$t('workflow.automation.createTitle')"
+        :hide-after="0"
+        :enterable="false"
+        placement="left"
+        popper-class="workflow-titlebar-tooltip">
+        <div class="icon-btn upperLayer" @click="openCreateAutomation">
+          <cs name="clock" />
+        </div>
+      </el-tooltip>
+      <el-tooltip
+        :content="$t('workflow.newWorkflow')"
+        :hide-after="0"
+        :enterable="false"
+        placement="left"
+        popper-class="workflow-titlebar-tooltip">
+        <div class="icon-btn upperLayer" @click="createNewWorkflow()">
+          <cs name="new-chat" />
+        </div>
+      </el-tooltip>
+
         <el-tooltip
           v-if="updateStore.isUpdateReady"
           :content="$t('common.newVersionReady')"
           :hide-after="0"
           :enterable="false"
-          placement="bottom">
+          placement="left"
+          popper-class="workflow-titlebar-tooltip">
           <div
             class="menu icon-btn upperLayer restart update-ready-btn"
             @click="updateStore.restartApp">
@@ -93,35 +134,8 @@
             {{ $t('common.updateButtonText') }}
           </div>
         </el-tooltip>
-        <el-dropdown trigger="click">
-          <div class="icon-btn upperLayer">
-            <el-tooltip
-              :content="$t('workflow.notificationSound')"
-              :hide-after="0"
-              :enterable="false"
-              placement="bottom">
-              <cs :name="soundIcon" />
-            </el-tooltip>
-          </div>
-          <template #dropdown>
-            <el-dropdown-menu class="sound-dropdown-menu">
-              <el-dropdown-item>
-                <el-checkbox
-                  :model-value="!workflowApprovalMuted"
-                  @change="toggleWorkflowApprovalMute">
-                  {{ $t('workflow.approvalSound') }}
-                </el-checkbox>
-              </el-dropdown-item>
-              <el-dropdown-item>
-                <el-checkbox
-                  :model-value="!workflowCompletionMuted"
-                  @change="toggleWorkflowCompletionMute">
-                  {{ $t('workflow.completionSound') }}
-                </el-checkbox>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+
+
         <div
           class="icon-btn upperLayer"
           :class="{ disabled: !canDeleteLastMessage }"
@@ -130,7 +144,8 @@
             :content="$t('workflow.deleteLastMessage')"
             :hide-after="0"
             :enterable="false"
-            placement="bottom">
+            placement="left"
+            popper-class="workflow-titlebar-tooltip">
             <cs name="undo" />
           </el-tooltip>
         </div>
@@ -139,7 +154,8 @@
             :content="$t(`common.${isAlwaysOnTop ? 'unpin' : 'pin'}`)"
             :hide-after="0"
             :enterable="false"
-            placement="bottom">
+            placement="left"
+            popper-class="workflow-titlebar-tooltip">
             <cs name="pin" />
           </el-tooltip>
         </div>
@@ -147,7 +163,7 @@
     </Titlebar>
 
     <div class="workflow-main" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
-      <div class="workflow-sidebar-region">
+      <div class="workflow-sidebar-region" :style="sidebarStyle">
         <nav v-if="!sidebarCollapsed" class="workflow-side-rail" :aria-label="$t('workflow.sidebarNavigation')">
           <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
             <button
@@ -167,15 +183,28 @@
               <cs name="clock" size="var(--cs-font-size-lg)" />
             </button>
           </el-tooltip>
-          <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
-            <button
-              class="workflow-side-rail__item workflow-side-rail__terminal"
-              :class="{ blinking: terminal.hasSessions && !terminal.visible }"
-              type="button"
-              @click="terminal.open">
-              <cs name="bash" size="var(--cs-font-size-lg)" />
-            </button>
-          </el-tooltip>
+          <div class="workflow-side-rail__bottom">
+            <ChatHubEntry
+              :hubs="chatHubStore.list"
+              :active-hub-id="chatHubStore.activeHubId"
+              @select="onSelectChatHubEntry"
+              @toggle="onChatHubEntryToggled"
+              @close="onCloseChatHub" />
+            <!-- The terminal entry only opens the terminal panel; the docked ChatHub page
+                 stays in place next to it. -->
+            <div class="workflow-side-rail__terminal-entry">
+              <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0"
+                :enterable="false">
+                <button
+                  class="workflow-side-rail__item workflow-side-rail__terminal"
+                  :class="{ blinking: terminal.hasSessions && !terminal.visible }"
+                  type="button"
+                  @click="terminal.open">
+                  <cs name="bash" size="var(--cs-font-size-lg)" />
+                </button>
+              </el-tooltip>
+            </div>
+          </div>
         </nav>
 
         <WorkflowSidebar
@@ -192,10 +221,15 @@
           :automations="workflowAutomationStore.automations"
           :selected-automation-id="workflowAutomationStore.selectedAutomationId"
           :navigation-tab="workflowSidebarNavigationTab"
+          :chat-hubs="chatHubStore.list"
+          :active-chat-hub-id="chatHubStore.activeHubId"
           v-model:active-tab="workflowSidebarActiveTab"
           v-model:navigation-tab="workflowSidebarNavigationTab"
           @select-workflow="onSelectWorkflowFromHistory"
           @select-automation="onSelectAutomation"
+          @select-chat-hub="onSelectChatHubEntry"
+          @toggle-chat-hub="onChatHubEntryToggled"
+          @close-chat-hub="onCloseChatHub"
           @create-automation="openCreateAutomation"
           @edit-automation="onEditAutomation"
           @delete-automation="onDeleteAutomation"
@@ -366,7 +400,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { homeDir } from '@tauri-apps/api/path'
@@ -389,6 +423,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useUpdateStore } from '@/stores/update'
 import { useWindowStore } from '@/stores/window'
 import { useModelStore } from '@/stores/model'
+import { useChatHubStore } from '@/stores/chatHub'
 
 import Titlebar from '@/components/window/Titlebar.vue'
 import StatusPanel from '@/components/workflow/StatusPanel.vue'
@@ -400,6 +435,9 @@ import WorkflowInputArea from '@/components/workflow/WorkflowInputArea.vue'
 import TerminalPanel from '@/components/workflow/TerminalPanel.vue'
 import WorkflowCodeEditor from '@/components/workflow/WorkflowCodeEditor.vue'
 import WorkflowAutomationEditor from '@/components/workflow/automation/WorkflowAutomationEditor.vue'
+import ChatHubEntry from '@/components/workflow/ChatHubEntry.vue'
+import ChatHubSplitter from '@/components/workflow/ChatHubSplitter.vue'
+import { createChatHubViewController, restoreChatHubEntry } from '@/libs/chatHubView'
 
 // Composables
 import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'
@@ -428,6 +466,7 @@ const settingStore = useSettingStore()
 const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const modelStore = useModelStore()
+const chatHubStore = useChatHubStore()
 
 // Component refs
 const messageListRef = ref(null)
@@ -2070,6 +2109,8 @@ const resolveAutomationWorkflowId = async automationId => {
 }
 
 const onSelectWorkflowFromHistory = async workflowId => {
+  // Clicking an existing task entry always returns to the workflow view, even
+  // when the clicked task is already selected and the handler returns early.
   workflowSelectionIntentRevision += 1
   if (
     workflowSidebarActiveTab.value === 'history' &&
@@ -2084,6 +2125,8 @@ const onSelectWorkflowFromHistory = async workflowId => {
 }
 
 const onSelectAutomation = async automationId => {
+  // Clicking an existing automation entry always returns to the workflow view,
+  // even when it is already selected and the handler returns early.
   if (!automationId) return
   const selectionRevision = ++workflowSelectionIntentRevision
   const workflowSessionId = await resolveAutomationWorkflowId(automationId)
@@ -2258,7 +2301,191 @@ const displayAllowedPathTitle = computed(() => {
   return displayAllowedPath.value || ''
 })
 
+// ============================================================
+// ChatHub (web chat entries)
+//
+// The ChatHub page is docked inside this window (see src-tauri/src/chat_hub), so the
+// layer is pure view state: it only decides whether the page is docked, how wide it is
+// and which entry it shows. It never stops, clears, rebuilds or otherwise touches the
+// workflow session, task, message or approval state.
+// ============================================================
+const chatHubVisible = ref(false)
+
+const activeChatHub = computed(
+  () => chatHubStore.list.find(hub => hub.id === chatHubStore.activeHubId) || null
+)
+
+/**
+ * Space the workflow UI keeps free for the docked page.
+ *
+ * Carriers that place the page themselves already narrow the workflow UI, so only the
+ * carriers that stack the page over it have to reserve the space on this side.
+ */
+const chatHubReservedWidth = computed(() =>
+  chatHubStore.viewMode === 'reserve' && chatHubVisible.value ? chatHubStore.pageWidth : 0
+)
+
+/**
+ * Space the docked page reserves, published on the document root.
+ *
+ * The page starts below the app titlebar, so the titlebar keeps the full window width and
+ * only the workflow content has to stay clear of the page. The width is published on the
+ * document root rather than on this layout, because the overlays and popovers Element Plus
+ * teleports to the document body have to find it outside this component as well. A carrier
+ * that lays the page out itself reserves nothing, and the content then keeps its full width.
+ */
+watchEffect(() => {
+  const reserved = chatHubReservedWidth.value
+  const root = document.documentElement
+
+  if (reserved > 0) {
+    root.style.setProperty('--cs-chathub-reserved-width', `${reserved}px`)
+    return
+  }
+
+  root.style.removeProperty('--cs-chathub-reserved-width')
+})
+
+/**
+ * Height of the app titlebar, which a stacked page has to stay below so it can never
+ * cover the window controls. Carriers that lay both webviews out themselves ignore it.
+ */
+const chatHubTopInset = () => {
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--cs-titlebar-height')
+  const height = Number.parseFloat(value)
+  return Number.isFinite(height) && height > 0 ? height : 0
+}
+
+/**
+ * Radius of the rounded border this window actually draws.
+ *
+ * The stacked page is a rectangle, so it paints over that border at its bottom-right
+ * corner and has to hand the corner back. The window container is what draws the border,
+ * so its computed radius is read instead of a design token: a platform whose window keeps
+ * square corners reports nothing, and the page stays rectangular there.
+ */
+const chatHubCornerRadius = () => {
+  const container = document.querySelector('.app-container')
+  if (!container) {
+    return 0
+  }
+  const radius = Number.parseFloat(getComputedStyle(container).borderBottomRightRadius)
+  return Number.isFinite(radius) && radius > 0 ? radius : 0
+}
+
+/**
+ * Single ordered boundary for every ChatHub view command.
+ *
+ * Show/hide/width/destroy cross the IPC boundary asynchronously, so a late reply must
+ * never override a newer user action: the controller serializes the commands and only
+ * applies the newest intent. Failures only report a message and keep the workflow UI
+ * usable, they never touch the workflow session.
+ */
+const chatHubView = createChatHubViewController({
+  show: (url, width) =>
+    invokeWrapper('show_chat_hub_page', {
+      url,
+      width,
+      topInset: chatHubTopInset(),
+      cornerRadius: chatHubCornerRadius()
+    }),
+  hide: () => invokeWrapper('hide_chat_hub_page'),
+  destroy: () => invokeWrapper('destroy_chat_hub_page'),
+  setWidth: width => invokeWrapper('set_chat_hub_page_width', { width }),
+  getWidth: () => chatHubStore.pageWidth,
+  onVisibleChange: visible => {
+    chatHubVisible.value = visible
+  },
+  onError: (error, action) => {
+    console.error(`Failed to ${action} the ChatHub page:`, error)
+    const key =
+      action === 'show'
+        ? 'showFailed'
+        : action === 'destroy'
+          ? 'closeFailed'
+          : action === 'hide'
+            ? 'hideFailed'
+            : ''
+    if (key) {
+      showMessage(t(`workflow.chatHub.${key}`), 'error')
+    }
+  }
+})
+
+/**
+ * Hides the ChatHub layer and restores the original workflow UI.
+ *
+ * Hiding never destroys the page, so the site session and the open page are still there
+ * when the entry is shown again.
+ */
+const hideChatHub = () => {
+  chatHubView.hide()
+}
+
+/**
+ * Docks the given entry next to the workflow UI.
+ */
+const showChatHub = hub => {
+  if (!hub) {
+    return
+  }
+  chatHubStore.setActiveHub(hub.id)
+  return chatHubView.select(hub.url)
+}
+
+const onSelectChatHubEntry = hub => {
+  showChatHub(hub)
+}
+
+/**
+ * Applies a width the splitter reported. The backend clamps it again, so the reserved
+ * space and the page itself can never drift apart.
+ */
+const onChatHubPageResize = width => {
+  chatHubStore.setPageWidth(width)
+  chatHubView.resize()
+}
+
+/**
+ * Actively closes the docked page from the entry of the shown site. Only this explicit
+ * action releases the page; the site session survives because the page uses a stable
+ * profile directory.
+ */
+const onCloseChatHub = () => {
+  chatHubStore.setActiveHub(0)
+  chatHubView.close()
+}
+
+/**
+ * Chat entry icon action. The docked page has no window chrome of its own, so its entry
+ * toggles it: a page that is on screen is hidden (and the workflow UI takes the space
+ * back) while a hidden one is brought back, which keeps that entry useful in both states.
+ */
+const onChatHubEntryToggled = () => {
+  if (chatHubVisible.value) {
+    hideChatHub()
+    return
+  }
+  restoreChatHubEntry(chatHubView, activeChatHub.value)
+}
+
+// The ChatHub page is docked next to the workflow UI, so switching tasks, automations,
+// sidebar tabs, opening the terminal or the authorized paths tab leaves it in place: the
+// only actions that touch it are its own entry (toggle and close). The open entry may be
+// deleted from the settings window, which only clears the current selection, so the
+// orphaned page is the one view change that still has to hide it.
+watch(
+  () => chatHubStore.activeHubId,
+  hubId => {
+    if (!hubId) {
+      hideChatHub()
+    }
+  }
+)
+
 const openWorkflowSidebarTab = tab => {
+  // Clicking an existing navigation entry always returns to the workflow view,
+  // even when the entry is already active.
   if (tab === 'history' || tab === 'automation') {
     workflowSidebarNavigationTab.value = tab
     workflowSidebarActiveTab.value = tab
@@ -2722,6 +2949,14 @@ onMounted(async () => {
   await workflowStore.loadWorkflows()
   await workflowAutomationStore.fetchAutomations()
   await agentStore.fetchAgents()
+  try {
+    await chatHubStore.load()
+    // How the page is docked and how wide it may be both belong to the backend.
+    await chatHubStore.loadViewLayout()
+    await chatHubStore.startSyncListener()
+  } catch (error) {
+    console.error('Failed to load chat hubs:', error)
+  }
   await fetchSystemSkills()
   try {
     defaultImageRecognitionPrompt.value = await invokeWrapper(
@@ -2762,11 +2997,28 @@ onBeforeUnmount(() => {
   onCodeEditorResizeEnd()
   stopTodayCostRefresh()
   clearRetryTimer()
+  chatHubStore.stopSyncListener()
 })
 </script>
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
+
+.app-container.macos .titlebar,
+.app-container.windows .titlebar{
+    background: var(--cs-titlebar-bg-color);
+}
+
+/*
+ * The window paints its titlebar as an opaque fixed layer above the app, so a tooltip that
+ * stays inside that strip would be drawn under it. The tooltips of the buttons next to the
+ * docked ChatHub page point left for the same reason: the page is a native view over
+ * everything below the strip, which a tooltip pointing down would be hidden by.
+ */
+.workflow-titlebar-tooltip.el-popper {
+  /* The popper carries a layer of its own, so this one has to win over it. */
+  z-index: var(--cs-upper-layer-zindex) !important;
+}
 
 .main-container {
   display: flex;
