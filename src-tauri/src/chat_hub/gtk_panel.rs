@@ -302,16 +302,17 @@ impl Page {
         // can be applied: the settings are read here.
         let mut web_context = WebContext::new(Some(page_data_directory(app)));
 
-        // A page that gives a window corner back also has to be see-through, so the radius only
-        // reaches a window that draws one.
+        // A page that gives a window corner back also has to be see-through.
+        // The page stands beside the workflow UI instead of sharing its titlebar, so it is a window
+        // of its own next to the workflow window and all four of its corners belong to it. The
+        // shared corner script is left out (`0.0`) for that reason: one implementation rounds all
+        // four corners here, so they cannot drift apart.
         let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-        let mut builder = page_builder(&mut web_context, url, page_proxy(app), radius);
+        let mut builder = page_builder(&mut web_context, url, page_proxy(app), 0.0);
         if radius > 0.0 {
-            // The page is packed next to the workflow webview instead of being stacked over it,
-            // which is what makes it own the window's right edge from top to bottom: the shared
-            // corner script gives the bottom-right corner back, and the top-right one, which a
-            // stacked page never covers, is rounded on top of it.
-            builder = builder.with_initialization_script(top_corner_script(radius));
+            builder = builder
+                .with_transparent(true)
+                .with_initialization_script(page_corners_script(radius));
         }
 
         let webview = builder.build_gtk(&column)?;
@@ -327,30 +328,82 @@ impl Page {
 
 /// Largest corner radius the page accepts, so a bad measurement cannot eat into the page.
 ///
-/// It repeats the bound the shared corner script applies, which only has to cover the
-/// bottom-right corner: the top-right corner is rounded by [`top_corner_script`].
+/// It is the bound the shared corner script applies, kept the same here so a radius that reaches
+/// the window is treated the same way on every carrier.
 const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
 
-/// Script that leaves the top-right corner of the window unpainted.
+/// JavaScript descriptor of one corner of the page, as [`page_corners_script`] reads it.
 ///
-/// The shared corner script ([`super::page`]) rounds the bottom-right corner, which is the one
-/// every carrier covers. The workflow UI keeps its own titlebar *beside* the page on this
-/// platform instead of above it, so the page owns the window's right edge from top to bottom and
-/// covers the top-right corner as well. That corner therefore has to come back from the page
-/// here, and the rules are the ones that hold at the other corner:
+/// `property` is the border radius the script applies to the elements that paint the corner,
+/// `attribute` marks a host whose pseudo element paints it, and `x` and `y` select the viewport
+/// point the corner sits at.
+fn corner_descriptor(property: &str, attribute: &str, x: &str, y: &str, radius: f64) -> String {
+    let declarations = format!("{property}:{radius}px !important");
+
+    format!(
+        "{{property: '{property}', attribute: '{attribute}', x: '{x}', y: '{y}', \
+         rule: '[{attribute}]::before,[{attribute}]::after{{{declarations}}}'}}"
+    )
+}
+
+/// Script that leaves the four corners of the page unpainted.
 ///
-/// - The corner is given back by every element that paints it. A decorative layer carries
+/// The page is a rectangle that owns the right edge of the window, so it paints over the corners
+/// the window rounds. The workflow UI keeps its own titlebar *beside* the page here instead of
+/// above it, which leaves the page standing next to the workflow window as a window of its own:
+/// all four of its corners are visible, and each of them has to come back from the page itself.
+/// The shared corner script ([`super::page`]) rounds one window corner, which is what a page below
+/// a shared titlebar needs, so this carrier leaves it out and rounds the four corners here: one
+/// implementation covers them all, so the corners cannot drift apart.
+///
+/// The rules are the ones that hold in the shared script:
+///
+/// - A corner is given back by every element that paints it. A decorative layer carries
 ///   `pointer-events: none`, so it never shows up in a hit test and the document is inspected by
-///   geometry instead: an element is rounded when it covers the top-right point of the viewport
-///   and paints something there.
+///   geometry instead: an element is rounded when it covers the corner point of the viewport and
+///   paints something there. A box shadow is painting there as well, and it follows the radius of
+///   its host, so a host that only throws a shadow over the corner is rounded too.
 /// - A pseudo element paints a box of its own, which the radius of its host does not cut, so a
-///   host that paints the corner through one is marked and the corner reaches it through a rule.
-/// - The corner is applied again for a short while after the page load, because a site can build
-///   the layer that paints it later than the load event.
-fn top_corner_script(radius: f64) -> String {
+///   host that paints a corner through one is marked and the corner reaches it through a rule.
+/// - The corners are applied again for a short while after the page load, because a site can
+///   build the layer that paints them later than the load event.
+///
+/// All four corners are inspected in one pass over the document, so they cost a single walk of
+/// the tree rather than four.
+fn page_corners_script(radius: f64) -> String {
+    let page_corners = [
+        ("border-top-left-radius", "data-cs-top-left", "left", "top"),
+        (
+            "border-top-right-radius",
+            "data-cs-top-right",
+            "right",
+            "top",
+        ),
+        (
+            "border-bottom-left-radius",
+            "data-cs-bottom-left",
+            "left",
+            "bottom",
+        ),
+        (
+            "border-bottom-right-radius",
+            "data-cs-bottom-right",
+            "right",
+            "bottom",
+        ),
+    ];
+    let mut descriptors = Vec::new();
+
+    for (property, attribute, x, y) in page_corners {
+        descriptors.push(corner_descriptor(property, attribute, x, y, radius));
+    }
+
+    let corners_js = descriptors.join(",\n    ");
+
     format!(
         r#"(function () {{
   var radius = '{radius}px';
+  var corners = [{corners_js}];
   var transparent = 'rgba(0, 0, 0, 0)';
   var pending = 0;
   var ruled = false;
@@ -358,15 +411,27 @@ fn top_corner_script(radius: f64) -> String {
     return !!background && background !== 'transparent' && background !== transparent;
   }}
   function paints(style) {{
-    return style.backgroundImage !== 'none' || opaque(style.backgroundColor);
+    return style.backgroundImage !== 'none' || style.boxShadow !== 'none'
+      || opaque(style.backgroundColor);
   }}
-  function addPseudoRule() {{
-    if (ruled) {{
-      return;
+  function replaced(element) {{
+    var tag = element.tagName;
+    return tag === 'IMG' || tag === 'CANVAS' || tag === 'VIDEO' || tag === 'IFRAME'
+      || tag === 'SVG' || tag === 'OBJECT' || tag === 'EMBED';
+  }}
+  function paintsCorner(element, style) {{
+    return paints(style) || replaced(element);
+  }}
+  function paintsPseudo(element) {{
+    for (var part = 0; part < 2; part += 1) {{
+      var pseudo = window.getComputedStyle(element, part ? '::after' : '::before');
+      if (pseudo.content && pseudo.content !== 'none' && paints(pseudo)) {{
+        return true;
+      }}
     }}
-    ruled = true;
-    var rule = '[data-cs-top-corner]::before,[data-cs-top-corner]::after'
-      + '{{border-top-right-radius:' + radius + ' !important}}';
+    return false;
+  }}
+  function insertRule(rule) {{
     try {{
       if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {{
         var sheet = new CSSStyleSheet();
@@ -388,18 +453,45 @@ fn top_corner_script(radius: f64) -> String {
       (document.head || document.documentElement).appendChild(element);
     }} catch (error) {{}}
   }}
-  function roundCorner() {{
-    var x = window.innerWidth - 2;
-    var y = 2;
-    var elements = document.querySelectorAll('*');
+  function addCornerRules() {{
+    if (ruled) {{
+      return;
+    }}
+    ruled = true;
+    for (var index = 0; index < corners.length; index += 1) {{
+      insertRule(corners[index].rule);
+    }}
+  }}
+  function coversCorner(rect, point) {{
+    return rect.left <= point.x && rect.top <= point.y
+      && rect.right >= point.x && rect.bottom >= point.y;
+  }}
+  function roundCorners() {{
+    var points = [];
     var targets = [];
-    for (var index = 0; index < elements.length; index += 1) {{
-      var element = elements[index];
+    var index;
+    for (index = 0; index < corners.length; index += 1) {{
+      points.push({{
+        x: corners[index].x === 'right' ? window.innerWidth - 2 : 2,
+        y: corners[index].y === 'bottom' ? window.innerHeight - 2 : 2
+      }});
+      targets.push([]);
+    }}
+    var elements = document.querySelectorAll('*');
+    for (var elementIndex = 0; elementIndex < elements.length; elementIndex += 1) {{
+      var element = elements[elementIndex];
       var rect = element.getBoundingClientRect();
       if (rect.width < 1 || rect.height < 1) {{
         continue;
       }}
-      if (rect.left > x || rect.top > y || rect.right < x || rect.bottom < y) {{
+      var covered = false;
+      for (index = 0; index < corners.length; index += 1) {{
+        if (coversCorner(rect, points[index])) {{
+          covered = true;
+          break;
+        }}
+      }}
+      if (!covered) {{
         continue;
       }}
       var style = window.getComputedStyle(element);
@@ -407,32 +499,41 @@ fn top_corner_script(radius: f64) -> String {
         || Number(style.opacity) === 0) {{
         continue;
       }}
-      if (paints(style)) {{
-        targets.push(element);
-      }}
-      for (var part = 0; part < 2; part += 1) {{
-        var pseudo = window.getComputedStyle(element, part ? '::after' : '::before');
-        if (pseudo.content && pseudo.content !== 'none' && paints(pseudo)) {{
-          element.setAttribute('data-cs-top-corner', '');
-          addPseudoRule();
+      var painted = paintsCorner(element, style);
+      var pseudoPainted = false;
+      for (index = 0; index < corners.length; index += 1) {{
+        if (!coversCorner(rect, points[index])) {{
+          continue;
+        }}
+        if (painted) {{
+          targets[index].push(element);
+        }}
+        if (!pseudoPainted) {{
+          pseudoPainted = paintsPseudo(element);
+        }}
+        if (pseudoPainted) {{
+          element.setAttribute(corners[index].attribute, '');
+          addCornerRules();
         }}
       }}
     }}
-    for (var target = 0; target < targets.length; target += 1) {{
-      targets[target].style.setProperty('border-top-right-radius', radius, 'important');
+    for (index = 0; index < corners.length; index += 1) {{
+      for (var target = 0; target < targets[index].length; target += 1) {{
+        targets[index][target].style.setProperty(corners[index].property, radius, 'important');
+      }}
+      document.documentElement.style.setProperty(corners[index].property, radius, 'important');
     }}
-    document.documentElement.style.setProperty('border-top-right-radius', radius, 'important');
   }}
-  roundCorner();
-  document.addEventListener('DOMContentLoaded', roundCorner);
-  window.addEventListener('load', roundCorner);
+  roundCorners();
+  document.addEventListener('DOMContentLoaded', roundCorners);
+  window.addEventListener('load', roundCorners);
   window.addEventListener('resize', function () {{
     if (pending) {{
       return;
     }}
     pending = window.setTimeout(function () {{
       pending = 0;
-      roundCorner();
+      roundCorners();
     }}, 200);
   }});
   var attempts = 0;
@@ -442,7 +543,7 @@ fn top_corner_script(radius: f64) -> String {
       window.clearInterval(retry);
       return;
     }}
-    roundCorner();
+    roundCorners();
   }}, 400);
 }})();"#
     )
@@ -512,5 +613,36 @@ mod tests {
 
         assert!(source.contains("build_gtk(&column)"));
         assert!(!source.contains(concat!("Webview", "Builder")));
+    }
+
+    /// Guard for the corners the page gives back: it stands next to the workflow window as a window
+    /// of its own, so all four of its corners are rounded here, by this carrier alone.
+    #[test]
+    fn the_page_gives_back_all_four_of_its_corners() {
+        let script = page_corners_script(15.0);
+
+        for property in [
+            "border-top-left-radius",
+            "border-top-right-radius",
+            "border-bottom-left-radius",
+            "border-bottom-right-radius",
+        ] {
+            assert!(script.contains(&format!("property: '{property}'")));
+            assert!(script.contains(&format!("{property}:15px !important")));
+        }
+
+        // A corner painted through a box shadow or through replaced content is found as well.
+        assert!(script.contains("style.boxShadow !== 'none'"));
+        assert!(script.contains("tag === 'IMG'"));
+
+        // The script reaches the page as JavaScript, so no formatting brace may survive in it.
+        assert!(!script.contains("{{"));
+        assert!(!script.contains("}}"));
+
+        // The shared corner script rounds one window corner, which is not what the page needs here,
+        // so this carrier leaves it out and rounds the four corners itself.
+        let source = include_str!("gtk_panel.rs");
+        assert!(source.contains("page_builder(&mut web_context, url, page_proxy(app), 0.0)"));
+        assert!(source.contains(".with_initialization_script(page_corners_script(radius))"));
     }
 }
