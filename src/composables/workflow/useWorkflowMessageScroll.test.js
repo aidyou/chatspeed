@@ -5,6 +5,12 @@ import { useWorkflowMessageScroll } from './useWorkflowMessageScroll.js'
 
 const waitForReconcile = () => new Promise(resolve => setTimeout(resolve, 15))
 
+// Scroll work is requested from a microtask (`nextTick`) and only then handed to the
+// animation frame fallback, so draining microtasks lets a request reach the frame queue.
+const drainMicrotasks = async () => {
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+}
+
 const createContainer = ({ scrollTop = 0, scrollHeight = 1000, clientHeight = 400 } = {}) => {
   const container = {
     scrollTop,
@@ -209,4 +215,78 @@ test('cancelling scheduled scrolling clears its internal target', async () => {
       delete globalThis.cancelAnimationFrame
     }
   }
+})
+
+test('an in-flight programmatic scroll event does not cancel an explicit bottom request', async () => {
+  const container = createContainer({ scrollTop: 600 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  // Streaming output pins the list to the bottom; that write reports its own scroll
+  // event in a later frame.
+  controller.beforeContentChange()
+  container.scrollHeight = 1200
+  controller.requestContentChange()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 800)
+
+  // Sending a message while the workflow runs: the send forces the bottom and the
+  // queued-message block is appended in the same update.
+  controller.scrollToBottom(true)
+  controller.beforeContentChange()
+  container.scrollHeight = 1270
+  controller.requestContentChange()
+  await drainMicrotasks()
+
+  // The earlier write's scroll event arrives before that frame runs, carrying the value
+  // we wrote ourselves. It must not be treated as a user scroll.
+  controller.onScroll()
+  await waitForReconcile()
+
+  assert.equal(controller.mode.value, 'following')
+  assert.equal(container.scrollTop, 870)
+  controller.dispose()
+})
+
+test('a wheel gesture keeps scroll control while our own write event is in flight', async () => {
+  const container = createContainer({ scrollTop: 600 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  controller.beforeContentChange()
+  container.scrollHeight = 1200
+  controller.requestContentChange()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 800)
+
+  controller.onWheel({ deltaY: -100 })
+  container.scrollTop = 700
+  controller.onScroll()
+  await waitForReconcile()
+
+  assert.equal(controller.mode.value, 'reading')
+  assert.equal(container.scrollTop, 700)
+  controller.dispose()
+})
+
+test('a container resize re-pins the newest content only while following', async () => {
+  const container = createContainer({ scrollTop: 600 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  // Following: a shorter pane leaves the list short of its newest content.
+  container.clientHeight = 300
+  controller.onContainerResize()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 700)
+  assert.equal(controller.mode.value, 'following')
+
+  // Reading history: the same resize must not move the reader.
+  controller.onWheel({ deltaY: -100 })
+  container.scrollTop = 200
+  controller.onScroll()
+  assert.equal(controller.mode.value, 'reading')
+
+  container.clientHeight = 250
+  controller.onContainerResize()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 200)
+  controller.dispose()
 })

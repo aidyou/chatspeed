@@ -22,6 +22,13 @@ const cancelFrame = frameId => {
  *
  * Content watchers and ResizeObserver only notify this controller. They never
  * decide whether the user should follow the bottom or keep reading history.
+ *
+ * The list either follows the bottom or reads history on a stable anchor. Only a real
+ * user gesture may move it into reading mode, because our own `scrollTop` writes report
+ * their scroll event asynchronously (in the next frame's scroll steps, before that
+ * frame's animation frame callbacks). `internalScrollTarget` records those writes so
+ * their events are never mistaken for a user scroll; that record deliberately survives
+ * scheduled-frame cancellation.
  */
 export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = () => {} } = {}) {
   const mode = ref('following')
@@ -103,6 +110,17 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     return snapshot
   }
 
+  /**
+   * Stop recognizing the last `scrollTop` write as ours.
+   *
+   * The write is still recognized while it is only explained by that write. Once the
+   * user takes over (wheel gesture, their own scroll event, session reset), the record
+   * must be dropped so their scrolling is never swallowed.
+   */
+  const clearInternalScrollTarget = () => {
+    internalScrollTarget = null
+  }
+
   const cancelScheduledFrames = () => {
     revision += 1
     if (reconcileFrameId !== null) {
@@ -115,7 +133,6 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     }
     reconcileScheduled = false
     settleFrameBudget = 0
-    internalScrollTarget = null
   }
 
   const clampScrollTop = (container, value) => {
@@ -125,11 +142,11 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
 
   const writeScrollTop = (container, value) => {
     const target = clampScrollTop(container, value)
-    if (Math.abs(container.scrollTop - target) <= 0.5) {
-      internalScrollTarget = null
-      return false
-    }
+    if (Math.abs(container.scrollTop - target) <= 0.5) return false
 
+    // Record the value being written so the scroll event it produces is recognized as
+    // ours. Nothing may clear this early: the event arrives in a later frame, and
+    // misreading it as a user scroll cancels the scroll it belongs to.
     internalScrollTarget = target
     container.scrollTop = target
     return true
@@ -244,12 +261,22 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     requestContentChange()
   }
 
+  // A container resize is not a reader gesture. Only the following mode re-pins to the
+  // newest content, so a reader keeps its stable anchor.
+  const onContainerResize = () => {
+    if (disposed || mode.value !== 'following') return
+    requestReconcile()
+  }
+
   const onWheel = event => {
     if (event.deltaY >= 0 || disposed) return
 
     cancelScheduledFrames()
     pendingSnapshot = null
     pendingExplicitBottom = false
+    // A wheel gesture is unambiguous user intent: drop the write record so the scrolling
+    // it produces is honored as user scrolling.
+    clearInternalScrollTarget()
     if (mode.value !== 'reading') {
       mode.value = 'reading'
       updateReadingAnchor(getContainer())
@@ -264,14 +291,14 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     const isInternalScroll =
       internalScrollTarget !== null && Math.abs(currentScrollTop - internalScrollTarget) <= 1
     if (isInternalScroll) {
-      internalScrollTarget = null
+      clearInternalScrollTarget()
       return
     }
 
     cancelScheduledFrames()
     pendingSnapshot = null
     pendingExplicitBottom = false
-    internalScrollTarget = null
+    clearInternalScrollTarget()
     if (isNearBottom(container)) {
       mode.value = 'following'
       clearReadingAnchor()
@@ -302,7 +329,7 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     cancelScheduledFrames()
     pendingSnapshot = null
     pendingExplicitBottom = false
-    internalScrollTarget = null
+    clearInternalScrollTarget()
     mode.value = 'following'
     clearReadingAnchor()
   }
@@ -312,7 +339,7 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     cancelScheduledFrames()
     pendingSnapshot = null
     pendingExplicitBottom = false
-    internalScrollTarget = null
+    clearInternalScrollTarget()
   }
 
   return {
@@ -320,6 +347,7 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
     beforeContentChange,
     requestContentChange,
     onContentResize,
+    onContainerResize,
     onScroll,
     onWheel,
     scrollToBottom,

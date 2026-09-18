@@ -1420,6 +1420,7 @@ const userMessageCollapsedHeightMap = ref({})
 let userMessageResizeObserver = null
 let messageContentResizeObserver = null
 let observedMessageListWidth = 0
+let observedMessageListHeight = 0
 let componentUnmounted = false
 let userMessageMeasureScheduled = false
 let userMessageMeasureFrameId = null
@@ -3018,17 +3019,26 @@ onMounted(() => {
     })
     userMessageResizeObserver = new ResizeObserver(entries => {
       const nextWidth = entries[0]?.contentRect?.width || messagesRef.value?.clientWidth || 0
+      const nextHeight = entries[0]?.contentRect?.height || messagesRef.value?.clientHeight || 0
+      // A shorter pane leaves a bottom-following list short of its newest content, and
+      // only the scroll controller may decide what that means.
+      if (nextHeight !== observedMessageListHeight) {
+        observedMessageListHeight = nextHeight
+        scrollController.onContainerResize()
+      }
       if (nextWidth === observedMessageListWidth) return
       observedMessageListWidth = nextWidth
       scheduleMeasureUserMessageOverflow()
     })
     if (messagesRef.value) {
       observedMessageListWidth = messagesRef.value.clientWidth
+      observedMessageListHeight = messagesRef.value.clientHeight
       userMessageResizeObserver.observe(messagesRef.value)
       syncMessageContentResizeObserver()
     }
   } else if (typeof window !== 'undefined') {
     window.addEventListener('resize', scheduleMeasureUserMessageOverflow)
+    window.addEventListener('resize', scrollController.onContainerResize)
   }
 
   scheduleMeasureUserMessageOverflow()
@@ -3047,6 +3057,7 @@ onBeforeUnmount(() => {
   }
   if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
     window.removeEventListener('resize', scheduleMeasureUserMessageOverflow)
+    window.removeEventListener('resize', scrollController.onContainerResize)
   }
   if (userMessageMeasureFrameId !== null) {
     cancelAnimationFrame(userMessageMeasureFrameId)
