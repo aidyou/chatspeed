@@ -163,7 +163,7 @@
     </Titlebar>
 
     <div class="workflow-main" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
-      <div class="workflow-sidebar-region">
+      <div class="workflow-sidebar-region" :style="sidebarStyle">
         <nav v-if="!sidebarCollapsed" class="workflow-side-rail" :aria-label="$t('workflow.sidebarNavigation')">
           <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
             <button
