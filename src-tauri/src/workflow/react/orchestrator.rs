@@ -552,11 +552,7 @@ fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
         tool != crate::tools::TOOL_BASH
             && tool != crate::tools::TOOL_SUB_AGENT_RUN
             && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
-            && tool != crate::tools::TOOL_SUB_AGENT_STOP
-            // Plan-related tools are for planning mode (writing records), not for sub-agents
-            && tool != crate::tools::TOOL_PLAN_READ_NOTE
-            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
-            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
+            && tool != crate::tools::TOOL_PLAN_NOTE
             // ask_user requires user interaction, sub-agents cannot use it
             && tool != crate::tools::TOOL_ASK_USER
     });
@@ -571,10 +567,7 @@ fn filter_sub_agent_mcp_config(
         tool != crate::tools::TOOL_BASH
             && tool != crate::tools::TOOL_SUB_AGENT_RUN
             && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
-            && tool != crate::tools::TOOL_SUB_AGENT_STOP
-            && tool != crate::tools::TOOL_PLAN_READ_NOTE
-            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
-            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
+            && tool != crate::tools::TOOL_PLAN_NOTE
             && tool != crate::tools::TOOL_ASK_USER
     });
     config.normalize();
@@ -2119,75 +2112,6 @@ impl ToolDefinition for TaskOutputTool {
             task_id,
             available_tasks
         )))
-    }
-}
-
-/// Tool to stop a background agent (Full Spec Clone)
-pub struct TaskStopTool {
-    session_id: String,
-}
-
-impl TaskStopTool {
-    pub fn new(session_id: String) -> Self {
-        Self { session_id }
-    }
-}
-
-#[async_trait]
-impl ToolDefinition for TaskStopTool {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_SUB_AGENT_STOP
-    }
-
-    fn description(&self) -> &str {
-        "- Stops a currently running sub-agent owned by this workflow by its task_id\n\
-        - Works for active sub-agents that are still registered in this workflow, including background runs and any still-running child sessions\n\
-        - Takes a task_id parameter identifying the sub-agent to stop\n\
-        - Returns success only when the stop signal was issued to an active sub-agent\n\
-        - Use this tool when the sub-agent is no longer needed, is stuck, or is taking too long. Do not use it for already completed tasks."
-    }
-
-    fn category(&self) -> ToolCategory {
-        ToolCategory::System
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "task_id": { "type": "string", "description": "The ID of the background sub-agent to stop" }
-                },
-                "required": ["task_id"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let task_id = params["task_id"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("task_id required".into()))?;
-        validate_task_access(&self.session_id, task_id)?;
-        if stop_background_task(task_id, None).await {
-            Ok(ToolCallResult::success(
-                Some(format!("Sub-agent {} has been terminated.", task_id)),
-                None,
-            ))
-        } else {
-            Err(ToolError::ExecutionFailed(format!(
-                "Sub-agent {} not found",
-                task_id
-            )))
-        }
     }
 }
 

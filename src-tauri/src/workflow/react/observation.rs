@@ -4,8 +4,8 @@ use crate::libs::ai_temp::{
 use crate::tools::helper::detect_json_stdout;
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_GLOB, TOOL_GREP,
-    TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_READ_FILE,
-    TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST,
+    TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_LIST,
     TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::file_preview::{
@@ -255,10 +255,7 @@ impl ObservationReinforcer {
                 }
 
                 // --- Custom Logic for File Tools (Formatting for UI Diff) ---
-                if matches!(
-                    tool_name,
-                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
-                ) {
+                if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE) {
                     let mut preview_args = args.clone();
                     merge_tool_result_into_preview_args(
                         &mut preview_args,
@@ -276,19 +273,18 @@ impl ObservationReinforcer {
                     raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
-                let display_type = if matches!(
-                    tool_name,
-                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
-                ) {
-                    "diff"
-                } else {
-                    "text"
-                };
+                let display_type =
+                    if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE) {
+                        "diff"
+                    } else {
+                        "text"
+                    };
 
                 let json_compacted_res = if !matches!(
                     tool_name,
                     TOOL_BASH
                         | TOOL_READ_FILE
+                        | TOOL_PLAN_NOTE
                         | TOOL_PLAN_READ_NOTE
                         | TOOL_EDIT_FILE
                         | TOOL_WRITE_FILE
@@ -381,6 +377,7 @@ impl ObservationReinforcer {
                 } else if !matches!(
                     tool_name,
                     TOOL_READ_FILE
+                        | TOOL_PLAN_NOTE
                         | TOOL_PLAN_READ_NOTE
                         | TOOL_EDIT_FILE
                         | TOOL_WRITE_FILE
@@ -557,13 +554,9 @@ impl ObservationReinforcer {
                 let display_path = get_relative_path(path);
                 format!("Write {}", display_path)
             }
-            TOOL_EDIT_FILE => {
-                let path = args["file_path"]
-                    .as_str()
-                    .or(args["path"].as_str())
-                    .unwrap_or("");
-                let display_path = get_relative_path(path);
-                format!("Edit {}", display_path)
+            TOOL_PLAN_NOTE => {
+                let action = args["action"].as_str().unwrap_or("read");
+                format!("Plan note {}", action)
             }
             TOOL_PLAN_READ_NOTE => {
                 let note_name = args["note_name"].as_str().unwrap_or("");
@@ -679,7 +672,6 @@ impl ObservationReinforcer {
                 .to_string()
             }
             TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
-            TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
             TOOL_COMPLETE_WORKFLOW => "Complete Workflow".to_string(),
             TOOL_SUBMIT_RESULT => "Submit Result".to_string(),
@@ -737,7 +729,7 @@ impl ObservationReinforcer {
         }
     }
 
-    fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
+    fn generate_summary(tool_name: &str, content: &str, args: &Value) -> String {
         match tool_name {
             TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
             TOOL_COMPLETE_WORKFLOW => t!("workflow.task_finished").to_string(),
@@ -778,7 +770,14 @@ impl ObservationReinforcer {
                 // Return success immediately, handled by reinforcement usually
                 "Fetched content".to_string()
             }
-            TOOL_EDIT_FILE => t!("workflow.summary.edit_file").to_string(),
+            TOOL_PLAN_NOTE => {
+                let action = args["action"].as_str().unwrap_or("read");
+                match action {
+                    "write" => t!("workflow.summary.write_file").to_string(),
+                    "edit" => t!("workflow.summary.edit_file").to_string(),
+                    _ => format!("Read {} lines", content.lines().count()),
+                }
+            }
             TOOL_PLAN_EDIT_NOTE => t!("workflow.summary.edit_file").to_string(),
             TOOL_PLAN_WRITE_NOTE => t!("workflow.summary.write_file").to_string(),
             TOOL_PLAN_READ_NOTE => {

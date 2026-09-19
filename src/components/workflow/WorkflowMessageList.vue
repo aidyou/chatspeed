@@ -1912,7 +1912,7 @@ const normalizeDiffPayload = message => {
 
   const toolName = getMessageToolName(message)
   if (
-    ['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note', 'submit_plan'].includes(
+    ['edit_file', 'write_file', 'plan_note', 'plan_edit_note', 'plan_write_note', 'submit_plan'].includes(
       toolName
     )
   ) {
@@ -1956,7 +1956,7 @@ const getApprovalDetailsPayload = message => {
   }
 
   const toolName = getMessageToolName(message)
-  if (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
+  if (['edit_file', 'write_file', 'plan_note', 'plan_edit_note', 'plan_write_note'].includes(toolName)) {
     const args = getToolCallArguments(message)
     if (args && typeof args === 'object') {
       return args

@@ -1588,6 +1588,7 @@
       "create": "Create todo",
       "createBatch": "Create batch todos",
       "list": "List todos",
+      "planNote": "Planning note",
       "statusCompleted": "completed",
       "statusInProgress": "in progress",
       "statusPending": "pending",

@@ -5,6 +5,8 @@ pub const TOOL_BASH: &str = "bash";
 pub const TOOL_READ_FILE: &str = "read_file";
 pub const TOOL_WRITE_FILE: &str = "write_file";
 pub const TOOL_EDIT_FILE: &str = "edit_file";
+pub const TOOL_PLAN_NOTE: &str = "plan_note";
+/// Legacy planning-note names retained for replay and compatibility parsing.
 pub const TOOL_PLAN_READ_NOTE: &str = "plan_read_note";
 pub const TOOL_PLAN_WRITE_NOTE: &str = "plan_write_note";
 pub const TOOL_PLAN_EDIT_NOTE: &str = "plan_edit_note";
@@ -19,12 +21,17 @@ pub const TOOL_WEB_FETCH: &str = "web_fetch";
 // These tools are internal tools for the agent, usually do not require review
 pub const TOOL_SUB_AGENT_RUN: &str = "sub_agent_run";
 pub const TOOL_SUB_AGENT_OUTPUT: &str = "sub_agent_output";
+/// Retained for historical message display while the callable tool remains removed.
+/// Re-evaluate and delete this compatibility name in a later cleanup pass.
+#[cfg(any())]
 pub const TOOL_SUB_AGENT_STOP: &str = "sub_agent_stop";
 
 // todo tools
 pub const TOOL_TODO_CREATE: &str = "todo_create";
 pub const TOOL_TODO_LIST: &str = "todo_list";
 pub const TOOL_TODO_UPDATE: &str = "todo_update";
+// Retained as an observation-only historical name; re-evaluate and delete later.
+#[cfg(any())]
 pub const TOOL_TODO_GET: &str = "todo_get";
 
 // skill tools
@@ -38,6 +45,10 @@ pub const TOOL_MCP_TOOL_EXPAND: &str = "mcp_tool_expand";
 pub const TOOL_MCP_TOOL_EXECUTE: &str = "mcp_tool_execute";
 /// Legacy workflow/chat tool name accepted for replay and compatibility.
 pub const TOOL_MCP_TOOL_LOAD_LEGACY: &str = "mcp_tool_load";
+
+pub fn is_planning_note_tool(name: &str) -> bool {
+    name == TOOL_PLAN_NOTE
+}
 
 pub fn is_mcp_tool_expand_tool(name: &str) -> bool {
     matches!(name, TOOL_MCP_TOOL_EXPAND | TOOL_MCP_TOOL_LOAD_LEGACY)
@@ -55,16 +66,12 @@ use phf::{phf_set, Set};
 pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
     matches!(
         name,
-        TOOL_PLAN_READ_NOTE
-            | TOOL_PLAN_WRITE_NOTE
-            | TOOL_PLAN_EDIT_NOTE
+        TOOL_PLAN_NOTE
             | TOOL_SUB_AGENT_RUN
             | TOOL_SUB_AGENT_OUTPUT
-            | TOOL_SUB_AGENT_STOP
             | TOOL_TODO_CREATE
             | TOOL_TODO_LIST
             | TOOL_TODO_UPDATE
-            | TOOL_TODO_GET
             | TOOL_SKILL
             | TOOL_ASK_USER
             | TOOL_COMPLETE_WORKFLOW
@@ -81,11 +88,9 @@ pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
         name,
         TOOL_SUB_AGENT_RUN
             | TOOL_SUB_AGENT_OUTPUT
-            | TOOL_SUB_AGENT_STOP
             | TOOL_TODO_CREATE
             | TOOL_TODO_LIST
             | TOOL_TODO_UPDATE
-            | TOOL_TODO_GET
             | TOOL_ASK_USER
             | TOOL_COMPLETE_WORKFLOW
             | TOOL_SUBMIT_RESULT
@@ -108,14 +113,10 @@ mod tests {
             TOOL_SUBMIT_RESULT,
             TOOL_SUB_AGENT_RUN,
             TOOL_SUB_AGENT_OUTPUT,
-            TOOL_SUB_AGENT_STOP,
             TOOL_TODO_CREATE,
             TOOL_TODO_LIST,
             TOOL_TODO_UPDATE,
-            TOOL_TODO_GET,
-            TOOL_PLAN_READ_NOTE,
-            TOOL_PLAN_WRITE_NOTE,
-            TOOL_PLAN_EDIT_NOTE,
+            TOOL_PLAN_NOTE,
             TOOL_MCP_TOOL_EXPAND,
             TOOL_MCP_TOOL_EXECUTE,
             TOOL_READ_HISTORY_MESSAGE,

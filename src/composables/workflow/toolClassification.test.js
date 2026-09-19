@@ -6,12 +6,12 @@ import {
   isWorkflowTodoTool
 } from './toolClassification.js'
 
-for (const toolName of ['todo_create', 'todo_list', 'todo_update', 'todo_get']) {
+for (const toolName of ['todo_create', 'todo_list', 'todo_update']) {
   assert.equal(isWorkflowTodoTool(toolName), true, `${toolName} must be an exact Todo tool`)
   assert.equal(getWorkflowToolFamily(toolName), 'todo')
 }
 
-for (const toolName of ['sub_agent_run', 'sub_agent_output', 'sub_agent_stop']) {
+for (const toolName of ['sub_agent_run', 'sub_agent_output']) {
   assert.equal(getWorkflowToolFamily(toolName), 'task')
 }
 

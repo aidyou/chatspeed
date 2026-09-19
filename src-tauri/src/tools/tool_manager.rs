@@ -134,11 +134,9 @@ fn reserved_mcp_aliases() -> HashSet<String> {
         crate::tools::TOOL_WEB_FETCH,
         crate::tools::TOOL_SUB_AGENT_RUN,
         crate::tools::TOOL_SUB_AGENT_OUTPUT,
-        crate::tools::TOOL_SUB_AGENT_STOP,
         crate::tools::TOOL_TODO_CREATE,
         crate::tools::TOOL_TODO_LIST,
         crate::tools::TOOL_TODO_UPDATE,
-        crate::tools::TOOL_TODO_GET,
         crate::tools::TOOL_SKILL,
         crate::tools::TOOL_ASK_USER,
         crate::tools::TOOL_COMPLETE_WORKFLOW,
@@ -450,11 +448,6 @@ impl ToolManager {
         //     main_store: main_store.clone(),
         // }))
         // .await?;
-        // self.register_tool(Arc::new(crate::tools::TodoGetTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
 
         // let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
         // let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
@@ -474,8 +467,6 @@ impl ToolManager {
         //     crate::workflow::react::orchestrator::TaskOutputTool,
         // ))
         // .await?;
-        // self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
-        //     .await?;
 
         // // Interaction tools
         // self.register_tool(Arc::new(crate::tools::AskUser)).await?;

@@ -3,14 +3,12 @@
 export const WORKFLOW_TODO_TOOL_NAMES = Object.freeze([
   'todo_create',
   'todo_list',
-  'todo_update',
-  'todo_get'
+  'todo_update'
 ])
 
 export const WORKFLOW_SUB_AGENT_TOOL_NAMES = Object.freeze([
   'sub_agent_run',
-  'sub_agent_output',
-  'sub_agent_stop'
+  'sub_agent_output'
 ])
 
 export const WORKFLOW_MCP_TOOL_NAME_SEPARATOR = '__mcp__'

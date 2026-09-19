@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 use crate::db::WorkflowMessage;
 use crate::tools::{
     READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_ASK_USER, TOOL_BASH,
-    TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_WRITE_FILE,
+    TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_PLAN_NOTE, TOOL_SUBMIT_PLAN, TOOL_TODO_LIST,
+    TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
@@ -216,10 +216,7 @@ impl WorkflowExecutor {
                         | TOOL_COMPLETE_WORKFLOW
                         | TOOL_ASK_USER
                         | TOOL_TODO_LIST
-                        | TOOL_TODO_GET
-                        | TOOL_PLAN_READ_NOTE
-                        | TOOL_PLAN_EDIT_NOTE
-                        | TOOL_PLAN_WRITE_NOTE
+                        | TOOL_PLAN_NOTE
                 )
             )
         })
@@ -2783,7 +2780,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             )
         } else {
             match name {
-                TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
+                TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
                     if let Ok(guard) = self.path_guard.read() {

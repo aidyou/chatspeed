@@ -1587,6 +1587,7 @@
       "create": "建立待辦",
       "createBatch": "批次建立待辦",
       "list": "列出待辦",
+      "planNote": "規劃筆記",
       "statusCompleted": "已完成",
       "statusInProgress": "進行中",
       "statusPending": "待處理",

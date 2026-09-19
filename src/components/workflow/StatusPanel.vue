@@ -883,7 +883,6 @@ const getToolInfo = (name, metadata = {}, roots = []) => {
     todo_create: { icon: resolveWorkflowToolIcon('todo_create', 'add'), toolType: 'tool-todo' },
     todo_update: { icon: resolveWorkflowToolIcon('todo_update', 'check'), toolType: 'tool-todo' },
     todo_list: { icon: resolveWorkflowToolIcon('todo_list', 'list'), toolType: 'tool-todo' },
-    todo_get: { icon: resolveWorkflowToolIcon('todo_get', 'list'), toolType: 'tool-todo' },
     submit_plan: {
       icon: resolveWorkflowToolIcon('submit_plan', 'skill-plan'),
       toolType: 'tool-todo'

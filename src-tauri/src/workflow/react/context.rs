@@ -902,8 +902,7 @@ impl ContextManager {
             Some(
                 crate::tools::TOOL_EDIT_FILE
                     | crate::tools::TOOL_WRITE_FILE
-                    | crate::tools::TOOL_PLAN_EDIT_NOTE
-                    | crate::tools::TOOL_PLAN_WRITE_NOTE
+                    | crate::tools::TOOL_PLAN_NOTE
             )
         )
     }

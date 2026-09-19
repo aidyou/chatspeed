@@ -915,14 +915,8 @@ const COLLAPSIBLE_READ_TOOL_NAMES = new Set(['read_file', 'list_dir', 'web_fetch
 const COLLAPSIBLE_SEARCH_TOOL_NAMES = new Set(['grep', 'glob', 'web_search'])
 const COLLAPSIBLE_COMMAND_TOOL_NAMES = new Set(['bash'])
 const COLLAPSIBLE_MUTATION_TOOL_NAMES = new Set(['edit_file', 'write_file'])
-const NON_COLLAPSIBLE_TOOL_NAMES = new Set([
-  'ask_user',
-  'submit_plan',
-  'complete_workflow',
-  'sub_agent_run',
-  'sub_agent_stop'
-])
-const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update', 'todo_get'])
+const NON_COLLAPSIBLE_TOOL_NAMES = new Set(['ask_user', 'submit_plan', 'complete_workflow', 'sub_agent_run'])
+const TODO_TOOL_NAMES = new Set(['todo_create', 'todo_list', 'todo_update'])
 const TOOL_GROUP_LABEL_KEYS = {
   bash: 'workflow.toolGroups.runCommand',
   edit_file: 'workflow.toolGroups.editFile',

@@ -17,8 +17,8 @@ use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_EXECUTE, TOOL_MCP_TOOL_EXPAND, TOOL_PLAN_EDIT_NOTE,
-    TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_EXECUTE, TOOL_MCP_TOOL_EXPAND, TOOL_PLAN_NOTE,
+    TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -378,10 +378,7 @@ impl WorkflowExecutor {
     ) -> Option<serde_json::Value> {
         if !matches!(
             tool_name,
-            crate::tools::TOOL_EDIT_FILE
-                | crate::tools::TOOL_WRITE_FILE
-                | TOOL_PLAN_EDIT_NOTE
-                | TOOL_PLAN_WRITE_NOTE
+            crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE | TOOL_PLAN_NOTE
         ) {
             return None;
         }
@@ -405,10 +402,7 @@ impl WorkflowExecutor {
     ) -> Option<serde_json::Value> {
         if !matches!(
             tool_name,
-            crate::tools::TOOL_EDIT_FILE
-                | crate::tools::TOOL_WRITE_FILE
-                | TOOL_PLAN_EDIT_NOTE
-                | TOOL_PLAN_WRITE_NOTE
+            crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE | TOOL_PLAN_NOTE
         ) {
             return None;
         }
@@ -447,10 +441,7 @@ impl WorkflowExecutor {
     }
 
     fn is_planning_note_tool(name: &str) -> bool {
-        matches!(
-            name,
-            TOOL_PLAN_READ_NOTE | TOOL_PLAN_WRITE_NOTE | TOOL_PLAN_EDIT_NOTE
-        )
+        crate::tools::is_planning_note_tool(name)
     }
 
     fn sanitize_assistant_metadata_for_storage(
@@ -1787,9 +1778,7 @@ impl WorkflowExecutor {
             }
         }
         if policy.is_strict_manual_planning() {
-            auto_approve.insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
-            auto_approve.insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
-            auto_approve.insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
+            auto_approve.insert(crate::tools::TOOL_PLAN_NOTE.to_string());
         }
 
         // Extract model configs from AgentModels structure
@@ -2512,10 +2501,7 @@ impl WorkflowExecutor {
         // Helper to check if a tool is allowed in Workflow scope
         let is_allowed = |name: &str| {
             if is_sub_agent
-                && matches!(
-                    name,
-                    TOOL_BASH | TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT | TOOL_SUB_AGENT_STOP
-                )
+                && matches!(name, TOOL_BASH | TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT)
             {
                 return false;
             }
@@ -2596,20 +2582,8 @@ impl WorkflowExecutor {
                     .await?;
             }
             if self.policy.allows_planning_note_tools() {
-                if is_allowed(crate::tools::TOOL_PLAN_READ_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanReadNote::new(
-                        self.planning_root.clone(),
-                    )))
-                    .await?;
-                }
-                if is_allowed(crate::tools::TOOL_PLAN_WRITE_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanWriteNote::new(
-                        self.planning_root.clone(),
-                    )))
-                    .await?;
-                }
-                if is_allowed(crate::tools::TOOL_PLAN_EDIT_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanEditNote::new(
+                if is_allowed(TOOL_PLAN_NOTE) {
+                    tm.register_tool(Arc::new(crate::tools::PlanNote::new(
                         self.planning_root.clone(),
                     )))
                     .await?;
@@ -2718,14 +2692,6 @@ impl WorkflowExecutor {
                 ))
                 .await?;
             }
-            if is_allowed(TOOL_SUB_AGENT_STOP) {
-                tm.register_tool(Arc::new(
-                    crate::workflow::react::orchestrator::TaskStopTool::new(
-                        self.session_id.clone(),
-                    ),
-                ))
-                .await?;
-            }
         }
 
         // 5. Workflow state tools. Historical transcript reads are main-agent only;
@@ -2766,13 +2732,6 @@ impl WorkflowExecutor {
             }
             if is_allowed(TOOL_TODO_UPDATE) {
                 tm.register_tool(Arc::new(TodoUpdateTool {
-                    session_id: self.session_id.clone(),
-                    main_store: self.context.main_store.clone(),
-                }))
-                .await?;
-            }
-            if is_allowed(TOOL_TODO_GET) {
-                tm.register_tool(Arc::new(TodoGetTool {
                     session_id: self.session_id.clone(),
                     main_store: self.context.main_store.clone(),
                 }))
@@ -6330,9 +6289,7 @@ impl WorkflowExecutor {
                     if name.starts_with("todo_")
                         || matches!(
                             name.as_str(),
-                            crate::tools::TOOL_SUB_AGENT_RUN
-                                | crate::tools::TOOL_SUB_AGENT_OUTPUT
-                                | crate::tools::TOOL_SUB_AGENT_STOP
+                            crate::tools::TOOL_SUB_AGENT_RUN | crate::tools::TOOL_SUB_AGENT_OUTPUT
                         )
                     {
                         if name == crate::tools::TOOL_TODO_UPDATE {
@@ -7927,11 +7884,7 @@ impl WorkflowExecutor {
         }
         if self.policy.is_strict_manual_planning() {
             self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
-            self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
-            self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
+                .insert(crate::tools::TOOL_PLAN_NOTE.to_string());
         }
     }
 

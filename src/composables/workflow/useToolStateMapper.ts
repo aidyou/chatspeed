@@ -69,6 +69,7 @@ function isInternalTool(toolName: string): boolean {
     'ask_user',
     'complete_workflow',
     'submit_plan',
+    'plan_note',
     'sub_agent_run',
     'sub_agent_output',
     'sub_agent_stop'
