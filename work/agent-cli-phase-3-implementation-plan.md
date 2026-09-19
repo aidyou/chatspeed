@@ -1095,3 +1095,126 @@ Phase 3 最终关闭仍需补齐这两项；AC-4 的 `codex`/`cursor`/`windsurf`
 - 计划状态：AC-2、AC-10、AC-12、INV-8 的本轮并发整改已完成；V-7 真实成功 stdio fixture、V-10
   真实桌面 GUI 交错/重启 smoke 及 AC-4 中未核实的外部 target 仍是既有未完成验证/限制，不能据此把 Phase 3
   标记为最终关闭。
+
+## Phase 3D as-built 记录（本机 Automation Facade）
+
+本节只追加 3D 的实施事实，不改写上方 3A–3C 历史记录。
+
+### 交付范围
+
+建立 transport-neutral 的 typed `AutomationApplicationService` 作为本机 automation 的唯一 facade，
+Tauri、HTTP、`cs` CLI、scheduler 与桌面 store 全部经它完成 `list/get/draft/apply/create/update/
+enable/disable/run/runs/delete`，未引入第二 runtime owner 或第二状态机。
+
+### 关键改动
+
+- 新增 `src-tauri/src/workflow/automation/application.rs`：facade、plan/apply、revision/CAS、
+  权限 non-escalation、durable receipt 复用、run lifecycle 结构化投影（`project_run`/`reconcile_all`）。
+- 新增 `src-tauri/src/workflow/automation/errors.rs`：canonical snake_case 错误码
+  （`invalid_request/not_found/conflict/revision_conflict/plan_expired/permission_expansion/busy/
+  confirmation_required/needs_reconcile/internal`）。
+- `types.rs` 增补 `AutomationSpec/AutomationDraftInput/AutomationPlanV1/AutomationApplyRequest/
+  AutomationView/AutomationRunView/AutomationMutationResult/AutomationDispatchResult`，内部统一 snake_case。
+- 新增 additive `migrations/v21.rs`（经 `manager.rs`/`mod.rs` 注册，head=21）：automation `revision`、
+  run `trigger`/`dispatch_key` 与 scheduled slot 去重、跨 transport `automation_mutations` receipt；
+  历史行使用安全默认值，未改写既有迁移。
+- `db/automation.rs` 增加 revision CAS、原子 due-slot claim（单事务 claim+推进+插入 run）、
+  mutation receipt reserve/replay/conflict、blocking-run 检测与 snapshot 读取。
+- `scheduler.rs` 收敛为仅调用 `automation_dispatch_due`，删除自身 list→advance→run 并行编排。
+- `commands/workflow_automation.rs` 保留旧 command 名与 camelCase wire（`compat_save`/`run_automation_now`
+  等），并 additive 增加 `draft/apply/run_views`；`delete` 增加 `confirm` 参数。全部经 `svc.automation()`。
+- `client/http/{server.rs,dto.rs}` additive 增加 `/control/v1/automation*` 路由：读免 key，写强制
+  bearer/Idempotency-Key，统一 `automation_error_response` 状态映射，snake_case 输出、delete 需 `confirm`。
+- `bin/cs/automation.rs` + `args.rs` + `cs.rs`：`cs automation` 全子命令，仅经认证 loopback HTTP，
+  复用 CapabilityClient 风格 idempotency 生成与 human/json/jsonl 渲染，附源码 guard 测试。
+- 前端 `stores/workflowAutomation.js` + `WorkflowAutomationEditor.vue` + `WorkflowSidebar`/`Workflow.vue` +
+  三语 `i18n/locales`：新增 draft/apply 预览（plan hash、base revision、permission summary、warnings）、
+  结构化 run 生命周期（含 `needs_reconcile`）、显式 destructive delete 确认；旧 save/list/run 行为保持。
+
+### 执行内核单一化证据
+
+`create_manual_run`（`service.rs`）是唯一 shell+workflow 执行内核；facade `automation_run`、
+scheduler `automation_dispatch_due` 与旧 `run_automation_now` command 均路由到它，未出现第二执行路径。
+
+### 验证证据
+
+- `cargo test --lib -- --test-threads=1 automation`：32 passed（facade 单元、db CAS/claim/receipt/
+  blocking-run、`runs` 结构化投影、HTTP automation 路由契约、既有 schedule/service 兼容测试）。
+- `cargo test --bin cs -- --test-threads=1`：148 passed（含 `cs automation` 渲染、idempotency 生成、
+  以及证明 CLI 无 MainStore/SQLite/ToolManager/进程执行 的源码 guard）。
+- HTTP 契约测试覆盖：bearer、缺 key 拒绝、draft 无副作用且 hash 稳定、create→get→runs→
+  未确认 delete 返回 `confirmation_required` 且不级联、确认 delete 成功并 404，读为 snake_case。
+- 前端 `pnpm run build` 通过（仅既有 chunk-size warning）；三语 `automation` key 集一致（各 62 key），
+  JSON 全部可解析。
+- `cargo check --lib` 仅余既有 `McpClientInternal` privacy warning（非 3D 引入，先前 `get_run_row` 死代码已删除）；
+  `git diff --check` 干净，改动文件全部在 3D 范围内，未触及 export/import、外部 benchmark 或第二 owner。
+
+### 限制与既有问题
+
+- 宿主无图形界面/真实 stdio MCP 环境：未运行 V-10 真实桌面 GUI 交错/重启 smoke；已用真实 SQLite +
+  认证 HTTP + temp 文件集成测试替代，不将其记为 GUI smoke。
+- 既有基线失败：`db::sql::migrations::v18::tests::creates_table_and_seeds_presets_once` 期望 chat_hubs
+  11 条 preset，实际 10 条。该测试在内存库上仅应用 v18 自身 SQL，且 `v18.rs` 与 `chat_hubs` 均不在 3D diff 内，
+  属 3D 之前的既有问题，不计入 3D 回归。
+- 兼容取舍：桌面仍以 Tauri compatibility adapter（`compat_save`/`run_automation_now`/`set_enabled`）为写路径，
+  但其内部一律归一到同一 facade，符合 INV-2；未在 3D 将桌面整体切到 HTTP。
+- 阶段指针：3D 本机 automation facade 已实现并通过上述 focused 验证；是否把 Phase 3 记为最终关闭仍需人工复核
+  上述限制项。
+
+## 13. Phase 3D 审查整改轮次记录一：原子活动-run guard 与 run-now facade 归一（AC-1/AC-6/INV-2）
+
+本节记录 3D final review 拒绝后的整改，只追加事实，不改写第 12 节 3A–3C 与上方 3D 初版记录。
+
+### 拒绝结论与根因
+
+final review 判定 3D 未达完成门槛，提出三条 major：
+
+1. `create_manual_run` 先查 `automation_has_blocking_run` 再在另一条写操作中插入 pending run，
+   两次并发手工请求可同时通过检查并创建两个活动 run（AC-6 不成立）。
+2. `automation_dispatch_due` 的 `claim_due_automation_slot` 事务只校验 enabled/revision/next_run_at，
+   未在 claim 事务内检查活动/未知 run，手工 run 存在时 scheduler 仍可再启一个（AC-6）。
+3. 兼容命令 `workflow_automation_run_now` 直接调用 `service::run_automation_now`/`create_manual_run`，
+   绕过 typed facade 写路径（AC-1/INV-2）。
+
+### 整改实现
+
+- **原子手工 run claim（DB 层）**：新增 `MainStore::claim_manual_run(automation_id, run_id, scheduled_for)`，
+  在单个 `write_blocking` 事务内先 `COUNT` 活动/未知 run（`pending/starting/running/needs_reconcile`），
+  仅当为 0 时插入 pending manual run 并 commit，否则 `Busy`。借助 SQLite 单写事务，两个并发手工请求
+  最多一个成功（`db/automation.rs`）。
+- **scheduler due-slot 活动-run guard**：`claim_due_automation_slot` 事务调整为「CAS 推进 → 同事务内活动-run
+  计数 → 命中则不 commit 直接返回 `ClaimOutcome::ActiveRunExists`」。CAS 先判保证 stale 仍返回 `NotEligible`
+  （既有去重测试不变），overlap 时回滚 next_run_at/revision，automation 保持 due 供下一 tick。
+- **facade 归一 run-now**：删除 `service::run_automation_now`；Tauri 命令改为 `svc.automation_run_compat(...)`。
+  `automation_run_compat` 的 mutation 只经 typed facade `self.automation_run(...)`（其内部拥有唯一
+  `create_manual_run` 内核），再经 facade 读方法 `get_row`/`run_rows` 用返回的 dispatch view 重建旧 camelCase
+  `WorkflowAutomationRunNowResult`（INV-9）。compat 不再直接调用 service kernel，命令层不再持有 automation 写逻辑，
+  满足 AC-1/INV-2「所有 Tauri mutation 归一到同一 typed facade」。
+- **dispatch_due**：新增匹配 `ActiveRunExists` → 记 `Skipped` 结果，scheduler 与手工/前序 run 双向不重叠。
+- **清理**：`create_manual_run` 改用 claim，`db/mod.rs` 移除随之未使用的 `WorkflowAutomationRunInsert` re-export，
+  测试引用改指 `crate::db::automation::WorkflowAutomationRunInsert`。
+
+### 验证证据
+
+- 新增 focused DB 测试全部通过：
+  `db::automation::tests::manual_claim_is_atomic_and_busy_on_overlap`（第二并发手工请求 `Busy`，run 数=1；
+  终态后可再 claim）、`db::automation::tests::scheduler_claim_skips_when_active_run_exists`
+  （存在 running 手工 run 时 due claim 返回 `ActiveRunExists`，next_run_at/revision 未推进、run 数=1）；
+  既有 `scheduled_slot_claim_is_atomic_and_unique` 仍 `NotEligible`，证明 stale 语义未回归。
+- `cargo test --lib -- --test-threads=1 automation`：35 passed（含上述新增与 HTTP/前端 facade 契约）。
+- `cargo test --bin cs -- --test-threads=1`：148 passed。
+- 源码 wiring guard `workflow::automation::application::tests::legacy_run_now_routes_through_typed_facade`：
+  断言 Tauri 命令仅调用 `svc.automation_run_compat`、不含 `run_automation_now`/`create_manual_run`；
+  `automation_run_compat` 仅经 `.automation_run(&automation_id)` typed facade 且不含 `create_manual_run`；
+  `automation_run` 是唯一持有 `create_manual_run` 内核之处。防止第二条公共 mutation path 回归。
+- 源码 guard：`create_manual_run` 仅由 `application.rs` 的 `automation_run` 调用；
+  `workflow_automation_run_now` 仅调用 `svc.automation_run_compat`；`run_automation_now` 已无引用。
+- `cargo check --lib` 仅余既有 `McpClientInternal` privacy warning（本轮整改曾引入的
+  `WorkflowAutomationRunInsert` unused re-export 警告已清除）；`git diff --check` 干净，改动限定在
+  `db/automation.rs`、`db/mod.rs`、`workflow/automation/{service.rs,application.rs}`、
+  `commands/workflow_automation.rs`，未触及普通 workflow、run-scoped experiment 与 3A–3C capability 契约。
+
+### 剩余限制
+
+- 仍以 SQLite 单写事务作为并发 authority；若未来出现多主进程写同一 DB，需升级为 lease/owner 设计（A-4）。
+- GUI/真实重启交错 smoke 仍受宿主限制未运行，以真实 SQLite 事务级测试替代，不记为桌面 smoke。

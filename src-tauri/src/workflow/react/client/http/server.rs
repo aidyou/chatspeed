@@ -468,6 +468,42 @@ fn build_router(state: ControlPlaneState) -> Router {
         .route("/control/v1/mcp-refresh", post(refresh_capability_mcp))
         .route("/control/v1/mcp-tools", get(get_capability_mcp_tools))
         .route("/control/v1/mcp-status", get(get_capability_mcp_status))
+        // Phase 3D local automation surface. Additive: every route resolves to
+        // the same `AutomationApplicationService` the Tauri commands and the
+        // scheduler use, so HTTP, the `cs` CLI and the desktop can never
+        // disagree about validation, revision, idempotency or run status
+        // (AC-1/AC-9/INV-2). Mutations are bearer + idempotency-key required.
+        .route(
+            "/control/v1/automations",
+            get(list_automations).post(create_automation),
+        )
+        .route("/control/v1/automation-draft", post(draft_automation))
+        .route("/control/v1/automation-apply", post(apply_automation))
+        .route(
+            "/control/v1/automations/{automation_id}",
+            get(get_automation),
+        )
+        .route(
+            "/control/v1/automations/{automation_id}/runs",
+            get(list_automation_runs),
+        )
+        .route(
+            "/control/v1/automations/{automation_id}/update",
+            post(update_automation),
+        )
+        .route(
+            "/control/v1/automations/{automation_id}/enable",
+            post(enable_automation),
+        )
+        .route(
+            "/control/v1/automations/{automation_id}/disable",
+            post(disable_automation),
+        )
+        .route("/control/v1/automations/{automation_id}/run", post(run_automation))
+        .route(
+            "/control/v1/automations/{automation_id}/delete",
+            post(delete_automation),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -1751,6 +1787,274 @@ fn replay_response(status: StatusCode, body: String) -> Response {
         body,
     )
         .into_response()
+}
+
+// --- Phase 3D local automation control-plane surface ------------------------
+
+/// Body for `POST /control/v1/automations/{id}/update`.
+#[derive(serde::Deserialize)]
+struct AutomationUpdateBody {
+    spec: crate::workflow::automation::types::AutomationSpec,
+    expected_revision: i64,
+}
+
+/// Body for `POST /control/v1/automations/{id}/delete`. Destructive, so it
+/// defaults to unconfirmed and refuses unless `confirm` is explicitly true.
+#[derive(serde::Deserialize, Default)]
+struct AutomationDeleteBody {
+    #[serde(default)]
+    confirm: bool,
+}
+
+fn parse_body_or_error<T: serde::de::DeserializeOwned>(body: &str, what: &str) -> Result<T, Response> {
+    serde_json::from_str(body).map_err(|error| {
+        dto::error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("Invalid {what} request: {error}"),
+        )
+    })
+}
+
+/// `GET /control/v1/automations` — the canonical automation list, the same
+/// authority the desktop and CLI observe (AC-1/AC-9). Read-only, no key.
+async fn list_automations(State(state): State<ControlPlaneState>) -> Response {
+    match state.svc.automation().list() {
+        Ok(views) => snake_json_response(serde_json::to_value(&views)),
+        Err(error) => dto::automation_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/automations/{id}` — one automation, or a stable 404.
+async fn get_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+) -> Response {
+    match state.svc.automation().get(&automation_id) {
+        Ok(Some(view)) => snake_json_response(serde_json::to_value(&view)),
+        Ok(None) => dto::error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("Automation {automation_id} not found"),
+        ),
+        Err(error) => dto::automation_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/automations/{id}/runs` — the projected run lifecycle, joined
+/// from the durable workflow snapshot, never from transcript text (AC-7/INV-7).
+async fn list_automation_runs(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+) -> Response {
+    match state.svc.automation().runs(&automation_id) {
+        Ok(runs) => snake_json_response(serde_json::to_value(&runs)),
+        Err(error) => dto::automation_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/automation-draft` — a side-effect-free plan (INV-4). A read
+/// that never mutates, so it needs no idempotency key.
+async fn draft_automation(State(state): State<ControlPlaneState>, body: String) -> Response {
+    let input: crate::workflow::automation::types::AutomationDraftInput =
+        match parse_body_or_error(&body, "draft") {
+            Ok(input) => input,
+            Err(response) => return response,
+        };
+    match state.svc.automation().draft(input) {
+        Ok(plan) => snake_json_response(serde_json::to_value(&plan)),
+        Err(error) => dto::automation_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/automations` — creates an automation. Idempotency-required:
+/// the durable receipt + the transport tracker make a retry single-effect
+/// (AC-5/INV-5).
+async fn create_automation(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automations:create");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, body| async move {
+        let spec: crate::workflow::automation::types::AutomationSpec =
+            match parse_body_or_error(&body, "create") {
+                Ok(spec) => spec,
+                Err(response) => return response,
+            };
+        match state.svc.automation().create(
+            &spec,
+            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+            Some(&key),
+        ) {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::automation_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/automation-apply` — applies a previously returned plan.
+async fn apply_automation(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:apply");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, body| async move {
+        let request: crate::workflow::automation::types::AutomationApplyRequest =
+            match parse_body_or_error(&body, "apply") {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+        match state.svc.automation().apply(
+            &request,
+            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+            Some(&key),
+        ) {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::automation_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/automations/{id}/update` — a compare-and-set update that
+/// never implicitly creates and never silently overwrites a moved revision.
+async fn update_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:update");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, body| async move {
+        let parsed: AutomationUpdateBody = match parse_body_or_error(&body, "update") {
+            Ok(parsed) => parsed,
+            Err(response) => return response,
+        };
+        match state.svc.automation().update(
+            &automation_id,
+            &parsed.spec,
+            parsed.expected_revision,
+            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+            Some(&key),
+        ) {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::automation_error_response(&error),
+        }
+    })
+    .await
+}
+
+async fn set_automation_enabled(
+    state: ControlPlaneState,
+    automation_id: String,
+    key: String,
+    enabled: bool,
+) -> Response {
+    match state.svc.automation().set_enabled(
+        &automation_id,
+        enabled,
+        None,
+        crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+        Some(&key),
+    ) {
+        Ok(result) => snake_json_response(serde_json::to_value(&result)),
+        Err(error) => dto::automation_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/automations/{id}/enable`.
+async fn enable_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:enable");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, _body| async move {
+        set_automation_enabled(state, automation_id, key, true).await
+    })
+    .await
+}
+
+/// `POST /control/v1/automations/{id}/disable`.
+async fn disable_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:disable");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, _body| async move {
+        set_automation_enabled(state, automation_id, key, false).await
+    })
+    .await
+}
+
+/// `POST /control/v1/automations/{id}/run` — a manual run. Idempotency-required
+/// for retry safety; the run is guarded against overlapping an active run, and
+/// an accepted start is never reported as a completion (AC-6/AC-8).
+async fn run_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:run");
+    }
+    with_idempotency(&state, &headers, &body, move |state, _body| async move {
+        match state.svc.automation_run(&automation_id).await {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::automation_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/automations/{id}/delete` — the destructive path. Requires a
+/// key and an explicit `confirm`, and refuses an active/unknown run (AC-10).
+async fn delete_automation(
+    State(state): State<ControlPlaneState>,
+    Path(automation_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("automation:delete");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, move |state, body| async move {
+        let parsed: AutomationDeleteBody = serde_json::from_str(body.trim())
+            .unwrap_or_default();
+        match state.svc.automation().delete(
+            &automation_id,
+            parsed.confirm,
+            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+            Some(&key),
+        ) {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::automation_error_response(&error),
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -4062,6 +4366,173 @@ mod tests {
                         == crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownCampaign
             ),
             "no campaign row may exist for a rejected schedule"
+        );
+    }
+
+    /// The Phase 3D automation routes share the one facade the desktop and the
+    /// scheduler use: `draft` is a side-effect-free plan needing no key, every
+    /// mutation is idempotency-required, reads are canonical `snake_case`, and
+    /// the destructive delete refuses an unconfirmed call before any cascade
+    /// (AC-1/AC-5/AC-9/AC-10/INV-1/INV-4).
+    #[tokio::test]
+    async fn automation_routes_enforce_idempotency_and_destructive_confirmation() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let spec = serde_json::json!({
+            "title": "Nightly",
+            "prompt": "do work",
+            "prompt_file_path": null,
+            "agent_id": "agent-1",
+            "agent_config": null,
+            "allowed_paths": [],
+            "shell_config": null,
+            "schedule_kind": "interval",
+            "schedule_config": { "interval_minutes": 60 },
+            "continuous_context": false,
+            "self_review": false,
+            "enabled": false
+        });
+
+        // A draft is a pure read: it returns a ready plan and never mutates.
+        let draft = http
+            .post(auth_url(&app, "/control/v1/automation-draft"))
+            .header("Authorization", &auth)
+            .json(&serde_json::json!({ "automation_id": null, "spec": spec, "intent": null }))
+            .send()
+            .await
+            .expect("draft");
+        assert_eq!(draft.status(), reqwest::StatusCode::OK);
+        let plan: serde_json::Value = draft.json().await.expect("plan json");
+        assert_eq!(plan["status"], "ready");
+        assert!(!plan["plan_hash"].as_str().unwrap_or_default().is_empty());
+
+        // A mutation with no idempotency key is refused before any write.
+        let refused = http
+            .post(auth_url(&app, "/control/v1/automations"))
+            .header("Authorization", &auth)
+            .json(&spec)
+            .send()
+            .await
+            .expect("create without key");
+        assert_eq!(refused.status(), reqwest::StatusCode::BAD_REQUEST);
+        let refused_body: serde_json::Value = refused.json().await.expect("refused json");
+        assert_eq!(refused_body["error"]["code"], "missing_idempotency_key");
+        let empty: serde_json::Value = http
+            .get(auth_url(&app, "/control/v1/automations"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("list")
+            .json()
+            .await
+            .expect("list json");
+        assert!(
+            empty.as_array().map(Vec::is_empty).unwrap_or(false),
+            "a refused create must not persist a row"
+        );
+
+        // An authorized create returns the canonical snake_case view at revision 1.
+        let created = http
+            .post(auth_url(&app, "/control/v1/automations"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "cli-create-1")
+            .json(&spec)
+            .send()
+            .await
+            .expect("create");
+        assert_eq!(created.status(), reqwest::StatusCode::OK);
+        let created_body: serde_json::Value = created.json().await.expect("create json");
+        assert_eq!(created_body["outcome"], "applied");
+        assert_eq!(created_body["automation"]["revision"], 1);
+        let automation_id = created_body["automation"]["automation_id"]
+            .as_str()
+            .expect("automation id")
+            .to_string();
+
+        let got: serde_json::Value = http
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("get")
+            .json()
+            .await
+            .expect("get json");
+        assert_eq!(got["automation_id"], automation_id.as_str());
+
+        let runs: serde_json::Value = http
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}/runs"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("runs")
+            .json()
+            .await
+            .expect("runs json");
+        assert!(runs.as_array().map(Vec::is_empty).unwrap_or(false));
+
+        // A delete without the explicit confirmation is refused and cascades nothing.
+        let unconfirmed = http
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}/delete"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "cli-delete-unconfirmed")
+            .json(&serde_json::json!({ "confirm": false }))
+            .send()
+            .await
+            .expect("unconfirmed delete");
+        assert_eq!(unconfirmed.status(), reqwest::StatusCode::CONFLICT);
+        let unconfirmed_body: serde_json::Value =
+            unconfirmed.json().await.expect("unconfirmed json");
+        assert_eq!(unconfirmed_body["error"]["code"], "confirmation_required");
+        assert!(http
+            .get(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("get after refusal")
+            .status()
+            .is_success());
+
+        // A confirmed delete succeeds and the row is gone.
+        let deleted = http
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}/delete"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "cli-delete-confirmed")
+            .json(&serde_json::json!({ "confirm": true }))
+            .send()
+            .await
+            .expect("confirmed delete");
+        assert_eq!(deleted.status(), reqwest::StatusCode::OK);
+        let deleted_body: serde_json::Value = deleted.json().await.expect("delete json");
+        assert_eq!(deleted_body["outcome"], "deleted");
+        assert_eq!(
+            http.get(auth_url(
+                &app,
+                &format!("/control/v1/automations/{automation_id}"),
+            ))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("get after delete")
+            .status(),
+            reqwest::StatusCode::NOT_FOUND
         );
     }
 }

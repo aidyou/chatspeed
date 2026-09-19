@@ -25,10 +25,7 @@ mod workflow;
 pub mod workflow_usage;
 
 pub use agent::{Agent, AgentConfig, McpToolConfig};
-pub use automation::{
-    WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationRunInsert,
-    WorkflowAutomationUpsert,
-};
+pub use automation::{WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
 pub use backup::{BackupConfig, DbBackup};
 pub use chat_hub::ChatHub;
 pub use error::StoreError;

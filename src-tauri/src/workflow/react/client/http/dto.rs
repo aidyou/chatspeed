@@ -71,6 +71,31 @@ pub fn application_error_response(error: &ApplicationError) -> Response {    let
     error_response(status, code, error.message.clone())
 }
 
+/// Maps an automation facade error to a stable HTTP status and code.
+///
+/// The facade's `&'static str` codes are part of the cross-transport contract
+/// (AC-9): the CLI and the desktop branch on the exact same token the backend
+/// produced. The message is the facade's human diagnostic; the automation facade
+/// never places raw shell output, secrets or full prompts in it (INV-8).
+pub fn automation_error_response(
+    error: &crate::workflow::automation::errors::AutomationError,
+) -> Response {
+    use crate::workflow::automation::errors::code;
+    let status = match error.code() {
+        code::INVALID_REQUEST => StatusCode::BAD_REQUEST,
+        code::NOT_FOUND => StatusCode::NOT_FOUND,
+        code::CONFLICT
+        | code::REVISION_CONFLICT
+        | code::PLAN_EXPIRED
+        | code::BUSY
+        | code::CONFIRMATION_REQUIRED
+        | code::NEEDS_RECONCILE => StatusCode::CONFLICT,
+        code::PERMISSION_EXPANSION => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error_response(status, error.code(), error.message().to_string())
+}
+
 /// Maps a capability error to a stable HTTP status and code.
 ///
 /// The capability error code is preserved on the wire as the envelope `code`,

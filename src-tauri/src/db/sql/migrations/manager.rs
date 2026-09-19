@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v20, v3,
-    v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v20,
+    v21, v3, v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -26,6 +26,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v18::MIGRATION,
     v19::MIGRATION,
     v20::MIGRATION,
+    v21::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -452,7 +453,11 @@ mod tests {
 
         run_migrations(&mut conn).expect("v19 -> v20 should succeed");
 
-        assert_eq!(get_db_version(&conn).expect("version"), 20);
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            latest_migration_version(),
+            "v19 upgrades to the current head"
+        );
         let name: String = conn
             .query_row("SELECT name FROM agents WHERE id = 'agent-v20'", [], |row| {
                 row.get(0)
@@ -480,10 +485,14 @@ mod tests {
     fn a_database_recorded_ahead_of_the_latest_version_still_gets_the_capability_journal() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
         build_at_version(&mut conn, 19);
-        conn.execute("INSERT INTO db_version (version) VALUES (21)", [])
+        let ahead = latest_migration_version() + 1;
+        conn.execute("INSERT INTO db_version (version) VALUES (?1)", [ahead])
             .expect("record a consolidated ahead version");
-        assert_eq!(get_db_version(&conn).expect("version"), 21);
-        assert_eq!(latest_migration_version(), 20);
+        assert_eq!(get_db_version(&conn).expect("version"), ahead);
+        assert!(
+            ahead > latest_migration_version(),
+            "the seeded version must be ahead of the current head"
+        );
         assert!(!table_exists(&conn, "capability_operations"));
 
         run_migrations(&mut conn)
@@ -491,7 +500,7 @@ mod tests {
 
         assert_eq!(
             get_db_version(&conn).expect("version"),
-            21,
+            ahead,
             "a newer recorded version is never downgraded or rewritten"
         );
         assert!(table_exists(&conn, "capability_operations"));

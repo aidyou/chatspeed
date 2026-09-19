@@ -27,6 +27,7 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
   const settingStore = useSettingStore()
   const automations = ref([])
   const runsByAutomation = ref({})
+  const projectedRunsByAutomation = ref({})
   const loading = ref(false)
   const error = ref(null)
   const selectedAutomationId = ref(null)
@@ -107,8 +108,10 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     }
   }
 
-  const deleteAutomation = async id => {
-    await invokeWrapper('workflow_automation_delete', { id })
+  const deleteAutomation = async (id, confirm = false) => {
+    // Destructive: the caller's confirm dialog must set `confirm` true, matching
+    // the backend safety gate (AC-10). A refused cascade surfaces as an error.
+    await invokeWrapper('workflow_automation_delete', { id, confirm })
     automations.value = automations.value.filter(item => item.id !== id)
     if (selectedAutomationId.value === id) {
       selectAutomation(automations.value[0]?.id || null)
@@ -148,9 +151,46 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     return runsByAutomation.value[automationId]
   }
 
+  // Maps a canonical snake_case projected run view to camelCase for the UI. The
+  // status/workflowStatus/waitReason come straight from the durable snapshot
+  // projection; the UI never infers lifecycle from transcript text (AC-7/INV-7).
+  const normalizeRunView = run => ({
+    ...run,
+    runId: run.run_id,
+    automationId: run.automation_id,
+    dispatchKey: run.dispatch_key ?? null,
+    workflowSessionId: run.workflow_session_id ?? null,
+    scheduledFor: run.scheduled_for,
+    startedAt: run.started_at ?? null,
+    finishedAt: run.finished_at ?? null,
+    workflowStatus: run.workflow_status ?? null,
+    waitReason: run.wait_reason ?? null,
+    createdAt: run.created_at ?? null,
+    updatedAt: run.updated_at ?? null
+  })
+
+  const fetchProjectedRuns = async automationId => {
+    if (!automationId) return []
+    const result = await invokeWrapper('workflow_automation_run_views', { automationId })
+    const views = (result || []).map(normalizeRunView)
+    projectedRunsByAutomation.value = {
+      ...projectedRunsByAutomation.value,
+      [automationId]: views
+    }
+    return views
+  }
+
+  // draft/apply reach the same typed facade the scheduler and CLI use. `draft`
+  // is side-effect-free; `apply` carries the reviewed plan plus the exact hash
+  // and an explicit permission acknowledgement (AC-3/AC-4/INV-4/INV-5).
+  const draftPlan = async input => invokeWrapper('workflow_automation_draft', { input })
+
+  const applyPlan = async request => invokeWrapper('workflow_automation_apply', { request })
+
   return {
     automations,
     runsByAutomation,
+    projectedRunsByAutomation,
     loading,
     error,
     selectedAutomationId,
@@ -162,6 +202,9 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
     updateAutomationAllowedPaths,
     setAutomationEnabled,
     runAutomationNow,
-    fetchRuns
+    fetchRuns,
+    fetchProjectedRuns,
+    draftPlan,
+    applyPlan
   }
 })

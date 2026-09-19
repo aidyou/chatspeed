@@ -21,6 +21,9 @@ chat:
   note_already_exists: This note already exists, no need to add again
 cs:
   agent_list_header: Agents
+  automation_list_header: Automations
+  automation_plan_header: Automation plan
+  automation_runs_header: Automation runs
   capability_doctor_clean: No capability findings
   capability_doctor_findings: 'Findings: %{findings}'
   capability_doctor_header: Capability doctor

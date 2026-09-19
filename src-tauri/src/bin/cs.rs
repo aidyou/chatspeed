@@ -14,6 +14,8 @@ rust_i18n::i18n!("i18n", fallback = "en");
 mod args;
 #[path = "cs/artifact.rs"]
 mod artifact;
+#[path = "cs/automation.rs"]
+mod automation;
 #[path = "cs/benchmark.rs"]
 mod benchmark;
 #[path = "cs/campaign.rs"]
@@ -133,6 +135,7 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         },
         Command::Skill { command } => skill::run(cli, &client, command).await,
         Command::Mcp { command } => mcp::run(cli, &client, command).await,
+        Command::Automation { command } => automation::run(cli, &client, command).await,
         Command::Agent { command } => run_agent_command(cli, &client, command).await,
         Command::Workflow { command } => run_workflow_command(cli, &client, command).await,
         Command::Experiment { command } => match command {

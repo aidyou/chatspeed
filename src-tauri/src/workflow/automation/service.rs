@@ -1,18 +1,17 @@
 use crate::commands::workflow::workflow_start_core;
+use crate::db::automation::ManualClaimOutcome;
 use crate::db::{
-    MainStore, WorkflowAutomation, WorkflowAutomationRunInsert, WorkflowAutomationUpsert,
+    WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert,
 };
-use crate::libs::tsid::TsidGenerator;
+use crate::workflow::automation::errors::AutomationError;
 use crate::workflow::automation::types::{
     DailyScheduleConfig, IntervalScheduleConfig, OnceScheduleConfig, WorkflowAutomationRequest,
-    WorkflowAutomationRunNowResult, WorkflowAutomationShellConfig,
+    WorkflowAutomationShellConfig,
 };
 use crate::workflow::react::application::WorkflowApplicationService;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::State;
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -296,7 +295,7 @@ fn build_agent_config(request: &WorkflowAutomationRequest) -> Result<String, Str
     serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
-fn request_to_upsert(
+pub(crate) fn request_to_upsert(
     mut request: WorkflowAutomationRequest,
     id: String,
     existing_workflow_session_id: Option<String>,
@@ -572,98 +571,35 @@ async fn execute_pre_workflow_shell(
     }))
 }
 
-pub fn save_automation(
-    tsid_generator: &Arc<TsidGenerator>,
-    store: &MainStore,
-    request: WorkflowAutomationRequest,
-) -> Result<WorkflowAutomation, String> {
-    let id = request
-        .id
-        .clone()
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or_else(|| {
-            tsid_generator
-                .generate()
-                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
-        });
-    let existing_workflow_session_id = store
-        .get_workflow_automation(&id)
-        .map_err(|e| e.to_string())?
-        .and_then(|automation| automation.current_workflow_session_id);
-    let upsert = request_to_upsert(request, id, existing_workflow_session_id)?;
-    store
-        .upsert_workflow_automation(&upsert)
-        .map_err(|e| e.to_string())
-}
-
-pub fn set_automation_enabled(store: &MainStore, id: &str, enabled: bool) -> Result<(), String> {
-    let automation = store
-        .get_workflow_automation(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Automation {} not found", id))?;
-    let schedule_config: Value =
-        serde_json::from_str(&automation.schedule_config).map_err(|e| e.to_string())?;
-    let next_run_at = if enabled {
-        compute_next_run_at(&automation.schedule_kind, &schedule_config)?
-    } else {
-        None
-    };
-    store
-        .set_workflow_automation_enabled(id, enabled, next_run_at)
-        .map_err(|e| e.to_string())
-}
-
-pub fn advance_automation_after_scheduler_tick(
-    store: &MainStore,
+/// Executes an already-created automation run against the shared workflow
+/// runtime. This is the single canonical run kernel: it resolves the prompt,
+/// runs the optional pre-workflow shell, creates or reuses the workflow session,
+/// links the run, and starts the workflow.
+///
+/// A *successful start is not a completion*: the run is left in `running` and
+/// only reaches a terminal state through the structured workflow snapshot/events
+/// projection in the facade (AC-8/INV-7). Deterministic pre-shell / start errors
+/// mark the run `failed` with a bounded, redacted reason (INV-8).
+pub(crate) async fn execute_automation_run(
+    svc: &WorkflowApplicationService,
     automation: &WorkflowAutomation,
-) -> Result<(), String> {
-    let schedule_config: Value =
-        serde_json::from_str(&automation.schedule_config).map_err(|e| e.to_string())?;
-    let next_run_at = compute_next_run_at(&automation.schedule_kind, &schedule_config)?;
-    let enabled = automation.schedule_kind != "once" || next_run_at.is_some();
-    store
-        .set_workflow_automation_enabled(&automation.id, enabled, next_run_at)
-        .map_err(|e| e.to_string())
-}
-
-pub async fn run_automation_now(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
-    automation_id: String,
-) -> Result<WorkflowAutomationRunNowResult, String> {
-    let state = &svc.main_store;
+    run_id: &str,
+    scheduled_for: &str,
+) -> Result<(), AutomationError> {
+    let store = &*svc.main_store;
     let tsid_generator = &svc.tsid_generator;
-    let automation = {
-        let store = &*state;
-        store
-            .get_workflow_automation(&automation_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Automation {} not found", automation_id))?
-    };
-    let run_id = tsid_generator.generate().map_err(|e| e.to_string())?;
-    let scheduled_for = normalize_datetime_for_db(Local::now());
 
-    let run = {
-        let store = &*state;
-        store
-            .add_workflow_automation_run(&WorkflowAutomationRunInsert {
-                id: run_id.clone(),
-                automation_id: automation.id.clone(),
-                workflow_session_id: None,
-                status: "pending".to_string(),
-                scheduled_for: scheduled_for.clone(),
-                started_at: None,
-                finished_at: None,
-                error: None,
-            })
-            .map_err(|e| e.to_string())?
-    };
+    // Non-terminal transition into the execution phase.
+    let _ = store.update_workflow_automation_run_status(run_id, "starting", None);
 
-    let prompt = automation_prompt(&automation)?;
-    let shell_result = match execute_pre_workflow_shell(&automation).await {
+    let prompt = automation_prompt(automation).map_err(AutomationError::invalid_request)?;
+    let shell_result = match execute_pre_workflow_shell(automation).await {
         Ok(result) => result,
         Err(error) => {
-            let store = &*state;
-            if let Err(update_error) = store.update_workflow_automation_run_failed(&run_id, &error)
+            // A deterministic pre-workflow shell failure has no external effect
+            // to reconcile, so it is a clean terminal `failed`.
+            if let Err(update_error) =
+                store.update_workflow_automation_run_status(run_id, "failed", Some(&error))
             {
                 log::error!(
                     "[WorkflowAutomation][automation={}][run={}] Failed to mark shell failure: {}",
@@ -672,7 +608,7 @@ pub async fn run_automation_now(
                     update_error
                 );
             }
-            return Err(error);
+            return Err(AutomationError::internal(error));
         }
     };
     let initial_prompt = build_workflow_prompt(&prompt, shell_result.as_ref());
@@ -683,31 +619,30 @@ pub async fn run_automation_now(
             .filter(|_| automation.continuous_context);
 
         if let Some(session_id) = existing_session_id {
-            let store = &*state;
             let exists = store
                 .get_workflow(&session_id)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| AutomationError::internal(e.to_string()))?
                 .is_some();
             if exists {
                 session_id
             } else {
-                tsid_generator.generate().map_err(|e| e.to_string())?
+                tsid_generator
+                    .generate()
+                    .map_err(|e| AutomationError::internal(e.to_string()))?
             }
         } else {
-            tsid_generator.generate().map_err(|e| e.to_string())?
+            tsid_generator
+                .generate()
+                .map_err(|e| AutomationError::internal(e.to_string()))?
         }
     };
 
-    let workflow_exists = {
-        let store = &*state;
-        store
-            .get_workflow(&workflow_session_id)
-            .map_err(|e| e.to_string())?
-            .is_some()
-    };
+    let workflow_exists = store
+        .get_workflow(&workflow_session_id)
+        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .is_some();
 
     if !workflow_exists {
-        let store = &*state;
         store
             .create_workflow(
                 &workflow_session_id,
@@ -716,13 +651,13 @@ pub async fn run_automation_now(
                 automation.agent_config.clone(),
                 None,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AutomationError::internal(e.to_string()))?;
     }
 
     let allowed_paths = parse_allowed_paths(&automation.allowed_paths);
     let mut metadata = json!({
         "automation_id": automation.id.clone(),
-        "automation_run_id": run_id.clone(),
+        "automation_run_id": run_id,
         "scheduled_for": scheduled_for,
     });
 
@@ -745,25 +680,20 @@ pub async fn run_automation_now(
         shell_result.as_ref().map(shell_result_attached_context),
     ]);
 
-    {
-        let store = &*state;
-        store
-            .update_workflow_automation_run_after_start(
-                &automation.id,
-                &run_id,
-                &workflow_session_id,
-                &scheduled_for,
-                automation
-                    .continuous_context
-                    .then_some(workflow_session_id.as_str()),
-            )
-            .map_err(|e| e.to_string())?;
-    }
-
-    let state_after_start = svc.main_store.clone();
+    store
+        .update_workflow_automation_run_after_start(
+            &automation.id,
+            run_id,
+            &workflow_session_id,
+            scheduled_for,
+            automation
+                .continuous_context
+                .then_some(workflow_session_id.as_str()),
+        )
+        .map_err(|e| AutomationError::internal(e.to_string()))?;
 
     if let Err(error) = workflow_start_core(
-        &svc,
+        svc,
         workflow_session_id.clone(),
         automation.agent_id.clone(),
         Some(initial_prompt),
@@ -773,9 +703,8 @@ pub async fn run_automation_now(
     )
     .await
     {
-        let store = &*state_after_start;
         if let Err(update_error) =
-            store.update_workflow_automation_run_failed(&run_id, &error.message)
+            store.update_workflow_automation_run_status(run_id, "failed", Some(&error.message))
         {
             log::error!(
                 "[WorkflowAutomation][automation={}][run={}] Failed to mark run failed after start error: {}",
@@ -784,14 +713,58 @@ pub async fn run_automation_now(
                 update_error
             );
         }
-        return Err(error.message);
+        return Err(AutomationError::internal(error.message));
     }
 
-    Ok(WorkflowAutomationRunNowResult {
-        automation,
-        run,
-        workflow_session_id,
-    })
+    Ok(())
+}
+
+/// Creates a pending manual run for an automation via a single atomic DB claim
+/// (active-run guard + pending insert in one write transaction), then executes
+/// the shared kernel. Returns the freshly re-read run so callers observe the
+/// post-start lifecycle. A concurrent overlapping run yields `busy`
+/// (AC-6/INV-6), closing the former check-then-insert race.
+pub(crate) async fn create_manual_run(
+    svc: &WorkflowApplicationService,
+    automation_id: &str,
+) -> Result<(WorkflowAutomation, WorkflowAutomationRun), AutomationError> {
+    let store = &*svc.main_store;
+    let automation = store
+        .get_workflow_automation(automation_id)
+        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            AutomationError::not_found(format!("Automation {automation_id} not found"))
+        })?;
+
+    let run_id = svc
+        .tsid_generator
+        .generate()
+        .map_err(|e| AutomationError::internal(e.to_string()))?;
+    let scheduled_for = normalize_datetime_for_db(Local::now());
+    // The guard and the pending insert share one write transaction, so two
+    // concurrent manual requests can never both start an active run.
+    let claimed_run = match store
+        .claim_manual_run(&automation.id, &run_id, &scheduled_for)
+        .map_err(|e| AutomationError::internal(e.to_string()))?
+    {
+        ManualClaimOutcome::Claimed(run) => run,
+        ManualClaimOutcome::Busy => {
+            return Err(AutomationError::busy(format!(
+                "Automation {} already has an active run",
+                automation.id
+            )));
+        }
+    };
+
+    // Execute the kernel; the pending -> running/failed transition happens
+    // inside it. Even an error path leaves a durable run row to reconcile.
+    let _ = execute_automation_run(svc, &automation, &claimed_run.id, &scheduled_for).await;
+
+    let run = store
+        .get_workflow_automation_run(&claimed_run.id)
+        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .ok_or_else(|| AutomationError::internal("created run disappeared"))?;
+    Ok((automation, run))
 }
 
 #[cfg(test)]

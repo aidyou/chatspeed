@@ -1395,7 +1395,37 @@
         "tue": "二",
         "wed": "三"
       },
-      "weekdays": "週幾執行"
+      "weekdays": "週幾執行",
+      "reviewPlan": "預覽計畫",
+      "planTitle": "檢視變更",
+      "planStatus": "狀態",
+      "planHash": "計畫雜湊",
+      "planBaseRevision": "基準版本",
+      "permissionSummary": "權限摘要",
+      "permissionAgent": "智能體",
+      "permissionPaths": "授權目錄",
+      "permissionShell": "Shell",
+      "permissionShellYes": "已設定",
+      "permissionShellNo": "無",
+      "permissionChangeWarning": "該計畫會變更權限，套用將被記錄。",
+      "applyPlan": "套用計畫",
+      "applySuccess": "計畫已套用",
+      "runsTab": "執行記錄",
+      "refreshRuns": "重新整理",
+      "noRuns": "尚無執行記錄",
+      "trigger": {
+        "manual": "手動",
+        "scheduled": "排程"
+      },
+      "runStatus": {
+        "pending": "等待中",
+        "starting": "啟動中",
+        "running": "執行中",
+        "completed": "已完成",
+        "failed": "失敗",
+        "cancelled": "已取消",
+        "needsReconcile": "待核對"
+      }
     },
     "autoApprovePlan": "自動批准計畫",
     "autoApprovePlanDisabled": "已關閉自動批准計畫",

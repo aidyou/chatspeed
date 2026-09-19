@@ -21,6 +21,9 @@ chat:
   note_already_exists: 該筆記已存在，無需重複新增
 cs:
   agent_list_header: Agent 列表
+  automation_list_header: 自動化任務
+  automation_plan_header: 自動化計畫
+  automation_runs_header: 自動化執行記錄
   capability_doctor_clean: 無能力相關發現項
   capability_doctor_findings: '發現項：%{findings}'
   capability_doctor_header: 能力健檢

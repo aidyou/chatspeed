@@ -2174,7 +2174,8 @@ const onDeleteAutomation = async automationId => {
   }
 
   try {
-    await workflowAutomationStore.deleteAutomation(automationId)
+    // The confirm dialog above is the explicit destructive acknowledgement.
+    await workflowAutomationStore.deleteAutomation(automationId, true)
     workflowSidebarActiveTab.value = 'automation'
     await workflowAutomationStore.fetchAutomations()
     showMessage(t('common.deleteSuccess'), 'success')

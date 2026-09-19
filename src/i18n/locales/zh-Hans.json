@@ -1395,7 +1395,37 @@
         "tue": "二",
         "wed": "三"
       },
-      "weekdays": "周几执行"
+      "weekdays": "周几执行",
+      "reviewPlan": "预览计划",
+      "planTitle": "审阅变更",
+      "planStatus": "状态",
+      "planHash": "计划哈希",
+      "planBaseRevision": "基准版本",
+      "permissionSummary": "权限摘要",
+      "permissionAgent": "智能体",
+      "permissionPaths": "授权目录",
+      "permissionShell": "Shell",
+      "permissionShellYes": "已配置",
+      "permissionShellNo": "无",
+      "permissionChangeWarning": "该计划会变更权限，应用将被记录。",
+      "applyPlan": "应用计划",
+      "applySuccess": "计划已应用",
+      "runsTab": "运行记录",
+      "refreshRuns": "刷新",
+      "noRuns": "暂无运行记录",
+      "trigger": {
+        "manual": "手动",
+        "scheduled": "定时"
+      },
+      "runStatus": {
+        "pending": "等待中",
+        "starting": "启动中",
+        "running": "运行中",
+        "completed": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "needsReconcile": "待核对"
+      }
     },
     "autoApprovePlan": "自动批准计划",
     "autoApprovePlanDisabled": "已关闭自动批准计划",

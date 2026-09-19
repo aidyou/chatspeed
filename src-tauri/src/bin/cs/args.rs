@@ -108,6 +108,17 @@ pub enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Create, inspect, draft, apply, schedule and run local workflow
+    /// Automations managed by the running ChatSpeed app.
+    ///
+    /// Every mutation goes through the app's single automation facade over the
+    /// authenticated control plane; the CLI never opens the database, starts a
+    /// workflow, or runs a shell command itself. `draft` is side-effect-free and
+    /// can never grant a new shell/path/network/MCP/Skill permission.
+    Automation {
+        #[command(subcommand)]
+        command: AutomationCommand,
+    },
     /// Capture, inspect and replay workflow run artifacts.
     Experiment {
         #[command(subcommand)]
@@ -244,6 +255,123 @@ pub enum McpCommand {
     Refresh {
         /// The MCP server name as registered in ChatSpeed.
         name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Local workflow-automation commands (Phase 3D).
+#[derive(Debug, Subcommand)]
+pub enum AutomationCommand {
+    /// List automations with their schedule, enabled state and revision.
+    List,
+    /// Show one automation by id.
+    Get {
+        /// Automation id.
+        automation_id: String,
+    },
+    /// List an automation's projected run lifecycle.
+    Runs {
+        /// Automation id.
+        automation_id: String,
+    },
+    /// Produce a side-effect-free plan from a structured spec or a constrained
+    /// intent. It never mutates and never grants new permissions.
+    Draft {
+        /// The structured spec document, inline.
+        #[arg(long, conflicts_with = "spec_file")]
+        spec_json: Option<String>,
+        /// The structured spec document, read from a file ("-" for stdin).
+        #[arg(long)]
+        spec_file: Option<PathBuf>,
+        /// A constrained natural-language intent (alternative to a spec).
+        #[arg(long, conflicts_with_all = ["spec_json", "spec_file"])]
+        intent: Option<String>,
+        /// Existing automation id to draft an update against.
+        #[arg(long)]
+        automation_id: Option<String>,
+    },
+    /// Apply a previously drafted plan after verifying its hash and base revision.
+    Apply {
+        /// The plan document (a `draft` output), inline.
+        #[arg(long, conflicts_with = "plan_file")]
+        plan_json: Option<String>,
+        /// The plan document, read from a file ("-" for stdin).
+        #[arg(long)]
+        plan_file: Option<PathBuf>,
+        /// The exact plan hash the caller reviewed. Defaults to the plan's own hash.
+        #[arg(long)]
+        expected_plan_hash: Option<String>,
+        /// Acknowledge that the plan changes shell/path/agent permissions.
+        #[arg(long)]
+        acknowledge_permission_changes: bool,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Create a new automation from a structured spec. The id is backend-minted.
+    Create {
+        /// The structured spec document, inline.
+        #[arg(long, conflicts_with = "spec_file")]
+        spec_json: Option<String>,
+        /// The structured spec document, read from a file ("-" for stdin).
+        #[arg(long)]
+        spec_file: Option<PathBuf>,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Update an existing automation by compare-and-set on its revision.
+    Update {
+        /// Automation id.
+        automation_id: String,
+        /// The structured spec document, inline.
+        #[arg(long, conflicts_with = "spec_file")]
+        spec_json: Option<String>,
+        /// The structured spec document, read from a file ("-" for stdin).
+        #[arg(long)]
+        spec_file: Option<PathBuf>,
+        /// The revision the caller read; a moved revision fails as a conflict.
+        #[arg(long)]
+        expected_revision: i64,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Enable an automation so the scheduler may dispatch it.
+    Enable {
+        /// Automation id.
+        automation_id: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Disable an automation so no further scheduled run is dispatched.
+    Disable {
+        /// Automation id.
+        automation_id: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Trigger a manual run now. An accepted start is never reported as a
+    /// completion; observe `runs` for the durable terminal state.
+    Run {
+        /// Automation id.
+        automation_id: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Permanently delete an automation and its associated workflow tree.
+    /// Destructive: requires `--confirm` and refuses while a run is active.
+    Delete {
+        /// Automation id.
+        automation_id: String,
+        /// Confirm the destructive delete. Without it the server refuses.
+        #[arg(long)]
+        confirm: bool,
         /// Idempotency key. Generated when omitted.
         #[arg(long)]
         idempotency_key: Option<String>,

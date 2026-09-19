@@ -181,6 +181,32 @@
             </el-form-item>
           </el-form>
         </el-tab-pane>
+
+        <el-tab-pane
+          v-if="form.id"
+          :label="$t('workflow.automation.runsTab')"
+          name="runs">
+          <div class="automation-runs">
+            <div class="runs-toolbar">
+              <el-button size="small" @click="refreshProjectedRuns">
+                {{ $t('workflow.automation.refreshRuns') }}
+              </el-button>
+            </div>
+            <div v-if="projectedRuns.length === 0" class="field-hint">
+              {{ $t('workflow.automation.noRuns') }}
+            </div>
+            <ul v-else class="runs-list">
+              <li v-for="run in projectedRuns" :key="run.runId" class="run-row">
+                <span class="run-status" :class="`run-status-${run.status}`">
+                  {{ runStatusLabel(run.status) }}
+                </span>
+                <span class="run-trigger">{{ triggerLabel(run.trigger) }}</span>
+                <span class="run-time">{{ run.startedAt || run.scheduledFor }}</span>
+                <span v-if="run.waitReason" class="run-wait">{{ run.waitReason }}</span>
+              </li>
+            </ul>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </div>
 
@@ -193,6 +219,9 @@
         <el-button v-if="form.id" @click="runNow" :loading="runningNow">
           <cs name="play" />
           {{ $t('workflow.automation.runNow') }}
+        </el-button>
+        <el-button v-if="form.id" :loading="reviewing" @click="previewPlan">
+          {{ $t('workflow.automation.reviewPlan') }}
         </el-button>
         <el-button
           type="primary"
@@ -209,6 +238,61 @@
       :agent="selectedAgent"
       :initial-models="form.agentConfig?.models"
       @save="onModelConfigSave" />
+
+    <el-dialog
+      v-model="planVisible"
+      :title="$t('workflow.automation.planTitle')"
+      width="520px"
+      append-to-body>
+      <div v-if="plan" class="plan-review">
+        <div class="plan-row">
+          <span>{{ $t('workflow.automation.planStatus') }}</span>
+          <b>{{ plan.status }}</b>
+        </div>
+        <div class="plan-row">
+          <span>{{ $t('workflow.automation.planHash') }}</span>
+          <code class="plan-hash">{{ plan.plan_hash }}</code>
+        </div>
+        <div class="plan-row">
+          <span>{{ $t('workflow.automation.planBaseRevision') }}</span>
+          <b>{{ plan.base_revision }}</b>
+        </div>
+        <div class="plan-perm">
+          <div class="plan-perm-title">{{ $t('workflow.automation.permissionSummary') }}</div>
+          <ul>
+            <li>{{ $t('workflow.automation.permissionAgent') }}: {{ plan.permission_summary?.agent_id }}</li>
+            <li>
+              {{ $t('workflow.automation.permissionPaths') }}:
+              {{ (plan.permission_summary?.allowed_paths || []).join(', ') || '-' }}
+            </li>
+            <li>
+              {{ $t('workflow.automation.permissionShell') }}:
+              {{ plan.permission_summary?.has_shell
+                ? $t('workflow.automation.permissionShellYes')
+                : $t('workflow.automation.permissionShellNo') }}
+            </li>
+          </ul>
+        </div>
+        <div v-if="permissionChanged" class="plan-warning">
+          {{ $t('workflow.automation.permissionChangeWarning') }}
+        </div>
+        <div v-for="(warning, index) in plan.warnings || []" :key="index" class="plan-warning">
+          [{{ warning.code }}] {{ warning.message }}
+        </div>
+      </div>
+      <template #footer>
+        <div class="automation-actions">
+          <el-button @click="planVisible = false">{{ $t('common.cancel') }}</el-button>
+          <el-button
+            type="primary"
+            :loading="applying"
+            :disabled="plan?.status !== 'ready'"
+            @click="applyReviewedPlan">
+            {{ $t('workflow.automation.applyPlan') }}
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
@@ -274,6 +358,12 @@ const activeTab = ref('basic')
 const saving = ref(false)
 const runningNow = ref(false)
 const modelSelectorVisible = ref(false)
+// The reviewed plan preview, shown before an explicit apply (AC-3/AC-4).
+const planVisible = ref(false)
+const plan = ref(null)
+const reviewing = ref(false)
+const applying = ref(false)
+const projectedRuns = ref([])
 const showContinuousContext = computed(() => form.scheduleKind !== 'once')
 
 const dialogTitle = computed(() =>
@@ -394,6 +484,9 @@ const resetForm = () => {
   dailyTimes.value = [defaultDailyTime()]
   onceRunAt.value = ''
   activeTab.value = 'basic'
+  projectedRuns.value = []
+  plan.value = null
+  planVisible.value = false
 }
 
 const prepareForm = async () => {
@@ -452,6 +545,112 @@ const applyAutomationToForm = automation => {
     automation.scheduleConfig?.times || [automation.scheduleConfig?.time || defaultDailyTime()]
   )
   onceRunAt.value = automation.scheduleConfig?.run_at || automation.scheduleConfig?.runAt || ''
+  void refreshProjectedRuns()
+}
+
+// Loads the projected run lifecycle for the open automation. The status is the
+// backend's snapshot-derived value, including needs_reconcile; the UI never
+// reconstructs a run state from the transcript (AC-7/INV-7).
+const refreshProjectedRuns = async () => {
+  if (!form.id) {
+    projectedRuns.value = []
+    return
+  }
+  try {
+    projectedRuns.value = await automationStore.fetchProjectedRuns(form.id)
+  } catch (error) {
+    projectedRuns.value = []
+    console.warn('[WorkflowAutomation] Failed to load projected runs:', error)
+  }
+}
+
+// Builds the canonical snake_case spec the facade validates. Permission fields
+// (agent, paths, shell) come only from this explicit form, never from a parsed
+// intent, so the editor cannot mint a permission implicitly (INV-3).
+const automationSpec = () => ({
+  title: form.title,
+  prompt: form.prompt,
+  prompt_file_path: form.promptFilePath || null,
+  agent_id: selectedAgent.value?.id || '',
+  agent_config: form.agentConfig || null,
+  allowed_paths: Array.isArray(form.allowedPaths) ? [...form.allowedPaths] : [],
+  shell_config: form.shellCommand.trim() ? { command: form.shellCommand.trim() } : null,
+  schedule_kind: form.scheduleKind,
+  schedule_config: scheduleConfig(),
+  continuous_context: form.scheduleKind === 'once' ? false : form.continuousContext,
+  self_review: form.selfReview,
+  enabled: form.enabled
+})
+
+const permissionChanged = computed(
+  () => plan.value?.permission_summary?.permission_expansion === true
+)
+
+// Human label for a projected run status. Every value comes from the backend
+// projection; the switch is total over the documented lifecycle and falls back
+// to the raw token rather than inventing a state (AC-7/INV-7).
+const runStatusLabel = status => {
+  const key = {
+    pending: 'pending',
+    starting: 'starting',
+    running: 'running',
+    completed: 'completed',
+    failed: 'failed',
+    cancelled: 'cancelled',
+    needs_reconcile: 'needsReconcile'
+  }[status]
+  return t(key ? `workflow.automation.runStatus.${key}` : 'workflow.automation.runStatus.pending')
+}
+
+const triggerLabel = trigger =>
+  t(
+    trigger === 'scheduled'
+      ? 'workflow.automation.trigger.scheduled'
+      : 'workflow.automation.trigger.manual'
+  )
+
+// Produces a side-effect-free plan for review (AC-3). A create has no target to
+// apply against, so review is offered only for an existing automation.
+const previewPlan = async () => {
+  if (!form.id) return
+  reviewing.value = true
+  try {
+    plan.value = await automationStore.draftPlan({
+      automation_id: form.id,
+      spec: automationSpec(),
+      intent: null
+    })
+    planVisible.value = true
+  } catch (err) {
+    ElMessage.error(err?.message || String(err))
+  } finally {
+    reviewing.value = false
+  }
+}
+
+// Applies the reviewed plan with its exact hash. The backend re-checks the hash,
+// version and base revision and refuses an unacknowledged permission change
+// (AC-4/INV-5). A conflict is shown, never silently retried.
+const applyReviewedPlan = async () => {
+  if (!plan.value) return
+  applying.value = true
+  try {
+    const result = await automationStore.applyPlan({
+      plan: plan.value,
+      expected_plan_hash: plan.value.plan_hash,
+      acknowledge_permission_changes: permissionChanged.value
+    })
+    planVisible.value = false
+    ElMessage.success(t('workflow.automation.applySuccess'))
+    await automationStore.fetchAutomations()
+    const refreshed = automationStore.automations.find(item => item.id === form.id)
+    if (refreshed) applyAutomationToForm(refreshed)
+    emit('saved', result?.automation ?? refreshed ?? null)
+  } catch (err) {
+    ElMessage.error(err?.message || String(err))
+  } finally {
+    applying.value = false
+  }
 }
 
 const scheduleConfig = () => {
@@ -527,7 +726,9 @@ const deleteAutomation = async () => {
   }
 
   try {
-    await automationStore.deleteAutomation(form.id)
+    // The confirm dialog above is the explicit destructive acknowledgement; pass
+    // it through to the facade safety gate (AC-10).
+    await automationStore.deleteAutomation(form.id, true)
     resetForm()
     visible.value = false
   } catch (error) {
@@ -899,5 +1100,101 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.automation-runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+}
+
+.runs-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.runs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-xs);
+}
+
+.run-row {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-sm);
+  font-size: var(--cs-font-size-sm);
+  color: var(--cs-text-color-primary);
+}
+
+.run-status {
+  min-width: 88px;
+  font-weight: 600;
+}
+
+.run-status-needs_reconcile,
+.run-status-failed {
+  color: var(--el-color-danger);
+}
+
+.run-status-completed {
+  color: var(--el-color-success);
+}
+
+.run-status-running,
+.run-status-starting,
+.run-status-pending {
+  color: var(--el-color-warning);
+}
+
+.run-trigger,
+.run-wait {
+  color: var(--cs-text-color-secondary);
+}
+
+.plan-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-sm);
+}
+
+.plan-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cs-space-sm);
+  font-size: var(--cs-font-size-sm);
+}
+
+.plan-row > span {
+  min-width: 120px;
+  color: var(--cs-text-color-secondary);
+}
+
+.plan-hash {
+  font-family: var(--cs-font-family-mono, monospace);
+  word-break: break-all;
+}
+
+.plan-perm {
+  font-size: var(--cs-font-size-sm);
+
+  .plan-perm-title {
+    font-weight: 600;
+    margin-bottom: var(--cs-space-xs);
+  }
+
+  ul {
+    margin: 0;
+    padding-left: var(--cs-space-md);
+    color: var(--cs-text-color-secondary);
+  }
+}
+
+.plan-warning {
+  font-size: var(--cs-font-size-sm);
+  color: var(--cs-color-warning);
 }
 </style>

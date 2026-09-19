@@ -1396,7 +1396,37 @@
         "tue": "Tue",
         "wed": "Wed"
       },
-      "weekdays": "Weekdays"
+      "weekdays": "Weekdays",
+      "reviewPlan": "Review plan",
+      "planTitle": "Review changes",
+      "planStatus": "Status",
+      "planHash": "Plan hash",
+      "planBaseRevision": "Base revision",
+      "permissionSummary": "Permission summary",
+      "permissionAgent": "Agent",
+      "permissionPaths": "Authorized directories",
+      "permissionShell": "Shell",
+      "permissionShellYes": "Configured",
+      "permissionShellNo": "None",
+      "permissionChangeWarning": "This plan changes permissions. Applying it will be recorded.",
+      "applyPlan": "Apply plan",
+      "applySuccess": "Plan applied",
+      "runsTab": "Runs",
+      "refreshRuns": "Refresh",
+      "noRuns": "No runs yet",
+      "trigger": {
+        "manual": "Manual",
+        "scheduled": "Scheduled"
+      },
+      "runStatus": {
+        "pending": "Pending",
+        "starting": "Starting",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "needsReconcile": "Needs reconcile"
+      }
     },
     "autoApprovePlan": "Auto-approve plan",
     "autoApprovePlanDisabled": "Automatic plan approval disabled",

@@ -21,6 +21,9 @@ chat:
   note_already_exists: 该笔记已存在，无需重复添加
 cs:
   agent_list_header: Agent 列表
+  automation_list_header: 自动化任务
+  automation_plan_header: 自动化计划
+  automation_runs_header: 自动化运行记录
   capability_doctor_clean: 无能力相关发现项
   capability_doctor_findings: '发现项：%{findings}'
   capability_doctor_header: 能力体检
