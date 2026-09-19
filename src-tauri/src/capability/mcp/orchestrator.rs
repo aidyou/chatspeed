@@ -68,6 +68,17 @@ pub struct McpTiming {
     pub effect_timeout: Duration,
     /// Budget for confirming a stop by observation.
     pub stop_confirm_timeout: Duration,
+    /// Budget for waiting for a started server to become observable as running.
+    ///
+    /// Starting is asynchronous: `register_mcp_server` answers as soon as it has
+    /// accepted the request, and a cold stdio process (e.g. an `npx` package that
+    /// must boot and complete the MCP handshake) only reaches `running` seconds
+    /// later. Confirming the start with a single observation right after the
+    /// effect returns therefore races that transition and would misclassify a
+    /// genuinely successful start as unobservable. This window bounds the poll
+    /// for `running`, and it stays below the CLI's own request timeout so a slow
+    /// but healthy start is proven inline instead of timing the caller out.
+    pub start_confirm_timeout: Duration,
     /// Budget for a single status observation.
     pub status_timeout: Duration,
     /// Pause between confirmation polls.
@@ -79,6 +90,7 @@ impl Default for McpTiming {
         Self {
             effect_timeout: Duration::from_secs(30),
             stop_confirm_timeout: Duration::from_secs(10),
+            start_confirm_timeout: Duration::from_secs(15),
             status_timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(150),
         }
@@ -361,11 +373,7 @@ impl CapabilityApplicationService {
                 Err(error)
             }
             Ok(Ok(())) => {
-                let observed = self.observe(&name).await.ok().flatten();
-                let running = observed
-                    .as_ref()
-                    .map(|runtime| is_running(&runtime.state))
-                    .unwrap_or(false);
+                let (running, observed) = self.wait_until_running(&name).await;
                 let outcome = if running {
                     crate::capability::types::EffectOutcome::Applied
                 } else {
@@ -843,11 +851,7 @@ impl CapabilityApplicationService {
                 Err(error)
             }
             Ok(Ok(())) => {
-                let observed = self.observe(&name).await.ok().flatten();
-                let running = observed
-                    .as_ref()
-                    .map(|answer| is_running(&answer.state))
-                    .unwrap_or(false);
+                let (running, observed) = self.wait_until_running(&name).await;
                 if !running {
                     self.record_effect_outcome(
                         &operation_id,
@@ -1034,11 +1038,7 @@ impl CapabilityApplicationService {
                     return Err(error);
                 }
                 Ok(Ok(())) => {
-                    let answer = self.observe(&updated.name).await.ok().flatten();
-                    let running = answer
-                        .as_ref()
-                        .map(|runtime| is_running(&runtime.state))
-                        .unwrap_or(false);
+                    let (running, answer) = self.wait_until_running(&updated.name).await;
                     self.record_effect_outcome(
                         &operation_id,
                         EFFECT_START,
@@ -1319,6 +1319,48 @@ impl CapabilityApplicationService {
                 )
                 .ok();
                 return false;
+            }
+            tokio::time::sleep(timing.poll_interval).await;
+        }
+    }
+
+    /// Starts a server and waits, bounded, for it to become observable as
+    /// running.
+    ///
+    /// Returns `(true, Some(runtime))` only once the runtime reports `running` or
+    /// `connected`; otherwise `(false, last)`, where `last` is the most recent
+    /// non-running observation (`None` if the runtime never answered). A start
+    /// that cannot be proven running within the window is not reported as a
+    /// false success: the caller records `Unknown` and leaves the effect for
+    /// reconciliation, which re-observes the real runtime (INV-7/INV-8). This is
+    /// the symmetric counterpart of `stop_and_confirm`: `register_mcp_server`
+    /// answers before a cold child has connected, so confirming a start has to
+    /// poll instead of observing exactly once (which raced the transition and
+    /// misclassified a healthy-but-slow start as unobservable).
+    async fn wait_until_running(
+        &self,
+        name: &str,
+    ) -> (bool, Option<ObservedMcpRuntime>) {
+        let timing = self.mcp_timing();
+        let deadline = tokio::time::Instant::now() + timing.start_confirm_timeout;
+        let mut last: Option<ObservedMcpRuntime> = None;
+        loop {
+            match self.observe(name).await {
+                Ok(Some(observed)) => {
+                    let running = is_running(&observed.state);
+                    last = Some(observed);
+                    if running {
+                        return (true, last);
+                    }
+                }
+                // A proven absence is not running: keep polling, because a cold
+                // child only appears in the runtime once it has connected.
+                Ok(None) => {}
+                // The runtime refused to answer: not proof either way.
+                Err(_) => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return (false, last);
             }
             tokio::time::sleep(timing.poll_interval).await;
         }

@@ -156,6 +156,16 @@ struct FakeRuntime {
     start_hang: Mutex<bool>,
     /// When true, `start` answers but the server never becomes observable.
     silent_start: Mutex<bool>,
+    /// When set, `start` leaves the server in this state (e.g. `starting`)
+    /// instead of `running`, so the caller cannot observe it up on the first
+    /// try. Models a cold child that is accepted before it has connected.
+    start_state: Mutex<Option<String>>,
+    /// When >0, a server started into `start_state` flips to `running` only
+    /// after this many `observe` calls, so the bounded start confirmation must
+    /// poll to prove the effect rather than observe once and give up.
+    running_after_observations: Mutex<usize>,
+    /// Total `observe` effect calls, used to prove the start polled (INV-7).
+    observe_count: AtomicUsize,
     /// When true, `stop` answers but the server stays observable.
     stubborn_stop: Mutex<bool>,
     /// Guards against a released-then-observed race in the concurrency test.
@@ -239,7 +249,11 @@ impl McpRuntimeEffects for FakeRuntime {
         match self.start_result.lock().expect("start_result").as_deref() {
             Some(message) => Err(CapabilityError::new(code::INTERNAL, message.to_string())),
             None => {
-                if !*self.silent_start.lock().expect("silent_start") {
+                if let Some(state) = self.start_state.lock().expect("start_state").clone() {
+                    // Accepted but not yet up: a cold child connects later, so the
+                    // first observations must not already read as running.
+                    self.set_state(&config.name, &state);
+                } else if !*self.silent_start.lock().expect("silent_start") {
                     self.set_state(&config.name, "running");
                 }
                 Ok(())
@@ -322,6 +336,19 @@ impl McpRuntimeEffects for FakeRuntime {
     }
 
     async fn observe(&self, name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError> {
+        self.observe_count.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut remaining = self
+                .running_after_observations
+                .lock()
+                .expect("running_after");
+            if *remaining > 0 {
+                *remaining -= 1;
+                if *remaining == 0 && self.state_of(name).as_deref() != Some("running") {
+                    self.set_state(name, "running");
+                }
+            }
+        }
         Ok(self.state_of(name).map(|state| ObservedMcpRuntime {
             state,
             cached_tool_count: self
@@ -354,6 +381,7 @@ fn fixture() -> Fixture {
             .with_mcp_timing(McpTiming {
                 effect_timeout: Duration::from_millis(60),
                 stop_confirm_timeout: Duration::from_millis(60),
+                start_confirm_timeout: Duration::from_millis(120),
                 status_timeout: Duration::from_millis(60),
                 poll_interval: Duration::from_millis(2),
             }),
@@ -1162,6 +1190,104 @@ async fn enable_reports_desired_and_observed_state_separately() {
     assert_eq!(result.result["server"]["runtime"]["observed"], json!(true));
     assert!(!fixture.repository.snapshot()[0].disabled);
     assert_eq!(fixture.runtime.calls(), vec!["start:weather".to_string()]);
+}
+
+/// A cold start that only becomes observable after the process has connected
+/// must be confirmed by polling, not by a single observation that races the
+/// transition. `register_mcp_server` answers before a cold child is up, so a
+/// start that reports success and later reaches `running` inside the window is a
+/// genuine success and completes the operation with a proven running runtime.
+#[tokio::test]
+async fn a_cold_start_that_becomes_running_is_proven_by_polling() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, true));
+    // `start` is accepted but leaves the server `starting`; it reaches
+    // `running` only after a few observations, like a slow npx handshake.
+    *fixture.runtime.start_state.lock().expect("start_state") =
+        Some("starting".to_string());
+    *fixture.runtime.running_after_observations.lock().expect("running_after") = 3;
+
+    let result = fixture
+        .service
+        .mcp_enable(id, "key-1", "test")
+        .await
+        .expect("a start that becomes running must be proven, not needs_reconcile");
+
+    assert_eq!(result.result["status"], "enabled");
+    assert_eq!(result.result["server"]["runtime"]["state"], "running");
+    assert_eq!(result.result["server"]["runtime"]["observed"], json!(true));
+    // The confirmation had to observe more than once to catch the transition.
+    assert!(
+        fixture.runtime.observe_count.load(Ordering::SeqCst) >= 2,
+        "the bounded start confirmation must poll, not observe once"
+    );
+    let op = fixture
+        .service
+        .repository()
+        .list_by_resource(CapabilityKind::Mcp, "mcp:weather", 5)
+        .expect("operations")
+        .into_iter()
+        .next()
+        .expect("one operation");
+    assert_eq!(op.state, OperationState::Completed);
+    assert_eq!(
+        fixture
+            .service
+            .repository()
+            .list_effects(&op.operation_id)
+            .expect("effects")
+            .into_iter()
+            .find(|effect| effect.effect_key == "mcp.start")
+            .expect("a start effect")
+            .outcome,
+        EffectOutcome::Applied,
+        "an observed running start is Applied"
+    );
+}
+
+/// A start that never reaches `running` within the bounded window stays
+/// fail-closed: the effect is recorded `Unknown` and the operation is left for
+/// reconciliation, never completed on a guess. This is the same invariant that
+/// must hold when the single immediate observation used to falsely short-circuit.
+#[tokio::test]
+async fn a_start_that_never_becomes_running_in_the_window_needs_reconcile() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, true));
+    // Accepted, stuck in `starting`, and never flips to running.
+    *fixture.runtime.start_state.lock().expect("start_state") =
+        Some("starting".to_string());
+
+    let error = fixture
+        .service
+        .mcp_enable(id, "key-1", "test")
+        .await
+        .err()
+        .expect("an unproven start cannot be a success");
+    assert_eq!(error.code(), code::NEEDS_RECONCILE);
+
+    let op = &fixture
+        .service
+        .repository()
+        .list_needing_reconcile()
+        .expect("reconcile list")[0];
+    assert_eq!(op.reconcile_reason.as_deref(), Some("start_not_observable"));
+    assert_eq!(
+        fixture
+            .service
+            .repository()
+            .list_effects(&op.operation_id)
+            .expect("effects")
+            .into_iter()
+            .find(|effect| effect.effect_key == "mcp.start")
+            .expect("a start effect")
+            .outcome,
+        EffectOutcome::Unknown,
+        "the unproven start must be recorded, never silently completed"
+    );
+    assert!(
+        fixture.runtime.observe_count.load(Ordering::SeqCst) >= 2,
+        "the start confirmation polled the whole window"
+    );
 }
 
 #[tokio::test]
