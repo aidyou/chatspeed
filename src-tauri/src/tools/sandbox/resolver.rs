@@ -8,6 +8,8 @@ use super::types::{
 };
 use std::path::{Path, PathBuf};
 
+const SANDBOX_CHAT_SPEED_CONFIG: &str = "/chatspeed-home/.chatspeed";
+
 pub struct ShellExecutionResolver;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +37,31 @@ impl ShellExecutionResolver {
         for root in &context.authorized_roots {
             push_mount(&mut mounts, root, workspace_access.clone());
         }
+        if let Some(home) = dirs::home_dir() {
+            let chatspeed_root = home.join(".chatspeed");
+            if !chatspeed_root.exists() {
+                if let Err(error) = std::fs::create_dir_all(&chatspeed_root) {
+                    log::warn!(
+                        "[Sandbox] Failed to create writable ChatSpeed home {:?}: {}",
+                        chatspeed_root,
+                        error
+                    );
+                }
+            }
+            push_mount_at_guest_path(
+                &mut mounts,
+                &chatspeed_root,
+                SANDBOX_CHAT_SPEED_CONFIG,
+                super::types::WorkspaceAccess::ReadWrite,
+            );
+        }
         for root in &context.skill_roots {
+            if dirs::home_dir()
+                .map(|home| root.starts_with(home.join(".chatspeed")))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             let access = if context
                 .writable_skill_roots
                 .iter()
@@ -194,6 +220,32 @@ impl ShellExecutionResolver {
             status: ShellExecutionPlanStatus::Ready,
         }
     }
+}
+
+fn push_mount_at_guest_path(
+    mounts: &mut Vec<SandboxMountPlan>,
+    host_root: &Path,
+    guest_path: &str,
+    access: super::types::WorkspaceAccess,
+) {
+    if !host_root.exists() {
+        return;
+    }
+    let host_path = host_root.to_string_lossy().to_string();
+    if let Some(existing) = mounts
+        .iter_mut()
+        .find(|mount| mount.guest_path == guest_path)
+    {
+        if access == super::types::WorkspaceAccess::ReadWrite {
+            existing.access = access;
+        }
+        return;
+    }
+    mounts.push(SandboxMountPlan {
+        host_path,
+        guest_path: guest_path.to_string(),
+        access,
+    });
 }
 
 fn push_mount(
@@ -806,6 +858,13 @@ mod tests {
             mount.host_path == builtin_skills.path().to_string_lossy()
                 && mount.guest_path == builtin_skills.path().to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadOnly
+        }));
+        assert!(plan.mounts.iter().any(|mount| {
+            dirs::home_dir()
+                .map(|home| home.join(".chatspeed").to_string_lossy() == mount.host_path)
+                .unwrap_or(false)
+                && mount.guest_path == SANDBOX_CHAT_SPEED_CONFIG
+                && mount.access == WorkspaceAccess::ReadWrite
         }));
         let physical_temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
         #[cfg(target_os = "macos")]

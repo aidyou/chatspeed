@@ -267,6 +267,25 @@ test('a wheel gesture keeps scroll control while our own write event is in fligh
   controller.dispose()
 })
 
+test('a late content resize keeps following mode pinned to the newest content', async () => {
+  const container = createContainer({ scrollTop: 600 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  controller.beforeContentChange()
+  container.scrollHeight = 1200
+  controller.requestContentChange()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 800)
+
+  // A queued-message block or streamed markdown can grow after the first reconcile.
+  container.scrollHeight = 1320
+  controller.onContentResize()
+  assert.equal(container.scrollTop, 920)
+  assert.equal(controller.mode.value, 'following')
+
+  controller.dispose()
+})
+
 test('a container resize re-pins the newest content only while following', async () => {
   const container = createContainer({ scrollTop: 600 })
   const controller = useWorkflowMessageScroll({ containerRef: ref(container) })

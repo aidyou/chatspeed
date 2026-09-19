@@ -27,21 +27,24 @@ pub fn sandbox_command_for_plan(
 }
 
 fn sandbox_home_for_plan(plan: &ShellExecutionPlan) -> Option<&Path> {
-    let skills_mount = plan.mounts.iter().find(|mount| {
-        mount.access == WorkspaceAccess::ReadWrite
-            && Path::new(&mount.host_path).ends_with(".chatspeed/skills")
-    })?;
-    Path::new(&skills_mount.guest_path).parent()
+    plan.mounts
+        .iter()
+        .find(|mount| {
+            mount.access == WorkspaceAccess::ReadWrite
+                && Path::new(&mount.guest_path) == Path::new("/chatspeed-home/.chatspeed")
+        })
+        .map(|_| Path::new("/chatspeed-home/.chatspeed"))
 }
 
 fn command_with_sandbox_home(plan: &ShellExecutionPlan, original_command: &str) -> String {
-    let Some(sandbox_home) = sandbox_home_for_plan(plan) else {
+    let Some(chatspeed_config) = sandbox_home_for_plan(plan) else {
         return original_command.to_string();
     };
+    let home = Path::new("/chatspeed-home");
+    let quoted_home = shell_quote(home);
+    let quoted_chatspeed_config = shell_quote(chatspeed_config);
     format!(
-        "export CHATSPEED_HOME={} && {}",
-        shell_quote(sandbox_home),
-        original_command
+        "export HOME={quoted_home} CHATSPEED_HOME={quoted_chatspeed_config} && {original_command}"
     )
 }
 
@@ -635,18 +638,19 @@ mod tests {
     fn sandbox_home_for_plan_uses_guest_mount_root() {
         let mut plan = plan(ShellExecutionBackendKind::Docker);
         plan.mounts = vec![SandboxMountPlan {
-            host_path: "/host/.chatspeed/skills".to_string(),
-            guest_path: "/guest/.chatspeed/skills".to_string(),
+            host_path: "/host/alice/.chatspeed".to_string(),
+            guest_path: "/chatspeed-home/.chatspeed".to_string(),
             access: WorkspaceAccess::ReadWrite,
         }];
 
         assert_eq!(
             sandbox_home_for_plan(&plan).map(Path::to_path_buf),
-            Some(PathBuf::from("/guest/.chatspeed"))
+            Some(PathBuf::from("/chatspeed-home/.chatspeed"))
         );
+        let command = command_with_sandbox_home(&plan, "python install.py");
         assert_eq!(
-            command_with_sandbox_home(&plan, "python install.py"),
-            "export CHATSPEED_HOME='/guest/.chatspeed' && python install.py"
+            command,
+            "export HOME='/chatspeed-home' CHATSPEED_HOME='/chatspeed-home/.chatspeed' && python install.py"
         );
     }
 
@@ -654,8 +658,8 @@ mod tests {
     fn sandbox_home_is_not_injected_for_read_only_or_unrelated_mounts() {
         let mut plan = plan(ShellExecutionBackendKind::Docker);
         plan.mounts = vec![SandboxMountPlan {
-            host_path: "/host/.chatspeed/skills".to_string(),
-            guest_path: "/guest/.chatspeed/skills".to_string(),
+            host_path: "/host/alice/.chatspeed/skills".to_string(),
+            guest_path: "/chatspeed-home/.chatspeed/skills".to_string(),
             access: WorkspaceAccess::ReadOnly,
         }];
         assert_eq!(sandbox_home_for_plan(&plan), None);

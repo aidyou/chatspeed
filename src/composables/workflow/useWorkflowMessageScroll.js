@@ -255,8 +255,21 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
 
   const onContentResize = () => {
     if (disposed) return
-    if (mode.value === 'reading' && !readingAnchor) {
-      updateReadingAnchor(getContainer())
+    const container = getContainer()
+    if (!container) return
+
+    if (mode.value === 'following') {
+      // Markdown, images, fonts, and queued-message status changes can grow a child after
+      // the initial Vue/animation-frame reconciliation. Re-pin synchronously from the
+      // ResizeObserver callback so that late layout growth cannot leave the newest content
+      // below the viewport; the settle frames cover another resize notification.
+      scrollToBottomNow(container)
+      scheduleSettle(MAX_SETTLE_FRAMES - 1)
+      return
+    }
+
+    if (!readingAnchor) {
+      updateReadingAnchor(container)
     }
     requestContentChange()
   }

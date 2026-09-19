@@ -27,9 +27,10 @@ use serde_json::{json, Value};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 #[cfg(test)]
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::time::{Duration as StdDuration, Instant as StdInstant};
 #[cfg(test)]
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -37,6 +38,15 @@ use tokio::process::{Child, Command};
 #[cfg(test)]
 use tokio::time::Instant;
 use tokio::time::{timeout, Duration};
+
+const SANDBOX_RUNTIME_STATUS_CACHE_TTL: StdDuration = StdDuration::from_secs(3);
+
+type SandboxRuntimeStatusCache = StdMutex<
+    Option<(
+        StdInstant,
+        crate::tools::SandboxRuntimeStatusSummary,
+    )>,
+>;
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone)]
@@ -1238,6 +1248,7 @@ pub struct ShellExecute {
     gateway: Option<Arc<dyn Gateway>>,
     session_id: Option<String>,
     approved_execution_plans: Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
+    sandbox_runtime_status_cache: Arc<SandboxRuntimeStatusCache>,
 }
 
 impl ShellExecute {
@@ -1255,6 +1266,7 @@ impl ShellExecute {
             gateway: None,
             session_id: None,
             approved_execution_plans: Arc::new(dashmap::DashMap::new()),
+            sandbox_runtime_status_cache: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -1360,7 +1372,9 @@ impl ToolDefinition for ShellExecute {
             .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
             .and_then(|v| v.as_str())
             .unwrap_or("bash");
-        let execution_plan = self.execution_plan_for_params(tool_id, command_str)?;
+        let execution_plan = self
+            .execution_plan_for_params(tool_id, command_str)
+            .await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
                 Self::execution_plan_denied_message(&execution_plan),
@@ -2380,7 +2394,7 @@ impl ShellExecute {
         }
     }
 
-    fn execution_plan_for_params(
+    async fn execution_plan_for_params(
         &self,
         tool_call_id: &str,
         command_str: &str,
@@ -2391,7 +2405,7 @@ impl ShellExecute {
                     "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
                 ));
             }
-            let current = self.resolve_execution_plan(tool_call_id, command_str);
+            let current = self.resolve_execution_plan(tool_call_id, command_str).await?;
             if plan != current {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
@@ -2399,27 +2413,52 @@ impl ShellExecute {
             }
             return Ok(plan);
         }
-        Ok(self.resolve_execution_plan(tool_call_id, command_str))
+        self.resolve_execution_plan(tool_call_id, command_str).await
     }
 
-    fn resolve_execution_plan(
+    async fn cached_runtime_status(
+        &self,
+    ) -> Result<crate::tools::SandboxRuntimeStatusSummary, ToolError> {
+        if let Ok(cache) = self.sandbox_runtime_status_cache.lock() {
+            if let Some((checked_at, status)) = cache.as_ref() {
+                if checked_at.elapsed() < SANDBOX_RUNTIME_STATUS_CACHE_TTL {
+                    return Ok(status.clone());
+                }
+            }
+        }
+
+        let required_images = self
+            .sandbox_config
+            .as_ref()
+            .map(crate::tools::AgentSandboxConfig::required_images)
+            .unwrap_or_default();
+        let status = tokio::task::spawn_blocking(move || {
+            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
+                required_images,
+                ..crate::tools::SandboxDetectorOptions::default()
+            })
+            .detect()
+        })
+        .await
+        .map_err(|error| {
+            ToolError::ExecutionFailed(format!("Sandbox runtime detection failed: {error}"))
+        })?;
+
+        if let Ok(mut cache) = self.sandbox_runtime_status_cache.lock() {
+            *cache = Some((StdInstant::now(), status.clone()));
+        }
+        Ok(status)
+    }
+
+    async fn resolve_execution_plan(
         &self,
         tool_call_id: &str,
         command_str: &str,
-    ) -> crate::tools::ShellExecutionPlan {
-        let runtime_status =
-            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
-                required_images: self
-                    .sandbox_config
-                    .as_ref()
-                    .map(crate::tools::AgentSandboxConfig::required_images)
-                    .unwrap_or_default(),
-                ..crate::tools::SandboxDetectorOptions::default()
-            })
-            .detect();
+    ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
+        let runtime_status = self.cached_runtime_status().await?;
         let primary_root = self.default_working_dir();
         let mount_context = self.sandbox_mount_context();
-        crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
+        Ok(crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
             crate::tools::ShellExecutionResolver::resolve(
                 tool_call_id,
                 command_str,
@@ -2428,7 +2467,7 @@ impl ShellExecute {
                 primary_root.as_deref(),
             ),
             &mount_context,
-        )
+        ))
     }
 
     fn sandbox_mount_context(&self) -> crate::tools::ShellSandboxMountContext {
@@ -2666,7 +2705,9 @@ impl ShellExecute {
                 )
             });
         let working_dir = self.default_working_dir();
-        let execution_plan = self.execution_plan_for_params(&tool_id, command_str)?;
+        let execution_plan = self
+            .execution_plan_for_params(&tool_id, command_str)
+            .await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
                 Self::execution_plan_denied_message(&execution_plan),

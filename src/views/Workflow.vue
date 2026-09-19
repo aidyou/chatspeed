@@ -1543,6 +1543,13 @@ function buildPendingQueueAttachments(attachments) {
 }
 
 function scrollMessageListToBottom(force = true) {
+  const scrollToBottom = messageListRef.value?.scrollToBottom
+  if (typeof scrollToBottom !== 'function') return
+
+  // Sending is an explicit navigation boundary: request the bottom immediately, then
+  // repeat after Vue has rendered the new message/queue item. The controller keeps its
+  // following-mode settle frames for markdown, image, and font layout that arrives later.
+  scrollToBottom(force)
   nextTick(() => messageListRef.value?.scrollToBottom(force))
 }
 
