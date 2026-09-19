@@ -158,11 +158,9 @@ Each unit should include:
 
 # Planning Notes
 
-You may use planning note tools to organize investigation:
+You may use the planning note tool to organize investigation:
 
-- `plan_write_note`
-- `plan_read_note`
-- `plan_edit_note`
+- `plan_note` with action `read`, `write`, or `edit`
 
 Use notes for temporary structure, findings, scratch summaries, or draft plan sections.
 

@@ -554,6 +554,14 @@ impl ObservationReinforcer {
                 let display_path = get_relative_path(path);
                 format!("Write {}", display_path)
             }
+            TOOL_EDIT_FILE => {
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("");
+                let display_path = get_relative_path(path);
+                format!("Edit {}", display_path)
+            }
             TOOL_PLAN_NOTE => {
                 let action = args["action"].as_str().unwrap_or("read");
                 format!("Plan note {}", action)
@@ -778,6 +786,7 @@ impl ObservationReinforcer {
                     _ => format!("Read {} lines", content.lines().count()),
                 }
             }
+            TOOL_EDIT_FILE => t!("workflow.summary.edit_file").to_string(),
             TOOL_PLAN_EDIT_NOTE => t!("workflow.summary.edit_file").to_string(),
             TOOL_PLAN_WRITE_NOTE => t!("workflow.summary.write_file").to_string(),
             TOOL_PLAN_READ_NOTE => {

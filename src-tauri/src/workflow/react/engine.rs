@@ -6829,7 +6829,7 @@ impl WorkflowExecutor {
             }
 
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_get` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
+                content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_list` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
                 llm_content: None,
                 title: format!("Tool unavailable: {}", name),
                 summary: "Planning note tool unavailable".to_string(),

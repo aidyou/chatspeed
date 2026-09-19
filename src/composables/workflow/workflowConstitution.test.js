@@ -775,13 +775,11 @@ const rustToolName = constantName => {
 assert.deepEqual(WORKFLOW_TODO_TOOL_NAMES, [
   rustToolName('TOOL_TODO_CREATE'),
   rustToolName('TOOL_TODO_LIST'),
-  rustToolName('TOOL_TODO_UPDATE'),
-  rustToolName('TOOL_TODO_GET')
+  rustToolName('TOOL_TODO_UPDATE')
 ])
 assert.deepEqual(WORKFLOW_SUB_AGENT_TOOL_NAMES, [
   rustToolName('TOOL_SUB_AGENT_RUN'),
-  rustToolName('TOOL_SUB_AGENT_OUTPUT'),
-  rustToolName('TOOL_SUB_AGENT_STOP')
+  rustToolName('TOOL_SUB_AGENT_OUTPUT')
 ])
 
 console.log('workflow constitution tests passed')

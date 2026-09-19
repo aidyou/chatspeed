@@ -772,11 +772,9 @@ const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
   'sub_agent_output',
-  'sub_agent_stop',
   'todo_create',
   'todo_list',
   'todo_update',
-  'todo_get',
   'skill',
   'ask_user',
   'complete_workflow',

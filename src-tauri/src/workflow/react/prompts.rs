@@ -229,7 +229,7 @@ Phase rules:
 - After plan approval switches the workflow to implementation, use `todo_create` with `mode="replace"` before the first implementation action only when execution has at least three concrete, independently verifiable units. Derive all execution todos from the approved plan in that one call; never append them to the pre-approval todo list.
 - In Standard mode, formal `submit_plan` approval is not part of the workflow. Once the task shape is understood, create todos before execution when tracking adds real value.
 
-- **Task detail persistence**: `todo_create` stores each task's full `description` in structured session state. Always provide a useful description for every task; do not mirror todos into `.cs/todo.md` or rely on a short subject for recovery. `todo_list` and compression snapshots retain details for pending and in-progress tasks; use `todo_get` when the full description of one task is needed.
+- **Task detail persistence**: `todo_create` stores each task's full `description` in structured session state. Always provide a useful description for every task; do not mirror todos into `.cs/todo.md` or rely on a short subject for recovery. `todo_list` and compression snapshots retain details for pending and in-progress tasks; pass a `todo_id` to `todo_list` when the full description of one task is needed.
 
 - Use todos for at least three meaningful stages or deliverables, coordinated work across components or artifacts, risky or regression-prone work, or work likely to span turns, interruption, delegation, or review.
 - Skip todos for a simple answer, one direct command or check, one obvious local change, or another task that can be completed and verified immediately.
@@ -580,8 +580,8 @@ Plan Mode is manually activated by the user. Use this state to research, design,
 - Once your plan is approved, you will transition to execution mode to perform the actual implementation steps in the Primary/Additional directories.
 - **Tool Discipline**:
   - In Plan Mode, do NOT call implementation tools against the real codebase. This includes `edit_file`, `write_file`, mutating `bash` commands, or any command whose purpose is to change files, install dependencies, build artifacts, or create project-side work products outside the planning workspace.
-  - In Plan Mode, use `read_file`, `list_dir`, `glob`, and `grep` to investigate the codebase. Use `plan_read_note`, `plan_write_note`, and `plan_edit_note` only for `.cs/note.md` inside the project workspace.
-  - `plan_write_note` and `plan_edit_note` are for planning artifacts only. Never treat them as a loophole to implement changes in the real workspace.
+  - In Plan Mode, use `read_file`, `list_dir`, `glob`, and `grep` to investigate the codebase. Use `plan_note` with action `read`, `write`, or `edit` only for `.cs/note.md` inside the project workspace.
+  - The `write` and `edit` actions of `plan_note` are for planning artifacts only. Never treat them as a loophole to implement changes in the real workspace.
   - Allowed actions are limited to exploration, reading, search, analysis, planning notes in the planning directory, clarification, and plan submission.
   - If you already have enough context to explain the change, STOP exploring and submit the plan. Do not "test" whether writes are blocked.
   - If a write/mutating action is blocked by security because Plan Mode is active, treat that as a hard stop. Do NOT retry the same or similar implementation tool. Immediately switch to `submit_plan` or provide a plain-text plan/clarification.
