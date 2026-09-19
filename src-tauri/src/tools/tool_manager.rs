@@ -273,9 +273,6 @@ pub struct ToolManager {
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
     /// A channel for notifying consumers that the externally visible MCP tool list changed.
     mcp_tool_change_event_sender: broadcast::Sender<()>,
-    /// A set to track MCP server IDs with ongoing operations (start, stop, restart, refresh).
-    /// This is used to prevent race conditions from rapid UI clicks.
-    pub ops_in_progress: tokio::sync::Mutex<HashSet<i64>>,
 }
 
 impl ToolManager {
@@ -290,7 +287,6 @@ impl ToolManager {
             mcp_alias_registry: RwLock::new(McpAliasRegistry::default()),
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
-            ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 

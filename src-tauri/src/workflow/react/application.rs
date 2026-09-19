@@ -158,6 +158,11 @@ pub struct WorkflowApplicationService {
     pub(crate) factory: Arc<dyn SubAgentFactory>,
     pub(crate) workflow_manager: Arc<WorkflowManager>,
     pub(crate) app_data_dir: PathBuf,
+    /// The unique Agent Skill / MCP capability service shared by the Tauri
+    /// commands, the control plane and (through it) the `cs` CLI. Holding it
+    /// here keeps exactly one instance alive for the desktop owner, so the
+    /// in-process single-flight locks and the durable journal cannot diverge.
+    pub(crate) capability: Arc<crate::capability::CapabilityApplicationService>,
     /// Run-scoped verified capability leases, keyed by session id.
     ///
     /// A lease's resolved secret values must never be persisted (INV-6), so it
@@ -178,6 +183,23 @@ impl WorkflowApplicationService {
         workflow_manager: Arc<WorkflowManager>,
         app_data_dir: PathBuf,
     ) -> Self {
+        let capability = Arc::new(
+            crate::capability::CapabilityApplicationService::new(
+                main_store.clone(),
+                app_data_dir.clone(),
+            )
+            // The desktop process is the only runtime owner, so it is also the
+            // only process that may observe *and* change MCP runtime state
+            // (INV-1). Both ports come from the same `ChatState`.
+            .with_mcp_runtime(
+                Arc::new(crate::capability::mcp::runtime::ToolManagerRuntimePort::new(
+                    chat_state.clone(),
+                )),
+                Arc::new(crate::capability::mcp::runtime::ToolManagerRuntimeEffects::new(
+                    chat_state.clone(),
+                )),
+            ),
+        );
         Self {
             main_store,
             chat_state,
@@ -186,8 +208,14 @@ impl WorkflowApplicationService {
             factory,
             workflow_manager,
             app_data_dir,
+            capability,
             prepared_leases: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// The unique capability service, shared with the Tauri command layer.
+    pub fn capability(&self) -> &Arc<crate::capability::CapabilityApplicationService> {
+        &self.capability
     }
 
     /// Registers the verified capability lease of one dispatched run.

@@ -21,8 +21,24 @@ chat:
   note_already_exists: This note already exists, no need to add again
 cs:
   agent_list_header: Agents
+  capability_doctor_clean: No capability findings
+  capability_doctor_findings: 'Findings: %{findings}'
+  capability_doctor_header: Capability doctor
+  capability_reconcile_clean: Nothing still needs reconcile
+  capability_reconcile_header: Capability reconcile
+  capability_reconcile_pending: 'Still needs reconcile: %{ids}'
   doctor_connected: 'Connected to ChatSpeed control plane: endpoint %{endpoint}, protocol v%{protocol}, instance %{instance}, pid %{pid}'
   doctor_ok: Connectivity, authentication and protocol version are OK
+  mcp_list_header: MCP servers
+  mcp_mutation_header: MCP operation
+  mcp_tools_header: MCP tools
+  no_records: No records
+  skill_check_header: Skill check
+  skill_install_header: Skill install
+  skill_list_header: Agent Skills
+  skill_operation: Operation
+  skill_targets_header: Skill install targets
+  skill_uninstall_header: Skill uninstall
   workflow_created: 'Workflow created: %{session_id}'
   workflow_started: 'Workflow started: %{session_id}'
   workflow_stopped: 'Workflow stopped: %{session_id}'

@@ -3,6 +3,12 @@ mod ai;
 /// persistence layer, ccproxy admission gate, workflow tool gate and the
 /// future experiment service (2C/2F) all consume it.
 pub mod budget;
+/// The Phase 3 capability-management contract: one transport-neutral
+/// application service owns every Agent Skill and MCP mutation, backed by the
+/// shared desktop `MainStore` journal. It never opens its own database
+/// connection and never owns a runtime, so it stays inside the single desktop
+/// owner (INV-1) while the Tauri, HTTP and CLI adapters all delegate to it.
+pub mod capability;
 /// The Phase 2F campaign/candidate contract, re-exported narrowly so the `cs`
 /// CLI binary can reuse exactly one strict parser, one canonical-hash
 /// implementation and one checked-in prompt catalog instead of duplicating
@@ -116,6 +122,7 @@ use crate::error::AppError;
 use ai::interaction::chat_completion::ChatState;
 use ai::model_catalog_updater::ModelsDevCatalogService;
 use commands::agent::*;
+use commands::capability::*;
 use commands::ccproxy::*;
 use commands::chat::*;
 use commands::chat_hub::*;
@@ -287,6 +294,17 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
         .invoke_handler(tauri::generate_handler![
+            // capability command (Phase 3 read-only surface)
+            capability_skill_targets,
+            capability_skill_inventory,
+            capability_mcp_servers,
+            capability_operation,
+            capability_doctor,
+            capability_reconcile,
+            // capability command (Phase 3 Skill mutations)
+            capability_skill_check,
+            capability_skill_install,
+            capability_skill_uninstall,
             // agent command
             add_agent,
             update_agent,
@@ -1010,6 +1028,60 @@ pub async fn run() -> crate::error::Result<()> {
                 ),
             );
             app.manage(application_service.clone());
+
+            // State 12: CapabilityApplicationService (Agent Skills + MCP)
+            //
+            // Same instance the application service (and therefore the control
+            // plane) uses, so the durable journal and in-process single-flight
+            // locks cannot diverge between the Tauri and HTTP adapters.
+            //
+            // The startup recovery gate runs before the control plane starts
+            // accepting requests and before any capability mutation is
+            // admitted: operations a crash left in flight are classified as
+            // failed-before-effect (retryable) or needs_reconcile, never
+            // blindly retried (INV-8).
+            {
+                let capability = application_service.capability().clone();
+                match capability.recover_interrupted_operations() {
+                    Ok(report) if !report.is_empty() => {
+                        log::warn!(
+                            "[Capability][recovery] {} operation(s) failed before any effect, {} need reconcile",
+                            report.failed_before_effect.len(),
+                            report.needs_reconcile.len()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => log::error!(
+                        "[Capability][recovery] startup recovery failed: {}",
+                        error.redacted_message()
+                    ),
+                }
+                app.manage(capability.clone());
+
+                // Evidence-driven convergence runs once after boot, on the async
+                // runtime so it can observe MCP. It finalizes quarantined Skill
+                // moves, discards orphaned private staging, and rolls forward any
+                // needs_reconcile operation whose durable + runtime evidence now
+                // proves the effect; anything unproven is left as needs_reconcile
+                // rather than blind-retried (AC-2/AC-7/INV-8).
+                tokio::spawn(async move {
+                    match capability.reconcile().await {
+                        Ok(report) if !report.is_noop() => log::info!(
+                            "[Capability][reconcile] converged {} quarantine(s), {} install(s), {} mcp effect(s), removed {} staging residue, left {} needing reconcile",
+                            report.quarantines_finalized.len(),
+                            report.installs_recovered.len(),
+                            report.mcp_effects_recovered.len(),
+                            report.staging_residue_removed,
+                            report.still_needs_reconcile.len()
+                        ),
+                        Ok(_) => {}
+                        Err(error) => log::error!(
+                            "[Capability][reconcile] startup reconcile failed: {}",
+                            error.redacted_message()
+                        ),
+                    }
+                });
+            }
 
             // Control plane: independent loopback HTTP/JSON + SSE server.
             // Startup failures are logged (without secrets) and must not block

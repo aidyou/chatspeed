@@ -21,8 +21,24 @@ chat:
   note_already_exists: 該筆記已存在，無需重複新增
 cs:
   agent_list_header: Agent 列表
+  capability_doctor_clean: 無能力相關發現項
+  capability_doctor_findings: '發現項：%{findings}'
+  capability_doctor_header: 能力健檢
+  capability_reconcile_clean: 無待收斂項
+  capability_reconcile_header: 能力收斂
+  capability_reconcile_pending: '仍待收斂：%{ids}'
   doctor_connected: '已連線 ChatSpeed 控制面：端點 %{endpoint}，協定 v%{protocol}，實例 %{instance}，pid %{pid}'
   doctor_ok: 連線、認證與協定版本檢查通過
+  mcp_list_header: MCP 伺服器
+  mcp_mutation_header: MCP 操作
+  mcp_tools_header: MCP 工具
+  no_records: 無記錄
+  skill_check_header: Skill 檢查
+  skill_install_header: Skill 安裝
+  skill_list_header: Agent Skills
+  skill_operation: 操作
+  skill_targets_header: Skill 安裝目標
+  skill_uninstall_header: Skill 卸載
   workflow_created: 'Workflow 已建立：%{session_id}'
   workflow_started: 'Workflow 已啟動：%{session_id}'
   workflow_stopped: 'Workflow 已停止：%{session_id}'

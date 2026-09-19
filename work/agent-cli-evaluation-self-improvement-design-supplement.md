@@ -133,7 +133,29 @@ ChatSpeed 作为开源工具，只提供 CLI 和评测框架功能；成本由�
 - WARN：非致命问题（重试成功、降级运行、budget 接近上限）；
 - ERROR：失败操作（请求拒绝、资源不可用、内部错误）。
 
-### 18.3 Metrics 和监控
+### 18.3 CLI 能力与实验 UI 的可观测性要求
+
+CLI-first 不等于 CLI-only。能力安装、自动化任务和实验运行都需要同时支持机器调用、人工审阅和故障恢复。
+
+**能力操作的观测要求**：
+
+- 每个 `skill`/`mcp`/automation mutation 都有 operation id、plan hash、actor、data domain、target scope、开始/结束时间和结构化终态；
+- `draft`、`plan`、`approve`、`apply`、`rollback` 是可分别观测的状态，不把一次长命令隐藏成不可恢复的黑盒；
+- stdout/HTTP response 只返回稳定 schema，日志和 UI 默认 redact token、API key、环境变量值、完整 prompt/response、MCP 参数与敏感路径；
+- `doctor` 能发现 staged package、未完成 journal、孤儿 MCP 进程、automation run 与 workflow session 失配、实验 owner/lease 残留，并给出确定性的 reconcile/rollback 建议；
+- UI、CLI 和 Agent 查询同一个 operation/run/snapshot/event authority，不能各自维护“看起来成功”的本地状态。
+
+**实验 UI 的可观测性要求**：
+
+- Workflow 页面提供“创建实验”按钮和 Experiment Launcher；创建前显示 resolved config、tool/MCP/skill 列表、预算/成本估算、权限和审批项；
+- Experiment Monitor 展示 run/campaign/job/candidate 的生命周期、SSE 实时事件、durable event、当前 workflow session、owner/data domain、budget reserve/commit/release、usage/cost、重试和 infra failure；
+- 工具调用展示名称、参数摘要、耗时、结果大小、是否实际进入 owner、admission/approval 结果；敏感值只显示 hash/长度/类型；
+- 对比页展示 baseline/candidate 配对结果、evaluator/verifier/promotion policy/canary/audit 状态，区分 `model`、`tool`、`runner`、`verifier` 和 `policy` provenance；
+- 用户可以从 UI 执行 stop/cancel/reconcile/export/replay，也可以复制 run/campaign id 后用 CLI 继续操作；UI 关闭不等于停止实验，停止必须是显式动作；
+- 失败、超时、unknown_manual 和 budget_exceeded 不能只显示“失败”，必须提供可定位的阶段、error code、最后一个 durable intent、残留资源和下一步 doctor/reconcile 操作。
+
+UI 只是 transport/client，不拥有实验状态；必须与 CLI 使用相同的 `ExperimentApplicationService`/control-plane contracts。UI MVP 可以先支持单次 experiment run 与 campaign 观测，再逐步加入 benchmark、promotion 和成本 dashboard。
+### 18.4 Metrics 和监控
 
 推荐的 Prometheus-style metrics：
 
@@ -167,7 +189,7 @@ chatspeed_db_query_duration_seconds{operation}
 
 可选的 metrics exporter（`chatspeed metrics serve --port 9090`）供 Prometheus 抓取。
 
-### 18.4 Debug 模式
+### 18.5 Debug 模式
 
 `chatspeed --debug <command>` 输出：
 - 完整的 HTTP request/response（包括 headers）；

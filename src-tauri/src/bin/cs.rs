@@ -18,6 +18,8 @@ mod artifact;
 mod benchmark;
 #[path = "cs/campaign.rs"]
 mod campaign;
+#[path = "cs/capability.rs"]
+mod capability;
 #[path = "cs/client.rs"]
 mod client;
 #[path = "cs/discovery.rs"]
@@ -28,20 +30,24 @@ mod error;
 mod evaluate;
 #[path = "cs/experiment.rs"]
 mod experiment;
+#[path = "cs/mcp.rs"]
+mod mcp;
 #[path = "cs/output.rs"]
 mod output;
 #[path = "cs/promotion.rs"]
 mod promotion;
 #[path = "cs/schedule.rs"]
 mod schedule;
+#[path = "cs/skill.rs"]
+mod skill;
 #[path = "cs/sse.rs"]
 mod sse;
 #[path = "cs/verifier.rs"]
 mod verifier;
 
 use args::{
-    AgentCommand, BenchmarkCommand, CampaignCommand, Cli, Command, ExperimentCommand, OutputFormat,
-    PromotionCommand, WorkflowCommand,
+    AgentCommand, BenchmarkCommand, CampaignCommand, Cli, Command, DoctorCommand, ExperimentCommand,
+    OutputFormat, PromotionCommand, WorkflowCommand,
 };
 use clap::Parser as _;
 use client::ControlPlaneClient;
@@ -115,7 +121,18 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
     let client = ControlPlaneClient::new(&discovery)?;
 
     match &cli.command {
-        Command::Doctor => doctor(cli, &discovery, &client).await,
+        Command::Doctor { command } => match command {
+            // Bare `cs doctor` keeps its exact connectivity/identity check.
+            None => doctor(cli, &discovery, &client).await,
+            Some(DoctorCommand::Capabilities) => {
+                capability::doctor_capabilities(cli, &client).await
+            }
+            Some(DoctorCommand::Reconcile { idempotency_key }) => {
+                capability::doctor_reconcile(cli, &client, idempotency_key).await
+            }
+        },
+        Command::Skill { command } => skill::run(cli, &client, command).await,
+        Command::Mcp { command } => mcp::run(cli, &client, command).await,
         Command::Agent { command } => run_agent_command(cli, &client, command).await,
         Command::Workflow { command } => run_workflow_command(cli, &client, command).await,
         Command::Experiment { command } => match command {

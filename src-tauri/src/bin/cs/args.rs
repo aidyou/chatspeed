@@ -75,7 +75,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check connectivity, authentication and protocol compatibility.
-    Doctor,
+    Doctor {
+        #[command(subcommand)]
+        command: Option<DoctorCommand>,
+    },
     /// Discover agents known to the running ChatSpeed app.
     Agent {
         #[command(subcommand)]
@@ -86,10 +89,164 @@ pub enum Command {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
+    /// Inspect and manage Agent Skills (file-based capabilities).
+    ///
+    /// Read-only in this phase: it never opens the database or a capability
+    /// directory and never installs anything.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+    /// Install, remove, start, stop and inspect the MCP servers managed by the
+    /// running ChatSpeed app.
+    ///
+    /// Every mutation goes through the app's single capability service over the
+    /// authenticated control plane; the CLI never touches the database, the
+    /// config cache or a server process itself. Listing tools never invokes a
+    /// tool.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
     /// Capture, inspect and replay workflow run artifacts.
     Experiment {
         #[command(subcommand)]
         command: ExperimentCommand,
+    },
+}
+
+/// Additive `cs doctor` sub-capabilities.
+#[derive(Debug, Subcommand)]
+pub enum DoctorCommand {
+    /// Report the capability journal, Skill ownership, MCP desired/runtime
+    /// drift and private staging residue (report-only; never mutates).
+    Capabilities,
+    /// Converge capability drift the durable evidence proves, then report what
+    /// changed. Anything whose effect state cannot be proven is left in
+    /// `needs_reconcile`; nothing is blind-retried or deleted on a guess.
+    Reconcile {
+        /// Idempotency key for the reconcile mutation. One is minted when the
+        /// flag is omitted so a retry cannot run twice.
+        #[arg(long = "idempotency-key")]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// Read-only Agent Skill commands.
+#[derive(Debug, Subcommand)]
+pub enum SkillCommand {
+    /// List the registered Skill install targets and whether each is usable.
+    Targets,
+    /// List installed Agent Skills with their ownership and drift state.
+    List,
+    /// Check a Skill source with the non-LLM checker, without installing.
+    Check {
+        /// The structured source document (`{"kind": ...}`), inline.
+        #[arg(long, conflicts_with = "source_file")]
+        source_json: Option<String>,
+        /// The structured source document, read from a file (`-` for stdin).
+        #[arg(long)]
+        source_file: Option<PathBuf>,
+    },
+    /// Install a Skill that passed the checker into the selected targets.
+    Install {
+        /// The structured source document (`{"kind": ...}`), inline.
+        #[arg(long, conflicts_with = "source_file")]
+        source_json: Option<String>,
+        /// The structured source document, read from a file (`-` for stdin).
+        #[arg(long)]
+        source_file: Option<PathBuf>,
+        /// Install target id; repeatable. Defaults to the ChatSpeed directory.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        /// Idempotency key. Generated when omitted, so a retry never doubles an effect.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Uninstall a Skill that ChatSpeed installed and still owns.
+    Uninstall {
+        /// The Skill name as installed.
+        name: String,
+        /// Install target id; repeatable. Defaults to the ChatSpeed directory.
+        #[arg(long = "target")]
+        targets: Vec<String>,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+}
+
+/// MCP capability commands: reads plus the durable mutations.
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    /// List MCP servers with their desired, observed runtime and tools state.
+    List,
+    /// Check one MCP server's status with a fresh bounded runtime observation.
+    Status {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+    },
+    /// Install one MCP server from a strict descriptor. It is registered
+    /// disabled: no process is started and no network is contacted by install.
+    Install {
+        /// The descriptor document (`{"name": ..., "type": ...}`), inline.
+        #[arg(long, conflicts_with = "descriptor_file")]
+        descriptor_json: Option<String>,
+        /// The descriptor document, read from a file (`-` for stdin).
+        #[arg(long)]
+        descriptor_file: Option<PathBuf>,
+        /// Enable and start the server as a second, separately recorded
+        /// operation after the install completes.
+        #[arg(long)]
+        enable: bool,
+        /// Idempotency key. Generated when omitted, so a retry never doubles an effect.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Uninstall a server: disable, confirm the runtime stopped, then delete.
+    Uninstall {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Set the desired state to enabled and start the server.
+    Enable {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Set the desired state to disabled and stop the server.
+    Disable {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// Stop and start one enabled server.
+    Restart {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// List the tools a server published, without invoking any of them.
+    Tools {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+    },
+    /// Re-read one server's tool list. It lists tools; it never invokes one.
+    Refresh {
+        /// The MCP server name as registered in ChatSpeed.
+        name: String,
+        /// Idempotency key. Generated when omitted.
+        #[arg(long)]
+        idempotency_key: Option<String>,
     },
 }
 
@@ -313,8 +470,7 @@ pub enum PromotionCommand {
 }
 
 #[derive(Debug, Subcommand)]
-pub enum BenchmarkCommand {
-    /// Resolve a checked-in `chatspeed-smoke@1` fixture task and submit one
+pub enum BenchmarkCommand {    /// Resolve a checked-in `chatspeed-smoke@1` fixture task and submit one
     /// budgeted, single-attempt experiment run (2C endpoint + admission).
     /// With --artifact-dir, waits for a durable terminal state and captures
     /// a 2A-compatible artifact.
@@ -534,4 +690,170 @@ pub fn validate_signal_source(
             .map_err(|e| format!("Failed to read signal file {}: {}", path.display(), e));
     }
     Err("Either --json or --file is required".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(argv)
+    }
+
+    /// The whole command tree must be internally consistent: duplicate or
+    /// conflicting definitions are a usage-contract regression.
+    #[test]
+    fn the_command_tree_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    /// Bare `cs doctor` keeps its previous behaviour; the capabilities report
+    /// is strictly additive.
+    #[test]
+    fn doctor_is_optional_subcommand_additive() {
+        let bare = parse(&["cs", "doctor"]).expect("bare doctor");
+        match bare.command {
+            Command::Doctor { command } => assert!(command.is_none()),
+            _ => panic!("expected the doctor command"),
+        }
+
+        let capabilities = parse(&["cs", "doctor", "capabilities"]).expect("doctor capabilities");
+        match capabilities.command {
+            Command::Doctor {
+                command: Some(DoctorCommand::Capabilities),
+            } => {}
+            _ => panic!("expected doctor capabilities"),
+        }
+
+        // The reconcile subcommand carries an optional idempotency key and stays
+        // additive; bare `cs doctor` is untouched.
+        let reconcile = parse(&["cs", "doctor", "reconcile"]).expect("doctor reconcile");
+        match reconcile.command {
+            Command::Doctor {
+                command: Some(DoctorCommand::Reconcile { idempotency_key }),
+            } => assert!(idempotency_key.is_none()),
+            _ => panic!("expected doctor reconcile"),
+        }
+        let keyed = parse(&[
+            "cs",
+            "doctor",
+            "reconcile",
+            "--idempotency-key",
+            "k-1",
+        ])
+        .expect("doctor reconcile with key");
+        match keyed.command {
+            Command::Doctor {
+                command: Some(DoctorCommand::Reconcile { idempotency_key }),
+            } => assert_eq!(idempotency_key.as_deref(), Some("k-1")),
+            _ => panic!("expected doctor reconcile with key"),
+        }
+    }
+
+    #[test]
+    fn skill_and_mcp_read_commands_parse() {
+        match parse(&["cs", "skill", "targets"]).expect("skill targets").command {
+            Command::Skill {
+                command: SkillCommand::Targets,
+            } => {}
+            _ => panic!("expected skill targets"),
+        }
+        match parse(&["cs", "skill", "list"]).expect("skill list").command {
+            Command::Skill {
+                command: SkillCommand::List,
+            } => {}
+            _ => panic!("expected skill list"),
+        }
+        match parse(&["cs", "mcp", "list"]).expect("mcp list").command {
+            Command::Mcp {
+                command: McpCommand::List,
+            } => {}
+            _ => panic!("expected mcp list"),
+        }
+        match parse(&["cs", "mcp", "status", "weather"])
+            .expect("mcp status")
+            .command
+        {
+            Command::Mcp {
+                command: McpCommand::Status { name },
+            } => assert_eq!(name, "weather"),
+            _ => panic!("expected mcp status"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_capability_subcommand_is_a_usage_error() {
+        // `skill check/install/uninstall` are the Phase 3 mutations; a name
+        // that does not exist stays a parse error.
+        assert!(parse(&["cs", "skill", "verify"]).is_err());
+        assert!(parse(&["cs", "mcp", "call"]).is_err());
+    }
+
+    #[test]
+    fn skill_mutations_parse_a_source_and_repeatable_targets() {
+        match parse(&[
+            "cs",
+            "skill",
+            "install",
+            "--source-json",
+            "{\"kind\":\"local_directory\",\"path\":\"/tmp/demo\"}",
+            "--target",
+            "chatspeed",
+            "--target",
+            "agents",
+            "--idempotency-key",
+            "k1",
+        ])
+        .expect("skill install")
+        .command
+        {
+            Command::Skill {
+                command:
+                    SkillCommand::Install {
+                        source_json,
+                        targets,
+                        idempotency_key,
+                        ..
+                    },
+            } => {
+                assert!(source_json.is_some());
+                assert_eq!(targets, vec!["chatspeed".to_string(), "agents".to_string()]);
+                assert_eq!(idempotency_key.as_deref(), Some("k1"));
+            }
+            _ => panic!("expected skill install"),
+        }
+
+        // An inline document and a file are mutually exclusive.
+        assert!(parse(&[
+            "cs",
+            "skill",
+            "check",
+            "--source-json",
+            "{}",
+            "--source-file",
+            "source.json",
+        ])
+        .is_err());
+
+        match parse(&["cs", "skill", "uninstall", "demo"])
+            .expect("skill uninstall")
+            .command
+        {
+            Command::Skill {
+                command:
+                    SkillCommand::Uninstall {
+                        name,
+                        targets,
+                        idempotency_key,
+                    },
+            } => {
+                assert_eq!(name, "demo");
+                // No target means the ChatSpeed directory only.
+                assert!(targets.is_empty());
+                assert!(idempotency_key.is_none());
+            }
+            _ => panic!("expected skill uninstall"),
+        }
+    }
 }

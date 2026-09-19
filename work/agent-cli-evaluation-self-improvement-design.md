@@ -435,6 +435,27 @@ CLI 的 `--output jsonl` 是 SSE envelope 的逐行投影，不另外定义 comm
 - 停止后先关闭新 effect admission，再等待/终止活动操作；
 - CLI 不应通过删除 session 或杀死单个 UI channel伪造停止。
 
+### 6.7 实验的桌面操作入口与可观测性
+
+实验不能只依赖命令行。CLI 适合自动化、脚本和 Agent 调用，但普通用户需要在 ChatSpeed 界面中发现、创建、观察和停止实验。建议在 Workflow 标题栏/侧边栏增加独立的“创建实验”入口（不要与现有时钟图标代表的 workflow automation 混淆），打开 Experiment Launcher，而不是让前端通过 shell 启动 `cs` 二进制。
+
+Experiment Launcher 的第一版流程：
+
+1. 选择 Agent、HarnessProfile、任务目标（文本或文件）、workspace 和运行类型（single run、baseline/candidate A/B、benchmark 或 campaign）；
+2. 选择本次允许的模型 slot、tools、MCP、skills、phase、审批策略、预算、超时和 artifact 输出；默认值来自 Agent defaults，UI 只提交本次 experiment override；
+3. 点击“解析/预览”后，由主进程执行 normalize → resolve → budget estimate，展示 resolved config、prompt/tool-schema/config hashes、预计 effect、预算和需要的审批；
+4. 用户确认后由 `ExperimentService` 原子执行 create → freeze → admission → start。UI 直接调用共享 application service/Tauri adapter；CLI 走同一 service 的 HTTP adapter，不通过拼接 CLI 命令形成第二套语义；
+5. 启动后进入 Experiment Monitor，可实时查看状态、阶段、事件时间线、当前 workflow、tool/MCP/skill 调用（脱敏）、审批、token/成本、预算余量、重试、错误和 artifact 进度；
+6. 终态后展示 baseline/candidate 对比、evaluator/verifier/promotion 状态、artifact/inspect/replay 入口，以及停止、取消、reconcile、重新运行和导出报告操作。promotion 仍必须经过 server-owned policy 和明确的人类确认。
+
+Experiment Monitor 至少需要提供三种视图：
+
+- **运行列表**：按 experiment/campaign/candidate/run 筛选，显示 queued/running/waiting/completed/failed/cancelled/unknown、owner、数据域、预算和最近错误；
+- **单次运行详情**：结构化 snapshot、SSE/durable event timeline、当前 wait/approval、tool calls、usage/cost、retry/infra failure 和 artifact provenance；模型输出只能作为带 `provenance=model` 的观察，不得冒充 verifier 事实；
+- **比较与审计**：baseline/candidate 的配对指标、成本/延迟/资源、verifier/evaluator 事实、policy gate、canary 和 audit bundle。原始 prompt、响应、token、secret 和私有 holdout 仍按脱敏策略处理。
+
+UI 入口与 CLI 入口必须有相同的 request/schema/status 语义，但允许使用各自的 Tauri/HTTP transport。这样用户可以从界面启动 AI 实验，随后用 CLI 或 Agent 继续观察和控制同一 experiment；关闭 UI 或 CLI 不应停止后台 owner，除非用户明确执行 stop/cancel。
+
 ## 7. CLI 作为 skill/MCP/Agent 管理控制面
 
 ### 7.1 单一内置 `chatspeed-cli` skill
@@ -540,6 +561,93 @@ smoke test 必须：
 - 失败后保持 disabled，而不是重试到成功。
 
 当前 `McpServerConfig` 包含 `bearer_token` 和 `env`，CLI/GUI 输出应默认 redact；MCP secrets 应迁入与 API key 相当的受保护存储，而不是作为普通可导出 JSON 处理。
+
+### 7.5 CLI 能力扩展路线
+
+当前 `cs` 已经是 workflow/实验控制面，但还不是完整的“能力管理 CLI”。需要把 CLI 明确定位为 ChatSpeed 的能力扩展层：CLI 负责声明、解析、审批和调用，主进程的 service 负责权限、事务、运行时注册、预算和审计；CLI 绝不能通过直接写数据库、直接修改 `~/.chatspeed` 或直接启动任意进程来获得能力。
+
+#### 7.5.1 当前实现状态与目标边界
+
+截至当前 Phase 1/2：
+
+- `cs workflow`、`cs experiment`、campaign、schedule、promotion 等控制/评测命令已经存在；
+- workflow runtime 已有 `web_search`、`web_fetch` 工具，Agent 可以在被允许的工具集合中调用它们；它们目前不是独立的 `cs tool call` 公共接口；
+- 桌面端已有 Workflow Automation 的创建、编辑、启停、立即运行和定时调度能力，但 `cs` 尚未提供对应的 automation 管理命令；
+- 实验 owner 内部已经有经过验证的 bundle MCP/skill 注入与回收，这不等同于面向用户的通用 skill/MCP 安装、升级和卸载产品；
+- 通用 skill 安装、MCP acquisition/register、目标驱动的自动化任务创建、受策略约束的独立工具调用，仍属于后续能力扩展，不应误报为当前 CLI 已支持。
+
+#### 7.5.2 Skill 管理：CLI 作为首选入口
+
+建议把 skill 生命周期做成 CLI 的一等能力，GUI 只提供调用和审阅入口：
+
+```text
+cs skill list
+cs skill inspect <name|digest>
+cs skill resolve --source <ref> [--version <version>]
+cs skill vet --package <path|ref>
+cs skill plan-install --package <path|ref> [--domain <id>]
+cs skill approve --plan <plan-file>
+cs skill install --plan <plan-file> --approval <approval-file>
+cs skill verify <name|digest>
+cs skill remove <name> [--plan <plan-file>]
+cs skill rollback --operation <operation-id>
+```
+
+安装必须沿用 `resolve → staging → 限制检查 → digest/signature → manifest/permission vet → plan → 人工批准 → immutable store → lock/journal → atomic switch → doctor` 流程。`skill install` 是高风险 mutation，默认不能因为 Agent 提交了一段自然语言或一个 URL 就直接落盘；没有可信来源、完整权限声明或无法完成脱敏/回滚时必须 fail closed。用户目录中的 skill 不能覆盖内置 `chatspeed-cli` skill。
+
+#### 7.5.3 MCP 管理：获取、注册、启用严格分离
+
+MCP 继续使用独立命令面，避免“安装一个 server”与“让当前 Agent 立即看见并执行它”混为一个不可审计动作：
+
+```text
+cs mcp list
+cs mcp inspect <server-id|digest>
+cs mcp acquire --source <ref>
+cs mcp verify-package --package <path|ref>
+cs mcp plan-register --package <path|ref> --scope <global|experiment>
+cs mcp register --plan <plan-file> --approval <approval-file>
+cs mcp smoke <server-id>
+cs mcp enable|disable <server-id>
+cs mcp remove|rollback <server-id|operation-id>
+```
+
+`global` 注册影响用户后续 workflow，必须有明确的人类批准；`experiment` 注册只能进入隔离实验数据域或 run-scoped capability lease，不能污染桌面主进程。stdio server、streamable HTTP endpoint、环境变量和 bearer token 要分别记录来源、权限和生命周期；secret 只通过受保护 credential 通道进入进程内内存，不能进入 argv、普通日志、模型 transcript、导出配置或 artifact。MCP smoke 默认无网络、无宿主 home/生产数据库，并受 CPU、内存、磁盘、进程和时间限制。
+
+#### 7.5.4 目标驱动的自动化任务创建
+
+现有 Workflow Automation 已有桌面端编辑器和 scheduler；CLI 应补齐同一 service 的 typed facade，使用户或 Agent 可以用“目标”创建自动化任务，而不需要直接编辑数据库或拼接内部字段：
+
+```text
+cs automation list
+cs automation get <automation-id>
+cs automation draft --agent <agent-id> --goal <text|file> \\
+  --schedule <once|daily|interval> [schedule-options]
+cs automation apply --plan <automation-plan.json> [--approval <approval.json>]
+cs automation create --agent <agent-id> --goal <text|file> --schedule <...>
+cs automation enable|disable <automation-id>
+cs automation run <automation-id>
+cs automation runs <automation-id>
+cs automation update|delete <automation-id>
+```
+
+其中 `automation draft`/`create --goal` 的“目标解析”只生成受约束的 `automation_plan.v1`，包括标题、prompt、Agent、schedule、workspace/allowed paths、shell 配置、tool/MCP/skill 需求、预算、风险和 canonical hash；它不会因为模型推断就自动获得额外工具、网络、路径或 shell 权限。推荐交互为 `draft → inspect → approve → apply`。低风险、完全落在现有 allowlist 内的创建可以由用户显式选择直接 apply；涉及 shell、外部网络、写入新目录、MCP/skill 或长期定时执行时必须停在审批门。
+
+服务端应复用现有 `WorkflowAutomationRequest`、automation scheduler 和 workflow application service，并在 automation run 创建 workflow 时沿用普通 workflow 的 config merge、sandbox、approval、usage 和 durable event authority。CLI 只访问 typed control-plane endpoint；不能自行写 `workflow_automations`、创建第二个 scheduler 或在本地重实现 cron/interval 语义。`automation runs` 应能关联 automation run、workflow session、snapshot、events、usage、artifact 和错误，以便 UI/CLI 共同观测。
+
+#### 7.5.5 受策略约束的工具调用扩展
+
+CLI 可以逐步提供少量高价值工具的 typed facade，但不公开任意 `api call` 或任意函数执行入口。建议先支持只读/可审计的 Web 工具：
+
+```text
+cs tool list
+cs tool inspect web_search|web_fetch
+cs tool call web_search --query <text> [--limit <n>]
+cs tool call web_fetch --url <url>
+```
+
+这些命令必须由主进程的 `ToolApplicationService` 执行，而不是让 CLI 自己发网络请求。每次调用都要经过 bearer/auth、tool allowlist、network/URL policy、请求级预算、超时、速率限制、结果大小限制和 redaction；结果带 `provenance=tool`、request/tool/cost/elapsed metadata，可选择写入 experiment artifact。`web_fetch` 至少校验 URL scheme、重定向、内网/本地地址和内容类型，避免把方便的工具入口变成 SSRF 或数据外带通道。未来扩展文件、代码、MCP 或其他工具时，必须为每类工具定义 typed schema、权限和 effect admission，而不是放宽成通用远程执行。
+
+CLI 能力扩展的优先顺序建议是：先做共享 capability registry/descriptor 与权限模型，再做 skill 安装，随后做 MCP 管理和 automation facade，最后开放 `web_search`/`web_fetch` 等少量 typed tool facade。每项能力都应同时提供 `list/inspect/plan|dry-run/apply/status/rollback|doctor` 中适用的操作，并保留 Tauri UI、CLI 和 Agent 使用同一 service 语义的约束。
 
 ## 8. 数据域、主进程所有权与并发一致性
 
@@ -1064,9 +1172,14 @@ promotion/verdict.json
 6. 基础 CLI：conversation 原语 + 一步式 `experiment run`；
 7. 无窗口主进程和结构化 artifact/usage/budget；
 8. Harbor installed-agent adapter 和小型 Polyglot smoke；
-9. 管理 services、单一 CLI skill 和安全 package pipeline；
-10. 分层 benchmark 与人工 A/B；
-11. GEPA-like 自动候选；
-12. 条件式 DGM-like archive。
+9. 共享 capability registry/descriptor、权限模型和 `doctor` 诊断；
+10. CLI-first skill 安装 pipeline：resolve/vet/plan/approve/apply/verify/rollback；
+11. MCP acquisition/register/smoke/enable 的安全生命周期，以及隔离 experiment capability；
+12. 目标驱动的 automation facade（`draft → inspect → approve → apply`）和 UI/CLI 共用的 automation 观测；
+13. Experiment Launcher/Monitor：UI 创建实验、实时状态/事件/预算/成本/错误/产物观测，并支持 CLI 接续；
+14. 受策略约束的 `web_search`/`web_fetch` 等 typed tool facade；
+15. 管理 services、分层 benchmark 与人工 A/B；
+16. GEPA-like 自动候选；
+17. 条件式 DGM-like archive。
 
-若直接从“自动安装任意 MCP/skill + 自动改进”开始，会在 runtime owner、DB/cache 一致性、package trust、verifier 独立性和预算控制尚未成立时扩大攻击面，因此不建议。
+CLI 能力和实验 UI 不应各自形成第二套业务语义：CLI、Tauri UI、内置 `chatspeed-cli` skill 和未来 Agent 都只能调用共享 application/capability/experiment services；control plane、workflow runtime、automation scheduler、budget ledger、artifact/verifier 和 promotion policy 继续由主进程或隔离 owner 持有。若直接从“自动安装任意 MCP/skill + 自动改进”开始，会在 package trust、数据域隔离、verifier 独立性和预算控制尚未充分产品化时扩大攻击面，因此不建议。

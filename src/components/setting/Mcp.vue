@@ -37,6 +37,18 @@
                   <span class="status-dot"></span>
                   <span class="status-text">{{ getServerStatusText(server.status) }}</span>
                 </div>
+                <div class="server-runtime-facts">
+                  <span
+                    v-if="mcpFacts(server).drift"
+                    class="runtime-fact drift">
+                    {{ driftText(mcpFacts(server).drift) }}
+                  </span>
+                  <span
+                    v-if="mcpFacts(server).toolsFreshness"
+                    class="runtime-fact">
+                    {{ toolsFreshnessText(mcpFacts(server)) }}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -244,7 +256,16 @@
                     type="textarea"
                     :rows="2"
                     :autosize="{ minRows: 1, maxRows: 5 }"
-                    :placeholder="$t('settings.mcp.form.envPlaceholder')" />
+                    :placeholder="
+                      $t(
+                        envPresent
+                          ? 'settings.mcp.form.envKeepPlaceholder'
+                          : 'settings.mcp.form.envPlaceholder'
+                      )
+                    " />
+                  <div v-if="envPresent" class="secret-hint">
+                    {{ $t('settings.mcp.form.envKeepHint') }}
+                  </div>
                 </el-form-item>
               </template>
 
@@ -263,7 +284,20 @@
                 <el-form-item
                   :label="$t('settings.mcp.form.bearerToken')"
                   prop="config.bearer_token">
-                  <el-input v-model="currentServerForm.config.bearer_token" />
+                  <el-input
+                    v-model="currentServerForm.config.bearer_token"
+                    type="password"
+                    show-password
+                    :placeholder="
+                      $t(
+                        bearerTokenPresent
+                          ? 'settings.mcp.form.secretKeepPlaceholder'
+                          : 'settings.mcp.form.secretPlaceholder'
+                      )
+                    " />
+                  <div v-if="bearerTokenPresent" class="secret-hint">
+                    {{ $t('settings.mcp.form.secretKeepHint') }}
+                  </div>
                 </el-form-item>
                 <el-form-item :label="$t('settings.general.proxyServer')" prop="config.proxy">
                   <el-input v-model="currentServerForm.config.proxy" />
@@ -371,6 +405,8 @@
 import { ref, computed, watch, reactive, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
+import { useCapabilityStore } from '@/stores/capability'
+import { mcpDisplayState } from '@/libs/capability.js'
 import { openUrl } from '@/libs/util'
 import { ElMessageBox, ElTooltip } from 'element-plus'
 import McpExecuteDialog from './McpExecuteDialog.vue'
@@ -379,6 +415,7 @@ import { showMessage, showMessageBox } from '@/libs/util'
 
 const { t } = useI18n()
 const mcpStore = useMcpStore()
+const capabilityStore = useCapabilityStore()
 
 const executeDialogVisible = ref(false)
 const executeDialogServer = ref(null)
@@ -420,6 +457,17 @@ const initialServerFormState = () => ({
 })
 
 const currentServerForm = reactive(initialServerFormState())
+
+// Whether the server being edited already has a stored secret. This comes only
+// from the capability projection: `list_mcp_servers` returns a redacted config,
+// so the form can neither display nor accidentally resubmit a token/env value.
+// A field left blank means "keep the stored value"; typing a value replaces it
+// (AC-13 presence / explicit-replace).
+const editingView = computed(() =>
+  currentServerForm.id ? capabilityStore.mcpViews[currentServerForm.id] : null
+)
+const bearerTokenPresent = computed(() => editingView.value?.secret_present === true)
+const envPresent = computed(() => editingView.value?.env_present === true)
 const jsonConfigString = ref('')
 
 const presetMcpsVisible = ref(false)
@@ -851,6 +899,37 @@ const toggleServerToolsExpansion = async server => {
   }
 }
 
+/**
+ * The observed facts of one row, from the capability projection.
+ *
+ * An absent view (the projection could not load) yields `unobserved`, which is
+ * deliberately different from a runtime that answered "stopped" — the page must
+ * not present an unchecked state as a checked one.
+ */
+const mcpFacts = server => mcpDisplayState(capabilityStore.mcpViews[server.id])
+
+const driftText = drift => {
+  const keys = {
+    desired_enabled_not_running: 'driftDesiredNotRunning',
+    running_while_disabled: 'driftRunningWhileDisabled',
+    unsupported_transport: 'driftUnsupportedTransport'
+  }
+  return t(`settings.mcp.${keys[drift] ?? 'driftUnknown'}`)
+}
+
+const toolsFreshnessText = facts => {
+  if (facts.toolsFreshness === 'fresh') {
+    return t('settings.mcp.toolsFresh', { count: facts.toolCount ?? 0 })
+  }
+  if (facts.toolsFreshness === 'stale') {
+    return t('settings.mcp.toolsStale', { count: facts.toolCount ?? 0 })
+  }
+  if (facts.toolsFreshness === 'observed') {
+    return t('settings.mcp.toolsObserved', { count: facts.toolCount ?? 0 })
+  }
+  return t('settings.mcp.toolsUnavailable')
+}
+
 const getServerStatusClass = status => {
   if (typeof status === 'object' && status !== null && status.hasOwnProperty('error')) {
     return 'error'
@@ -1115,6 +1194,13 @@ const trimQuotes = str => {
 </script>
 
 <style lang="scss" scoped>
+.secret-hint {
+  margin-top: var(--cs-space-xs, 4px);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--cs-text-secondary, var(--el-text-color-secondary));
+}
+
 .card {
   .list {
     .item-wrapper {
@@ -1154,6 +1240,21 @@ const trimQuotes = str => {
 
             .server-name {
               font-weight: bold;
+            }
+
+            // What the capability service actually observed, kept visually apart
+            // from the legacy cached status so a reader never mistakes one for
+            // the other.
+            .server-runtime-facts {
+              display: flex;
+              flex-wrap: wrap;
+              gap: var(--cs-space-xs);
+              font-size: var(--cs-font-size-xs);
+              color: var(--cs-text-color-secondary);
+
+              .runtime-fact.drift {
+                color: var(--cs-warning-color);
+              }
             }
 
             .server-status {

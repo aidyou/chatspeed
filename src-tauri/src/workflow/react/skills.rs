@@ -43,6 +43,18 @@ fn default_source() -> String {
     "builtin".to_string()
 }
 
+/// A skill found on disk with the search root it was found under.
+#[derive(Debug, Clone)]
+pub struct ScannedSkill {
+    pub manifest: SkillManifest,
+    /// The search path (skills directory) the skill was found in.
+    pub root: PathBuf,
+    /// The skill's own directory.
+    pub directory: PathBuf,
+    /// Whether the root is a bundled-resource root.
+    pub builtin: bool,
+}
+
 pub struct SkillScanner {
     search_paths: Vec<PathBuf>,
 }
@@ -75,6 +87,15 @@ impl SkillScanner {
 
     pub fn get_search_paths(&self) -> Vec<PathBuf> {
         self.search_paths.clone()
+    }
+
+    /// Creates a scanner over an explicit search-path list, in precedence
+    /// order (earlier paths win).
+    ///
+    /// Used by isolated capability tests and by a hosted run that must resolve
+    /// skills from an injected environment instead of the process HOME.
+    pub fn with_search_paths(search_paths: Vec<PathBuf>) -> Self {
+        Self { search_paths }
     }
 
     /// Adds a run-scoped skill directory to this session's search paths.
@@ -130,6 +151,52 @@ impl SkillScanner {
         );
 
         Ok(skills)
+    }
+
+    /// A skill discovered on disk together with its provenance.
+    ///
+    /// Unlike [`SkillScanner::scan`], this keeps per-location detail instead of
+    /// collapsing same-named skills by priority, which the capability
+    /// inventory needs to classify managed/discovered/builtin installations
+    /// without changing the resolver's precedence rules.
+    pub fn scan_detailed(&self) -> Result<Vec<ScannedSkill>, WorkflowEngineError> {
+        let builtin_roots = crate::constants::resolve_resource_subdirs("skills");
+        let mut found = Vec::new();
+
+        for path in &self.search_paths {
+            if !path.exists() {
+                continue;
+            }
+            let builtin = builtin_roots.iter().any(|root| root == path);
+            let entries = match std::fs::read_dir(path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    log::debug!("Skipping unreadable skill root {:?}: {}", path, error);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let skill_dir = entry.path();
+                if !skill_dir.is_dir() {
+                    continue;
+                }
+                if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
+                    manifest.source = if builtin {
+                        "builtin".to_string()
+                    } else {
+                        "user".to_string()
+                    };
+                    found.push(ScannedSkill {
+                        manifest,
+                        root: path.clone(),
+                        directory: skill_dir,
+                        builtin,
+                    });
+                }
+            }
+        }
+
+        Ok(found)
     }
 
     fn try_load_skill(&self, dir: &std::path::Path) -> Option<SkillManifest> {

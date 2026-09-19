@@ -60,8 +60,7 @@ pub fn error_response(status: StatusCode, code: &'static str, message: String) -
 }
 
 /// Maps a domain [`ApplicationError`] to a stable HTTP status and code.
-pub fn application_error_response(error: &ApplicationError) -> Response {
-    let (status, code) = match error.kind {
+pub fn application_error_response(error: &ApplicationError) -> Response {    let (status, code) = match error.kind {
         ApplicationErrorKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
         ApplicationErrorKind::InvalidInput => (StatusCode::BAD_REQUEST, "invalid_input"),
         ApplicationErrorKind::Conflict => (StatusCode::CONFLICT, "conflict"),
@@ -70,6 +69,70 @@ pub fn application_error_response(error: &ApplicationError) -> Response {
         ApplicationErrorKind::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
     };
     error_response(status, code, error.message.clone())
+}
+
+/// Maps a capability error to a stable HTTP status and code.
+///
+/// The capability error code is preserved on the wire as the envelope `code`,
+/// so a client branches on the same value the service produced. The message is
+/// the redacted one: a capability error can quote an upstream failure and must
+/// never be able to leak a secret through the HTTP plane (AC-13).
+pub fn capability_error_response(
+    error: &crate::capability::error::CapabilityError,
+) -> Response {
+    let (status, code) = match error.code() {
+        crate::capability::error::code::INVALID_REQUEST => {
+            (StatusCode::BAD_REQUEST, "invalid_request")
+        }
+        crate::capability::error::code::IDEMPOTENCY_KEY_REQUIRED => {
+            (StatusCode::BAD_REQUEST, "idempotency_key_required")
+        }
+        crate::capability::error::code::IDEMPOTENCY_KEY_CONFLICT => {
+            (StatusCode::CONFLICT, "idempotency_key_conflict")
+        }
+        crate::capability::error::code::OPERATION_NOT_FOUND => {
+            (StatusCode::NOT_FOUND, "operation_not_found")
+        }
+        crate::capability::error::code::NOT_FOUND => (StatusCode::NOT_FOUND, "not_found"),
+        crate::capability::error::code::UNSUPPORTED_TARGET => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "unsupported_target")
+        }
+        crate::capability::error::code::UNSUPPORTED_ADAPTER => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "unsupported_adapter")
+        }
+        crate::capability::error::code::CHECK_BLOCKED => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "check_blocked")
+        }
+        crate::capability::error::code::CHECK_INCONCLUSIVE => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "check_inconclusive")
+        }
+        crate::capability::error::code::REFUSED => (StatusCode::CONFLICT, "refused"),
+        crate::capability::error::code::FORBIDDEN => (StatusCode::FORBIDDEN, "forbidden"),
+        crate::capability::error::code::NEEDS_RECONCILE => {
+            (StatusCode::CONFLICT, "needs_reconcile")
+        }
+        // An interrupted operation is a recoverable answer about the operation,
+        // not a server fault: reporting it as 500 would hide the retry path.
+        crate::capability::error::code::INTERRUPTED_BEFORE_EFFECT => (
+            StatusCode::CONFLICT,
+            "interrupted_before_effect",
+        ),
+        crate::capability::error::code::EFFECT_STATE_UNKNOWN => {
+            (StatusCode::CONFLICT, "effect_state_unknown")
+        }
+        // No runtime in this process means the effect cannot be performed or
+        // observed; 503 says "try a process that owns the runtime".
+        crate::capability::error::code::RUNTIME_UNAVAILABLE => {
+            (StatusCode::SERVICE_UNAVAILABLE, "runtime_unavailable")
+        }
+        crate::capability::error::code::BUSY => (StatusCode::CONFLICT, "busy"),
+        crate::capability::error::code::PARTIAL => (StatusCode::CONFLICT, "partial"),
+        crate::capability::error::code::STORE_ERROR => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "store_error")
+        }
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+    };
+    error_response(status, code, error.redacted_message())
 }
 
 /// Converts camelCase JSON keys to snake_case, recursively.
