@@ -94,7 +94,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 78,
+      "modelCount": 82,
       "name": "AIHubMix",
       "responses": false
     },
@@ -144,7 +144,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba-cn",
       "logo": "https://models.dev/logos/alibaba-cn.svg",
-      "modelCount": 89,
+      "modelCount": 90,
       "name": "Alibaba (China)",
       "protocol": "openai",
       "responses": false
@@ -941,7 +941,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 378,
+      "modelCount": 379,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -949,11 +949,21 @@
     {
       "api": "https://api.kimi.com/coding/v1",
       "documentationUrl": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
-      "id": "kimi-for-coding",
-      "logo": "https://models.dev/logos/kimi-for-coding.svg",
+      "id": "kimi-code-plan-cn",
+      "logo": "https://models.dev/logos/kimi-code-plan-cn.svg",
       "modelCount": 4,
-      "name": "Kimi For Coding",
-      "protocol": "claude",
+      "name": "Kimi For Coding (kimi.com)",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.kimi.ai/coding/v1",
+      "documentationUrl": "https://www.kimi.ai/code/docs/en/kimi-code/models.html",
+      "id": "kimi-code-plan-global",
+      "logo": "https://models.dev/logos/kimi-code-plan-global.svg",
+      "modelCount": 4,
+      "name": "Kimi For Coding (kimi.ai)",
+      "protocol": "openai",
       "responses": false
     },
     {
@@ -1285,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 571,
+      "modelCount": 572,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1429,7 +1439,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 103,
+      "modelCount": 105,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1460,7 +1470,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 370,
+      "modelCount": 372,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1490,7 +1500,7 @@
       "documentationUrl": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog//",
       "id": "ovhcloud",
       "logo": "https://models.dev/logos/ovhcloud.svg",
-      "modelCount": 15,
+      "modelCount": 14,
       "name": "OVHcloud AI Endpoints",
       "protocol": "openai",
       "responses": false
@@ -2029,7 +2039,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 375,
+      "modelCount": 372,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2049,7 +2059,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 27,
+      "modelCount": 30,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2190,7 +2200,7 @@
       "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
       "id": "zai",
       "logo": "https://models.dev/logos/zai.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "Z.AI",
       "protocol": "openai",
       "responses": false
@@ -2241,7 +2251,7 @@
       "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
       "id": "zhipuai",
       "logo": "https://models.dev/logos/zhipuai.svg",
-      "modelCount": 15,
+      "modelCount": 16,
       "name": "Zhipu AI",
       "protocol": "openai",
       "responses": false
@@ -2258,9 +2268,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "2b14e88659908bd136b5ffd39e1e4c7123a3dc638e63f36201236dfa2b95c33f",
-    "generatedAt": "2026-09-18T08:16:54Z",
+    "catalogSha256": "8dc8b3362713718feb6075bc202c07ce226ebaa244e91b57fa67cce64df44a41",
+    "generatedAt": "2026-09-19T08:04:42Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "74e9f4abd9bf951b43aaad664b18839715c74581"
+    "revision": "8fcdf73a0977a6e0b7b222c24556ac19a347f0da"
   }
 }
