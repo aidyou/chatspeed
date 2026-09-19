@@ -1021,3 +1021,77 @@ Rust（修改）：
 - 剩余限制（不变）：live update start 阶段现已具备 durable intent/outcome 且只在证明 running 后 `Completed`，re-review
   的该项 major 已闭环。V-7 真实子进程 stdio fixture 与 V-10 真实桌面 GUI 交错/重启 smoke 仍未在本环境执行，
   Phase 3 最终关闭仍需补齐这两项。
+
+## 12.9 审查整改轮次记录四：refresh 未证明终态不再伪装成功 + reconcile 补齐 refresh 收敛与冷启动轮询（AC-2 / AC-10 / AC-11 / AC-12 / INV-7 / INV-8）
+
+- 缺陷 1（L1/L2）：`mcp_refresh_tools` 在 effect 超时或确定性失败时仍返回 `Ok`（HTTP 200 / CLI exit 0），
+  超时路径还直接 `finish_operation(NeedsReconcile)` 而不写 `reconcile_reason`；只按状态码或退出码分支的调用方会把
+  一次未确认甚至失败的刷新当成成功，而 enable/disable/update/restart 在同等情况下都返回结构化 `NEEDS_RECONCILE`。
+- 缺陷 2（M1）：reconcile 的通用 MCP effect 证明只识别 `mcp.start|mcp.stop|mcp.delete`，`mcp.tools.refresh` 的
+  `Unknown` effect 永远无法被证明，operation 会**永久**停留在 `needs_reconcile`，每轮 doctor/reconcile 都报同一噪声。
+- 缺陷 3（M2）：reconcile 的 `mcp.update` roll-forward 在启动新配置后只用**单次** `observe` 判定，未复用 live 路径的
+  `wait_until_running` 有界轮询；冷启动（进程已被接受但尚未握手）会被误判为不可观察，收敛要等下一轮。
+
+修复：
+
+- `capability/mcp/orchestrator.rs`（refresh 尾段，约 634–717 行）：超时 → `mcp.tools.refresh`=`Unknown` +
+  `finish_operation(NeedsReconcile, 结果)`（journal 保留 `kept_last_known` 与 `freshness=stale`）+
+  `require_reconcile("refresh_timed_out")` + 返回 `NEEDS_RECONCILE`；确定性失败 → effect=`Failed` + 结构化失败结果 +
+  返回底层错误；成功路径不变（`Completed` + `freshness=fresh`）。三种终态都不再向调用方伪装成功，最后已知快照仍可从
+  operation 记录读到。
+- `capability/reconcile.rs`：
+  - 新增 `reconcile_refresh_operation`（574–687 行），并在 `reconcile_operations`（255–265 行）为 `mcp.tools.refresh`
+    走专用 roll-forward：已持久化终态直接收敛；运行时被证明 running 则有界重发 `refresh_tools`（列工具从不执行工具），
+    应答成功才记 `Applied` 并 `Completed`（此时 freshness 才是真的新鲜）；被证明未运行记 `Failed`（前提已消失，
+    不可能再生效）；运行时无应答保持 `needs_reconcile` + reason `refresh_reconcile_unconfirmed`，绝不猜测。
+  - `reconcile_update_operation` 的启动分支改用 `wait_until_running`（532 行），与 live 路径同一有界确认语义。
+- `capability/mcp/orchestrator.rs:1375`：`wait_until_running` 由私有提为 `pub(crate)` 以共享（仅可见性变化，
+  实现未改）。
+
+新增 focused 测试（`capability/mcp/tests.rs`）：
+
+- `a_refresh_that_never_answers_is_refused_and_needs_reconcile`（1678）：超时返回 `NEEDS_RECONCILE`、
+  reason=`refresh_timed_out`、effect=`Unknown`、未证明 effect 计数=1、journal 结果 status=`refresh_unconfirmed`。
+- `a_failed_refresh_is_refused_and_keeps_the_last_known_snapshot`（1634）：把原先断言 `Ok` 的用例改为错误契约，
+  并断言 journal 仍保留 `kept_last_known` 与 `freshness=failed`。
+- `reconcile_converges_a_refresh_once_the_runtime_proves_the_server_running`（1955）、
+  `reconcile_fails_a_refresh_whose_server_is_not_running`（1987）、
+  `reconcile_keeps_a_refresh_needs_reconcile_when_the_runtime_will_not_answer`（2018）。
+- `reconcile_polls_until_the_updated_config_is_proven_running`（828）：`start_state=starting` +
+  `running_after_observations=4`，证明一次 reconcile 就能收敛冷启动。
+
+失败-通过证据（临时回退验证后已还原为修复实现）：把 reconcile update 启动分支临时改回单次 `observe`，
+`reconcile_polls_until_the_updated_config_is_proven_running` 失败（`still_needs_reconcile` 非空）；把
+`mcp.tools.refresh` 分支临时禁用、退回通用证明器，三项 refresh reconcile 测试全部失败。还原后全部通过。
+
+本轮 focused 验证（在最终代码上运行）：`capability::mcp::tests` 45 passed；`capability::` 全量 167 passed；
+`workflow::react::client::http` 39 passed；`commands::mcp` 8 passed；`--bin cs` 141 passed；
+`pnpm test:capability` 22 passed；`cargo check --lib --bin cs` 仅剩既有无关 privacy warning；`git diff --check` 通过。
+
+剩余限制（不变）：V-7 真实成功 stdio 子进程 fixture 与 V-10 真实桌面 GUI 交错/重启 smoke 仍未在本环境执行，
+Phase 3 最终关闭仍需补齐这两项；AC-4 的 `codex`/`cursor`/`windsurf`/`cline`/`trae` 仍按 fail closed 返回
+`unsupported(path_not_verified)`。
+
+## 12.10 审查整改轮次记录五：reconcile 与实时 MCP mutation 共享锁域（AC-2 / AC-10 / AC-12 / INV-8）
+
+- 审查发现：`reconcile()` 会执行 MCP `start`/`refresh_tools` 等 runtime effect，但此前未取得与实时
+  `enable`/`update`/`refresh` 相同的 per-resource lock；恢复操作可能与桌面或 CLI mutation 交错，导致重复
+  effect、运行时配置错配或将其他操作造成的 running 误判为当前 operation 已收敛。
+- 审查发现：`mcp_update` 改名时只锁旧 name，另一调用可按新 name 进入并发 mutation；跨名操作也存在锁顺序不一致
+  时的死锁风险。
+- 修复：`mcp/orchestrator.rs` 新增 `lock_mcp_resources()`，按排序后的 MCP name 去重并统一转换为
+  `mcp:<name>` journal lock key；`mcp_update` 同时锁旧名与新名；`reconcile_operations` 对 MCP operation
+  复用同一锁域，Skill reconcile 保持原有路径不变。这样恢复与实时 mutation 不能在同一 MCP runtime 上交错，
+  跨名锁获取顺序也稳定。
+- 健壮性调整：`CapabilityApplicationService::mcp_servers()` 对全量 runtime observation 增加
+  `status_timeout` 有界等待；删除无调用者的未脱敏 `mcp_records()` 和无调用者的 `mcp_status_all()`，避免
+  后续 adapter 误用 secret-bearing API；保留桌面专用 `mcp_records_redacted()` 与共享 `mcp_servers()` 投影。
+- 新增回归：`reconcile_serializes_runtime_effects_with_a_live_refresh` 验证恢复 refresh 与实时 refresh 的
+  runtime effect 最大并发数为 1；已有改名/启动/停止/刷新状态机测试继续通过。
+- 最终验证：`capability::mcp::tests` 与 `capability::reconcile` 共 51 passed；`commands::mcp` 与
+  `workflow::react::client::http` 共 47 passed；`cargo test --bin cs -- --test-threads=1` 为 141 passed；
+  `cargo check --lib --bin cs` 通过；`git diff --check` 通过。仅保留既有 `Message`/`McpClientInternal`
+  privacy warning，未引入新的编译错误。
+- 计划状态：AC-2、AC-10、AC-12、INV-8 的本轮并发整改已完成；V-7 真实成功 stdio fixture、V-10
+  真实桌面 GUI 交错/重启 smoke 及 AC-4 中未核实的外部 target 仍是既有未完成验证/限制，不能据此把 Phase 3
+  标记为最终关闭。

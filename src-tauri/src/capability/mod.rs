@@ -213,13 +213,22 @@ impl CapabilityApplicationService {
     /// read, because the durable desired state is still valid information.
     pub async fn mcp_servers(&self) -> Result<Vec<McpServerView>, CapabilityError> {
         let servers = self.repository.store().config.get_mcps();
-        let observation = match self.runtime.observed_runtime().await {
-            Ok(observation) => Some(observation),
-            Err(error) => {
+        let observation = match tokio::time::timeout(
+            self.mcp_timing.status_timeout,
+            self.runtime.observed_runtime(),
+        )
+        .await
+        {
+            Ok(Ok(observation)) => Some(observation),
+            Ok(Err(error)) => {
                 log::debug!(
                     "[Capability][mcp] runtime observation unavailable: {}",
                     error.redacted_message()
                 );
+                None
+            }
+            Err(_) => {
+                log::debug!("[Capability][mcp] runtime observation timed out");
                 None
             }
         };

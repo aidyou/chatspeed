@@ -820,6 +820,71 @@ async fn reconcile_converges_an_update_once_the_old_runtime_is_proven_stopped() 
     assert_eq!(fixture.runtime.state_of("weather").as_deref(), Some("running"));
 }
 
+/// A cold child only becomes observable after a couple of polls, so one reconcile
+/// pass must still converge it: the update roll-forward uses the same bounded
+/// start confirmation as the live path instead of judging it with a single
+/// observation (INV-7).
+#[tokio::test]
+async fn reconcile_polls_until_the_updated_config_is_proven_running() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    fixture.runtime.set_state("weather", "running");
+    *fixture.runtime.stubborn_stop.lock().expect("stubborn_stop") = true;
+    fixture
+        .service
+        .mcp_update(
+            id,
+            "weather",
+            "updated",
+            blank_secret_config("weather"),
+            false,
+            "key-1",
+            "test",
+        )
+        .await
+        .expect_err("stop unconfirmed");
+    let op = fixture
+        .service
+        .repository()
+        .list_needing_reconcile()
+        .expect("reconcile list")[0]
+        .clone();
+
+    // Recovery: the old process is finally gone, and the new configuration
+    // answers "accepted" but only connects after a couple of observations.
+    *fixture.runtime.stubborn_stop.lock().expect("stubborn_stop") = false;
+    fixture.runtime.set_state("weather", "stopped");
+    *fixture.runtime.start_state.lock().expect("start_state") =
+        Some("starting".to_string());
+    *fixture
+        .runtime
+        .running_after_observations
+        .lock()
+        .expect("running_after") = 4;
+
+    let report = fixture.service.reconcile().await.expect("reconcile");
+
+    assert!(
+        report.still_needs_reconcile.is_empty(),
+        "a healthy cold start must converge in one pass, got {:?}",
+        report.still_needs_reconcile
+    );
+    assert_eq!(
+        fixture
+            .service
+            .operation(&op.operation_id)
+            .expect("op")
+            .state,
+        OperationState::Completed
+    );
+    assert!(fixture
+        .runtime
+        .calls()
+        .iter()
+        .any(|call| call == "start:weather"));
+    assert_eq!(fixture.runtime.state_of("weather").as_deref(), Some("running"));
+}
+
 /// A desired-disabled update that bailed at the stop gate converges to a
 /// stopped runtime without ever starting a new process.
 #[tokio::test]
@@ -1562,8 +1627,11 @@ async fn refresh_of_a_disabled_server_is_refused_without_touching_the_runtime() 
     assert!(fixture.runtime.calls().is_empty());
 }
 
+/// A refresh the runtime answers with an error is not a success either: the
+/// journal keeps the last-known snapshot for inspection, but the caller gets the
+/// error so a broken refresh cannot look like a completed one (AC-2/AC-11).
 #[tokio::test]
-async fn a_failed_refresh_keeps_the_last_known_snapshot_and_marks_it() {
+async fn a_failed_refresh_is_refused_and_keeps_the_last_known_snapshot() {
     let fixture = fixture();
     let id = fixture.repository.seed(record("weather", 1, false));
     fixture.runtime.set_state("weather", "running");
@@ -1576,23 +1644,87 @@ async fn a_failed_refresh_keeps_the_last_known_snapshot_and_marks_it() {
     *fixture.runtime.refresh_result.lock().expect("refresh_result") =
         Some("connection reset".to_string());
 
-    let result = fixture
+    let error = fixture
         .service
         .mcp_refresh_tools(id, "key-1", "test")
         .await
-        .expect("a failed refresh still answers structurally");
-    assert_eq!(result.result["status"], "refresh_failed");
-    assert_eq!(result.result["freshness"], "failed");
-    assert_eq!(result.result["kept_last_known"][0]["name"], "cached_tool");
+        .err()
+        .expect("a refresh that failed must not report success");
+    assert_eq!(error.code(), code::INTERNAL);
 
     let operation = fixture
         .service
-        .operation(&result.operation_id)
-        .expect("operation");
+        .repository()
+        .list_by_resource(CapabilityKind::Mcp, "mcp:weather", 10)
+        .expect("operations")
+        .into_iter()
+        .next()
+        .expect("the refresh operation");
     assert_eq!(operation.state, OperationState::Failed);
+    let result = operation.result.expect("the failed refresh is journaled");
+    assert_eq!(result["status"], "refresh_failed");
+    assert_eq!(result["freshness"], "failed");
+    assert_eq!(result["kept_last_known"][0]["name"], "cached_tool");
+
     // Last-known tools survive the failure, which is the point of the snapshot.
     let snapshot = fixture.service.mcp_tools(id).await.expect("tools");
     assert_eq!(snapshot.tools.len(), 1);
+}
+
+/// A refresh the runtime never answers is left durably reconcilable with a
+/// stable reason, and the caller is told so instead of being handed a stale list
+/// as if it were fresh (AC-2/AC-11/INV-8).
+#[tokio::test]
+async fn a_refresh_that_never_answers_is_refused_and_needs_reconcile() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    fixture.runtime.set_state("weather", "running");
+    *fixture.runtime.hang.lock().expect("hang") = true;
+
+    let error = fixture
+        .service
+        .mcp_refresh_tools(id, "key-1", "test")
+        .await
+        .err()
+        .expect("an unanswered refresh must not report success");
+    assert_eq!(error.code(), code::NEEDS_RECONCILE);
+
+    let operation = fixture
+        .service
+        .repository()
+        .list_needing_reconcile()
+        .expect("reconcile list")[0]
+        .clone();
+    assert_eq!(
+        operation.reconcile_reason.as_deref(),
+        Some("refresh_timed_out"),
+        "a stuck refresh must explain itself to the doctor"
+    );
+    assert_eq!(
+        operation.result.as_ref().expect("journaled result")["status"],
+        json!("refresh_unconfirmed")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .repository()
+            .list_effects(&operation.operation_id)
+            .expect("effects")
+            .into_iter()
+            .find(|effect| effect.effect_key == "mcp.tools.refresh")
+            .expect("a refresh effect was recorded")
+            .outcome,
+        EffectOutcome::Unknown,
+        "the unanswered refresh stays unproven so reconcile can settle it"
+    );
+    assert_eq!(
+        fixture
+            .service
+            .repository()
+            .count_unproven_effects(&operation.operation_id)
+            .expect("count"),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1658,6 +1790,40 @@ async fn two_operations_on_one_server_serialize_their_runtime_effects() {
             .expect("operations")
             .len(),
         2
+    );
+}
+
+#[tokio::test]
+async fn reconcile_serializes_runtime_effects_with_a_live_refresh() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    fixture.runtime.set_state("weather", "running");
+    let _operation = crashed_mcp_operation(
+        &fixture,
+        "mcp.tools.refresh",
+        "mcp.tools.refresh",
+        "reconcile-refresh-lock",
+    )
+    .await;
+
+    let reconcile_service = fixture.service.clone();
+    let live_service = fixture.service.clone();
+    let reconcile = tokio::spawn(async move { reconcile_service.reconcile().await });
+    let live = tokio::spawn(async move {
+        live_service
+            .mcp_refresh_tools(id, "live-refresh-lock", "test")
+            .await
+    });
+
+    reconcile.await.expect("reconcile task").expect("reconcile");
+    live.await
+        .expect("live refresh task")
+        .expect("live refresh");
+    assert_eq!(
+        fixture.runtime.max_concurrent.load(Ordering::SeqCst),
+        1,
+        "reconcile and a live mutation must share the per-server lock: {:?}",
+        fixture.runtime.calls()
     );
 }
 
@@ -1812,6 +1978,106 @@ async fn reconcile_keeps_an_mcp_stop_needs_reconcile_when_the_runtime_still_runs
         fixture.service.operation(&op).expect("op").state,
         OperationState::NeedsReconcile,
         "a stop the runtime contradicts is not reported as done"
+    );
+}
+
+/// A refresh leaves no runtime state an observation could prove, so reconcile
+/// rolls it forward by re-reading the list of a server the runtime proves
+/// running. Only after that answer may the operation complete and its freshness
+/// become `fresh` (AC-2/AC-11/INV-7/INV-8).
+#[tokio::test]
+async fn reconcile_converges_a_refresh_once_the_runtime_proves_the_server_running() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    let op = crashed_mcp_operation(
+        &fixture,
+        "mcp.tools.refresh",
+        "mcp.tools.refresh",
+        "reconcile-refresh",
+    )
+    .await;
+    fixture.runtime.set_state("weather", "running");
+
+    let report = fixture.service.reconcile().await.expect("reconcile");
+
+    assert_eq!(
+        report.mcp_effects_recovered,
+        vec!["mcp:weather:mcp.tools.refresh".to_string()]
+    );
+    assert!(report.still_needs_reconcile.is_empty());
+    assert!(fixture.runtime.calls().contains(&"refresh:weather".to_string()));
+    assert_eq!(
+        fixture.service.operation(&op).expect("op").state,
+        OperationState::Completed
+    );
+    // The re-list really happened, so freshness may now claim `fresh`.
+    let snapshot = fixture.service.mcp_tools(id).await.expect("tools");
+    assert_eq!(snapshot.freshness, "fresh");
+}
+
+/// A refresh whose server the runtime proves gone can never be applied, so it
+/// ends as a structured failure instead of pending forever (INV-8).
+#[tokio::test]
+async fn reconcile_fails_a_refresh_whose_server_is_not_running() {
+    let fixture = fixture();
+    let op = crashed_mcp_operation(
+        &fixture,
+        "mcp.tools.refresh",
+        "mcp.tools.refresh",
+        "reconcile-refresh-down",
+    )
+    .await;
+    fixture.runtime.set_state("weather", "stopped");
+
+    let report = fixture.service.reconcile().await.expect("reconcile");
+
+    assert_eq!(
+        report.mcp_effects_recovered,
+        vec!["mcp:weather:mcp.tools.refresh".to_string()]
+    );
+    assert!(report.still_needs_reconcile.is_empty());
+    assert_eq!(
+        fixture.service.operation(&op).expect("op").state,
+        OperationState::Failed
+    );
+    assert!(
+        fixture.runtime.calls().is_empty(),
+        "a server the runtime proves stopped is never contacted"
+    );
+}
+
+/// A runtime that will not answer proves nothing, so the refresh stays
+/// `needs_reconcile` with a stable reason rather than being guessed either way.
+#[tokio::test]
+async fn reconcile_keeps_a_refresh_needs_reconcile_when_the_runtime_will_not_answer() {
+    let fixture = fixture();
+    let op = crashed_mcp_operation(
+        &fixture,
+        "mcp.tools.refresh",
+        "mcp.tools.refresh",
+        "reconcile-refresh-silent",
+    )
+    .await;
+    fixture.runtime.set_state("weather", "running");
+    *fixture.runtime.hang.lock().expect("hang") = true;
+
+    let report = fixture.service.reconcile().await.expect("reconcile");
+
+    assert!(report.mcp_effects_recovered.is_empty());
+    assert_eq!(report.still_needs_reconcile, vec![op.clone()]);
+    let operation = fixture.service.operation(&op).expect("op");
+    assert_eq!(operation.state, OperationState::NeedsReconcile);
+    assert_eq!(
+        operation.reconcile_reason.as_deref(),
+        Some("refresh_reconcile_unconfirmed")
+    );
+    assert_eq!(
+        fixture
+            .service
+            .repository()
+            .count_unproven_effects(&op)
+            .expect("count"),
+        1
     );
 }
 

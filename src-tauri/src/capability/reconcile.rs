@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::capability::error::CapabilityError;
+use crate::capability::error::{code, CapabilityError};
 use crate::capability::mcp::runtime::ObservedMcpRuntime;
 use crate::capability::skill::staging::StagingArea;
 use crate::capability::skill::uninstaller::SkillUninstaller;
@@ -47,6 +47,7 @@ pub mod reconcile_finding {
 const EFFECT_START: &str = "mcp.start";
 const EFFECT_STOP: &str = "mcp.stop";
 const EFFECT_DELETE: &str = "mcp.delete";
+const EFFECT_REFRESH_TOOLS: &str = "mcp.tools.refresh";
 
 /// What one reconcile pass converged, plus what it intentionally left alone.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -236,6 +237,27 @@ impl CapabilityApplicationService {
     ) -> Result<(), CapabilityError> {
         let pending = self.repository().list_needing_reconcile()?;
         for operation in pending {
+            // Reconcile performs runtime effects too. MCP recovery must share the
+            // same lock domain as live mutations, otherwise a recovery start or
+            // refresh can race an enable/update and prove the wrong configuration
+            // as settled. Skill operations retain their existing path and do not
+            // need an MCP runtime lock.
+            let _guards = if let Some(old_name) = operation.resource_key.strip_prefix("mcp:") {
+                let requested_name = operation
+                    .request
+                    .get("name")
+                    .and_then(|value| value.as_str());
+                let mut names = vec![old_name];
+                if let Some(requested_name) = requested_name {
+                    names.push(requested_name);
+                }
+                // Rename updates touch both names; the helper acquires them in
+                // stable order to avoid a cross-rename deadlock.
+                Some(self.lock_mcp_resources(&names).await)
+            } else {
+                None
+            };
+
             // An `mcp.update` that bailed at the stop gate needs more than
             // proving effects: once the old runtime is proven gone, the updated
             // record's desired state (running or stopped) must actually be
@@ -247,6 +269,16 @@ impl CapabilityApplicationService {
                 && operation.operation_kind == "mcp.update"
             {
                 self.reconcile_update_operation(&operation, report).await?;
+                continue;
+            }
+
+            // A refresh leaves no runtime state an observation could prove, so it
+            // gets its own bounded roll-forward instead of the generic prover,
+            // which would leave its Unknown effect pending forever (AC-2/AC-11).
+            if operation.capability == CapabilityKind::Mcp
+                && operation.operation_kind == "mcp.tools.refresh"
+            {
+                self.reconcile_refresh_operation(&operation, report).await?;
                 continue;
             }
 
@@ -513,7 +545,13 @@ impl CapabilityApplicationService {
                 self.finish_operation(&id, OperationState::Failed, None, Some(&error))?;
             }
             Ok(Ok(())) => {
-                if proven_running(&self.mcp_observe(&record.name).await) {
+                // Same bounded confirmation the live path uses. A cold child
+                // answers "accepted" long before it connects, so judging it with a
+                // single observation here would leave a healthy start stuck in
+                // `needs_reconcile` for no reason and make recovery depend on a
+                // second pass (INV-7).
+                let (running, _) = self.wait_until_running(&record.name).await;
+                if running {
                     self.repository().record_effect_outcome(
                         &id,
                         EFFECT_START,
@@ -535,6 +573,135 @@ impl CapabilityApplicationService {
                         .mark_needs_reconcile(&id, "update_reconcile_start_not_observable", None)?;
                     report.still_needs_reconcile.push(id);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Converges one interrupted `mcp.tools.refresh`.
+    ///
+    /// Unlike start/stop/delete there is no persistent runtime state that could
+    /// *prove* a refresh happened, so reconcile rolls it forward instead of
+    /// guessing: once the runtime proves the server running, it re-runs the same
+    /// bounded re-list the live mutation uses. Listing never invokes a tool, and
+    /// an answer means the cache really was re-read — which is exactly the effect
+    /// that was left unknown, so the operation may then end `Completed` and only
+    /// then does its freshness become `fresh`.
+    ///
+    /// A server the runtime proves is not running can never apply the refresh, and
+    /// a runtime that will not answer proves nothing: the first ends as a
+    /// structured `Failed`, the second stays `needs_reconcile` (AC-2/AC-11/
+    /// INV-7/INV-8).
+    async fn reconcile_refresh_operation(
+        &self,
+        operation: &CapabilityOperation,
+        report: &mut CapabilityReconcileReport,
+    ) -> Result<(), CapabilityError> {
+        let id = operation.operation_id.clone();
+        let Some(name) = operation.resource_key.strip_prefix("mcp:") else {
+            report.still_needs_reconcile.push(id);
+            return Ok(());
+        };
+
+        // A durable outcome already decides the operation: nothing is re-run.
+        let outcome = self
+            .repository()
+            .list_effects(&id)?
+            .into_iter()
+            .find(|effect| effect.effect_key == EFFECT_REFRESH_TOOLS)
+            .map(|effect| effect.outcome);
+        match outcome {
+            Some(EffectOutcome::Applied) | Some(EffectOutcome::Skipped) => {
+                report
+                    .mcp_effects_recovered
+                    .push(format!("mcp:{name}:{EFFECT_REFRESH_TOOLS}"));
+                let result = serde_json::json!({
+                    "status": "reconciled",
+                    "operation": "mcp.tools.refresh",
+                    "name": name,
+                });
+                self.finish_operation(&id, OperationState::Completed, Some(&result), None)?;
+                return Ok(());
+            }
+            Some(EffectOutcome::Failed) | Some(EffectOutcome::Blocked) => {
+                let error = CapabilityError::new(
+                    code::INTERNAL,
+                    "the MCP tool refresh did not complete and cannot be rolled forward",
+                );
+                self.finish_operation(&id, OperationState::Failed, None, Some(&error))?;
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        let observed = self.mcp_observe(name).await;
+        if !proven_running(&observed) {
+            if proven_not_running(&observed) {
+                self.repository().record_effect_outcome(
+                    &id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Failed,
+                    Some(&serde_json::json!({ "reconciled": true })),
+                )?;
+                report
+                    .mcp_effects_recovered
+                    .push(format!("mcp:{name}:{EFFECT_REFRESH_TOOLS}"));
+                let error = CapabilityError::new(
+                    code::RUNTIME_UNAVAILABLE,
+                    "the MCP server is not running, so its tools cannot be re-read",
+                );
+                self.finish_operation(&id, OperationState::Failed, None, Some(&error))?;
+            } else {
+                // The runtime would not answer, which proves neither outcome.
+                report.still_needs_reconcile.push(id);
+            }
+            return Ok(());
+        }
+
+        let timing = self.mcp_timing();
+        let refreshed = tokio::time::timeout(
+            timing.effect_timeout,
+            self.mcp_effects().refresh_tools(name),
+        )
+        .await;
+        match refreshed {
+            Ok(Ok(())) => {
+                self.repository().record_effect_outcome(
+                    &id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Applied,
+                    Some(&serde_json::json!({ "reconciled": true })),
+                )?;
+                report
+                    .mcp_effects_recovered
+                    .push(format!("mcp:{name}:{EFFECT_REFRESH_TOOLS}"));
+                let result = serde_json::json!({
+                    "status": "reconciled",
+                    "operation": "mcp.tools.refresh",
+                    "name": name,
+                    "freshness": "fresh",
+                });
+                self.finish_operation(&id, OperationState::Completed, Some(&result), None)?;
+            }
+            Ok(Err(error)) => {
+                self.repository().record_effect_outcome(
+                    &id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Failed,
+                    None,
+                )?;
+                self.finish_operation(&id, OperationState::Failed, None, Some(&error))?;
+            }
+            Err(_) => {
+                self.repository().record_effect_outcome(
+                    &id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Unknown,
+                    None,
+                )?;
+                self.repository()
+                    .mark_needs_reconcile(&id, "refresh_reconcile_unconfirmed", None)?;
+                report.still_needs_reconcile.push(id);
             }
         }
         Ok(())

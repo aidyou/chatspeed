@@ -29,7 +29,7 @@ use crate::capability::mcp::descriptor::parse_descriptor;
 use crate::capability::mcp::repository::NewMcpRecord;
 use crate::capability::mcp::runtime::ObservedMcpRuntime;
 use crate::capability::mcp_service::{
-    project_mcp_server, project_mcp_servers, redact_record_secrets, McpServerView,
+    project_mcp_server, redact_record_secrets, McpServerView,
 };
 use crate::capability::operation;
 use crate::capability::types::{
@@ -636,58 +636,91 @@ impl CapabilityApplicationService {
         let timing = self.mcp_timing();
         let refreshed = with_timeout(timing.effect_timeout, self.mcp_effects().refresh_tools(&name)).await;
 
+        // Every non-completed refresh still journals the last-known snapshot, so
+        // what was cached stays inspectable, but the *caller* gets the same
+        // structured refusal as every other unproven MCP effect instead of a
+        // success: a stale list reported as 200 hides an unconfirmed runtime
+        // effect from anything that branches on status or exit code (AC-2/AC-11/
+        // INV-8).
         let snapshot = self.tools_snapshot(&name).await;
-        let (state, result) = match refreshed {
-            Err(_) => (
-                OperationState::NeedsReconcile,
-                json!({
+        let tool_count = snapshot.tools.len();
+        match refreshed {
+            Err(_) => {
+                let result = json!({
                     "status": "refresh_unconfirmed",
                     "name": name,
                     "kept_last_known": snapshot.tools,
                     "freshness": "stale",
-                }),
-            ),
-            Ok(Err(error)) => (
-                OperationState::Failed,
-                json!({
+                });
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Unknown,
+                    Some(&json!({ "tool_count": tool_count })),
+                )?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::NeedsReconcile,
+                    Some(&result),
+                    None,
+                )?;
+                // A stable reason is what lets the doctor and reconcile explain
+                // why the operation is not converged yet.
+                self.require_reconcile(&operation_id, "refresh_timed_out")?;
+                Err(CapabilityError::new(
+                    code::NEEDS_RECONCILE,
+                    "the MCP tool refresh did not answer in time; the tool list is unknown",
+                ))
+            }
+            Ok(Err(error)) => {
+                let result = json!({
                     "status": "refresh_failed",
                     "name": name,
                     "kept_last_known": snapshot.tools,
                     "freshness": "failed",
                     "detail": error.redacted_message(),
-                }),
-            ),
-            Ok(Ok(())) => (
-                OperationState::Completed,
-                json!({
+                });
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Failed,
+                    Some(&json!({ "tool_count": tool_count })),
+                )?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::Failed,
+                    Some(&result),
+                    Some(&error),
+                )?;
+                Err(error)
+            }
+            Ok(Ok(())) => {
+                let result = json!({
                     "status": "refreshed",
                     "name": name,
-                    "tool_count": snapshot.tools.len(),
+                    "tool_count": tool_count,
                     "freshness": "fresh",
                     "tools": snapshot.tools,
-                }),
-            ),
-        };
-        let outcome = match state {
-            OperationState::Completed => crate::capability::types::EffectOutcome::Applied,
-            OperationState::NeedsReconcile => crate::capability::types::EffectOutcome::Unknown,
-            _ => crate::capability::types::EffectOutcome::Failed,
-        };
-        self.record_effect_outcome(
-            &operation_id,
-            EFFECT_REFRESH_TOOLS,
-            outcome,
-            Some(&json!({ "tool_count": snapshot.tools.len() })),
-        )?;
-        // A failed refresh keeps the last-known snapshot in `result`, so the
-        // error itself is recorded only as the structured status above.
-        self.finish_operation(&operation_id, state, Some(&result), None)?;
-
-        Ok(McpMutationResult {
-            operation_id,
-            replayed: false,
-            result,
-        })
+                });
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_REFRESH_TOOLS,
+                    EffectOutcome::Applied,
+                    Some(&json!({ "tool_count": tool_count })),
+                )?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::Completed,
+                    Some(&result),
+                    None,
+                )?;
+                Ok(McpMutationResult {
+                    operation_id,
+                    replayed: false,
+                    result,
+                })
+            }
+        }
     }
 
     /// The cached tool list of one server, without invoking anything (AC-11).
@@ -720,24 +753,9 @@ impl CapabilityApplicationService {
         })?
     }
 
-    /// The persisted records, unprojected.
-    ///
-    /// The legacy desktop edit form round-trips a full `McpServerConfig`, so it
-    /// needs the stored record rather than the redacted read model. Capability
-    /// adapters (HTTP/CLI) must use `mcp_status_all` instead, which never
-    /// carries a secret value (AC-13).
-    pub async fn mcp_records(&self) -> Result<Vec<Mcp>, CapabilityError> {
-        self.mcp_repository().list()
-    }
-
-    /// One persisted record by id.
-    pub async fn mcp_record(&self, id: i64) -> Result<Option<Mcp>, CapabilityError> {
-        self.mcp_repository().get(id)
-    }
-
     /// Every persisted record with secret values removed, keeping the legacy
     /// editable `Mcp` wire shape the desktop MCP page depends on. This is the
-    /// only list the desktop adapter may return; `mcp_records` stays internal.
+    /// only list the desktop adapter may return.
     pub async fn mcp_records_redacted(&self) -> Result<Vec<Mcp>, CapabilityError> {
         Ok(self
             .mcp_repository()
@@ -769,18 +787,6 @@ impl CapabilityApplicationService {
         let record = self.require_server(id).await?;
         let observed = self.observe_for_view(&record.name).await;
         Ok(project_view(&record, observed.as_ref()))
-    }
-
-    /// Every server with one bounded runtime observation shared across them.
-    pub async fn mcp_status_all(&self) -> Result<Vec<McpServerView>, CapabilityError> {
-        let servers = self.mcp_repository().list()?;
-        let timing = self.mcp_timing();
-        let observation =
-            match with_timeout(timing.status_timeout, self.runtime.observed_runtime()).await {
-                Ok(Ok(map)) => Some(map),
-                _ => None,
-            };
-        Ok(project_mcp_servers(&servers, observation.as_ref()))
     }
 
     /// Stops and starts one enabled server.
@@ -915,8 +921,9 @@ impl CapabilityApplicationService {
             config.env = previous.config.env.clone();
         }
         let key = operation::require_idempotency_key(idempotency_key)?;
+        let resource_names = vec![previous.name.as_str(), name];
+        let _guards = self.lock_mcp_resources(&resource_names).await;
         let resource_key = resource_key_for(&previous.name);
-        let _guard = self.lock_resource(&resource_key).await;
         let operation_id = match self
             .open_operation(
                 "mcp.update",
@@ -1194,12 +1201,27 @@ impl CapabilityApplicationService {
     }
 
 
-    /// Takes the per-resource lock for the whole mutation.
+    /// Takes the locks for all MCP names in a stable order.
     ///
-    /// `begin_operation` would take and release the same key, so these operations
-    /// call `repository().begin` directly while holding the guard: two concurrent
-    /// enable/disable/uninstall calls on one server then serialize across their
-    /// runtime effects instead of interleaving them.
+    /// Rename operations touch both the old and new runtime names. Sorting before
+    /// acquisition prevents two concurrent cross-renames from deadlocking while
+    /// still sharing the same lock domain as reconcile.
+    pub(crate) async fn lock_mcp_resources(
+        &self,
+        names: &[&str],
+    ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+        let mut names: Vec<&str> = names.iter().copied().filter(|name| !name.is_empty()).collect();
+        names.sort_unstable();
+        names.dedup();
+
+        let mut guards = Vec::with_capacity(names.len());
+        for name in names {
+            guards.push(self.lock_resource(&resource_key_for(name)).await);
+        }
+        guards
+    }
+
+    /// Takes the per-resource lock for one MCP name.
     async fn lock_resource(&self, resource_key: &str) -> tokio::sync::OwnedMutexGuard<()> {
         self.locks().lock(&journal_lock_key(resource_key)).await
     }
@@ -1336,8 +1358,10 @@ impl CapabilityApplicationService {
     /// the symmetric counterpart of `stop_and_confirm`: `register_mcp_server`
     /// answers before a cold child has connected, so confirming a start has to
     /// poll instead of observing exactly once (which raced the transition and
-    /// misclassified a healthy-but-slow start as unobservable).
-    async fn wait_until_running(
+    /// misclassified a healthy-but-slow start as unobservable). Reconcile uses
+    /// the same confirmation for its update roll-forward, so a cold child is
+    /// proven up there too instead of being judged by one observation.
+    pub(crate) async fn wait_until_running(
         &self,
         name: &str,
     ) -> (bool, Option<ObservedMcpRuntime>) {
