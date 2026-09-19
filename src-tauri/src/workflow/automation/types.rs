@@ -6,7 +6,7 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowAutomationShellConfig {
     pub command: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "file_path")]
     pub file_path: Option<String>,
     #[serde(default)]
     pub args: Option<String>,
@@ -94,7 +94,7 @@ pub const AUTOMATION_ACTOR_SCOPE_DESKTOP: &str = "desktop";
 /// distinct from ordinary content so the plan layer can reason about escalation
 /// without granting anything (INV-3).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case", default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AutomationSpec {
     pub title: String,
     pub prompt: Option<String>,
@@ -115,7 +115,7 @@ pub struct AutomationSpec {
 /// content and references to *existing* agents/paths/shell policy — it can never
 /// mint a new shell command, path, network, MCP or Skill permission (INV-3).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case", default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AutomationDraftInput {
     /// Optional structured target. When present with `automation_id`, the plan
     /// is relative to that existing automation's current revision.
@@ -193,7 +193,7 @@ pub struct AutomationPlanV1 {
 /// force/skip-check field: a stale hash, moved revision or unknown target must
 /// be rejected, not overridden (AC-4/INV-5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct AutomationApplyRequest {
     pub plan: AutomationPlanV1,
     /// The exact `plan_hash` the caller is authorizing. `apply` recomputes the

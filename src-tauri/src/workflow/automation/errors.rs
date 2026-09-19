@@ -84,6 +84,18 @@ impl AutomationError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(code::INTERNAL, message)
     }
+
+    pub fn to_tauri_string(&self) -> String {
+        serde_json::json!({
+            "module": "automation",
+            "message": self.message,
+            "details": {
+                "kind": self.code,
+                "message": self.message,
+            }
+        })
+        .to_string()
+    }
 }
 
 impl std::fmt::Display for AutomationError {

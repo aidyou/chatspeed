@@ -23,7 +23,7 @@ pub async fn workflow_automation_list(
 ) -> Result<Vec<WorkflowAutomation>, String> {
     svc.automation()
         .list_rows()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -31,7 +31,7 @@ pub async fn workflow_automation_get(
     svc: State<'_, Arc<WorkflowApplicationService>>,
     id: String,
 ) -> Result<Option<WorkflowAutomation>, String> {
-    svc.automation().get_row(&id).map_err(|e| e.to_string())
+    svc.automation().get_row(&id).map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -41,7 +41,7 @@ pub async fn workflow_automation_save(
 ) -> Result<WorkflowAutomation, String> {
     svc.automation()
         .compat_save(&request)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -58,7 +58,7 @@ pub async fn workflow_automation_delete(
             None,
         )
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -70,7 +70,7 @@ pub async fn workflow_automation_set_enabled(
     svc.automation()
         .set_enabled(&id, enabled, None, AUTOMATION_ACTOR_SCOPE_DESKTOP, None)
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -80,7 +80,7 @@ pub async fn workflow_automation_list_runs(
 ) -> Result<Vec<WorkflowAutomationRun>, String> {
     svc.automation()
         .run_rows(&automation_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 #[tauri::command]
@@ -104,7 +104,7 @@ pub async fn workflow_automation_draft(
     svc: State<'_, Arc<WorkflowApplicationService>>,
     input: AutomationDraftInput,
 ) -> Result<AutomationPlanV1, String> {
-    svc.automation().draft(input).map_err(|e| e.to_string())
+    svc.automation().draft(input).map_err(|e| e.to_tauri_string())
 }
 
 /// Applies a previously reviewed plan (AC-4). A tampered hash, moved revision or
@@ -121,7 +121,7 @@ pub async fn workflow_automation_apply(
             AUTOMATION_ACTOR_SCOPE_DESKTOP,
             None,
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_tauri_string())
 }
 
 /// The projected run lifecycle (snake_case) joined from the durable workflow
@@ -132,5 +132,5 @@ pub async fn workflow_automation_run_views(
     svc: State<'_, Arc<WorkflowApplicationService>>,
     automation_id: String,
 ) -> Result<Vec<AutomationRunView>, String> {
-    svc.automation().runs(&automation_id).map_err(|e| e.to_string())
+    svc.automation().runs(&automation_id).map_err(|e| e.to_tauri_string())
 }

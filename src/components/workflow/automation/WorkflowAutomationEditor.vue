@@ -276,6 +276,12 @@
         <div v-if="permissionChanged" class="plan-warning">
           {{ $t('workflow.automation.permissionChangeWarning') }}
         </div>
+        <el-checkbox
+          v-if="permissionChanged"
+          v-model="permissionAcknowledged"
+          class="plan-permission-ack">
+          {{ $t('workflow.automation.acknowledgePermissionChanges') }}
+        </el-checkbox>
         <div v-for="(warning, index) in plan.warnings || []" :key="index" class="plan-warning">
           [{{ warning.code }}] {{ warning.message }}
         </div>
@@ -585,6 +591,7 @@ const automationSpec = () => ({
 const permissionChanged = computed(
   () => plan.value?.permission_summary?.permission_expansion === true
 )
+const permissionAcknowledged = ref(false)
 
 // Human label for a projected run status. Every value comes from the backend
 // projection; the switch is total over the documented lifecycle and falls back
@@ -599,7 +606,7 @@ const runStatusLabel = status => {
     cancelled: 'cancelled',
     needs_reconcile: 'needsReconcile'
   }[status]
-  return t(key ? `workflow.automation.runStatus.${key}` : 'workflow.automation.runStatus.pending')
+  return key ? t(`workflow.automation.runStatus.${key}`) : status
 }
 
 const triggerLabel = trigger =>
@@ -620,6 +627,7 @@ const previewPlan = async () => {
       spec: automationSpec(),
       intent: null
     })
+    permissionAcknowledged.value = false
     planVisible.value = true
   } catch (err) {
     ElMessage.error(err?.message || String(err))
@@ -638,7 +646,7 @@ const applyReviewedPlan = async () => {
     const result = await automationStore.applyPlan({
       plan: plan.value,
       expected_plan_hash: plan.value.plan_hash,
-      acknowledge_permission_changes: permissionChanged.value
+      acknowledge_permission_changes: permissionChanged.value && permissionAcknowledged.value
     })
     planVisible.value = false
     ElMessage.success(t('workflow.automation.applySuccess'))

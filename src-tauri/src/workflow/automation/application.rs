@@ -14,7 +14,7 @@
 //! receipt/lifecycle-projection semantics and the canonical snake_case views.
 
 use crate::capability::operation::{canonical_request_hash, now_ms};
-use crate::db::automation::{CasOutcome, ClaimOutcome, ReceiptOutcome};
+use crate::db::automation::{CasOutcome, ClaimOutcome, DeleteAutomationOutcome, ReceiptOutcome};
 use crate::db::{
     MainStore, WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert,
 };
@@ -256,13 +256,6 @@ impl AutomationApplicationService {
             ));
         }
 
-        let Some(automation_id) = plan.automation_id.clone() else {
-            // A create plan has no target to attach; require an explicit create.
-            return Err(AutomationError::invalid_request(
-                "a create plan must be applied via the create operation",
-            ));
-        };
-
         if plan.permission_summary.permission_expansion
             && !request.acknowledge_permission_changes
         {
@@ -270,31 +263,39 @@ impl AutomationApplicationService {
                 "plan expands permissions; acknowledge before applying",
             ));
         }
-
-        let existing = self
-            .store()
-            .get_workflow_automation(&automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
-            .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
-
-        if existing.revision != plan.base_revision.unwrap_or(i64::MIN) {
-            return Err(AutomationError::revision_conflict(
-                "the automation changed since this plan was drafted; re-draft",
-            ));
-        }
-
         let request_hash = canonical_request_hash(&json!({
             "operation": "apply",
             "plan_hash": derived,
-            "automation_id": automation_id,
+            "automation_id": plan.automation_id,
         }));
-        self.apply_mutation_with_receipt(
-            actor_scope,
-            idempotency_key,
-            "apply",
-            &request_hash,
-            |svc| svc.update_existing(&automation_id, &plan.changes, existing.revision),
-        )
+        let result = if let Some(automation_id) = plan.automation_id.clone() {
+            let existing = self
+                .store()
+                .get_workflow_automation(&automation_id)
+                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
+            if existing.revision != plan.base_revision.unwrap_or(i64::MIN) {
+                return Err(AutomationError::revision_conflict(
+                    "the automation changed since this plan was drafted; re-draft",
+                ));
+            }
+            self.apply_mutation_with_receipt(
+                actor_scope,
+                idempotency_key,
+                "apply",
+                &request_hash,
+                |svc| svc.update_existing(&automation_id, &plan.changes, existing.revision),
+            )?
+        } else {
+            self.apply_mutation_with_receipt(
+                actor_scope,
+                idempotency_key,
+                "apply",
+                &request_hash,
+                |svc| svc.insert_new(&plan.changes),
+            )?
+        };
+        Ok(result)
     }
 
     // --- explicit create / update / enable / disable / delete ------------
@@ -616,22 +617,22 @@ impl AutomationApplicationService {
                 "delete is destructive and cascades the automation's runs and workflow tree; confirm explicitly",
             ));
         }
-        if self
+        match self
             .store()
-            .automation_has_blocking_run(automation_id)
+            .delete_workflow_automation_if_idle(automation_id)
             .map_err(|e| AutomationError::internal(e.to_string()))?
         {
-            return Err(AutomationError::busy(
+            DeleteAutomationOutcome::Deleted => Ok(AutomationMutationResult {
+                outcome: AutomationMutationOutcome::Deleted,
+                automation: None,
+            }),
+            DeleteAutomationOutcome::NotFound => Err(AutomationError::not_found(format!(
+                "Automation {automation_id}"
+            ))),
+            DeleteAutomationOutcome::ActiveRun => Err(AutomationError::busy(
                 "automation has an active or unreconciled run; it cannot be deleted",
-            ));
+            )),
         }
-        self.store()
-            .delete_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
-        Ok(AutomationMutationResult {
-            outcome: AutomationMutationOutcome::Deleted,
-            automation: None,
-        })
     }
 
     // --- internal helpers -------------------------------------------------
@@ -654,13 +655,12 @@ impl AutomationApplicationService {
     }
 
     fn validate_spec(&self, spec: &AutomationSpec) -> Result<(), AutomationError> {
-        // The full write-time validation (title/agent/prompt/shell/schedule)
-        // happens in `build_upsert`; this just guards the empty/unknown target
-        // so a caller cannot create a target-less automation via `update`.
         if spec.title.trim().is_empty() {
             return Err(AutomationError::invalid_request("automation title is required"));
         }
-        Ok(())
+        let request = spec_to_request(spec, None);
+        crate::workflow::automation::service::validate_automation_request(&request)
+            .map_err(|error| AutomationError::invalid_request(format!("invalid automation spec: {error}")))
     }
 
     fn build_upsert(
@@ -853,7 +853,47 @@ impl WorkflowApplicationService {
         })
     }
 
-    /// Backwards-compatible manual run for the legacy Tauri `run_now` command.
+    pub async fn automation_run_with_receipt(
+        &self,
+        automation_id: &str,
+        actor_scope: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<AutomationDispatchResult, AutomationError> {
+        let Some(key) = idempotency_key.map(str::trim).filter(|key| !key.is_empty()) else {
+            return self.automation_run(automation_id).await;
+        };
+        let request_hash = canonical_request_hash(&json!({
+            "operation": "run",
+            "automation_id": automation_id,
+        }));
+        match self
+            .automation()
+            .store()
+            .reserve_automation_mutation(actor_scope, key, "run", &request_hash)
+            .map_err(|e| AutomationError::internal(e.to_string()))?
+        {
+            ReceiptOutcome::Conflict => Err(AutomationError::conflict(
+                "idempotency key was already used with a different request",
+            )),
+            ReceiptOutcome::Replay(Some(raw)) => serde_json::from_str(&raw)
+                .map_err(|e| AutomationError::internal(e.to_string())),
+            ReceiptOutcome::Replay(None) => Err(AutomationError::internal(
+                "idempotent run has no replay result",
+            )),
+            ReceiptOutcome::Proceed => {
+                let result = self.automation_run(automation_id).await?;
+                let stored = serde_json::to_string(&result)
+                    .map_err(|e| AutomationError::internal(e.to_string()))?;
+                self.automation()
+                    .store()
+                    .complete_automation_mutation(actor_scope, key, Some(&stored))
+                    .map_err(|e| AutomationError::internal(e.to_string()))?;
+                Ok(result)
+            }
+        }
+    }
+
+
     /// The mutation goes exclusively through the typed facade `automation_run`
     /// (AC-1/INV-2) — this method never calls the service kernel itself — and the
     /// historical camelCase `WorkflowAutomationRunNowResult` is then rebuilt from

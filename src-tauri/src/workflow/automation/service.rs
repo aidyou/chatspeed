@@ -256,7 +256,7 @@ fn normalize_interval_schedule_config(
     serde_json::from_value(normalized).map_err(|e| e.to_string())
 }
 
-fn validate_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
+pub(crate) fn validate_automation_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
     if request.title.trim().is_empty() {
         return Err("Automation title is required".to_string());
     }
@@ -304,7 +304,7 @@ pub(crate) fn request_to_upsert(
     {
         request.prompt = Some(prompt_from_file);
     }
-    validate_request(&request)?;
+    validate_automation_request(&request)?;
     let next_run_at = if request.enabled {
         compute_next_run_at(&request.schedule_kind, &request.schedule_config)?
     } else {

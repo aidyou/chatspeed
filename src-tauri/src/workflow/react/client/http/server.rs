@@ -646,7 +646,7 @@ fn has_idempotency_key(headers: &HeaderMap) -> bool {
     headers
         .get("Idempotency-Key")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|key| !key.is_empty())
+        .is_some_and(|key| !key.trim().is_empty())
 }
 
 fn missing_idempotency_key_response(route: &str) -> Response {
@@ -1694,7 +1694,7 @@ where
     T: IntoResponse,
 {
     let key = match headers.get("Idempotency-Key").and_then(|v| v.to_str().ok()) {
-        Some(key) if !key.is_empty() => key.to_string(),
+        Some(key) if !key.trim().is_empty() => key.trim().to_string(),
         _ => {
             return execute(state.clone(), body.to_string())
                 .await
@@ -1793,6 +1793,7 @@ fn replay_response(status: StatusCode, body: String) -> Response {
 
 /// Body for `POST /control/v1/automations/{id}/update`.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AutomationUpdateBody {
     spec: crate::workflow::automation::types::AutomationSpec,
     expected_revision: i64,
@@ -1801,6 +1802,7 @@ struct AutomationUpdateBody {
 /// Body for `POST /control/v1/automations/{id}/delete`. Destructive, so it
 /// defaults to unconfirmed and refuses unless `confirm` is explicitly true.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct AutomationDeleteBody {
     #[serde(default)]
     confirm: bool,
@@ -2020,8 +2022,13 @@ async fn run_automation(
     if !has_idempotency_key(&headers) {
         return missing_idempotency_key_response("automation:run");
     }
+    let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, move |state, _body| async move {
-        match state.svc.automation_run(&automation_id).await {
+        match state.svc.automation_run_with_receipt(
+            &automation_id,
+            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+            Some(&key),
+        ).await {
             Ok(result) => snake_json_response(serde_json::to_value(&result)),
             Err(error) => dto::automation_error_response(&error),
         }
@@ -2042,8 +2049,10 @@ async fn delete_automation(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, move |state, body| async move {
-        let parsed: AutomationDeleteBody = serde_json::from_str(body.trim())
-            .unwrap_or_default();
+        let parsed: AutomationDeleteBody = match parse_body_or_error(body.trim(), "automation delete") {
+            Ok(parsed) => parsed,
+            Err(response) => return response,
+        };
         match state.svc.automation().delete(
             &automation_id,
             parsed.confirm,

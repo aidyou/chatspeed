@@ -121,6 +121,12 @@ pub enum ManualClaimOutcome {
     Busy,
 }
 
+#[derive(Debug, Clone)]
+pub enum DeleteAutomationOutcome {
+    Deleted,
+    NotFound,
+    ActiveRun,
+}
 /// Outcome of reserving a durable mutation receipt.
 #[derive(Debug, Clone)]
 pub enum ReceiptOutcome {
@@ -131,6 +137,7 @@ pub enum ReceiptOutcome {
     /// The key was used by a different request body.
     Conflict,
 }
+
 
 impl From<&Row<'_>> for WorkflowAutomation {
     fn from(row: &Row<'_>) -> Self {
@@ -266,10 +273,33 @@ impl MainStore {
         })
     }
 
-    pub fn delete_workflow_automation(&self, id: &str) -> Result<(), StoreError> {
+    pub fn delete_workflow_automation_if_idle(
+        &self,
+        id: &str,
+    ) -> Result<DeleteAutomationOutcome, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.write_blocking(move |conn| {
             let transaction = conn.transaction()?;
+            let exists: Option<i64> = transaction
+                .query_row(
+                    "SELECT 1 FROM workflow_automations WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if exists.is_none() {
+                return Ok(DeleteAutomationOutcome::NotFound);
+            }
+            let active_runs: i64 = transaction.query_row(
+                "SELECT COUNT(1) FROM workflow_automation_runs
+                 WHERE automation_id = ?1
+                   AND status IN ('pending','starting','running','needs_reconcile')",
+                params![id],
+                |row| row.get(0),
+            )?;
+            if active_runs > 0 {
+                return Ok(DeleteAutomationOutcome::ActiveRun);
+            }
             let mut workflow_ids = {
                 let mut statement = transaction.prepare(
                     "SELECT DISTINCT workflow_session_id
@@ -277,8 +307,7 @@ impl MainStore {
                      WHERE automation_id = ?1 AND workflow_session_id IS NOT NULL",
                 )?;
                 let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
-                let ids = rows.collect::<Result<Vec<_>, _>>()?;
-                ids
+                rows.collect::<Result<Vec<_>, _>>()?
             };
             if let Some(current_workflow_id) = transaction
                 .query_row(
@@ -305,10 +334,19 @@ impl MainStore {
                 params![id],
             )?;
             transaction.commit()?;
-            Ok(())
+            Ok(DeleteAutomationOutcome::Deleted)
         })
     }
-
+    /// Compatibility wrapper for tests and legacy callers. New mutation paths
+    /// must use the atomic idle-checked variant above.
+    pub fn delete_workflow_automation(&self, id: &str) -> Result<(), StoreError> {
+        match self.delete_workflow_automation_if_idle(id)? {
+            DeleteAutomationOutcome::Deleted | DeleteAutomationOutcome::NotFound => Ok(()),
+            DeleteAutomationOutcome::ActiveRun => Err(StoreError::Query(
+                "automation has an active run".to_string(),
+            )),
+        }
+    }
     pub fn update_workflow_automation_run_after_start(
         &self,
         automation_id: &str,
