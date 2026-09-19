@@ -2,6 +2,26 @@
 
 # Release Notes
 
+## [2.0.18]
+
+### 🪄 Improvements
+
+- **Workflow**:
+  - Streamlined the agent toolset for weaker models: planning-note operations now go through a single tool and detailed todo lookups are folded into the list, so smaller models pick tools more reliably.
+
+### 🐞 Bug Fixes
+
+- **Workflow**:
+  - Sending a message now always pins the message list to the newest content, so queued or still-growing streaming messages can no longer cover the input box.
+  - The sidebar resize handle now aligns exactly with the sidebar edge.
+  - Tool execution no longer freezes the interface while the sandbox runtime is being detected (the UI could previously become unresponsive during tool runs on Ubuntu).
+- **ChatHub**:
+  - Links clicked inside a docked chat page now open in the default browser instead of doing nothing.
+- **Sandbox**:
+  - `~/.chatspeed` now resolves to the same location inside the sandbox as on the host, so paths no longer diverge when the sandbox user name differs.
+
+---
+
 ## [2.0.17]
 
 ### 🚀 New Features
