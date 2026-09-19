@@ -210,6 +210,7 @@ Before submission, perform this mandatory self-check and repair the plan locally
 
 - The objective and final deliverable are stated exactly enough for an agent without chat history;
   user requirements, confirmed facts, assumptions, and open questions are distinguishable.
+- The plan includes the **User Language and Output Requirement** in the `Problem Statement`.
 - The task classification is explicit, conditional dimensions are marked applicable or not applicable
   with reasons, and no scenario-specific requirement is presented as a universal coding requirement.
 - Every `AC-*` is observable and every applicable `INV-*` is necessary; IDs are unique and spelled
@@ -243,6 +244,12 @@ Include:
 - why it matters
 - user-visible or system-visible symptoms when relevant
 - scope boundaries and non-goals
+
+### User Language and Output Requirement
+
+Include this short handoff in every submitted plan:
+
+> Please use **`<the user's language>`** for all user-visible conversation output and the final report, unless the user explicitly requests another language. The plan itself may use any language.
 
 ## 2. Target Outcome and Acceptance Contract
 
