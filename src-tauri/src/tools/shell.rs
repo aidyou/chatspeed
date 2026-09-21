@@ -27,9 +27,9 @@ use serde_json::{json, Value};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
 #[cfg(test)]
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration as StdDuration, Instant as StdInstant};
 #[cfg(test)]
 use tokio::io::AsyncReadExt;
@@ -41,12 +41,8 @@ use tokio::time::{timeout, Duration};
 
 const SANDBOX_RUNTIME_STATUS_CACHE_TTL: StdDuration = StdDuration::from_secs(3);
 
-type SandboxRuntimeStatusCache = StdMutex<
-    Option<(
-        StdInstant,
-        crate::tools::SandboxRuntimeStatusSummary,
-    )>,
->;
+type SandboxRuntimeStatusCache =
+    StdMutex<Option<(StdInstant, crate::tools::SandboxRuntimeStatusSummary)>>;
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone)]
@@ -155,8 +151,6 @@ impl ShellPolicyEngine {
                 | "chsh"
                 | "newgrp"
                 | "sg"
-                | "ssh"
-                | "scp"
                 | "useradd"
                 | "adduser"
                 | "userdel"
@@ -729,6 +723,19 @@ impl ShellPolicyEngine {
             }
 
             if redirection_ops.contains(&token_str) {
+                // FD redirections (`2>&1`, `1>&2`, `>&-`) are tokenized as
+                // `2 > & 1`; they only reconnect file descriptors without touching
+                // the file system, so the file-boundary review does not apply.
+                let is_fd_redirection = tokens.get(i + 1).is_some_and(|next| next == "&")
+                    && tokens.get(i + 2).is_some_and(|fd_target| {
+                        !fd_target.is_empty()
+                            && (fd_target.chars().all(|c| c.is_ascii_digit())
+                                || fd_target == "-"
+                                || Self::is_null_device(fd_target))
+                    });
+                if is_fd_redirection {
+                    continue;
+                }
                 if let Some(next_token) = tokens.get(i + 1) {
                     if !next_token.starts_with('-') && !Self::is_null_device(next_token) {
                         match self.validate_path_token(
@@ -859,11 +866,114 @@ impl ShellPolicyEngine {
         }
     }
 
+    /// A token shaped like `[user@]host:path`, `[IPv6]:path` or `rsync://host/path`
+    /// is a remote transfer target for scp/rsync, not a local path.
+    fn is_remote_transfer_target(token: &str) -> bool {
+        if token.starts_with("rsync://") {
+            return true;
+        }
+        // Windows drive-letter paths (e.g. `C:\x`, `C:/x`) are local paths.
+        let bytes = token.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'/' || bytes[2] == b'\\')
+        {
+            return false;
+        }
+        let Some(colon) = token.find(':') else {
+            return false;
+        };
+        let host_part = &token[..colon];
+        if host_part.starts_with('[') {
+            // Bracketed IPv6 literal, e.g. `[::1]:/path`.
+            return host_part.ends_with(']') && host_part.len() > 2;
+        }
+        if host_part.is_empty() || host_part.contains('/') {
+            return false;
+        }
+        let host = host_part
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(host_part);
+        !host.contains(':') && !host.is_empty()
+    }
+
+    /// Operand scan for file-transfer commands (scp/rsync/rcp): remote targets
+    /// such as `user@host:path` are not local paths and skip PathGuard checks,
+    /// while local path operands keep the normal validation.
+    fn transfer_command_non_path_argument(
+        arguments: &[String],
+        arg_index: usize,
+        value_options: &[&str],
+    ) -> bool {
+        let mut index = 0;
+        while index <= arg_index && index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if argument == "--" {
+                return index < arg_index && Self::is_remote_transfer_target(&arguments[arg_index]);
+            }
+            if argument == "-" || !argument.starts_with('-') {
+                if index == arg_index {
+                    return Self::is_remote_transfer_target(argument);
+                }
+                index += 1;
+                continue;
+            }
+            // Options that consume the next argument (e.g. `scp -i key`, `rsync -e ssh`).
+            index += if value_options.contains(&argument) {
+                2
+            } else {
+                1
+            };
+        }
+        false
+    }
+
     fn is_non_path_argument(command: &str, arguments: &[String], arg_index: usize) -> bool {
         match command {
             "awk" => Self::awk_non_path_argument(arguments, arg_index),
             "sed" => Self::sed_non_path_argument(arguments, arg_index),
             "grep" | "egrep" | "fgrep" | "rg" => Self::grep_non_path_argument(arguments, arg_index),
+            "scp" | "rsync" | "rcp" => Self::transfer_command_non_path_argument(
+                arguments,
+                arg_index,
+                &[
+                    // scp value options
+                    "-P",
+                    "-S",
+                    "-i",
+                    "-F",
+                    "-J",
+                    "-l",
+                    "-c",
+                    "-o",
+                    "-D",
+                    "-I",
+                    // rsync/rcp value options
+                    "-e",
+                    "--rsh",
+                    "--password-file",
+                    "--include-from",
+                    "--exclude-from",
+                    "--files-from",
+                    "--log-file",
+                    "--sockopts",
+                    "--rsync-path",
+                    "--temp-dir",
+                    "--partial-dir",
+                    "--backup-dir",
+                    "--compare-dest",
+                    "--copy-dest",
+                    "--link-dest",
+                    "--bwlimit",
+                    "--timeout",
+                    "--port",
+                    "--min-size",
+                    "--max-size",
+                    "--chmod",
+                ],
+            ),
             _ => false,
         }
     }
@@ -1372,9 +1482,7 @@ impl ToolDefinition for ShellExecute {
             .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
             .and_then(|v| v.as_str())
             .unwrap_or("bash");
-        let execution_plan = self
-            .execution_plan_for_params(tool_id, command_str)
-            .await?;
+        let execution_plan = self.execution_plan_for_params(tool_id, command_str).await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
                 Self::execution_plan_denied_message(&execution_plan),
@@ -2405,7 +2513,9 @@ impl ShellExecute {
                     "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
                 ));
             }
-            let current = self.resolve_execution_plan(tool_call_id, command_str).await?;
+            let current = self
+                .resolve_execution_plan(tool_call_id, command_str)
+                .await?;
             if plan != current {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
@@ -2458,16 +2568,18 @@ impl ShellExecute {
         let runtime_status = self.cached_runtime_status().await?;
         let primary_root = self.default_working_dir();
         let mount_context = self.sandbox_mount_context();
-        Ok(crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
-            crate::tools::ShellExecutionResolver::resolve(
-                tool_call_id,
-                command_str,
-                self.sandbox_config.as_ref(),
-                &runtime_status,
-                primary_root.as_deref(),
+        Ok(
+            crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
+                crate::tools::ShellExecutionResolver::resolve(
+                    tool_call_id,
+                    command_str,
+                    self.sandbox_config.as_ref(),
+                    &runtime_status,
+                    primary_root.as_deref(),
+                ),
+                &mount_context,
             ),
-            &mount_context,
-        ))
+        )
     }
 
     fn sandbox_mount_context(&self) -> crate::tools::ShellSandboxMountContext {
@@ -3255,6 +3367,23 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_engine_allows_fd_redirection_without_file_boundary_review() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // FD redirections only reconnect file descriptors, so no file-boundary review.
+        for command in ["ls -la 2>&1", "git status 2>&1 | head -5", "echo hi 1>&2"] {
+            assert_eq!(engine.check(command, false), ShellDecision::Allow);
+        }
+
+        // File redirections still require review.
+        assert!(matches!(
+            engine.check("git status > out.txt", false),
+            ShellDecision::Review(_)
+        ));
+    }
+
+    #[test]
     fn test_policy_engine_blocked_binaries() {
         let (_root, _, guard) = setup_test_context();
         let engine = ShellPolicyEngine::new(guard, vec![]);
@@ -3272,6 +3401,45 @@ mod tests {
         }
         assert!(matches!(
             engine.check("rm -rf test", false),
+            ShellDecision::Review(_)
+        ));
+    }
+
+    #[test]
+    fn test_policy_engine_allows_remote_shell_and_transfers() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+        for command in [
+            "ssh user@host",
+            "ssh -p 2222 user@host",
+            "scp local.txt user@host:/remote/path",
+            "scp -i key.pem local.txt host:dest/",
+            "scp user@host:/remote/file.txt ./local.txt",
+            "scp -r . host:/opt/app",
+            "scp local.txt outside.txt",
+            "rsync -av ./local/ user@host:/remote/",
+            "rsync -e ssh local.txt host:dest/",
+            "rsync -av rsync://host/module/ ./downloads/",
+            "rsync host::module/ ./downloads/",
+            "rcp ./local.txt host:dest/",
+        ] {
+            assert!(
+                !matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected remote transfer to be allowed for {command}"
+            );
+        }
+
+        for command in ["scp local.txt /outside/path", "rsync -av ./ /outside/path"] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected local out-of-root path to be denied for {command}"
+            );
+        }
+
+        // ssh inside a dynamic awk system() call is no longer a hard denial;
+        // it still requires review as dynamic execution.
+        assert!(matches!(
+            engine.check("awk 'BEGIN { system(\"ssh user@host\") }'", false),
             ShellDecision::Review(_)
         ));
     }
