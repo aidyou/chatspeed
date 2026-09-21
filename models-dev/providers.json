@@ -422,7 +422,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 47,
+      "modelCount": 46,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -483,7 +483,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 59,
+      "modelCount": 60,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -1031,7 +1031,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 402,
+      "modelCount": 404,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 577,
+      "modelCount": 576,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1439,14 +1439,14 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 107,
+      "modelCount": 104,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
     },
     {
       "api": "https://opencode.ai/zen/go/v1",
-      "documentationUrl": "https://opencode.ai/docs/zen",
+      "documentationUrl": "https://opencode.ai/docs/go",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
       "modelCount": 36,
@@ -2039,7 +2039,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 376,
+      "modelCount": 375,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2059,7 +2059,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 30,
+      "modelCount": 29,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2268,9 +2268,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "85371e1efdf2931d49fa569f533941c4957d901ed736c531a1d77ff3a882e8ea",
-    "generatedAt": "2026-09-20T08:37:18Z",
+    "catalogSha256": "d5f9b50884559e4251c5cc392548dbe86edf5b15e0661b1920026fc9eba9ba46",
+    "generatedAt": "2026-09-21T08:59:37Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "bd94b6ab639374b576d40c6ce78774b7742101ef"
+    "revision": "25c48bf4e195c5b7da7466969976df06c0e3c5c9"
   }
 }
