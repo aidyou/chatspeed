@@ -1192,7 +1192,6 @@
     }
   },
   "workflow": {
-    "allowedShellCommands": "允许的 Shell 命令",
     "costAnalysis": {
       "cache": "缓存",
       "cacheHitRate": "缓存命中率",
@@ -1273,6 +1272,7 @@
       "validationOtherRequired": "选择“其他”时，请填写补充信息。",
       "validationRequired": "请为每一项选择一个选项。"
     },
+    "autoApproveTab": "自动审批",
     "autoApprovedTools": "自动审批的工具",
     "mcpConfig": "MCP 配置",
     "automation": {
@@ -1502,6 +1502,7 @@
     "retrying": "请求频率过快，正在重试 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "sessionLost": "会话已断开，请重启或刷新页面。",
     "shellPolicyClickRemove": "点击 × 移除项目",
+    "shellRulesTab": "Shell 规则",
     "sidebarStatus": {
       "awaitingApproval": "等待审批",
       "awaitingSubAgent": "等待子代理",

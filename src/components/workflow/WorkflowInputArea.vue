@@ -351,7 +351,7 @@
                           </div>
                           <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
                         </el-tab-pane>
-                        <el-tab-pane :label="`${$t('workflow.toolConfig')} (${autoApprovedTools.length})`" name="autoApprove">
+                        <el-tab-pane :label="`${$t('workflow.autoApproveTab')} (${autoApprovedTools.length})`" name="autoApprove">
                           <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
                             <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
                               <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool, checked)">
@@ -364,7 +364,7 @@
                           </div>
                           <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
                         </el-tab-pane>
-                        <el-tab-pane :label="`${$t('workflow.allowedShellCommands')} (${shellPolicyRules.length})`" name="shell">
+                        <el-tab-pane :label="`${$t('workflow.shellRulesTab')} (${shellPolicyRules.length})`" name="shell">
                           <div class="panel-section">
                             <div class="section-toolbar shell-policy-search">
                               <el-input
@@ -820,6 +820,7 @@ import {
   getModelConfigForOption,
   resolveActiveModelConfig
 } from '@/composables/workflow/modelConfigSelection'
+import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import AgentSelector from './AgentSelector.vue'
 import StatusNotifier from './StatusNotifier.vue'
 
@@ -1209,8 +1210,28 @@ const getMcpToolTooltip = tool => {
   return server ? `${server} · ${name}` : name
 }
 
+const toolRegistryById = computed(
+  () => new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+)
+// MCP tools may also be persisted under their public alias instead of the canonical
+// `__MCP__` id, so aliases of registered MCP tools must be rejected as well.
+const mcpToolAliasNames = computed(
+  () =>
+    new Set(
+      agentStore.availableTools.filter(tool => tool.category === 'MCP').map(tool => tool.name)
+    )
+)
+
+// The tool configuration popover only manages native tools: MCP availability and
+// approval are owned by the dedicated MCP panel.
+const isMcpToolId = toolId => {
+  const id = String(toolId ?? '')
+  const category = toolRegistryById.value.get(id)?.category
+  return isWorkflowMcpTool(id, category) || mcpToolAliasNames.value.has(id)
+}
+
 const agentAvailableTools = computed(() => {
-  const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+  const toolDetails = toolRegistryById.value
   const configuredNativeTools = Array.isArray(props.selectedAgent?.availableTools)
     ? props.selectedAgent.availableTools
     : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
@@ -1218,7 +1239,7 @@ const agentAvailableTools = computed(() => {
       : []
 
   return configuredNativeTools
-    .filter(id => !String(id).includes('__MCP__'))
+    .filter(id => !isMcpToolId(id))
     .map(id => ({ id, name: toolDetails.get(id)?.name || id }))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
@@ -1252,14 +1273,14 @@ const workflowAvailableToolIds = computed(() => {
     agentAvailableTools.value.map(tool => tool.id)
   )
   if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
-    const ordinary = props.currentWorkflow.agentConfig.availableTools
-      .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
+    const ordinary = props.currentWorkflow.agentConfig.availableTools.filter(id =>
+      nativeCapabilityIds.has(id)
+    )
     const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
     return [...new Set([...ordinary, ...mcp])]
   }
   const ordinary = Array.isArray(props.selectedAgent?.availableTools)
-    ? props.selectedAgent.availableTools
-        .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
+    ? props.selectedAgent.availableTools.filter(id => nativeCapabilityIds.has(id))
     : []
   const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
   return [...new Set([...ordinary, ...mcp])]
@@ -1267,7 +1288,7 @@ const workflowAvailableToolIds = computed(() => {
 const autoApprovedTools = computed(() => {
   const availableSet = new Set(workflowAvailableToolIds.value)
   return workflowStore.autoApprovedTools
-    .filter(tool => availableSet.has(tool))
+    .filter(tool => availableSet.has(tool) && !isMcpToolId(tool))
     .sort((a, b) => a.localeCompare(b))
 })
 const shellPolicyRules = computed(() => {
@@ -1315,28 +1336,12 @@ watch(
   }
 )
 const availableApprovalTools = computed(() => {
-  const nativeAllowedSet = new Set(
-    workflowAvailableToolIds.value.filter(
-      toolId => toolId && !String(toolId).includes(MCP_TOOL_NAME_SEPARATOR)
-    )
-  )
+  const allowedSet = new Set(workflowAvailableToolIds.value)
 
-  const nativeTools = agentAvailableTools.value
-    .filter(tool => nativeAllowedSet.has(tool.id))
-    .filter(
-      tool =>
-        tool.id !== 'bash' &&
-        tool.id !== 'mcp_tool_expand' &&
-        tool.id !== 'mcp_tool_execute' &&
-        tool.id !== 'mcp_tool_load'
-    )
-    .map(tool => ({ ...tool, isMcp: false }))
-
-  const mcpTools = workflowMcpTools.value
-    .filter(tool => tool.available)
-    .map(tool => ({ ...tool, isMcp: true }))
-
-  return [...nativeTools, ...mcpTools].sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
+  return agentAvailableTools.value
+    // Shell approval is expressed by shell policy rules, never by tool auto-approval.
+    .filter(tool => tool.id !== 'bash' && allowedSet.has(tool.id))
+    .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 const canAddShellPolicyItem = computed(() =>
   Boolean(props.currentWorkflowId && newShellCommandPattern.value.trim())
@@ -1537,18 +1542,17 @@ const toggleAutoApprovedTool = async (tool, checked) => {
   if (!props.currentWorkflowId) return
   const toolName = typeof tool === 'string' ? tool : tool.id
 
-  if (typeof tool === 'object' && tool?.isMcp) {
-    await toggleWorkflowMcpConfig(toolName, 'autoApprove', checked)
-    return
-  }
-
   const currentAutoApprove = Array.isArray(props.currentWorkflow?.agentConfig?.autoApprove)
     ? props.currentWorkflow.agentConfig.autoApprove
     : [...workflowStore.autoApprovedTools]
 
-  const nextAutoApprove = checked
-    ? [...new Set([...currentAutoApprove, toolName])]
-    : currentAutoApprove.filter(tool => tool !== toolName)
+  // Rewriting the native auto-approval list also drops MCP residue, whose approval
+  // state belongs to the MCP configuration.
+  const nextAutoApprove = (
+    checked
+      ? [...new Set([...currentAutoApprove, toolName])]
+      : currentAutoApprove.filter(tool => tool !== toolName)
+  ).filter(id => !isMcpToolId(id))
 
   try {
     await persistAgentConfig({ autoApprove: nextAutoApprove })
@@ -2455,7 +2459,7 @@ defineExpose({
   align-items: flex-start;
   gap: var(--cs-space-xs);
   margin: 1px 0;
-  padding: var(--cs-space-xs) var(--cs-space-sm);
+  padding: 8px var(--cs-space-sm);
   border-radius: var(--cs-border-radius);
   line-height: 1.35;
   transition:

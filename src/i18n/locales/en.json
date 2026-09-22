@@ -1193,7 +1193,6 @@
     }
   },
   "workflow": {
-    "allowedShellCommands": "Allowed Shell Commands",
     "costAnalysis": {
       "cache": "Cache",
       "cacheHitRate": "Cache hit rate",
@@ -1274,6 +1273,7 @@
       "validationOtherRequired": "Please enter additional information when selecting Other.",
       "validationRequired": "Please select an option for every item."
     },
+    "autoApproveTab": "Auto Approve",
     "autoApprovedTools": "Auto-Approved Tools",
     "mcpConfig": "MCP Configuration",
     "automation": {
@@ -1504,6 +1504,7 @@
     "retrying": "Request too fast, retrying (attempt {attempt}/{total}), waiting {seconds} seconds...",
     "sessionLost": "Session lost. Please restart or refresh the page.",
     "shellPolicyClickRemove": "Click × to remove items",
+    "shellRulesTab": "Shell Rules",
     "sidebarStatus": {
       "awaitingApproval": "Awaiting approval",
       "awaitingSubAgent": "Awaiting sub-agent",

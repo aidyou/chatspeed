@@ -1192,7 +1192,6 @@
     }
   },
   "workflow": {
-    "allowedShellCommands": "允許的 Shell 指令",
     "costAnalysis": {
       "cache": "快取",
       "cacheHitRate": "快取命中率",
@@ -1273,6 +1272,7 @@
       "validationOtherRequired": "選擇「其他」時，請填寫補充資訊。",
       "validationRequired": "請為每一項選擇一個選項。"
     },
+    "autoApproveTab": "自動審批",
     "autoApprovedTools": "自動審批工具",
     "mcpConfig": "MCP 設定",
     "automation": {
@@ -1503,6 +1503,7 @@
     "retrying": "請求頻率過快，正在重試 (第 {attempt}/{total} 次)，等待 {seconds} 秒...",
     "sessionLost": "工作階段已中斷，請重新啟動或重新整理頁面。",
     "shellPolicyClickRemove": "點擊 × 移除項目",
+    "shellRulesTab": "Shell 規則",
     "sidebarStatus": {
       "awaitingApproval": "等待審批",
       "awaitingSubAgent": "等待子代理",
