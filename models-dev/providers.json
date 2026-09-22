@@ -94,7 +94,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 82,
+      "modelCount": 98,
       "name": "AIHubMix",
       "responses": false
     },
@@ -592,7 +592,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 279,
+      "modelCount": 280,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 62,
+      "modelCount": 66,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -674,7 +674,7 @@
       "documentationUrl": "https://docs.github.com/en/copilot",
       "id": "github-copilot",
       "logo": "https://models.dev/logos/github-copilot.svg",
-      "modelCount": 28,
+      "modelCount": 29,
       "name": "GitHub Copilot",
       "protocol": "openai",
       "responses": false
@@ -781,7 +781,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 77,
+      "modelCount": 78,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -941,7 +941,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 378,
+      "modelCount": 382,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1021,7 +1021,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 193,
+      "modelCount": 196,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1031,7 +1031,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 404,
+      "modelCount": 408,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1121,7 +1121,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 187,
+      "modelCount": 188,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 576,
+      "modelCount": 580,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1345,7 +1345,7 @@
       "documentationUrl": "https://portal.neuralwatt.com/docs",
       "id": "neuralwatt",
       "logo": "https://models.dev/logos/neuralwatt.svg",
-      "modelCount": 21,
+      "modelCount": 29,
       "name": "Neuralwatt",
       "protocol": "openai",
       "responses": false
@@ -1439,7 +1439,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 104,
+      "modelCount": 105,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1449,7 +1449,7 @@
       "documentationUrl": "https://opencode.ai/docs/go",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 36,
+      "modelCount": 39,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1470,7 +1470,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 371,
+      "modelCount": 375,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1480,7 +1480,7 @@
       "documentationUrl": "https://opper.ai/models",
       "id": "opper",
       "logo": "https://models.dev/logos/opper.svg",
-      "modelCount": 40,
+      "modelCount": 57,
       "name": "Opper",
       "protocol": "openai",
       "responses": false
@@ -1729,7 +1729,7 @@
       "documentationUrl": "https://cloud.siliconflow.com/models",
       "id": "siliconflow",
       "logo": "https://models.dev/logos/siliconflow.svg",
-      "modelCount": 49,
+      "modelCount": 57,
       "name": "SiliconFlow",
       "protocol": "openai",
       "responses": false
@@ -1739,7 +1739,7 @@
       "documentationUrl": "https://cloud.siliconflow.com/models",
       "id": "siliconflow-cn",
       "logo": "https://models.dev/logos/siliconflow-cn.svg",
-      "modelCount": 47,
+      "modelCount": 44,
       "name": "SiliconFlow (China)",
       "protocol": "openai",
       "responses": false
@@ -1790,7 +1790,7 @@
       "documentationUrl": "https://platform.stepfun.ai/docs/en/overview/concept",
       "id": "stepfun-ai",
       "logo": "https://models.dev/logos/stepfun-ai.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "StepFun (Global)",
       "protocol": "openai",
       "responses": false
@@ -1810,7 +1810,7 @@
       "documentationUrl": "https://platform.stepfun.com/docs/zh/step-plan/integrations/reasoning-api",
       "id": "stepfun-step-plan",
       "logo": "https://models.dev/logos/stepfun-step-plan.svg",
-      "modelCount": 4,
+      "modelCount": 5,
       "name": "StepFun Step Plan (China)",
       "protocol": "openai",
       "responses": false
@@ -1842,6 +1842,16 @@
       "logo": "https://models.dev/logos/synthetic.svg",
       "modelCount": 10,
       "name": "Synthetic",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.temprhq.io/v1",
+      "documentationUrl": "https://temprhq.io/docs/gateway-reference.html",
+      "id": "tempr",
+      "logo": "https://models.dev/logos/tempr.svg",
+      "modelCount": 29,
+      "name": "Tempr",
       "protocol": "openai",
       "responses": false
     },
@@ -2031,7 +2041,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 105,
+      "modelCount": 106,
       "name": "Venice AI",
       "responses": false
     },
@@ -2039,7 +2049,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 375,
+      "modelCount": 379,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2059,7 +2069,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 29,
+      "modelCount": 31,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2120,7 +2130,7 @@
       "documentationUrl": "https://docs.wandb.ai/inference",
       "id": "wandb",
       "logo": "https://models.dev/logos/wandb.svg",
-      "modelCount": 27,
+      "modelCount": 28,
       "name": "CoreWeave",
       "protocol": "openai",
       "responses": false
@@ -2139,7 +2149,7 @@
       "documentationUrl": "https://docs.x.ai/docs/models",
       "id": "xai",
       "logo": "https://models.dev/logos/xai.svg",
-      "modelCount": 10,
+      "modelCount": 12,
       "name": "xAI",
       "protocol": "openai",
       "responses": false
@@ -2150,7 +2160,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi",
       "logo": "https://models.dev/logos/xiaomi.svg",
-      "modelCount": 6,
+      "modelCount": 9,
       "name": "Xiaomi",
       "protocol": "openai",
       "responses": false
@@ -2160,7 +2170,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-ams",
       "logo": "https://models.dev/logos/xiaomi-token-plan-ams.svg",
-      "modelCount": 7,
+      "modelCount": 9,
       "name": "Xiaomi Token Plan (Europe)",
       "protocol": "openai",
       "responses": false
@@ -2170,7 +2180,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-cn",
       "logo": "https://models.dev/logos/xiaomi-token-plan-cn.svg",
-      "modelCount": 7,
+      "modelCount": 9,
       "name": "Xiaomi Token Plan (China)",
       "protocol": "openai",
       "responses": false
@@ -2180,7 +2190,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-sgp",
       "logo": "https://models.dev/logos/xiaomi-token-plan-sgp.svg",
-      "modelCount": 7,
+      "modelCount": 9,
       "name": "Xiaomi Token Plan (Singapore)",
       "protocol": "openai",
       "responses": false
@@ -2200,7 +2210,7 @@
       "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
       "id": "zai",
       "logo": "https://models.dev/logos/zai.svg",
-      "modelCount": 17,
+      "modelCount": 18,
       "name": "Z.AI",
       "protocol": "openai",
       "responses": false
@@ -2251,7 +2261,7 @@
       "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
       "id": "zhipuai",
       "logo": "https://models.dev/logos/zhipuai.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "Zhipu AI",
       "protocol": "openai",
       "responses": false
@@ -2268,9 +2278,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "d5f9b50884559e4251c5cc392548dbe86edf5b15e0661b1920026fc9eba9ba46",
-    "generatedAt": "2026-09-21T08:59:37Z",
+    "catalogSha256": "ff6b32709b5d959716596e6f91cdac8a0715790a1d2cafabb9e4ca9150d8d8cc",
+    "generatedAt": "2026-09-22T08:34:36Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "25c48bf4e195c5b7da7466969976df06c0e3c5c9"
+    "revision": "8e350677b4c9c6f3649c2bdffd51647ea6e5299b"
   }
 }
