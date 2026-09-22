@@ -717,6 +717,20 @@ footer.input-container {
         color: var(--cs-text-color-secondary);
         font-size: var(--cs-font-size-sm);
     }
+
+    .sandbox-refresh {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--cs-text-color-secondary);
+        cursor: pointer;
+        transition: color 0.16s ease;
+
+        &:hover {
+            color: var(--cs-color-primary);
+        }
+    }
 }
 
 // Auto-approved tools popover

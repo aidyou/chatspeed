@@ -307,6 +307,7 @@
       "sandboxProfileRuntime": "Profile Runtime",
       "sandboxProfiles": "Sandbox profiles",
       "sandboxProfilesEmpty": "No sandbox profiles configured",
+      "sandboxRefreshConfig": "Refresh Configuration",
       "sandboxRuntimeAuto": "Auto",
       "sandboxRuntimeDocker": "Docker",
       "sandboxRuntimeMsb": "Microsandbox (msb)",

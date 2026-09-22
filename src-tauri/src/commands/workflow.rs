@@ -6200,6 +6200,94 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_resolve_agent_sandbox_snapshot_reads_latest_scheme_after_update() {
+        let test_store = create_test_store();
+
+        // Auto sandbox scheme with one enabled common catch-all profile.
+        let scheme = crate::db::SandboxScheme {
+            id: "scheme-1".to_string(),
+            name: "Scheme".to_string(),
+            description: String::new(),
+            config: crate::tools::SandboxSchemeConfig {
+                runtime_preference: crate::tools::SandboxRuntimePreference::Auto,
+                profiles: vec![crate::tools::SandboxProfileConfig {
+                    id: "common".to_string(),
+                    name: "Common".to_string(),
+                    enabled: true,
+                    priority: 0,
+                    command_patterns: vec!["^.*$".to_string()],
+                    runtime_preference: crate::tools::SandboxRuntimePreference::Auto,
+                    image: "node:20".to_string(),
+                    instance_name: None,
+                    image_size_bytes: None,
+                    network: Default::default(),
+                    resources: Default::default(),
+                    workspace_access: crate::tools::WorkspaceAccess::ReadWrite,
+                }],
+                host_rules: vec![],
+            },
+            disabled: false,
+            created_at: None,
+            updated_at: None,
+        };
+        test_store
+            .add_sandbox_scheme(&scheme)
+            .expect("add sandbox scheme");
+
+        // Agent references the scheme with Auto execution mode.
+        let mut agent = crate::db::agent::Agent::new(
+            "agent-1".to_string(),
+            "Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            Some(serde_json::json!([crate::tools::TOOL_BASH]).to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        agent.sandbox_execution_mode = crate::tools::ShellExecutionMode::Auto;
+        agent.sandbox_scheme_id = Some("scheme-1".to_string());
+        test_store.add_agent(&agent).expect("add agent");
+
+        // First resolution snapshots the current scheme content.
+        let mut config = crate::db::agent::AgentConfig::default();
+        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config)
+            .expect("resolve sandbox snapshot");
+        let first = config.sandbox_config.as_ref().expect("has sandbox config");
+        assert_eq!(first.scheme_id.as_deref(), Some("scheme-1"));
+        assert_eq!(first.profiles["common"].image, "node:20");
+
+        // Simulate the scheme being edited in the sandbox scheme manager.
+        let mut updated = scheme.clone();
+        updated.config.profiles[0].image = "node:22".to_string();
+        updated.config.profiles[0].name = "Common v2".to_string();
+        test_store
+            .update_sandbox_scheme(&updated)
+            .expect("update sandbox scheme");
+
+        // Re-resolution must observe the edited scheme, not a cached snapshot.
+        let mut config = crate::db::agent::AgentConfig::default();
+        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config)
+            .expect("resolve sandbox snapshot again");
+        let second = config.sandbox_config.as_ref().expect("has sandbox config");
+        assert_eq!(second.profiles["common"].image, "node:22");
+        assert_eq!(second.profiles["common"].name, "Common v2");
+    }
+
     #[tokio::test]
     async fn search_workspace_files_allows_csignore_whitelisted_gitignored_directory() {
         let root = tempdir().expect("failed to create temp dir");

@@ -695,6 +695,18 @@
                     <span class="sandbox-option-copy">
                       <span>{{ scheme.name }}</span>
                     </span>
+                    <el-tooltip
+                      v-if="sandboxSchemeId === scheme.id"
+                      :content="$t('settings.agent.sandboxRefreshConfig')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top">
+                      <span
+                        class="sandbox-refresh"
+                        @click.stop="refreshSandboxConfig">
+                        <cs name="refresh" size="14px" />
+                      </span>
+                    </el-tooltip>
                     <cs
                       v-if="sandboxSchemeId === scheme.id"
                       name="check"
@@ -1450,6 +1462,11 @@ const selectSandboxMode = async executionMode => {
 const selectSandboxScheme = async schemeId => {
   if (!schemeId || schemeId === sandboxSchemeId.value) return
   await persistSandboxConfig(sandboxMode.value, schemeId)
+}
+
+const refreshSandboxConfig = async () => {
+  if (isUpdatingSandboxConfig.value) return
+  await persistSandboxConfig(sandboxMode.value, sandboxSchemeId.value)
 }
 
 watch(sandboxPopoverVisible, async isVisible => {

@@ -307,6 +307,7 @@
       "sandboxProfileRuntime": "Profile 运行时",
       "sandboxProfiles": "沙箱配置列表",
       "sandboxProfilesEmpty": "暂无沙箱配置",
+      "sandboxRefreshConfig": "刷新配置",
       "sandboxRuntimeAuto": "自动",
       "sandboxRuntimeDocker": "Docker",
       "sandboxRuntimeMsb": "Microsandbox (msb)",
