@@ -286,8 +286,10 @@
               <WorkflowSessionMessagePane
                 :session-id="activeSubAgentSessionId"
                 agent-role="child"
+                :ask-user-submitting="askUserSubmitting"
                 @close="closeSubAgentMessagePane"
-                @open-sub-agent="openSubAgentMessagePane" />
+                @open-sub-agent="openSubAgentMessagePane"
+                @submit-ask-user="submitAskUserResponse" />
             </div>
 
             <!-- Status Panel (Floating) -->
@@ -2682,7 +2684,8 @@ const submitAskUserResponse = async response => {
         ui_visibility: 'hide',
         ask_user_response: true,
         ...(toolCallId ? { requested_tool_call_id: toolCallId } : {})
-      }
+      },
+      ...(response?.target ? { target: response.target } : {})
     })
   } finally {
     askUserSubmitting.value = false

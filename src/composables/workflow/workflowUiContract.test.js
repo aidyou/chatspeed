@@ -403,14 +403,16 @@ test('MCP tool calls show their arguments and format only valid JSON results', a
 })
 
 test('ask-user responses stay hidden from the transcript and render on their source tool card', async () => {
-  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine, workflowStore] =
+  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine, workflowStore, sessionPane, sessionMessages] =
     await Promise.all([
       readFile('src/views/Workflow.vue', 'utf8'),
       readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
       readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
       readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
       readFile('src-tauri/src/workflow/react/engine.rs', 'utf8'),
-      readFile('src/stores/workflow.js', 'utf8')
+      readFile('src/stores/workflow.js', 'utf8'),
+      readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
+      readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8')
     ])
 
   assert.match(
@@ -422,6 +424,26 @@ test('ask-user responses stay hidden from the transcript and render on their sou
     workflowCore,
     /if \(options\.metadata\) \{\s*signalPayload\.metadata = options\.metadata/,
     'hidden-message metadata must continue through the user-message signal sent to the runtime'
+  )
+  assert.match(
+    sessionPane,
+    /const submitAskUserResponse = response => \{[\s\S]*?sessionId: props\.sessionId,[\s\S]*?waitReason: resolvedWaitReason\.value,[\s\S]*?hasLiveSession: childWorkflow\.hasLiveSession === true/
+  )
+  assert.match(
+    workflowView,
+    /@submit-ask-user="submitAskUserResponse"[\s\S]*?const submitAskUserResponse = async response => \{[\s\S]*?response\?\.target/
+  )
+  assert.match(
+    workflowCore,
+    /const showSubAgentAskUserNotification = \(sessionId, payload = \{\}\) =>[\s\S]*?parentSessionId !== sessionId[\s\S]*?kind: 'ask_user'[\s\S]*?targetSessionId: subAgentId/
+  )
+  assert.match(
+    workflowCore,
+    /payload\.wait_reason === WORKFLOW_WAIT_REASONS\.USER_INPUT[\s\S]*?showSubAgentAskUserNotification\(sessionId, payload\)/
+  )
+  assert.match(
+    sessionMessages,
+    /hasLiveSession: snapshot\.hasLiveSession === true/
   )
   const awaitingUserMetadataWrites = workflowEngine.match(
     /WorkflowSignal::UserMessage \{\s*content, metadata, \.\.\s*\}[\s\S]*?canonicalize_ask_user_response_metadata\(metadata\)[\s\S]*?add_message_and_notify_internal\([\s\S]*?metadata,\s*\)/g
