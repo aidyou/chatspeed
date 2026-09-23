@@ -1218,3 +1218,272 @@ final review 判定 3D 未达完成门槛，提出三条 major：
 
 - 仍以 SQLite 单写事务作为并发 authority；若未来出现多主进程写同一 DB，需升级为 lease/owner 设计（A-4）。
 - GUI/真实重启交错 smoke 仍受宿主限制未运行，以真实 SQLite 事务级测试替代，不记为桌面 smoke。
+
+## 14. Phase 3E 前置事实回写与 contract freeze（2026-09-19）
+
+本节为 3E 执行前追加记录，不改写第 11 节及第 12～13 节既有历史事实。
+
+### 14.1 3D、V-7 与 V-10 状态
+
+- **3D 阶段指针**：第 12～13 节记录的本机 Automation Facade 及并发 run guard 已实现；其 focused
+  验证事实保留，3E 不改变 3D 的 runtime owner、artifact 或普通 workflow 语义。
+- **V-7**：按本轮可复核探针，使用有界命令
+  `timeout 60s bash -lc '... | npx -y @upstash/context7-mcp 2>&1'` 启动了真实 stdio 子进程，并完成
+  JSON-RPC `initialize`（server `Context7`、version `4.1.1`、protocol `2024-11-05`）与 `tools/list`，返回
+  两个声明工具。该证据证明真实 stdio 启动/握手/工具枚举路径可工作，但**不等同于原 V-7 的仓库内确定性
+  fixture 完整 install 流程，也不等同于 3E Harbor task smoke**：`npx` 运行期获取了外部包，且本次未执行
+  enable/disable/uninstall、network-none、artifact allowlist 或真实桌面交错验证。因此 V-7 仍标记为部分覆盖，
+  不把该探针包装成已完成的 Harbor benchmark 证据。
+- **V-10**：当前仓库记录仍为真实桌面 GUI 与 CLI 交错/重启 smoke 未执行；headless 环境无显示会话，不能
+  推断 GUI 通过。已有真实 SQLite、认证 HTTP 与临时文件系统 focused 替代验证继续保留为部分覆盖。
+- **未验证项与风险**：V-7 仍缺仓库内 deterministic stdio fixture 的完整生命周期；V-10 仍缺真实 GUI
+  交错/重启证据。3E 本切片只使用 Harbor task contract，不能以本次 Context7 探针降低其隔离、digest、license
+  或 public-tests 要求。
+
+### 14.2 3E-1 Python Bowling contract freeze
+
+- 数据集固定为外部 `exercism-polyglot` 快照，首切片仅为 `python` split 的
+  `python/exercises/practice/bowling`；不扩展其他语言、题目或 Aider 官方总分声明。source ref、canonical
+  file list/tree digest、task digest、runner/verifier identity 和版本在 U-2 中由实际目录计算，禁止预填猜测值。
+- 任务输入固定为 starter、`bowling_test.py`、`.meta/config.json` 及实际可读的逐题 license/attribution evidence；
+  测试分类固定为 `public_tests`，结果记录污染风险，不能当作 private holdout、promotion 或官方 Aider 排名。
+- 运行固定为 Harbor `HarborTaskOwner` capability 证明的 task environment，Python 标准库 `unittest`，结构化
+  argv、固定 cwd/env、network none、资源预算、只读测试根、候选 workspace 和 declared artifact allowlist；
+  capability 缺失/不匹配时 fail closed，绝不 fallback 到宿主 subprocess。
+- 独立 verifier 只接受 digest-bound staged snapshot 与声明的 runner evidence，重新核对任务/数据集/runner/
+  verifier identity、退出状态、测试计数/失败事实、artifact manifest/hash 和 `run_id/session_id/chain_head`；
+  输出 `pass`、`candidate_failure`、`timeout`、`dependency_error`、`infrastructure_error`、`tamper_detected`
+  或 `not_evaluable`，不读取 agent transcript 或自报分数。
+- durable request/job 只保存 dataset/task ref、digest 与 instruction hash，不保存题面、测试正文或 transcript；
+  原始题目/测试默认仅保留在受控内部 task package。license 未确认时标记 blocked/not_evaluable，不公开复制题目
+  内容或公开可比成绩。
+- 3E 结果只 additive 接入现有 artifact/evaluation/verdict provenance，不修改 `chatspeed-smoke@2`、旧
+  artifact v1/evaluator、现有 scheduler/owner 语义，不产生 promotion verdict；若实现需要 breaking schema、
+  migration、动态联网 acquisition、第二 runtime owner 或放宽 Harbor 边界，按计划 stop condition 停止并请求确认。
+
+该记录完成 U-1 的事实回写与 contract freeze；U-2 已从外部目录计算并冻结本切片 manifest 的实际 digest 与 license
+证据，结果因逐题许可证不足保持 blocked；后续实现仅允许 contract-level 验证，不得将其视为已完成的正式数据集 acquisition。
+
+## 15. Phase 3E contract-only as-built 记录（2026-09-19）
+
+本节追加本轮执行事实，不把受限的 contract 实现写成正式 Harbor benchmark 完成。
+
+### 15.1 实际交付
+
+- 新增 `work/agent-cli-polyglot-benchmark/manifest.json`：固定 `exercism-polyglot`、dataset version 1、
+  `python_smoke`、Bowling 相对路径、规范化本地 snapshot/archive digest、task tree digest、文件角色、
+  runner/verifier identity、public-tests 污染标签、artifact allowlist 和 durable projection。外部目录不是 Git
+  checkout，因此 source ref 明确为带 digest 的 local snapshot，而不是 mutable `HEAD`。
+- Bowling 目录未发现任务级 `LICENSE`、`COPYING` 或 `NOTICE`；README 仅给出 Exercism 归属和链接，不能替代
+  逐题许可证明。manifest 因此固定为 `license.status=blocked`、`publication=internal_audit_only_until_task_license_is_confirmed`，
+  不在仓库复制 starter、测试正文或题目包，不发布公开成绩。
+- 新增 `tools/harbor/polyglot_bowling_contract.py`：严格拒绝未知字段/错误版本、固定 source/task digest、
+  runner argv/network-none/install-free policy、public-tests/non-holdout policy、artifact declared-only/secret
+  boundary，并只生成不含题面/测试正文的 durable ref projection。verifier 重新检查 provenance、artifact hash
+  和 secret marker，输出稳定的 `pass`、`candidate_failure`、`timeout`、`dependency_error`、
+  `infrastructure_error`、`tamper_detected` 或 `not_evaluable` 分类。
+- 新增 `tools/harbor/test_polyglot_bowling_contract.py`：仅使用合成 runner evidence 和合成 artifact，不读取或
+  复制外部题目内容；覆盖 strict schema、source/task drift、durable privacy、license block、五类结果分类、
+  artifact tamper 和 secret marker。
+
+### 15.2 明确未做与阻塞结论
+
+- 未修改 `chatspeed-smoke@2`、`fixture.rs`、旧 artifact/evaluator/verifier、scheduler schema、
+  `tools/harbor/artifact_contract.py` 或 `tools/harbor/chatspeed_agent.py`；没有新增第二 runtime/data authority、
+  SQLite 直连、任意 shell 或动态 acquisition。
+- 未创建或声明 Python Bowling Harbor task image/profile；当前已有 image/profile 面向 ChatSpeed smoke，且旧
+  Harbor artifact contract 只允许 campaign/job 文件。按用户确认的 fail-closed 选择，本切片没有 host fallback，
+  没有运行 Bowling candidate，也没有产生正式 Harbor score。当前任何 Bowling execution 只能为
+  `blocked`/`not_evaluable`，不能满足 V-7 的真实 Bowling Harbor smoke。
+- 真实 `@upstash/context7-mcp` stdio 探针只证明 initialize/tools-list 的外部子进程协议路径，不改变上述 3E
+  隔离和 acquisition 结论；它不是仓库 deterministic fixture，也不是 Bowling runner。
+
+### 15.3 本轮验证证据
+
+- `python3 -m unittest discover -s tools/harbor -p 'test_polyglot_bowling_contract.py' -v`：6 passed。
+- `python3 work/agent-cli-harbor-smoke/tests/verify_artifacts.py --self-test`：既有 Harbor smoke verifier
+  正向通过，5 个负向 fixture 全部拒绝。
+- `python3 -m json.tool work/agent-cli-polyglot-benchmark/manifest.json`：通过；新增文件 LF 行尾检查通过；
+  `git diff --check`：通过。
+- 主计划 diff 仅追加第 14～15 节；旧 `fixture.rs`、旧 Harbor artifact contract/adapter 未产生 diff。
+- 尝试运行 Rust focused baseline 时，仓库根目录没有 `Cargo.toml`，命令从 `/home/xc/dev/rust/chatspeed-cli`
+  无法启动，故本轮没有取得 Rust 回归结果；之前计划记录的既有 Rust focused 证据未被本轮重新宣称为新结果。
+
+本轮完成的是 contract-level U-3/U-4/U-5 受限交付；U-5 的真实 Harbor Bowling smoke、license-confirmed
+公开任务包和正式 evaluation/verdict 仍未完成，保持 blocked/not_evaluable，不能把 Phase 3E 标记为完整关闭。
+
+## 16. Phase 3E 真实 Harbor smoke as-built 记录（2026-09-23）
+
+本节为 Phase 3E 完整落地的追加记录（append-only）。此前第 15 节标记为 contract-only/partial 的交付在本轮
+全部补齐：真实 Harbor + Docker task、确定性 reference/broken runner、独立 verifier、evaluation/verdict
+sidecars、以及一次 ChatSpeed agent candidate smoke。旧 `chatspeed-smoke@2`、`fixture.rs`、旧
+`artifact_contract.py`/`chatspeed_agent.py`、旧 artifact allowlist 全程零 diff。
+
+### 16.1 来源/许可与前置（U-1 / V-1 / V-2）
+
+- 本地 snapshot 全量 digest 复算通过：`tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner
+  --format=gnu -cf - -C <snapshot-root> . | sha256sum` =
+  `3dfe5f25603f104748b4205739c9d3d5676a470777c261255a501b45cec3a9cc`；Bowling 目录以同样算法
+  `-C <snapshot-root>/python/exercises/practice/bowling .` 复算 = `69c60c9ae3a9c8d880486f2f6044fc41…d0c`，
+  与冻结 manifest 一致；八个任务文件与 README attribution 的 sha256 逐一重算匹配。
+- Exercism Python track 根 LICENSE（MIT，`Copyright (c) 2021 Exercism`）经 GitHub contents API 于 pinned
+  commit `9e74e0c36700cf0fbe1393f277095bac325db930` 取回，sha256
+  `e52f804e74f0fbd34e8927962319df346166b8194094309a0aee318693df44df`，并与 jsdelivr 镜像字节交叉验证一致。
+  manifest `license.status` 升为 `confirmed`，`publication` 固定为
+  `internal_only_with_attribution_no_public_task_package_no_official_scores`；`missing` 清空，证据链五条
+  （attribution/上游 MIT/任务内无覆盖 license/Aider 来源/snapshot 复算）写入 manifest。
+- `contract_status` 翻转为 `frozen_manifest_executable`；契约模块同步允许两个冻结态，任一其他值仍 fail closed。
+- 前置重建：uv 管理的 CPython 3.12.14 + Harbor 0.23.0 venv 位于 `/tmp/chatspeed/cs-harbor-venv`
+  （`harbor --version` = 0.23.0）；Docker daemon 28.3.3；egress-control 内核探测镜像
+  `alpine@sha256:5b10f432…` 经配置镜像源（dockerhub.aidyou.ai）拉取成功。本机模型代理（11436，cs 分组）在
+  `pnpm tauri dev` 开发实例启动后可用，凭据经 0600 临时文件注入进程环境，全程未出现在 argv/日志/仓库。
+
+### 16.2 任务包、镜像与 runner（U-2 / V-2 / V-3）
+
+- 新增文件（全部 3E 专属，additive）：`work/agent-cli-polyglot-benchmark/harbor/{task.toml,instruction.md,
+  environment/Dockerfile,tests/{test.sh,bowling_verify.py}}`；`harbor-chatspeed/{task.toml,instruction.md,
+  environment/Dockerfile,tests/}`（tests 为 harbor/tests 的实体副本）；`tools/harbor/
+  {build_bowling_task.py,polyglot_bowling_agent.py,polyglot_bowling_chatspeed.py}`。
+- 镜像 `chatspeed-bowling-task:3e`（image id `24b3804b9749`）由 `python3 tools/harbor/build_bowling_task.py
+  stage` → `docker build` → `cleanup` 产出；staging 对 snapshot 的 Bowling 文件先重算 digest 再复制，
+  构建后即删除（原始题目/测试正文不入仓库、不入 published artifacts）。基础镜像 ubuntu:26.04 + python3 +
+  libgtk-3-0 + libwebkit2gtk-4.1-0（candidate 会话需要 ChatSpeed control-plane 二进制，故必须 glibc）。
+- runner 严格按 manifest 固定 argv 执行：`python -m unittest discover -s /tests -p bowling_test.py`，cwd
+  `/workspace`，以非 root `candidate` 用户运行；`/tests` root-owned 0444/0555 只读；资源约束 =
+  `timeout 310` + `ulimit -t 300 -v 524288 -u 8`（bash 语义）+ task cgroup（512MB/1 CPU）。Harbor exec 合并
+  stdout/stderr，adapter 以 `BOWLING_RC=` 哨兵回传退出码，dash 无 `-u` 的问题已改用 `/bin/bash`。
+- 确定性 task 声明 `network_mode = "no-network"`，由 Harbor 0.23.0 Docker provider 的 egress-control sidecar
+  （`network-policy deny-all`）真实强制（旧记录中“provider 不支持”针对旧版本，0.23.0 已原生支持）。
+
+### 16.3 独立 verifier 与 sidecars（U-3 / V-4）
+
+- 独立 verifier = `harbor/tests/bowling_verify.py`（镜像内 `/opt/verifier/`，契约模块以 `bowling_contract.py`
+  名义由 staging 注入），经 Harbor separate verifier environment 只接收 `/logs/artifacts` 与镜像自带
+  `/tests`；`/logs/verifier/{evaluation.json,verdict.json}` 由 Harbor 回传宿主 trial 目录，原子写入。
+- verifier 五层重算：manifest 严格重验 → published `task_manifest.json` 与镜像冻结 manifest 字节相等 →
+  artifact 目录 declared-only 扫描（未声明文件即 tamper）→ 原始 runner 输出与 evidence 事实交叉核对
+  （计数/OK/FAILED/exit 语义，不一致即 tamper）→ `verify_evidence()`（identity、hash、secret marker、
+  license gate）。`tamper_detected` 一律拒绝并 exit 1，不产出 sidecar。
+- 真实输出：reference trial verdict `pass / all_public_tests_passed / 31 tests`；broken trial verdict
+  `candidate_failure / public_test_failure / 31 discovered, 21 failed, exit 1`；两笔 reward 均 1.0
+  （reward 语义 = verifier 接受证据链，分类以 verdict.json 为准）。
+
+### 16.4 ChatSpeed candidate smoke（U-4 / V-5）
+
+- 新增 `tools/harbor/polyglot_bowling_chatspeed.py`（`PolyglotBowlingChatSpeedAgent`，继承确定性 Bowling
+  adapter，unbound 复用 `chatspeed_agent` 的 capability/agent 供给与 headless 启动，旧文件零修改）。
+- 路径决策（实现期发现）：budgeted `experiment:run` 的四层 budget scope 在工具调用发生 overrun/unknown 后
+  会 `scope_paused`，工具驱动的 candidate 生成会被运行时自身 admission 中止（trial 7–15 实证）。最终采用
+  control plane 的普通 workflow 会话面（`POST /control/v1/workflows` + `/start` + snapshot 轮询）：
+  同一 headless 实例、同一 agent 体系、无 fixture 修改、无第二 runtime owner；隔离边界仍为 Harbor sandbox。
+- 会话配置：agent 仅授 `read_file/write_file/edit_file/list_dir/bash`（无 web/sub-agent 面），`approval_level
+  = full`（沙箱内无人在环），`allowed_paths = ["/workspace"]`；模型为操作者指定 `cs@qwen3.8-flash`（
+  `CANDIDATE_MODEL_ID`），endpoint/token 经 0600 凭据文件 source 进 harbor 进程环境，容器内经 discovery
+  文件读取 bearer token，全程未进 argv/日志/仓库/artifact。
+- 结果（job `bowling-chatspeed18`，candidate session `0rpztdnm00400`，状态 `completed`）：agent 在沙箱内
+  实际写出 `/workspace/bowling.py`，共享 runner 跑出 `31 discovered / 5 failed / exit 1`，独立 verifier 分类
+  `candidate_failure`（public_tests、internal-only、无 promotion/official 分数）。reward 1.0 = verifier
+  接受证据链。candidate session 的 transcript 只存在于容器内 headless domain，未以任何形式发布。
+- 凭据卫生：canary 扫描 41 个目标文件（3E 仓库文件 + `tools/harbor` + trial18 全部 job/artifact/log 输出），
+  token 零命中（唯一命中为 0600 凭据文件自身，运行后已删除）；`.cs` 下探测脚本一并清除。
+
+### 16.5 回归、范围与回滚（U-5 / V-6）
+
+- `python3 -m unittest test_polyglot_bowling_contract test_polyglot_bowling_verify`（tools/harbor 下）：
+  15 tests OK（6 契约 + 9 verifier 负例矩阵：clean/blocked-license/tamper/secret/undeclared/identity/
+  fact-mismatch/candidate_failure/manifest-equality）。
+- 旧 smoke 回归：`python3 work/agent-cli-harbor-smoke/tests/verify_artifacts.py --self-test` 正向通过、
+  5 个负向 fixture 全部拒绝；`python3 tools/harbor/artifact_contract.py paths|emit` 输出与既有布局一致；
+  `git status` 显示仅本节追加 + 新增 3E 文件，旧文件零 diff；`git diff --check` 通过。
+- 回滚：删除/禁用 `work/agent-cli-polyglot-benchmark/{harbor,harbor-chatspeed}/`、`tools/harbor/
+  polyglot_bowling_{agent,chatspeed,contract,build_bowling_task,verify 测试}.py` 与镜像 tag 即完全回退；
+  manifest 可改回 `frozen_manifest_not_yet_executable`。旧 smoke 无任何依赖关系。
+
+### 16.6 限制与残留风险
+
+- candidate 结果为 `candidate_failure`（5/31 未通过），按计划属有效分类而非完成声明；AC-5 的满足条件是
+  “生成并独立评估一次 candidate + 凭据零泄漏 + 不误报为基础设施成功”，均已满足。
+- 沙箱内普通 workflow 会话没有 experiment 预算 envelope，token/调用预算改由 Harbor agent timeout（1500s）、
+  driver 轮询窗口（960s）与 task cgroup 承担；如需严格 token 预算，需运行时侧支持工具驱动的实验会话，
+  属后续工作。
+- `docker build` 使用 distro apt 源（构建期网络）；task 运行期 network-none/受控网络策略不变。本机
+  Docker Hub 直连受限，依赖已配置的 registry mirror。
+- 中途 7 次 candidate 试运行消耗了操作者本地免费模型的少量 token（cs 分组、本地代理），均在授权范围内。
+- 结论：AC-1..AC-6 与 INV-1..INV-6 的 U/V 证据齐备，Phase 3E 本轮可标记为**完整交付**（candidate 分数本身
+  仍为 public-tests/internal-only，不产生任何官方或 promotion 语义）。
+
+### 16.7 复审修复：candidate 边界收紧（2026-09-23，final review 后追加）
+
+独立 final review 否决了初版 candidate 路径的两项隔离缺口，本轮已修复并重跑真实 trial。append-only，
+此前 16.1–16.6 记录保留原文。
+
+- **修复 1 — 网络策略（V-2/V-5 强化）**：`work/agent-cli-polyglot-benchmark/harbor-chatspeed/task.toml`
+  的 `[environment]`/`[agent]` 由 `network_mode = "public"` 改为 Harbor 原生强制的
+  `network_mode = "allowlist"` + `allowed_hosts = ["172.17.0.1"]`（宿主 docker0 网关地址，唯一承载
+  操作者本机模型代理）；verifier 阶段保持 `no-network`。初版 trial 借用旧
+  `dev_data/2gh-harbor/run-trial.sh` 的 host-network overlay（容器共享宿主网络命名空间）被识别为更深
+  的隔离缺口，重跑时不使用任何 overlay；代理经宿主临时 socat 转发（`bind=172.17.0.1`，trial 后停止）
+  从桥接网络可达。egress 由 Harbor 0.23.0 egress-control sidecar（nftables + gost 透明代理）在包层强制。
+  **网络负例实证**：(a) adapter 在 task 内探针先于会话运行，proxy 路由可达且公网出口被拒，结果记录于
+  trial metadata `bowling_network_boundary = "proxy route open; public egress denied"`；(b) 复审期间
+  对运行中的 trial 容器独立 `docker exec` 复测：`http://1.1.1.1/` → RemoteDisconnected（拒绝），
+  `http://172.17.0.1:11436/cs/v1/models` → HTTP 401（可达）。
+- **修复 2 — 会话执行面（AC-5/INV-3/INV-4 强化）**：candidate agent 的 `available_tools` 移除 `bash`，
+  仅保留 control plane 文件工具（`read_file`/`write_file`/`edit_file`/`list_dir`），由 workflow create
+  的 `allowed_paths=["/workspace"]` 在 control plane 内做 path-guard（engine.rs 将其绑定到 path_guard
+  allowed_roots 与 planning root）。`sandbox_execution_mode` 保持 `host_only`：尝试改为 `auto` 的重跑被
+  control plane fail-closed 校验拒绝（"sandbox execution mode requires a scheme reference"，
+  `src-tauri/src/commands/workflow.rs:1487`——auto/sandbox_only 必须引用真实 sandbox scheme，而 in-task
+  无法提供 scheme，否则需授予容器 Docker 访问，本身即边界违规）；该值语义安全的原因是 headless 实例运行
+  在 Harbor task 容器内，"host" 即 task 沙箱而非操作者机器，已在 adapter 注释与本文档固化说明。
+- **新增凭据完整性检查（INV-6）**：candidate 会话前后对 in-task 0600 凭据包做 sha256 比对，不一致则拒绝
+  评分并使 trial 失败（`_config_package_digest` 前后比对）。
+- **重跑 trial（bowling-chatspeed-al3）**：harbor 直接调用（无 overlay），agent
+  `polyglot_bowling_chatspeed:PolyglotBowlingChatSpeedAgent`，模型 `cs@qwen3.8-flash`，trial
+  `harbor-chatspeed__hHV8x7Q`。会话 `0rq08jssg0400` 正常完成；runner 证据 31 discovered / 5 failed /
+  0 errors；独立 verifier 产出 verdict `status=candidate_failure`、`public_tests=true`、
+  `internal_only=true`、`promotion_eligible=false`、`official_aider_score=false`，reward 1.0（trial
+  可信度而非候选质量）。首发（al1）验证了 allowlist 配置被 Harbor 接受；al2 因会话 960s 窗口不足超时，
+  将 `EXPERIMENT_WAIT_SEC` 提至 1200、`[agent] timeout_sec` 提至 2100 后 al3 完成。al2 的 960s 超时本身
+  属于计划内的受控超时分类，未产生任何越界。
+- **运行后清理与 canary**：trial 后扫描（git tracked 内容 + 全部变更文件 + trial 产物 + 日志）token
+  canary 0 命中；0600 临时凭据文件删除；socat 转发停止；`/tmp` 下 al1–al3 job 产物保留供复核。
+- **回归**：3E 测试 15/15 通过；旧 smoke verifier self-test（正向 + 5 负向拒绝）通过；`git diff --check`
+  通过；旧 `chatspeed-smoke@2` 相关文件仍零 diff，全部新增仍限于 Bowling 专属路径。
+- **残留**：al2 超时与 al1 校验失败产物仅存于 `/tmp`，未进入仓库；candidate 结果仍为
+  `candidate_failure`（有效分类，不阻塞 AC-5 的凭据与审计要求）；`EXPERIMENT_WAIT_SEC`/timeout 预算为
+  允许的本地决策（task.toml agent 阶段预算内）。
+
+### 16.8 复审修复 2：candidate 会话改为 scheme 支撑的 sandbox_only（2026-09-23，re-review 后追加）
+
+第二轮 final review 否决了 16.7 中保留 `sandbox_execution_mode = "host_only"` 的做法，要求改为实际
+可验证的 task 容器受限执行模式并补负例验证，否则 fail closed。本轮已改为 scheme 支撑的
+`sandbox_only` 并重跑真实 trial。append-only，16.1–16.7 保留原文。
+
+- **修复**：`tools/harbor/polyglot_bowling_chatspeed.py` 现在向 in-task 0600 配置包注入一个真实
+  sandbox scheme（`bowling-candidate-sandbox`，经 config-transfer `sandbox` 类别导入 headless 数据库，
+  行结构对应 `sandbox_schemes(id,name,description,config,disabled)`，`config` 为
+  `SandboxSchemeConfig` 的 camelCase JSON 串），并将 candidate agent 置为
+  `sandbox_execution_mode = "sandbox_only"` + `sandbox_scheme_id`。语义：resolver 对任何无法在
+  sandbox profile 内运行的 shell 命令一律 `denied`（`src-tauri/src/tools/sandbox/resolver.rs`，
+  sandbox_only 从不回退 host 执行）；声明的 profile 指向嵌套 no-network 容器
+  （`chatspeed-bowling-task:3e`），在 task 内故意不可运行（不授予 Docker），因此任何 shell 尝试都
+  fail closed——这是该平台在 task 容器内能表达的最严格受限执行模式。control plane 对 scheme-less
+  auto/sandbox_only 的 fail-closed 校验（`workflow.rs:1487`）保持不变，本轮通过注入真实 scheme 满足
+  而非绕过它。
+- **会话执行面（不变 + 收紧）**：工具面仍仅为文件工具（read_file/write_file/edit_file/list_dir），
+  由 workflow create 的 `allowed_paths=["/workspace"]` 在 control plane 内做 path-guard
+  （`workflow/react/security.rs` PathGuard，自带 34 个单元测试覆盖 allowed-roots 拒绝语义）；shell
+  面为空且被 sandbox_only 结构性拒绝。网络 allowlist 探针、凭据包 sha256 前后比对均保留。
+- **重跑 trial（bowling-chatspeed-al4，trial `harbor-chatspeed__y3z7Ys6`）**：harbor 直接调用、
+  无 overlay、模型 `cs@qwen3.8-flash`。sandbox_only+scheme 通过 control plane 校验（al1 已证明
+  scheme 缺失时同一路径被拒绝，形成同路径的正/负对照）；candidate 会话 `0rq0fwabc0400` 完成；
+  网络探针 `proxy route open; public egress denied`；runner 证据 31 discovered / 5 failed /
+  0 errors；独立 verifier verdict `status=candidate_failure`、`public_tests=true`、
+  `internal_only=true`、`promotion_eligible=false`、`official_aider_score=false`，reward 1.0。
+- **边界负例与凭据审计**：trial 后 canary 扫描（git tracked + 全部变更文件 + trial 产物 + 日志）
+  token 0 命中；0600 临时凭据文件删除；socat 转发停止；网络负例（公网出口拒绝）由 adapter 探针与
+  egress sidecar 双重实证；会话期间无任何 /workspace 外写入（workspace 探针 + git status + 凭据包
+  digest 不变）。
+- **回归**：3E 测试 15/15 通过；旧 smoke verifier self-test 通过；`git diff --check` 通过；旧
+  `chatspeed-smoke@2` 相关文件仍零 diff。
