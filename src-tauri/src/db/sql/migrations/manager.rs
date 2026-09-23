@@ -82,11 +82,14 @@ fn execute_migration(
     Ok(())
 }
 
-fn run_post_migration_ensures(conn: &Connection, current_version: i32) -> Result<(), StoreError> {
-    for migration in MIGRATIONS
-        .iter()
-        .filter(|migration| migration.version <= current_version)
-    {
+fn run_post_migration_ensures(
+    conn: &Connection,
+    current_version: i32,
+    minimum_version: i32,
+) -> Result<(), StoreError> {
+    for migration in MIGRATIONS.iter().filter(|migration| {
+        migration.version >= minimum_version && migration.version <= current_version
+    }) {
         if let Some(ensure) = migration.ensure {
             ensure(conn)?;
         }
@@ -134,16 +137,26 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             current_version
         );
 
-        run_post_migration_ensures(conn, current_version)?;
+        run_post_migration_ensures(conn, current_version, 0)?;
         return Ok(());
     }
 
-    if current_version >= latest_version {
+    if current_version == latest_version {
         log::info!(
             "Database is already up to date at version {}.",
             current_version
         );
-        run_post_migration_ensures(conn, current_version)?;
+        run_post_migration_ensures(conn, current_version, current_version)?;
+        return Ok(());
+    }
+
+    if current_version > latest_version {
+        log::info!(
+            "Database is ahead of this build at version {} (latest known version {}). Running compatibility ensures.",
+            current_version,
+            latest_version
+        );
+        run_post_migration_ensures(conn, current_version, 0)?;
         return Ok(());
     }
 
@@ -174,7 +187,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     let final_version = get_db_version(conn)?;
-    run_post_migration_ensures(conn, final_version)?;
+    run_post_migration_ensures(conn, final_version, current_version)?;
     log::info!(
         "All migrations applied. Database is now at version {}.",
         final_version
@@ -212,6 +225,32 @@ mod tests {
         }
 
         false
+    }
+
+    #[test]
+    fn current_database_skips_historical_ensures() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+
+        run_migrations(&mut conn).expect("fresh install should build the latest schema");
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-current', 'current', ?1, '0', '0')",
+            ["complete_workflow_with_summary"],
+        )
+        .expect("failed to seed current database");
+
+        run_migrations(&mut conn).expect("current database should remain usable");
+
+        let prompt: String = conn
+            .query_row(
+                "SELECT system_prompt FROM agents WHERE id = 'agent-current'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("seeded agent should remain readable");
+        // v10's ensure rewrites the legacy completion tool name, so an unchanged
+        // prompt proves historical ensures were not replayed on a current database.
+        assert_eq!(prompt, "complete_workflow_with_summary");
     }
 
     #[test]

@@ -161,7 +161,7 @@ impl Display for McpStatus {
 pub type StatusChangeCallback = Box<dyn Fn(String, McpStatus) -> () + Send + Sync>;
 
 #[async_trait::async_trait]
-pub(crate) trait McpClientInternal: Send + Sync {
+pub trait McpClientInternal: Send + Sync {
     /// Internal method to set MCP status
     async fn set_status(&self, status: McpStatus);
 

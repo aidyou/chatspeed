@@ -780,11 +780,7 @@ pub async fn run() -> crate::error::Result<()> {
                 });
             }
 
-            if let Err(e) =
-                builtin_agents::sync_builtin_agents_if_needed(main_store.clone())
-            {
-                log::error!("Failed to synchronize built-in agents: {}", e);
-            }
+            // Built-in agents are synchronized after the first window paint below.
 
             // Setup language and reconcile OS-managed settings with persisted preferences.
             {
@@ -915,16 +911,45 @@ pub async fn run() -> crate::error::Result<()> {
             // See: src-tauri/src/workflow/helper.rs for state usage in listeners
             // === END EVENT LISTENERS SECTION ===
 
+            // Create the workflow window as soon as every command dependency has been
+            // registered. The Vue startup overlay keeps the window responsive while
+            // non-essential synchronization continues in the background.
+            let app_handle = app.handle().clone();
+            window::setup_window_creation_handlers(app_handle.clone());
+            match window::create_workflow_window(&app_handle, true) {
+                Ok(win) => restore_window_config(&win, main_store.clone()),
+                Err(error) => log::error!("Failed to create workflow window: {}", error),
+            }
+            match window::create_assistant_window(&app_handle, false) {
+                Ok(win) => restore_window_config(&win, main_store.clone()),
+                Err(error) => log::error!("Failed to create assistant window: {}", error),
+            }
+            WINDOW_READY.store(true, Ordering::SeqCst);
+
             // === BACKGROUND TASKS SECTION ===
-            // Critical tasks run in background, send event when ready
+            // Non-essential startup work must not delay the first paint.
             let handle = app.handle().clone();
             let main_store_clone = main_store.clone();
             let chat_state_clone = chat_state.clone();
             let update_manager_clone = update_manager.clone();
 
-            // 1. Initialize environment synchronously (Critical for get_env command)
-            // This must run before background tasks to ensure PATH is ready for any spawned processes
-            environment::init_environment();
+            {
+                let handle_for_startup = handle.clone();
+                let store_for_startup = main_store.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) =
+                        builtin_agents::sync_builtin_agents_if_needed(store_for_startup)
+                    {
+                        log::error!("Failed to synchronize built-in agents: {}", error);
+                    }
+                    environment::init_environment();
+                    if let Err(error) =
+                        scraper::ensure_default_configs_exist(&handle_for_startup)
+                    {
+                        log::error!("Failed to synchronize scraper schemas: {}", error);
+                    }
+                });
+            }
 
             tauri::async_runtime::spawn(async move {
                 // 1. Register native tools first (fast, local-only)
@@ -967,41 +992,9 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             });
 
-            // Search schemas are consumed by scraper commands, so replace them before exposing
-            // either application window to the frontend.
-            scraper::ensure_default_configs_exist(&app.handle())
-                .map_err(|error| AppError::General {
-                    message: format!("Failed to synchronize scraper schemas: {error}"),
-                })?;
-
-            // IMPORTANT: Manual window creation sequence.
-            // This is critical for Windows compatibility to resolve race conditions where the frontend
-            // process might launch and invoke commands before the backend's `setup` hook has finished
-            // registering managed states. Auto-creating windows in `tauri.conf.json` via `"create": true`
-            // can lead to "state not managed" panics or UI initialization failures in high-performance builds.
-            // For any future windows, ensure `"create": false` is set in the configuration and
-            // initialize them manually here or via specific logic after backend readiness is guaranteed.
-
-            // 1. Assistant Window (Hidden)
-            match window::create_assistant_window(&app.handle(), false) {
-                Ok(win) => { restore_window_config(&win, main_store.clone()); },
-                Err(e) => { log::error!("Failed to create assistant window: {}", e); }
-            }
-
-            // 2. Workflow Window (Visible by default)
-            match window::create_workflow_window(&app.handle(), true) {
-                Ok(win) => { restore_window_config(&win, main_store.clone()); },
-                Err(e) => { log::error!("Failed to create workflow window: {}", e); }
-            }
-
             // create tray
             let app_handle_clone = app.app_handle().clone();
             let _ = create_tray(&app_handle_clone, None);
-
-            // Register window creation event handlers
-            window::setup_window_creation_handlers(app_handle_clone.clone());
-
-            WINDOW_READY.store(true, Ordering::SeqCst);
 
             Ok(())
         })

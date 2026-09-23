@@ -119,7 +119,7 @@ impl MainStore {
     }
 
     #[cfg(test)]
-    pub fn get_messages_for_conversation(
+    pub(crate) fn get_messages_for_conversation(
         &self,
         conversation_id: i64,
     ) -> Result<Vec<Message>, StoreError> {

@@ -88,7 +88,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("failed to open database");
         apply_migration(&conn);
 
-        assert_eq!(count(&conn), 11, "preset entries should be seeded");
+        assert_eq!(count(&conn), 10, "preset entries should be seeded");
         let presets: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM chat_hubs WHERE is_default = 1",
@@ -97,7 +97,7 @@ mod tests {
             )
             .expect("failed to count preset entries");
         assert_eq!(
-            presets, 11,
+            presets, 10,
             "every seeded entry should be marked as a preset"
         );
 

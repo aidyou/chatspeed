@@ -1,5 +1,9 @@
 <template>
   <div class="workflow-layout">
+    <div v-if="isInitializing" class="workflow-startup-overlay" role="status" aria-live="polite">
+      <cs name="loading" size="32px" class="cs-spin" />
+      <span>{{ $t('common.loading') }}</span>
+    </div>
     <ChatHubSplitter
       v-if="chatHubVisible"
       :right="chatHubReservedWidth"
@@ -483,6 +487,7 @@ const osType = ref('')
 // ============================================================
 // Local state - MUST be defined FIRST before any composables
 // ============================================================
+const isInitializing = ref(true)
 const selectedAgent = ref(null)
 const approvalLevel = ref('default')
 const finalAuditMode = ref('off')
@@ -2991,6 +2996,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('resize', updateMaxWidth)
   startTodayCostRefresh()
+  isInitializing.value = false
 
   // Initial scroll
   scrollMessageListToBottom()
@@ -3013,6 +3019,19 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
+
+.workflow-startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--cs-upper-layer-zindex);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-md);
+  color: var(--cs-text-color-primary);
+  background: var(--cs-bg-color);
+}
 
 .app-container.macos .titlebar,
 .app-container.windows .titlebar{
