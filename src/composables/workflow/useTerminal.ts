@@ -203,7 +203,9 @@ export function useTerminal(
     restoredPanelState = null
   }
   const create = async (shellPath = requestedShell.value, cwd = currentPaths.value?.[0] || null) => {
-    const session = toTab(await invokeWrapper('terminal_create', { cwd, shellPath: shellPath || null }))
+    const payload = { cwd, shellPath: shellPath || null }
+    console.debug('[terminal] create payload', { currentPaths: currentPaths.value, payload })
+    const session = toTab(await invokeWrapper('terminal_create', payload))
     state.tabs.push(session)
     state.activeSessionId = session.sessionId
     state.visible = true
@@ -329,9 +331,8 @@ export function useTerminal(
     outputBuffers.set(sessionId, { chunks: [prompt], lines: 0 })
     outputHistory.set(sessionId, { chunks: [prompt], lines: 0 })
     scheduleOutputPersistence()
-    // xterm keeps the live shell cursor/prompt after clear. Do not write the cached prompt here,
-    // otherwise repeated clear shortcuts visibly stack duplicate prompts in the running terminal.
     writers.get(sessionId)?.clear()
+    void write(sessionId, '\u000c')
   }
   const updateCwd = (sessionId: string, cwd: string) => {
     const tab = state.tabs.find(item => item.sessionId === sessionId)

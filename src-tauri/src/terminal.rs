@@ -620,16 +620,21 @@ fn windows_prompt_bootstrap(is_cmd: bool, cwd: &Path) -> String {
     }
 }
 
+fn unix_shell_quote(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "'\\''")
+}
+
 fn install_session_prompt(writer: &mut (dyn Write + Send), shell: &ShellDescriptor, cwd: &Path) {
     #[cfg(unix)]
     {
-        let _ = cwd;
+        let quoted_cwd = unix_shell_quote(cwd);
         let command = match shell.name.as_str() {
-            "zsh" => "autoload -Uz add-zsh-hook; _cs_terminal_osc7(){ print -n $'\\e]7;file://'${HOST:-localhost}${PWD}$'\\a'; }; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%~ > '\n",
-            "bash" => "__cs_terminal_osc7(){ printf '\\033]7;file://%s%s\\007' \"${HOSTNAME:-localhost}\" \"$PWD\"; }; PROMPT_COMMAND=\"__cs_terminal_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"; PS1='\\w > '\n",
-            "fish" => "function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; set -l display_path \"$PWD\"; if test \"$PWD\" = \"$HOME\"; set display_path '~'; else; set display_path (string replace -- \"$HOME/\" '~/' \"$PWD\"); end; printf '%s > ' \"$display_path\"; end\n",
-            _ => "PS1='\\w > '\n",
+            "zsh" => format!("cd -- '{quoted_cwd}'; autoload -Uz add-zsh-hook; _cs_terminal_osc7(){{ print -n $'\\e]7;file://'${{HOST:-localhost}}${{PWD}}$'\\a'; }}; add-zsh-hook precmd _cs_terminal_osc7; PROMPT='%~ > '\n"),
+            "bash" => format!("cd -- '{quoted_cwd}'; __cs_terminal_osc7(){{ printf '\\033]7;file://%s%s\\007' \"${{HOSTNAME:-localhost}}\" \"$PWD\"; }}; PROMPT_COMMAND=\"__cs_terminal_osc7${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\"; PS1='\\w > '\n"),
+            "fish" => format!("cd -- '{quoted_cwd}'; function __cs_terminal_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\a' \"$HOSTNAME\" \"$PWD\"; end; function fish_prompt; set -l display_path \"$PWD\"; if test \"$PWD\" = \"$HOME\"; set display_path '~'; else; set display_path (string replace -- \"$HOME/\" '~/' \"$PWD\"); end; printf '%s > ' \"$display_path\"; end\n"),
+            _ => format!("cd -- '{quoted_cwd}'; PS1='\\w > '\n"),
         };
+        eprintln!("[terminal] unix bootstrap: {command:?}");
         let _ = writer
             .write_all(command.as_bytes())
             .and_then(|_| writer.flush());
@@ -733,6 +738,7 @@ mod tests {
         let mut bootstrap = Vec::new();
         install_session_prompt(&mut bootstrap, &bash, Path::new("/workspace"));
         let bootstrap = String::from_utf8(bootstrap).expect("bootstrap must be UTF-8");
+        assert!(bootstrap.contains("cd -- '/workspace'"));
         assert!(bootstrap.contains("PROMPT_COMMAND"));
         assert!(bootstrap.contains("PS1='\\w > '"));
         assert!(bootstrap.contains("]7;file://"));

@@ -73,15 +73,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
+import { FitAddon, init, Terminal, UrlRegexProvider } from 'ghostty-web'
+import { writeClipboard } from '@/libs/clipboard'
+import { openUrl } from '@/libs/util'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
 const props = defineProps<{ terminal: any; preferences: any }>()
 const { t } = useI18n()
 const terminal = props.terminal
 const preferences = props.preferences
+const ghosttyReady = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const panelHeight = computed(() =>
   Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 160))
@@ -89,7 +90,7 @@ const panelHeight = computed(() =>
 const hosts = new Map<string, HTMLElement>()
 const instances = new Map<
   string,
-  { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }
+  { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; disposeSelection: () => void; clearOutputQueue: () => void }
 >()
 const pageDark = ref(document.documentElement.classList.contains('dark'))
 const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -143,6 +144,7 @@ const disposeTab = (sessionId: string) => {
   terminal.unregisterWriter(sessionId)
   instance.clearOutputQueue()
   instance.observer.disconnect()
+  instance.disposeSelection()
   instance.terminal.dispose()
   instances.delete(sessionId)
 }
@@ -180,36 +182,49 @@ const mountTab = (tab: TerminalTab) => {
   })
   const fit = new FitAddon()
   instance.loadAddon(fit)
-  instance.parser.registerOscHandler(7, uri => {
-    try {
-      terminal.updateCwd(tab.sessionId, cwdFromOsc7(uri))
-    } catch {
-      // Ignore malformed terminal title reports without affecting PTY rendering.
-    }
-    return true
-  })
   instance.open(host)
+  const urlProvider = new UrlRegexProvider(instance)
+  instance.registerLinkProvider({
+    provideLinks(y, callback) {
+      urlProvider.provideLinks(y, links => {
+        callback(
+          links?.map(link => ({
+            ...link,
+            activate: event => {
+              if (event.ctrlKey || event.metaKey) void openUrl(link.text)
+            }
+          }))
+        )
+      })
+    },
+    dispose: () => urlProvider.dispose()
+  })
   instance.attachCustomKeyEventHandler(event => {
     if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
       return true
     }
     if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
-      event.preventDefault()
       terminal.clear(tab.sessionId)
-      return false
+      return true
     }
     if (matchesTerminalShortcut(event, preferences.toggleShortcut)) {
-      event.preventDefault()
       terminal.visible = !terminal.visible
-      return false
+      return true
     }
-    return true
+    // ghostty-web treats a truthy return as "handled" and suppresses its own key encoder.
+    return false
   })
   instance.onData(data => {
     // Forward each xterm input chunk to the per-session FIFO bridge so rapid typing reaches the
     // PTY in order without debounce/coalescing dropping intermediate characters.
     void terminal.write(tab.sessionId, data)
   })
+  const copySelection = () => {
+    const selected = instance.getSelection()
+    if (selected) void writeClipboard(selected)
+  }
+  host.addEventListener('mouseup', copySelection)
+  const disposeSelection = () => host.removeEventListener('mouseup', copySelection)
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))
   observer.observe(host)
   let outputQueue: Uint8Array[] = []
@@ -278,7 +293,7 @@ const mountTab = (tab: TerminalTab) => {
     clearPendingProgress()
     outputQueue = []
   }
-  instances.set(tab.sessionId, { terminal: instance, fit, observer, clearOutputQueue })
+  instances.set(tab.sessionId, { terminal: instance, fit, observer, disposeSelection, clearOutputQueue })
   terminal.registerWriter(tab.sessionId, {
     write: enqueueOutput,
     clear: () => {
@@ -293,6 +308,7 @@ const mountTab = (tab: TerminalTab) => {
 }
 
 const reconcile = async () => {
+  if (!ghosttyReady.value) return
   const activeIds = new Set(terminal.tabs.map((tab: TerminalTab) => tab.sessionId))
   for (const sessionId of instances.keys()) {
     if (!activeIds.has(sessionId)) disposeTab(sessionId)
@@ -355,7 +371,13 @@ const startResize = (event: MouseEvent) => {
 let themeObserver: MutationObserver | null = null
 
 watch(terminalTheme, theme => {
-  for (const instance of instances.values()) instance.terminal.options.theme = theme
+  for (const instance of instances.values()) {
+    instance.terminal.options.theme = theme
+    const renderer = (instance.terminal as unknown as {
+      renderer?: { setTheme: (nextTheme: typeof theme) => void }
+    }).renderer
+    renderer?.setTheme(theme)
+  }
 })
 watch(
   () => preferences.outputLineLimit,
@@ -373,7 +395,15 @@ watch(
   reconcile,
   { immediate: true, flush: 'post' }
 )
-onMounted(() => {
+onMounted(async () => {
+  try {
+    await init()
+    ghosttyReady.value = true
+    await reconcile()
+  } catch (error) {
+    console.error('Failed to initialize ghostty-web:', error)
+    return
+  }
   themeObserver = new MutationObserver(() => {
     pageDark.value = document.documentElement.classList.contains('dark')
   })
@@ -489,25 +519,15 @@ onBeforeUnmount(() => {
 .workflow-terminal__content {
   flex: 1;
   min-height: 0;
-  padding: 0;
+  padding: var(--cs-space-sm) 0 0 var(--cs-space-sm);
   overflow: hidden;
   box-sizing: border-box;
+  background: var(--workflow-terminal-background);
 }
 
-.workflow-terminal__content :deep(.xterm) {
+.workflow-terminal__content :deep(canvas) {
+  display: block;
   width: 100%;
   height: 100%;
-  padding: var(--cs-space-sm);
-  box-sizing: border-box;
-  background: inherit;
-}
-
-.workflow-terminal__content :deep(.xterm-screen) {
-  max-width: 100%;
-  padding-bottom: var(--cs-space-sm);
-}
-
-.workflow-terminal__content :deep(.xterm-viewport) {
-  background-color: var(--workflow-terminal-background);
 }
 </style>

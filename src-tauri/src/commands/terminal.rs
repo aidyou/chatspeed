@@ -54,6 +54,7 @@ pub fn terminal_create(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<TerminalSessionMetadata, String> {
+    eprintln!("[terminal] create request cwd: {cwd:?}");
     ensure_workflow_window(&window)?;
     terminal_manager.create(cwd.as_deref(), shell_path.as_deref(), cols, rows)
 }
