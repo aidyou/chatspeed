@@ -377,7 +377,7 @@
           <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
             <el-switch v-model="modelConfigForm.reasoning" />
           </el-form-item>
-          <el-form-item v-if="isGpt56ModelId(modelConfigForm.id)"
+          <el-form-item v-if="supportsReasoningSummary(modelConfigForm.id)"
             :label="$t('settings.model.responsesReasoningSummary')" prop="reasoningSummary">
             <el-radio-group v-model="modelConfigForm.reasoningSummary">
               <el-radio value="none">{{ $t('settings.model.summaryNone') }}</el-radio>
@@ -1157,8 +1157,15 @@ const toggleModelStatus = async model => {
 // =================================================
 // Model Config area
 // =================================================
-const isGpt56ModelId = id => String(id || '').toLowerCase().includes('gpt-5.6')
-const normalizeGpt56ReasoningSummary = value => {
+const supportsReasoningSummary = id => {
+  const modelId = String(id || '').trim().toLowerCase().split(/[\/@]/).pop()
+  const match = /^gpt-(\d+)(?:\.(\d+))?(?=$|[-:])/.exec(modelId)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2] || 0)
+  return major > 5 || (major === 5 && minor >= 6)
+}
+const normalizeReasoningSummary = value => {
   const normalized = value === 'off' ? 'none' : value
   return ['none', 'auto', 'concise', 'detailed'].includes(normalized) ? normalized : 'none'
 }
@@ -1308,8 +1315,8 @@ const onModelConfig = model => {
       thinking: model.thinking || null,
       thinkingLevel: thinkingLevelFromBudget(model.thinking?.budgetTokens)
     }
-    modelConfigForm.value.reasoningSummary = isGpt56ModelId(model.id)
-      ? normalizeGpt56ReasoningSummary(model.reasoningSummary)
+    modelConfigForm.value.reasoningSummary = supportsReasoningSummary(model.id)
+      ? normalizeReasoningSummary(model.reasoningSummary)
       : 'none'
   } else {
     prevModelConfigId.value = ''
@@ -1366,8 +1373,8 @@ const updateModelConfig = () => {
     customParams: modelConfigForm.value.customParams.filter(p => p.key.trim() !== '')
   }
   delete updatedModelConfig.thinkingLevel
-  if (isGpt56ModelId(trimmedId)) {
-    updatedModelConfig.reasoningSummary = normalizeGpt56ReasoningSummary(
+  if (supportsReasoningSummary(trimmedId)) {
+    updatedModelConfig.reasoningSummary = normalizeReasoningSummary(
       modelConfigForm.value.reasoningSummary
     )
   } else {

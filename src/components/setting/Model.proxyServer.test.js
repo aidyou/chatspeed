@@ -13,6 +13,23 @@ const loadNormalizeProxyServerAddress = async () => {
   return new Function('value', match[1])
 }
 
+test('reasoning summary is available for GPT 5.6 and newer model versions', async () => {
+  const source = await readModelComponent()
+  const match = source.match(/const supportsReasoningSummary = id => \{([\s\S]*?)\n\}\nconst normalizeReasoningSummary/)
+  assert.ok(match, 'reasoning summary model gate must remain independently testable')
+  const supportsReasoningSummary = new Function('id', match[1])
+
+  for (const id of ['gpt-5.6', 'openai@gpt-5.6-luna-pro', 'openai/gpt-6-astra', 'gpt-6-sol', 'GPT-6-LUNA', 'gpt-7', 'gpt-10.2-preview']) {
+    assert.equal(supportsReasoningSummary(id), true, id)
+  }
+  for (const id of ['gpt-5.4', 'gpt-5.5-preview', 'gpt-4.1', 'gpt-5.60x', 'gpt-6.1.2', 'my-gpt-6-sol', 'other/gpt-6oops', '']) {
+    assert.equal(supportsReasoningSummary(id), false, id)
+  }
+  assert.match(source, /v-if="supportsReasoningSummary\(modelConfigForm\.id\)"/)
+  assert.match(source, /modelConfigForm\.value\.reasoningSummary = supportsReasoningSummary\(model\.id\)/)
+  assert.match(source, /if \(supportsReasoningSummary\(trimmedId\)\)/)
+})
+
 test('adds http protocol to bare IPv4 proxy addresses', async () => {
   const normalizeProxyServerAddress = await loadNormalizeProxyServerAddress()
 

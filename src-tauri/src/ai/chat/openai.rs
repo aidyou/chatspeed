@@ -1151,12 +1151,24 @@ pub(crate) fn build_prompt_cache_key(
     )
 }
 
-fn is_gpt_56_model_id(model_id: &str) -> bool {
-    model_id.to_ascii_lowercase().contains("gpt-5.6")
+fn supports_reasoning_summary(model_id: &str) -> bool {
+    let model_id = model_id.rsplit(['/', '@']).next().unwrap_or_default();
+    let normalized = model_id.trim().to_ascii_lowercase();
+    let Some(version) = normalized.strip_prefix("gpt-") else {
+        return false;
+    };
+    let mut parts = version.split(['-', ':']).next().unwrap_or_default().split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    let Some(minor) = parts.next().unwrap_or("0").parse::<u32>().ok() else {
+        return false;
+    };
+    parts.next().is_none() && (major > 5 || (major == 5 && minor >= 6))
 }
 
 fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'static str> {
-    let model_config = model_config.filter(|model| is_gpt_56_model_id(&model.id))?;
+    let model_config = model_config.filter(|model| supports_reasoning_summary(&model.id))?;
 
     match model_config.reasoning_summary.as_deref() {
         Some("none") => None,
@@ -1548,6 +1560,47 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[test]
+    fn responses_reasoning_summary_supports_future_gpt_versions_without_matching_other_ids() {
+        for id in [
+            "gpt-5.6-luna-pro",
+            "openai/gpt-6-astra",
+            "openai@gpt-6-sol:batch",
+            "GPT-6-LUNA",
+            "gpt-7",
+            "gpt-10.2-preview",
+        ] {
+            assert_eq!(
+                responses_reasoning_summary(Some(&ModelConfig {
+                    id: id.to_string(),
+                    reasoning_summary: Some("auto".to_string()),
+                    ..Default::default()
+                })),
+                Some("auto"),
+                "model {id} should support reasoning summaries"
+            );
+        }
+        for id in [
+            "gpt-5.4",
+            "gpt-5.5-preview",
+            "gpt-4.1",
+            "gpt-5.60x",
+            "gpt-6.1.2",
+            "my-gpt-6-sol",
+            "other/gpt-6oops",
+        ] {
+            assert_eq!(
+                responses_reasoning_summary(Some(&ModelConfig {
+                    id: id.to_string(),
+                    reasoning_summary: Some("auto".to_string()),
+                    ..Default::default()
+                })),
+                None,
+                "model {id} should not support reasoning summaries"
+            );
+        }
     }
 }
 
