@@ -35,7 +35,7 @@
       "documentationUrl": "https://above.dev/docs",
       "id": "above",
       "logo": "https://models.dev/logos/above.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "above.dev",
       "protocol": "openai",
       "responses": false
@@ -94,7 +94,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 98,
+      "modelCount": 106,
       "name": "AIHubMix",
       "responses": false
     },
@@ -206,7 +206,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 177,
+      "modelCount": 179,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -422,7 +422,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 47,
+      "modelCount": 50,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -463,7 +463,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 109,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -522,7 +522,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 68,
+      "modelCount": 70,
       "name": "Deep Infra",
       "responses": false
     },
@@ -592,7 +592,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 283,
+      "modelCount": 285,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -633,7 +633,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 33,
+      "modelCount": 34,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -683,7 +683,7 @@
       "documentationUrl": "https://docs.gitlab.com/user/duo_agent_platform/",
       "id": "gitlab",
       "logo": "https://models.dev/logos/gitlab.svg",
-      "modelCount": 26,
+      "modelCount": 28,
       "name": "GitLab Duo",
       "responses": false
     },
@@ -941,7 +941,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 389,
+      "modelCount": 392,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1031,7 +1031,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 426,
+      "modelCount": 428,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 586,
+      "modelCount": 592,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1439,7 +1439,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 109,
+      "modelCount": 110,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1449,7 +1449,7 @@
       "documentationUrl": "https://opencode.ai/docs/go",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 39,
+      "modelCount": 41,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1470,7 +1470,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 382,
+      "modelCount": 385,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1850,7 +1850,7 @@
       "documentationUrl": "https://temprhq.io/docs/gateway-reference.html",
       "id": "tempr",
       "logo": "https://models.dev/logos/tempr.svg",
-      "modelCount": 29,
+      "modelCount": 39,
       "name": "Tempr",
       "protocol": "openai",
       "responses": false
@@ -2041,7 +2041,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 109,
+      "modelCount": 111,
       "name": "Venice AI",
       "responses": false
     },
@@ -2049,7 +2049,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 385,
+      "modelCount": 388,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2069,7 +2069,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 31,
+      "modelCount": 34,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2278,9 +2278,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "510d5cf1da02c205892c9391d3638b39419c33ebebe726519d0f6f3fa74b3cf5",
-    "generatedAt": "2026-09-23T08:36:44Z",
+    "catalogSha256": "244084865a398941d02a72abf58b89c2a75ef9d22df65a3a5fe40139a132b42c",
+    "generatedAt": "2026-09-24T08:29:33Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "8200e1330cf4e3a30b38acffd9e4af74d3d3b046"
+    "revision": "ae4a802894c72c7cbbd893ea36d3f637b50b5587"
   }
 }
