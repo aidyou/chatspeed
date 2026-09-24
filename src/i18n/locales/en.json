@@ -177,8 +177,11 @@
     "searchNotePlaceholder": "Search Notes"
   },
   "proxySwitcher": {
+    "copyProxyId": "Copy Proxy Server ID",
     "groupSwitch": "Group Switch",
     "hitRate": "Hit Rate",
+    "proxyIdCopyFailed": "Failed to copy proxy server ID: {error}",
+    "proxyIdCopySuccess": "Proxy server ID copied to clipboard!",
     "serverSwitch": "Server Switch",
     "switchBackendModels": "Switch Target Backend Models",
     "title": "Proxy Switcher"

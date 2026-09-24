@@ -177,8 +177,11 @@
     "searchNotePlaceholder": "搜索智记"
   },
   "proxySwitcher": {
+    "copyProxyId": "复制服务器 ID",
     "groupSwitch": "分组切换",
     "hitRate": "命中率",
+    "proxyIdCopyFailed": "复制服务器 ID 失败：{error}",
+    "proxyIdCopySuccess": "服务器 ID 已复制到剪贴板！",
     "serverSwitch": "服务器切换",
     "switchBackendModels": "切换目标后端模型",
     "title": "代理切换"
