@@ -223,10 +223,11 @@ pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<()
     .map_err(|e| e.to_string())?;
 
     let menu = tauri::menu::MenuBuilder::new(app)
-        .item(&main_window_menu_item)
-        .item(&assistant_window_menu_item)
         .item(&workflow_window_menu_item)
+        .item(&assistant_window_menu_item)
+        .item(&main_window_menu_item)
         .item(&note_window_menu_item)
+        .separator()
         .item(&proxy_switcher_window_menu_item)
         .separator()
         .item(&settings_window_menu_item)
