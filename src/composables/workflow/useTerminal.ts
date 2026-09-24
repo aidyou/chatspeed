@@ -325,8 +325,7 @@ export function useTerminal(
   const clear = (sessionId = state.activeSessionId) => {
     if (!sessionId) return
     const tab = state.tabs.find(item => item.sessionId === sessionId)
-    // Clearing the screen should not make a live shell look dead after a page reload. Keep only
-    // its current prompt as the new bounded history; subsequent PTY output replaces it naturally.
+    // Keep the current prompt as bounded history so a live shell remains usable after a reload.
     const prompt = new TextEncoder().encode(`${tab?.cwd || ''} > `)
     outputBuffers.set(sessionId, { chunks: [prompt], lines: 0 })
     outputHistory.set(sessionId, { chunks: [prompt], lines: 0 })

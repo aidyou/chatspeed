@@ -120,17 +120,24 @@ const selectTab = (sessionId: string) => {
 }
 const focus = (sessionId: string) => instances.get(sessionId)?.terminal.focus()
 const shortcutMainKey = (shortcut: string | undefined) => shortcut?.split('+').pop()?.toLowerCase()
-const matchesTerminalShortcut = (event: KeyboardEvent, shortcut: string | undefined) => {
+const matchesTerminalShortcut = (
+  event: KeyboardEvent,
+  shortcut: string | undefined,
+  commandModifierDown = false
+) => {
   if (!shortcut) return false
   const parts = shortcut.split('+')
-  const requiresCommandOrControl = parts.includes('CommandOrControl')
-  const commandOrControlPressed = preferences.usesCommandKey
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey
+  const requiresCommandOrControl =
+    parts.includes('CommandOrControl') || parts.includes('CommandOrCtrl')
+  const isMacPlatform = /Macintosh|Mac OS/.test(`${navigator.platform} ${navigator.userAgent}`)
+  const commandOrControlPressed = isMacPlatform
+    ? (event.metaKey || commandModifierDown) && !event.ctrlKey
+    : (event.ctrlKey || commandModifierDown) && !event.metaKey
   if (requiresCommandOrControl !== commandOrControlPressed) return false
   if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey)
     return false
-  return event.key.toLowerCase() === shortcutMainKey(shortcut)
+  const mainKey = shortcutMainKey(shortcut)
+  return event.code === `Key${mainKey?.toUpperCase()}` || event.key.toLowerCase() === mainKey
 }
 
 const setHost = (sessionId: string, element: Element | null) => {
@@ -172,6 +179,22 @@ const mountTab = (tab: TerminalTab) => {
   const host = hosts.get(tab.sessionId)
   if (!host) return
 
+  let commandModifierDown = false
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Meta' || event.key === 'Control') {
+      commandModifierDown = true
+      return
+    }
+    if (!matchesTerminalShortcut(event, preferences.clearShortcut, commandModifierDown)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    terminal.clear(tab.sessionId)
+  }
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.key === 'Meta' || event.key === 'Control') commandModifierDown = false
+  }
+  host.addEventListener('keydown', onKeyDown, true)
+  host.addEventListener('keyup', onKeyUp, true)
   const instance = new Terminal({
     cursorBlink: true,
     convertEol: false,
@@ -200,9 +223,6 @@ const mountTab = (tab: TerminalTab) => {
     dispose: () => urlProvider.dispose()
   })
   instance.attachCustomKeyEventHandler(event => {
-    if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
-      return true
-    }
     if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
       terminal.clear(tab.sessionId)
       return true
@@ -224,7 +244,11 @@ const mountTab = (tab: TerminalTab) => {
     if (selected) void writeClipboard(selected)
   }
   host.addEventListener('mouseup', copySelection)
-  const disposeSelection = () => host.removeEventListener('mouseup', copySelection)
+  const disposeSelection = () => {
+    host.removeEventListener('mouseup', copySelection)
+    host.removeEventListener('keydown', onKeyDown, true)
+    host.removeEventListener('keyup', onKeyUp, true)
+  }
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))
   observer.observe(host)
   let outputQueue: Uint8Array[] = []
@@ -252,13 +276,26 @@ const mountTab = (tab: TerminalTab) => {
     pendingProgressChunk = null
     flushOutputQueue()
   }
+  const joinOutputQueue = (first: Uint8Array) => {
+    const totalLength = outputQueue.reduce((length, chunk) => length + chunk.length, first.length)
+    const joined = new Uint8Array(totalLength)
+    joined.set(first)
+    let offset = first.length
+    for (const chunk of outputQueue) {
+      joined.set(chunk, offset)
+      offset += chunk.length
+    }
+    return joined
+  }
   const flushOutputQueue = () => {
     if (disposed || writeInFlight) return
-    const output = outputQueue.shift()
-    if (!output) return
+    const first = outputQueue.shift()
+    if (!first) return
+    const output = joinOutputQueue(first)
+    outputQueue = []
     writeInFlight = true
-    // xterm's write callback fires only after parser/render consumption. Serializing PTY chunks
-    // through that callback preserves CR/CSI progress updates even when Tauri emits rapidly.
+    // xterm's write callback fires only after parser/render consumption. Coalescing queued PTY chunks
+    // avoids replaying restored startup output one chunk at a time while preserving byte order.
     instance.write(output, () => {
       writeInFlight = false
       flushOutputQueue()
@@ -519,15 +556,19 @@ onBeforeUnmount(() => {
 .workflow-terminal__content {
   flex: 1;
   min-height: 0;
-  padding: var(--cs-space-sm) 0 0 var(--cs-space-sm);
+  padding: var(--cs-space-sm);
   overflow: hidden;
   box-sizing: border-box;
   background: var(--workflow-terminal-background);
+  font-size: 0;
+  caret-color: transparent;
+
+  :deep(br) {
+    display: none;
+  }
 }
 
 .workflow-terminal__content :deep(canvas) {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 </style>

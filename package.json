@@ -101,6 +101,9 @@
       "undici": "7.29.0",
       "uuid": "11.1.1",
       "yaml": "2.8.3"
+    },
+    "patchedDependencies": {
+      "ghostty-web@0.4.0": "src/patches/ghostty-web@0.4.0.patch"
     }
   }
 }

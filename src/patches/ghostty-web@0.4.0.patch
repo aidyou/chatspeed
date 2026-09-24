@@ -1,0 +1,56 @@
+diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
+index a4ca427b95288e70c782ce303013cd644893dcec..e324825a81d3c43691c3e89b2c8d5dd96d35a8ff 100644
+--- a/dist/ghostty-web.js
++++ b/dist/ghostty-web.js
+@@ -848,7 +848,8 @@ class P {
+    * @param event - KeyboardEvent
+    */
+   handleKeyDown(A) {
+-    if (this.isDisposed || this.isComposing || A.isComposing || A.keyCode === 229)
++    this.imeSkippedKeydown = !this.isDisposed && (this.isComposing || A.isComposing || A.keyCode === 229);
++    if (this.isDisposed || this.imeSkippedKeydown)
+       return;
+     if (this.onKeyCallback && this.onKeyCallback({ key: A.key, domEvent: A }), this.customKeyEventHandler && this.customKeyEventHandler(A)) {
+       A.preventDefault();
+@@ -1363,7 +1364,7 @@ class $ {
+   measureFont() {
+     const B = document.createElement("canvas").getContext("2d");
+     B.font = `${this.fontSize}px ${this.fontFamily}`;
+-    const g = B.measureText("M"), E = Math.ceil(g.width), C = g.actualBoundingBoxAscent || this.fontSize * 0.8, I = g.actualBoundingBoxDescent || this.fontSize * 0.2, D = Math.ceil(C + I) + 2, i = Math.ceil(C) + 1;
++    const g = B.measureText("M"), E = Math.ceil(g.width), F = B.measureText("中"), C = Math.max(g.actualBoundingBoxAscent || this.fontSize * 0.8, F.actualBoundingBoxAscent || 0), I = Math.max(g.actualBoundingBoxDescent || this.fontSize * 0.2, F.actualBoundingBoxDescent || 0), D = Math.ceil(C + I) + 2, i = Math.ceil(C) + 1;
+     return { width: E, height: D, baseline: i };
+   }
+   /**
+@@ -2327,7 +2328,13 @@ class IA {
+       throw new Error("Terminal has been disposed");
+     this.element = A, this.isOpen = !0;
+     try {
+-      A.hasAttribute("tabindex") || A.setAttribute("tabindex", "0"), A.setAttribute("contenteditable", "true"), A.addEventListener("beforeinput", (E) => E.preventDefault()), A.setAttribute("role", "textbox"), A.setAttribute("aria-label", "Terminal input"), A.setAttribute("aria-multiline", "true");
++      A.hasAttribute("tabindex") || A.setAttribute("tabindex", "0"), A.setAttribute("contenteditable", "true"), A.addEventListener("beforeinput", (E) => {
++        E.preventDefault();
++        if (this.inputHandler?.imeSkippedKeydown && E.inputType === "insertText" && E.data && !E.isComposing && /^[\x20-\x7e]+$/.test(E.data) && !this.options.disableStdin) {
++          this.dataEmitter.fire(E.data);
++          this.inputHandler.imeSkippedKeydown = !1;
++        }
++      }), A.setAttribute("role", "textbox"), A.setAttribute("aria-label", "Terminal input"), A.setAttribute("aria-multiline", "true");
+       const B = this.buildWasmConfig();
+       this.wasmTerm = this.ghostty.createTerminal(this.cols, this.rows, B), this.canvas = document.createElement("canvas"), this.canvas.style.display = "block", A.appendChild(this.canvas), this.textarea = document.createElement("textarea"), this.textarea.setAttribute("autocorrect", "off"), this.textarea.setAttribute("autocapitalize", "off"), this.textarea.setAttribute("spellcheck", "false"), this.textarea.setAttribute("tabindex", "0"), this.textarea.setAttribute("aria-label", "Terminal input"), this.textarea.style.position = "absolute", this.textarea.style.left = "0", this.textarea.style.top = "0", this.textarea.style.width = "1px", this.textarea.style.height = "1px", this.textarea.style.padding = "0", this.textarea.style.border = "none", this.textarea.style.margin = "0", this.textarea.style.opacity = "0", this.textarea.style.clipPath = "inset(50%)", this.textarea.style.overflow = "hidden", this.textarea.style.whiteSpace = "nowrap", this.textarea.style.resize = "none", A.appendChild(this.textarea);
+       const g = this.textarea;
+@@ -2834,7 +2841,7 @@ class IA {
+     return this.assertOpen(), this.wasmTerm.hasMouseTracking();
+   }
+ }
+-const QA = 2, BA = 1, gA = 15, EA = 100;
++const QA = 2, BA = 1, EA = 100;
+ class DA {
+   constructor() {
+     this._isResizing = !1;
+@@ -2902,7 +2909,7 @@ class DA {
+     const C = window.getComputedStyle(E), I = Number.parseInt(C.getPropertyValue("padding-top")) || 0, D = Number.parseInt(C.getPropertyValue("padding-bottom")) || 0, i = Number.parseInt(C.getPropertyValue("padding-left")) || 0, w = Number.parseInt(C.getPropertyValue("padding-right")) || 0, s = E.clientWidth, N = E.clientHeight;
+     if (s === 0 || N === 0)
+       return;
+-    const k = s - i - w - gA, M = N - I - D, a = Math.max(QA, Math.floor(k / g.width)), h = Math.max(BA, Math.floor(M / g.height));
++    const k = s - i - w, M = N - I - D, a = Math.max(QA, Math.floor(k / g.width)), h = Math.max(BA, Math.floor(M / g.height));
+     return { cols: a, rows: h };
+   }
+   /**
