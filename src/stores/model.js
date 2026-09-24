@@ -75,7 +75,7 @@ export const useModelStore = defineStore('modelProvider', () => {
    * Returns the available model providers.
    * @returns {ModelProvider[]} The available model providers.
    */
-  const getAvailableProviders = computed(() => providers.value.filter(m => !m.disabled))
+  const getAvailableProviders = computed(() => providers.value.filter(m => !m.disabled && m.apiProtocol !== 'decision'))
 
   /**
    * Set the model providers from the backend
@@ -165,7 +165,7 @@ export const useModelStore = defineStore('modelProvider', () => {
       // check if the default model is available
       const currentDefaultModel = getModelProviderById(defaultModelProvider.value.id)
       // current default model has existed, update and return
-      if (currentDefaultModel) {
+      if (currentDefaultModel && !currentDefaultModel.disabled && currentDefaultModel.apiProtocol !== 'decision') {
         setDefaultModelProvider(currentDefaultModel)
         return;
       }

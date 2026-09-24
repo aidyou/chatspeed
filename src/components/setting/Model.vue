@@ -79,14 +79,17 @@
           <el-form-item :label="$t('settings.model.baseUrl')" prop="baseUrl">
             <el-input v-model="modelForm.baseUrl" :placeholder="baseUrlPlaceholder" />
           </el-form-item>
+          <el-form-item v-if="modelForm.apiProtocol === 'decision'" :label="$t('settings.model.decisionEndpoint')">
+            <span class="form-tip">{{ $t('settings.model.decisionEndpointHint') }}</span>
+          </el-form-item>
           <el-form-item :label="$t('settings.model.apiKey')" prop="apiKey">
             <el-input v-model="modelForm.apiKey" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }"
               :placeholder="$t('settings.model.apiKeyPlaceholder')" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.supportsResponsesApi')" prop="supportsResponsesApi">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.supportsResponsesApi')" prop="supportsResponsesApi">
             <el-switch v-model="modelForm.supportsResponsesApi" />
           </el-form-item>
-          <el-form-item v-if="modelForm.supportsResponsesApi" :label="$t('settings.model.responsesApiPreference')"
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision' && modelForm.supportsResponsesApi" :label="$t('settings.model.responsesApiPreference')"
             prop="responsesApiPreference">
             <el-radio-group v-model="modelForm.responsesApiPreference">
               <el-radio value="responses">{{ $t('settings.model.responsesApi') }}</el-radio>
@@ -189,7 +192,7 @@
             </div>
             <div class="footer">
               <el-button type="success" round @click="onProviderModelImportShow()" :loading="isLoadingProviderModels"
-                :disabled="isLoadingProviderModels || Object.keys(providerModelToShow).length < 1">
+                :disabled="isLoadingProviderModels || (modelForm.apiProtocol !== 'decision' && Object.keys(providerModelToShow).length < 1)">
                 <cs name="import" />{{ $t('settings.model.import') }}
               </el-button>
               <el-button type="success" round @click="onModelConfig()">
@@ -201,7 +204,7 @@
         <!-- /end model info -->
 
         <!-- additional info -->
-        <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
+        <el-tab-pane v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.additionalInfo')" name="additional">
           <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
             <el-input-number v-model="modelForm.maxTokens" :min="64" :step="1024" :step-strictly="false"
               controls-position="right" :placeholder="$t('settings.model.maxTokensPlaceholder')" />
@@ -374,10 +377,10 @@
           <el-form-item :label="$t('settings.model.modelGroup')" prop="group">
             <el-input v-model="modelConfigForm.group" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.reasoning')" prop="reasoning">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.reasoning')" prop="reasoning">
             <el-switch v-model="modelConfigForm.reasoning" />
           </el-form-item>
-          <el-form-item v-if="supportsReasoningSummary(modelConfigForm.id)"
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision' && supportsReasoningSummary(modelConfigForm.id)"
             :label="$t('settings.model.responsesReasoningSummary')" prop="reasoningSummary">
             <el-radio-group v-model="modelConfigForm.reasoningSummary">
               <el-radio value="none">{{ $t('settings.model.summaryNone') }}</el-radio>
@@ -386,27 +389,27 @@
               <el-radio value="detailed">{{ $t('settings.model.summaryDetailed') }}</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item v-if="modelConfigForm.reasoning" :label="$t('settings.model.thinkingLevel')">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision' && modelConfigForm.reasoning" :label="$t('settings.model.thinkingLevel')">
             <el-select v-model="modelConfigForm.thinkingLevel" style="width: 100%">
               <el-option v-for="option in modelThinkingLevelOptions" :key="option.value" :label="$t(option.label)"
                 :value="option.value" />
             </el-select>
           </el-form-item>
-          <el-form-item :label="$t('settings.model.functionCall')" prop="functionCall">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.functionCall')" prop="functionCall">
             <el-switch v-model="modelConfigForm.functionCall" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.imageInput')" prop="imageInput">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.imageInput')" prop="imageInput">
             <el-switch v-model="modelConfigForm.imageInput" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
               style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.maxTokens')" prop="maxTokens">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.maxTokens')" prop="maxTokens">
             <el-input-number v-model="modelConfigForm.maxTokens" :min="0" :step="1024" controls-position="right"
               style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.temperature')" prop="temperature">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.temperature')" prop="temperature">
             <el-tooltip :content="$t('settings.model.temperaturePlaceholder')" placement="top" :hide-after="0"
               :enterable="false" transition="none">
               <div style="display: flex; align-items: center; width: 100%; gap: 12px">
@@ -422,7 +425,7 @@
           </el-form-item>
         </el-tab-pane>
 
-        <el-tab-pane :label="$t('settings.model.additionalInfo')" name="additional">
+        <el-tab-pane v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.additionalInfo')" name="additional">
           <el-form-item :label="$t('settings.model.structuredOutput')" prop="structuredOutput">
             <el-switch v-model="modelConfigForm.structuredOutput" />
           </el-form-item>
@@ -474,29 +477,29 @@
             <el-input-number v-model="modelConfigForm.pricing.outputPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.cachePricePerMillion')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.cachePricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.cachePerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.cacheWritePricePerMillion')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.cacheWritePricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.cacheWritePerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.audioInputPricePerMillion')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.audioInputPricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.audioInputPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.audioOutputPricePerMillion')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.audioOutputPricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.audioOutputPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
-          <el-form-item :label="$t('settings.model.reasoningPricingMode')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.reasoningPricingMode')" label-width="150px">
             <el-radio-group v-model="modelConfigForm.pricing.reasoningPricingMode">
               <el-radio value="output">{{ $t('settings.model.reasoningPricingOutput') }}</el-radio>
               <el-radio value="separate">{{ $t('settings.model.reasoningPricingSeparate') }}</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item :label="$t('settings.model.reasoningPricePerMillion')" label-width="150px">
+          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.reasoningPricePerMillion')" label-width="150px">
             <el-input-number v-model="modelConfigForm.pricing.reasoningPerMillion" :min="0" :step="0.01" :precision="6"
               controls-position="right" style="width: 100%" />
           </el-form-item>
@@ -706,6 +709,7 @@ const editId = ref(null)
 
 // Computed property to generate API type options for the select input
 const apiProtocolOptions = {
+  Decision: 'decision',
   OpenAI: 'openai',
   Ollama: 'ollama',
   Gemini: 'gemini',
@@ -823,6 +827,9 @@ const onProxyServerUpdate = event => {
 
 // Computed property to get the base URL placeholder based on the API type
 const baseUrlPlaceholder = computed(() => {
+  if (modelForm.value.apiProtocol === 'decision') {
+    return 'https://api.typesafe.ai/v1/systemone'
+  }
   if (modelForm.value.apiProtocol === 'openai') {
     return 'https://api.openai.com/v1'
   } else if (modelForm.value.apiProtocol === 'ollama') {
@@ -842,7 +849,18 @@ const modelRules = {
   apiProtocol: [{ required: true, message: t('settings.model.apiProtocolRequired') }],
   name: [{ required: true, message: t('settings.model.nameRequired') }],
   models: [{ required: true, message: t('settings.model.modelsRequired') }],
-  baseUrl: [{ required: true, message: t('settings.model.baseUrlRequired') }]
+  baseUrl: [{ required: true, message: t('settings.model.baseUrlRequired') }, {
+    validator: (_, value, callback) => {
+      if (modelForm.value.apiProtocol !== 'decision') return callback()
+      try {
+        const url = new URL(value)
+        if (!['https:', 'http:'].includes(url.protocol) || !url.pathname || url.pathname === '/' || url.username || url.password || url.search || url.hash || (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error('invalid')
+        callback()
+      } catch {
+        callback(new Error(t('settings.model.decisionEndpointInvalid')))
+      }
+    }
+  }]
 }
 
 // =================================================
@@ -984,6 +1002,14 @@ const updateModel = () => {
       return
     }
 
+    if (
+      modelForm.value.apiProtocol === 'decision' &&
+      (!modelForm.value.apiKey.trim() || !modelForm.value.models.every(model => model.id?.trim()))
+    ) {
+      showMessage(t('settings.model.decisionConfigurationRequired'), 'error')
+      return
+    }
+
     // Validate restricted headers
     const restrictedHeaders = [
       'host',
@@ -1050,6 +1076,7 @@ const updateModel = () => {
         topK: toInt(modelForm.value.topK),
         disabled: modelForm.value.disabled,
         metadata: {
+          ...(editId.value ? modelStore.getModelProviderById(editId.value)?.metadata || {} : {}),
           modelsDevProviderId: modelForm.value.modelsDevProviderId || null,
           modelsDevModelId: modelForm.value.modelsDevModelId || null,
           logo: modelForm.value.logo || '',
@@ -1249,6 +1276,7 @@ const modelCatalogResolveSignature = () =>
     provider: modelCatalogProviderSignature()
   })
 const resolveNewModelCatalog = async () => {
+  if (modelForm.value.apiProtocol === 'decision') return
   const modelId = modelConfigForm.value.id?.trim()
   if (prevModelConfigId.value || !modelId) return
   const token = ++modelConfigResolveToken.value
@@ -1351,6 +1379,30 @@ const updateModelConfig = () => {
   const trimmedId = modelConfigForm.value.id.trim()
   const idToUpdate = prevModelConfigId.value ?? trimmedId
   const index = modelForm.value.models.findIndex(item => item.id === idToUpdate)
+
+  if (modelForm.value.apiProtocol === 'decision') {
+    const currentModel = index !== -1 ? modelForm.value.models[index] : null
+    const pricing = normalizePricing(modelConfigForm.value.pricing)
+    const updatedDecisionModel = {
+      ...currentModel,
+      id: trimmedId,
+      name: modelConfigForm.value.name?.trim() || modelAliasFromId(trimmedId),
+      group: modelConfigForm.value.group?.trim() || '',
+      pricing: {
+        ...pricing,
+        reasoningPricingMode: modelConfigForm.value.pricing.reasoningPricingMode,
+        reasoningPerMillion: modelConfigForm.value.pricing.reasoningPerMillion
+      }
+    }
+    if (index !== -1) {
+      if (prevModelConfigId.value === modelForm.value.defaultModel) modelForm.value.defaultModel = trimmedId
+      modelForm.value.models.splice(index, 1, updatedDecisionModel)
+    } else {
+      modelForm.value.models.push(updatedDecisionModel)
+    }
+    modelConfigDialogVisible.value = false
+    return
+  }
 
   const updatedModelConfig = {
     ...modelConfigForm.value,
@@ -1465,6 +1517,10 @@ watchEffect(async () => {
       proxyServers: modelForm.value.proxyServers
     })
   } else {
+    if (modelForm.value.apiProtocol === 'decision') {
+      fetchedProviderModels.value = []
+      return
+    }
     loadCatalogProviderModels()
   }
 })
@@ -1489,7 +1545,7 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
   try {
     fetchedProviderModels.value =
       (await modelStore.listModels(protocol, baseUrl, apiKey, metadata)) || []
-    if (!fetchedProviderModels.value.length) {
+    if (!fetchedProviderModels.value.length && protocol !== 'decision') {
       await loadCatalogProviderModels()
     }
   } catch (error) {
@@ -1497,6 +1553,10 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
       error instanceof FrontendAppError
         ? error.toFormattedString()
         : error?.message || String(error)
+    if (protocol === 'decision') {
+      showMessage(t('settings.model.decisionImportFailed', { error: formattedError }), 'error')
+      return
+    }
     const isUnsupportedListModels =
       formattedError.includes('Method Not Allowed') ||
       formattedError.includes('status_code\":405') ||
@@ -1520,6 +1580,12 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
 }
 
 const onProviderModelImportShow = () => {
+  if (modelForm.value.apiProtocol === 'decision') {
+    void fetchedProviderModelsFromServer('decision', modelForm.value.baseUrl, modelForm.value.apiKey, {
+      proxyType: modelForm.value.proxyType,
+      proxyServers: modelForm.value.proxyServers
+    })
+  }
   modelImportDialogVisible.value = true
   providerModelSelected.value = {}
   providerModelKeyword.value = ''
@@ -1590,6 +1656,14 @@ const onProviderModelSave = async () => {
   )
   const modelsToAdd = await Promise.all(
     selectedProviderModels.map(async model => {
+      if (modelForm.value.apiProtocol === 'decision') {
+        return {
+          ...createDefaultModelConfig(),
+          id: model.id.trim(),
+          name: model.name || model.id,
+          group: model.family || ''
+        }
+      }
       let profile = null
       try {
         profile = await modelStore.resolveModelProfile(

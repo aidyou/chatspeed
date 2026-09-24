@@ -1016,7 +1016,9 @@ const {
 })
 
 function normalizeVisionModel(model) {
-  if (!model || !model.id || !model.model) {
+  if (!model || !model.id || !model.model ||
+      !modelStore.getAvailableProviders.some(provider =>
+        provider.id === model.id && provider.models?.some(item => item.id === model.model))) {
     return null
   }
 

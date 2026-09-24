@@ -191,7 +191,7 @@
         <div class="value" style="width: 300px">
           <el-select v-model="settings.conversationTitleGenModel.id" class="auto-width-select" placement="bottom"
             clearable @change="onConversationTitleGenModelIdChange">
-            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            <el-option v-for="model in modelStore.getAvailableProviders" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
           <el-select v-model="settings.conversationTitleGenModel.model" class="auto-width-select" placement="bottom"
@@ -212,7 +212,7 @@
         <div class="value" style="width: 300px">
           <el-select v-model="settings.visionModel.id" class="auto-width-select" placement="bottom" clearable
             @change="onVisionModelIdChange">
-            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            <el-option v-for="model in modelStore.getAvailableProviders" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
           <el-select v-model="settings.visionModel.model" class="auto-width-select" placement="bottom" clearable
@@ -255,7 +255,7 @@
             placement="bottom"
             @change="onWebsearchModelIdChange">
             <el-option
-              v-for="model in modelStore.providers"
+              v-for="model in modelStore.getAvailableProviders"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -1109,29 +1109,15 @@ const primaryColors = computed(() => ({
   blue: t('settings.general.primaryColors.blue')
 }))
 
-const conversationTitleGenModelList = computed(() => {
-  if (settingStore.settings.conversationTitleGenModel.id) {
-    return (
-      modelStore.getModelProviderById(settingStore.settings.conversationTitleGenModel.id)?.models ||
-      []
-    )
-  }
-  return []
-})
+const chatProviderModels = providerId => modelStore.getAvailableProviders.find(provider => provider.id === providerId)?.models || []
 
-const visionModelList = computed(() => {
-  if (settingStore.settings.visionModel.id) {
-    return modelStore.getModelProviderById(settingStore.settings.visionModel.id)?.models || []
-  }
-  return []
-})
+const conversationTitleGenModelList = computed(() =>
+  chatProviderModels(settingStore.settings.conversationTitleGenModel.id)
+)
 
-const websearchModelList = computed(() => {
-  if (settingStore.settings.websearchModel.id) {
-    return modelStore.getModelProviderById(settingStore.settings.websearchModel.id)?.models || []
-  }
-  return []
-})
+const visionModelList = computed(() => chatProviderModels(settingStore.settings.visionModel.id))
+
+const websearchModelList = computed(() => chatProviderModels(settingStore.settings.websearchModel.id))
 
 const proxyTypes = computed(() => ({
   none: t('settings.general.proxyTypes.none'),

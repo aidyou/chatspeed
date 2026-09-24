@@ -1918,6 +1918,7 @@ impl WorkflowExecutor {
         );
         // Keep initial execution aligned with later runtime MCP configuration updates.
         executor.rebuild_auto_approve_from_agent_config();
+        executor.sync_runtime_models_from_agent_config();
 
         executor
     }
@@ -6873,7 +6874,7 @@ impl WorkflowExecutor {
             )
         {
             if let Some(review) = self
-                .review_tool_call_for_smart_mode(name, args, text_part)
+                .review_tool_call_for_smart_mode(name, args, text_part, true)
                 .await?
             {
                 if review.approved {
@@ -9846,6 +9847,16 @@ mod recovery_tests {
                 context_size: Some(1_000),
                 max_tokens: None,
             }),
+            decision_enabled: true,
+            decision: Some(crate::db::agent::ModelConfig {
+                id: 33,
+                model: "jev-latest".into(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
             ..Default::default()
         });
         store.add_agent(&agent).expect("failed to add test agent");
@@ -9889,6 +9900,8 @@ mod recovery_tests {
             executor.intelligence_manager.utility_model_name,
             "utility-model"
         );
+        // Decision models are now read from the global config table, not AgentModels.
+        executor.sync_runtime_models_from_agent_config();
     }
 
     #[tokio::test]

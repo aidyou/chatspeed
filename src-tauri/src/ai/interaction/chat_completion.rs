@@ -9,7 +9,7 @@ use tokio::sync::{
     Mutex,
 };
 
-use crate::ccproxy::ChatProtocol;
+use crate::ccproxy::{decision, ChatProtocol};
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -311,6 +311,34 @@ pub async fn list_models_async(
     api_key: Option<&str>,
     metadata: Option<Value>,
 ) -> crate::error::Result<Vec<ModelDetails>> {
+    if api_protocol == "decision" {
+        let models = decision::list_models(
+            main_store,
+            api_url.unwrap_or_default(),
+            api_key.unwrap_or_default(),
+            metadata,
+        )
+        .await
+        .map_err(|error| AppError::Ai(AiError::InitFailed(error.to_string())))?;
+        return Ok(models
+            .into_iter()
+            .map(|(id, name)| ModelDetails {
+                id,
+                name,
+                protocol: ChatProtocol::OpenAI,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                description: None,
+                last_updated: None,
+                family: None,
+                reasoning: None,
+                function_call: None,
+                image_input: None,
+                recommended_temperature: None,
+                metadata: None,
+            })
+            .collect());
+    }
     let chat_protocol = ChatProtocol::from_str(&api_protocol)
         .map_err(|_| CCProxyError::InvalidProtocolError(api_protocol.clone()))?;
     let (api_url_clone, api_key_clone) = prepare_chat_parameters(
@@ -335,6 +363,33 @@ pub async fn list_models_async(
         .map_err(AppError::Ai)
 }
 
+fn is_decision_chat_provider(provider: &crate::db::AiModel) -> bool {
+    provider.api_protocol == "decision"
+}
+
+fn validate_chat_provider(store: &MainStore, provider_id: i64) -> crate::error::Result<()> {
+    if store.config.get_ai_model_by_id(provider_id)
+        .is_ok_and(|provider| is_decision_chat_provider(&provider))
+    {
+        return Err(CCProxyError::InvalidProtocolError("decision".to_string()).into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod chat_provider_tests {
+    use super::is_decision_chat_provider;
+    use crate::db::AiModel;
+
+    #[test]
+    fn decision_cannot_enter_chat_while_chat_provider_still_can() {
+        let decision = AiModel { api_protocol: "decision".into(), ..Default::default() };
+        let chat = AiModel { api_protocol: "openai".into(), ..Default::default() };
+        assert!(is_decision_chat_provider(&decision));
+        assert!(!is_decision_chat_provider(&chat));
+    }
+}
+
 pub async fn start_new_chat_interaction(
     chat_state_arc: Arc<ChatState>,
     provider_id: i64,
@@ -345,6 +400,8 @@ pub async fn start_new_chat_interaction(
     metadata: Option<ChatMetadata>,
     callback: Option<Box<dyn Fn(Arc<ChatResponse>) + Send + 'static>>,
 ) -> crate::error::Result<()> {
+    validate_chat_provider(chat_state_arc.main_store.as_ref(), provider_id)?;
+
     // Update the shared message history with the complete list of messages for this turn.
     // This ensures that the history reflects the state *before* the AI responds to the current messages.
     {

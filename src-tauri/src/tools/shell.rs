@@ -1113,6 +1113,17 @@ impl ShellPolicyEngine {
         }
     }
 
+    /// Whether an explicit policy rule requires review or denial for any command segment.
+    pub fn has_explicit_review_or_deny(&self, command_str: &str, restrict_to_planning: bool) -> bool {
+        let Ok(segments) = self.extract_policy_match_segments(command_str, restrict_to_planning) else {
+            return true;
+        };
+        if segments.len() == 1 && matches!(self.match_custom_rule(command_str), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))) {
+            return true;
+        }
+        segments.iter().any(|segment| matches!(self.match_custom_rule(segment), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))))
+    }
+
     fn evaluate_custom_rules(
         &self,
         command_str: &str,
@@ -3185,6 +3196,19 @@ mod tests {
     use tempfile::tempdir;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn explicit_policy_reviews_cannot_be_decision_approved() {
+        let (_root, _, guard) = setup_test_context();
+        let policy = ShellPolicyEngine::new(guard, vec![
+            ShellPolicyRule { pattern: "^git status$".into(), decision: ShellDecision::Review("explicit review".into()), description: None },
+            ShellPolicyRule { pattern: "^rm ".into(), decision: ShellDecision::Deny("blocked".into()), description: None },
+        ]);
+        assert!(policy.has_explicit_review_or_deny("git status", false));
+        assert!(policy.has_explicit_review_or_deny("rm -rf something", false));
+        assert!(policy.has_explicit_review_or_deny("git status; echo ok", false));
+        assert!(!policy.has_explicit_review_or_deny("echo ok", false));
+    }
 
     #[test]
     fn shell_decisions_round_trip_as_policy_strings() {

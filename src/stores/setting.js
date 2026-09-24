@@ -109,6 +109,7 @@ const defaultSettings = {
   websearchModel: { id: '', model: '' },
   // vision model settings
   visionModel: { id: '', model: '' },
+  decisionConfig: { enabled: false, providerId: null, model: '' },
   searchEngine: '',
   scraperConcurrencyCount: 5
 }

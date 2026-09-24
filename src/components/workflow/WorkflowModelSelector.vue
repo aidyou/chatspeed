@@ -329,6 +329,8 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
+  const existingModels = props.initialModels?.models || props.initialModels ||
+    (workflowStore.currentWorkflow?.agentConfig?.models || null)
   for (const key of ['plan', 'act', 'utility', 'lite', 'vision']) {
     result[key].thinking = result[key].thinkingEnabled
       ? {

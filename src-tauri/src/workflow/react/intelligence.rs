@@ -5,6 +5,7 @@ use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
+use crate::workflow::react::decision::parse_tool_approval_review;
 use crate::workflow::react::error::WorkflowEngineError;
 
 use std::sync::Arc;
@@ -29,57 +30,9 @@ pub struct IntelligenceManager {
     pub root_task_run_id: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ToolApprovalReview {
-    pub approved: bool,
-    pub reason: String,
-    pub risk_level: String,
-}
+pub use crate::workflow::react::decision::ToolApprovalReview;
 
 impl IntelligenceManager {
-    fn parse_tool_approval_review(result: &str) -> ToolApprovalReview {
-        let invalid_review = || ToolApprovalReview {
-            approved: false,
-            reason: "Approval reviewer returned invalid structured output; manual review required"
-                .to_string(),
-            risk_level: "medium".to_string(),
-        };
-
-        let Ok(review_json) = serde_json::from_str::<serde_json::Value>(
-            crate::libs::util::format_json_str(result).as_str(),
-        ) else {
-            return invalid_review();
-        };
-        let Some(review) = review_json.as_object() else {
-            return invalid_review();
-        };
-        let Some(approved) = review.get("approved").and_then(|value| value.as_bool()) else {
-            return invalid_review();
-        };
-        let Some(reason) = review
-            .get("reason")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return invalid_review();
-        };
-        let Some(risk_level) = review
-            .get("risk_level")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| matches!(*value, "low" | "medium" | "high"))
-        else {
-            return invalid_review();
-        };
-
-        ToolApprovalReview {
-            approved: approved && risk_level == "low",
-            reason: reason.to_string(),
-            risk_level: risk_level.to_string(),
-        }
-    }
-
     pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
@@ -127,7 +80,7 @@ impl IntelligenceManager {
         }
     }
 
-    fn truncate_text(value: &str, max_chars: usize) -> String {
+    pub(crate) fn truncate_text(value: &str, max_chars: usize) -> String {
         let mut text: String = value.chars().take(max_chars).collect();
         if value.chars().count() > max_chars {
             text.push_str("...");
@@ -276,7 +229,13 @@ impl IntelligenceManager {
         tool_description: &str,
         tool_args: &serde_json::Value,
         assistant_text: &str,
+        decision_may_approve: bool,
     ) -> Result<ToolApprovalReview, WorkflowEngineError> {
+        if decision_may_approve {
+            if let Some(review) = self.try_decision_approval(context, workspace_context, tool_name, tool_category, tool_scope, tool_description, tool_args, assistant_text).await {
+                return Ok(review);
+            }
+        }
         log::info!(
             "IntelligenceManager {}: Reviewing tool approval for '{}'",
             self.session_id,
@@ -388,7 +347,7 @@ impl IntelligenceManager {
             }
         }
 
-        Ok(Self::parse_tool_approval_review(result.trim()))
+        Ok(parse_tool_approval_review(result.trim()))
     }
 
     /// Generates a concise title for the workflow session based on the user's initial query.
@@ -409,7 +368,10 @@ impl IntelligenceManager {
                     (Some(provider_id), Some(model_name))
                         if provider_id > 0 && !model_name.trim().is_empty() =>
                     {
-                        Some((provider_id, model_name.to_string()))
+                        store.config.get_ai_model_by_id(provider_id).ok()
+                            .filter(|provider| !provider.disabled && provider.api_protocol != "decision")
+                            .filter(|provider| provider.models.iter().any(|model| model.id == model_name))
+                            .map(|_| (provider_id, model_name.to_string()))
                     }
                     _ => None,
                 }
@@ -545,6 +507,18 @@ impl IntelligenceManager {
         max_input_tokens: usize,
         segment_id: i32,
     ) -> Option<String> {
+        if let Some(language) = self.try_decision_language(user_input, max_input_tokens).await {
+            return Some(language);
+        }
+        self.detect_input_language_with_lite(user_input, max_input_tokens, segment_id).await
+    }
+
+    async fn detect_input_language_with_lite(
+        &self,
+        user_input: &str,
+        max_input_tokens: usize,
+        segment_id: i32,
+    ) -> Option<String> {
         const MAX_DETECTION_ATTEMPTS: u32 = 3;
 
         let trimmed = user_input.trim();
@@ -657,7 +631,7 @@ impl IntelligenceManager {
     /// Truncates text to a rough token budget using the shared estimator.
     /// Keeps the head (2/3) and tail (1/3) of the input so language cues at
     /// either end survive, and always cuts on char boundaries (CJK-safe).
-    fn truncate_to_token_budget(text: &str, max_tokens: usize) -> String {
+    pub(crate) fn truncate_to_token_budget(text: &str, max_tokens: usize) -> String {
         if max_tokens == 0 || estimate_tokens(text) <= max_tokens as f64 {
             return text.to_string();
         }
@@ -777,35 +751,5 @@ mod tests {
             ),
             "English"
         );
-    }
-
-    #[test]
-    fn smart_approval_requires_valid_low_risk_json() {
-        let approved = IntelligenceManager::parse_tool_approval_review(
-            r#"{"approved":true,"reason":"Read-only inspection","risk_level":"low"}"#,
-        );
-        assert!(approved.approved);
-
-        for invalid in [
-            "I approve this action",
-            "I do not recommend approving this action",
-            r#"{"approved":true,"reason":"Mutation","risk_level":"medium"}"#,
-            r#"{"approved":"true","reason":"Invalid type","risk_level":"low"}"#,
-            r#"{"approved":true,"reason":"Missing risk"}"#,
-        ] {
-            let review = IntelligenceManager::parse_tool_approval_review(invalid);
-            assert!(!review.approved, "invalid review was approved: {invalid}");
-            assert_eq!(review.risk_level, "medium");
-        }
-    }
-
-    #[test]
-    fn smart_approval_preserves_structured_rejection() {
-        let review = IntelligenceManager::parse_tool_approval_review(
-            r#"{"approved":false,"reason":"Needs user review","risk_level":"high"}"#,
-        );
-        assert!(!review.approved);
-        assert_eq!(review.reason, "Needs user review");
-        assert_eq!(review.risk_level, "high");
     }
 }

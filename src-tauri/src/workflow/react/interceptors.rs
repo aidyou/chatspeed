@@ -17,7 +17,7 @@ use crate::workflow::react::file_preview::{
     attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
     render_preview_details_text,
 };
-use crate::workflow::react::intelligence::ToolApprovalReview;
+use crate::workflow::react::decision::ToolApprovalReview;
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
@@ -2052,6 +2052,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         tool_name: &str,
         args: &serde_json::Value,
         assistant_text: &str,
+        decision_may_approve: bool,
     ) -> Result<Option<ToolApprovalReview>, WorkflowEngineError> {
         let tool = match self.tool_manager.get_tool(tool_name).await {
             Ok(tool) => tool,
@@ -2077,6 +2078,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 tool.description(),
                 args,
                 assistant_text,
+                decision_may_approve,
             )
             .await
         {
@@ -2631,6 +2633,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let policy_engine =
             crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
         let execution_audit = policy_engine.execution_audit_decision(command_str);
+        let decision_may_approve = !matches!(execution_audit, crate::tools::ShellDecision::Review(_) | crate::tools::ShellDecision::Deny(_))
+            && !policy_engine.has_explicit_review_or_deny(command_str, self.policy.phase == ExecutionPhase::Planning);
         let shell_policy_decision =
             policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning);
         if let crate::tools::ShellDecision::Deny(reason) = &shell_policy_decision {
@@ -2694,7 +2698,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             // Don't intercept - allow the read-only command
                         } else {
                             if let Some(review) = self
-                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str)
+                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str, decision_may_approve)
                                 .await?
                             {
                                 if review.approved {

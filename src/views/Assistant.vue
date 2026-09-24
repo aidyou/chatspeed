@@ -425,8 +425,31 @@ let unlistenPasteResponse = ref(null)
 let unlistenSyncState = ref(null)
 let unlistenFocusInput = ref(null)
 
-// Do not remove this, it's useful when user does not set default model at assistant dialog
-const currentModelProvider = ref({ ...modelStore.defaultModelProvider })
+const selectAssistantChatProvider = (availableProviders, preferredId, defaultProvider, preferredModelId) => {
+  const candidates = availableProviders.filter(provider =>
+    !provider.disabled && provider.apiProtocol !== 'decision' && provider.models?.length)
+  const provider = candidates.find(item => item.id === preferredId) ||
+    candidates.find(item => item.id === defaultProvider?.id) ||
+    candidates.find(item => item.isDefault) || candidates[0]
+  if (!provider) return {}
+  const selectedModel = provider.models.some(model => model.id === preferredModelId)
+    ? preferredModelId
+    : provider.models.some(model => model.id === provider.defaultModel)
+      ? provider.defaultModel
+      : provider.models[0].id
+  return { ...provider, defaultModel: selectedModel }
+}
+
+const currentModelProvider = ref(
+  selectAssistantChatProvider(modelStore.getAvailableProviders, null, modelStore.defaultModelProvider)
+)
+const restoreAssistantProvider = preferredId => {
+  const preferredModelId = currentModelProvider.value?.id === preferredId
+    ? currentModelProvider.value.defaultModel : null
+  currentModelProvider.value = selectAssistantChatProvider(
+    modelStore.getAvailableProviders, preferredId, modelStore.defaultModelProvider, preferredModelId
+  )
+}
 
 watch(
   () => chatErrorMessage.value,
@@ -437,38 +460,24 @@ watch(
   }
 )
 
-// Watch for changes in modelStore.providers to keep currentModelProvider in sync
+// Keep a valid chat model when providers are refreshed, disabled, or changed to decision.
 watch(
   () => modelStore.providers,
-  newProviders => {
-    const currentId = currentModelProvider.value?.id
-    if (currentId) {
-      const updatedProvider = newProviders.find(p => p.id === currentId)
-      if (updatedProvider) {
-        // If the provider still exists, update the local ref with the latest data from the store.
-        // This ensures that the `models` array within the provider is also updated.
-        currentModelProvider.value = { ...updatedProvider }
-      } else {
-        // The selected provider was deleted. Fallback to default.
-        const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
-        let model = modelStore.getModelProviderById(mid)
-        if (!model && newProviders.length > 0) {
-          model = modelStore.defaultModelProvider
-        }
-        currentModelProvider.value = model ? { ...model } : {}
-      }
-    } else if (newProviders.length > 0) {
-      // No provider was selected, but now there are providers. Select default.
-      currentModelProvider.value = { ...modelStore.defaultModelProvider }
-    }
+  () => {
+    const currentId = currentModelProvider.value?.id ||
+      csGetStorage(csStorageKey.defaultModelIdAtDialog)
+    restoreAssistantProvider(currentId)
   },
   { deep: true }
 )
 
-const canChat = computed(() => modelStore.getAvailableProviders.length > 0)
+const canChat = computed(() => modelStore.getAvailableProviders.some(provider => provider.models?.length))
 const canSendMessage = computed(
   () =>
     canChat.value &&
+    modelStore.getAvailableProviders.some(provider =>
+      provider.id === currentModelProvider.value?.id &&
+      provider.models?.some(model => model.id === currentModelProvider.value.defaultModel)) &&
     !isSubmittingMessage.value &&
     (!!inputMessage.value?.trim() || attachments.value.length > 0)
 )
@@ -554,13 +563,9 @@ watch(
 watch(
   () => currentModelProvider.value,
   () => {
-    // get default sub model from local storage
     const defaultSubModel = csGetStorage(csStorageKey.defaultModelAtDialog)
-    if (defaultSubModel) {
-      const model = currentModelProvider.value.models.find(m => m.id === defaultSubModel)
-      if (model) {
-        currentModelProvider.value.defaultModel = defaultSubModel
-      }
+    if (defaultSubModel && currentModelProvider.value?.models?.some(m => m.id === defaultSubModel)) {
+      currentModelProvider.value.defaultModel = defaultSubModel
     }
   }
 )
@@ -580,18 +585,8 @@ onMounted(async () => {
     }
   })
 
-  // set default model from local storage
-  const mid = csGetStorage(csStorageKey.defaultModelIdAtDialog)
-  if (mid) {
-    const model = modelStore.getModelProviderById(mid)
-    if (model) {
-      // IMPORTANT: Do not simplify this logic!
-      // If model is not found, we should keep the system default model (modelStore.defaultModelProvider)
-      // instead of setting an empty object or null.
-      // This ensures fallback to system default when user-defined model has been deleted.
-      currentModelProvider.value = { ...model }
-    }
-  }
+  // Restore only a currently available chat provider; old decision references fall back.
+  restoreAssistantProvider(csGetStorage(csStorageKey.defaultModelIdAtDialog))
 
   // listen chat_stream event
   unlistenChunkResponse.value = await listen('chat_stream', async event => {
@@ -733,7 +728,9 @@ const dispatchChatCompletion = async () => {
     const visionModel = settingStore.settings.visionModel
 
     if (hasImageAttachments) {
-      if (!visionModel.id || !visionModel.model) {
+      if (!visionModel.id || !visionModel.model ||
+          !modelStore.getAvailableProviders.some(provider =>
+            provider.id === visionModel.id && provider.models?.some(model => model.id === visionModel.model))) {
         // Rollback
         inputMessage.value = backupMessage
         attachments.value = backupAttachments

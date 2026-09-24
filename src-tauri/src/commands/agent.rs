@@ -125,6 +125,8 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
         models.vision = None;
         models.utility = None;
         models.lite = None;
+        models.decision_enabled = false;
+        models.decision = None;
     }
     Ok(())
 }
@@ -464,12 +466,22 @@ mod tests {
         child.sandbox_execution_mode = ShellExecutionMode::SandboxOnly;
         child.sandbox_scheme_id = Some("scheme-1".to_string());
 
+        child.models = Some(crate::db::agent::AgentModels {
+            decision_enabled: true,
+            decision: Some(crate::db::agent::ModelConfig {
+                id: 42, model: "jev-latest".into(), temperature: None, thinking: None,
+                function_call: None, context_size: None, max_tokens: None,
+            }),
+            ..Default::default()
+        });
         sanitize_agent_for_persistence(&mut child).expect("sanitize child agent");
         assert_eq!(child.sandbox_execution_mode, ShellExecutionMode::HostOnly);
         assert!(child.sandbox_scheme_id.is_none());
         assert_eq!(child.available_tools.as_deref(), Some("[]"));
         assert_eq!(child.allowed_paths.as_deref(), Some("[]"));
         assert_eq!(child.shell_policy.as_deref(), Some("[]"));
+        assert!(!child.models.as_ref().unwrap().decision_enabled);
+        assert!(child.models.as_ref().unwrap().decision.is_none());
     }
 
     #[test]

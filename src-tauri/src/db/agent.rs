@@ -252,6 +252,10 @@ pub struct AgentModels {
     pub vision: Option<ModelConfig>,
     pub utility: Option<ModelConfig>,
     pub lite: Option<ModelConfig>,
+    #[serde(default)]
+    pub decision_enabled: bool,
+    #[serde(default)]
+    pub decision: Option<ModelConfig>,
 }
 
 /// Represents an AI agent for ReAct workflows
@@ -1153,9 +1157,14 @@ mod tests {
             .expect("failed to count remaining records");
 
         assert_eq!(remaining_agents, 0, "agent tree should be deleted");
-        assert_eq!(
-            remaining_workflows, 0,
-            "workflows bound to the deleted agents should be removed first"
-        );
+        assert_eq!(remaining_workflows, 0, "workflows bound to the deleted agents should be removed first");
+    }
+
+    #[test]
+    fn decision_models_are_ignored_by_runtime_configuration() {
+        use super::AgentModels;
+        let legacy: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null,"decisionEnabled":true}"#).unwrap();
+        assert!(legacy.decision_enabled);
+        assert!(legacy.decision.is_none());
     }
 }

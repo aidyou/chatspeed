@@ -25,7 +25,7 @@ test('reasoning summary is available for GPT 5.6 and newer model versions', asyn
   for (const id of ['gpt-5.4', 'gpt-5.5-preview', 'gpt-4.1', 'gpt-5.60x', 'gpt-6.1.2', 'my-gpt-6-sol', 'other/gpt-6oops', '']) {
     assert.equal(supportsReasoningSummary(id), false, id)
   }
-  assert.match(source, /v-if="supportsReasoningSummary\(modelConfigForm\.id\)"/)
+  assert.match(source, /v-if="modelForm\.apiProtocol !== 'decision' && supportsReasoningSummary\(modelConfigForm\.id\)"/)
   assert.match(source, /modelConfigForm\.value\.reasoningSummary = supportsReasoningSummary\(model\.id\)/)
   assert.match(source, /if \(supportsReasoningSummary\(trimmedId\)\)/)
 })

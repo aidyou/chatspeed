@@ -141,6 +141,9 @@ const _transformFromBackend = (backendAgent) => {
     visionModel: models.vision,
     utilityModel: models.utility,
     liteModel: models.lite,
+    // Decision model selection is global and stored in the application config.
+    decisionEnabled: false,
+    decisionModel: null,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     sandboxExecutionMode: backendAgent.sandbox_execution_mode || 'host_only',
@@ -188,7 +191,10 @@ const _transformToBackend = (frontendAgent) => {
     act: buildModelConfig(frontendAgent.actModel),
     vision: buildModelConfig(frontendAgent.visionModel),
     utility: buildModelConfig(frontendAgent.utilityModel),
-    lite: buildModelConfig(frontendAgent.liteModel)
+    lite: buildModelConfig(frontendAgent.liteModel),
+    // Legacy per-agent decision fields are intentionally ignored.
+    decisionEnabled: false,
+    decision: null
   };
 
   const mcpTools = frontendAgent.mcpTools || { available: [], autoApprove: [], autoExpand: [] }

@@ -765,6 +765,10 @@ const modelRoles = computed(() => {
   return allModelRoles
 })
 
+const decisionProviders = computed(() => modelStore.providers.filter(provider => !provider.disabled && provider.apiProtocol === 'decision'))
+const decisionModelOptions = computed(() => [])
+const decisionModelValid = computed(() => true)
+
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
 const HIDDEN_AGENT_TOOL_IDS = ['bash']
@@ -844,6 +848,8 @@ const defaultFormData = {
   visionModel: defaultAgentModelConfig(),
   utilityModel: defaultAgentModelConfig(),
   liteModel: defaultAgentModelConfig(),
+  decisionEnabled: false,
+  decisionModel: { id: '', model: '' },
   maxContexts: 128000,
   approvalLevel: 'default'
 }
@@ -1434,6 +1440,8 @@ const normalizeAgentFormForSave = form => {
     normalized.visionModel = defaultAgentModelConfig()
     normalized.utilityModel = defaultAgentModelConfig()
     normalized.liteModel = defaultAgentModelConfig()
+    normalized.decisionEnabled = false
+    normalized.decisionModel = null
     normalized.allowedPaths = []
     normalized.shellPolicy = []
     normalized.sandboxExecutionMode = 'host_only'
@@ -2191,6 +2199,7 @@ watch(
     overflow-y: auto;
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius);
+    box-sizing: border-box;
   }
 
   .personality-option {

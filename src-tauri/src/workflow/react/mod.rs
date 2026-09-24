@@ -5,6 +5,7 @@ pub mod child_tasks_tests;
 pub mod compression;
 pub mod constants;
 pub mod context;
+pub mod decision;
 pub mod dispatcher;
 pub mod engine;
 pub mod error;
