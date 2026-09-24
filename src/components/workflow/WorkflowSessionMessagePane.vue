@@ -23,7 +23,7 @@
       ref="messageListRef"
       :key="`${agentRole}:${sessionId || 'empty'}`"
       :messages="messageProjection.enhancedMessages.value"
-      :is-loading="isLoadingMessages"
+      :is-loading="isLoadingMessages || (agentRole === 'primary' && isInitializing)"
       :hidden-earlier-message-count="messageProjection.hiddenEarlierMessageCount.value"
       :is-running="isRunning"
       :queued-messages="agentRole === 'primary' ? workflowStore.messageQueue : []"
@@ -76,6 +76,7 @@ import WorkflowMessageList from './WorkflowMessageList.vue'
 
 const props = defineProps({
   sessionId: { type: String, default: '' },
+  isInitializing: { type: Boolean, default: false },
   agentRole: {
     type: String,
     default: 'primary',

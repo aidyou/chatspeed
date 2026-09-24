@@ -1,9 +1,5 @@
 <template>
   <div class="workflow-layout">
-    <div v-if="isInitializing" class="workflow-startup-overlay" role="status" aria-live="polite">
-      <cs name="loading" size="32px" class="cs-spin" />
-      <span>{{ $t('common.loading') }}</span>
-    </div>
     <ChatHubSplitter
       v-if="chatHubVisible"
       :right="chatHubReservedWidth"
@@ -274,6 +270,7 @@
               ref="messageListRef"
               :session-id="currentWorkflowId"
               agent-role="primary"
+              :is-initializing="isInitializing"
               :primary-chat-state="chatState"
               :primary-is-chatting="isChatting"
               :primary-is-compressing="isCompressing"
@@ -2811,7 +2808,8 @@ const matchesLocalShortcut = (event, shortcut) => {
   const mainKey = parts.pop()?.toLowerCase()
   if (!mainKey) return false
 
-  const requiresCommandOrControl = parts.includes('CommandOrControl')
+  const requiresCommandOrControl =
+    parts.includes('CommandOrControl') || parts.includes('CommandOrCtrl')
   const commandOrControlPressed = osType.value === 'macos' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
   if (requiresCommandOrControl !== commandOrControlPressed) return false
   if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey) return false
@@ -3019,19 +3017,6 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 @use '@/styles/workflow/index' as *;
-
-.workflow-startup-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--cs-upper-layer-zindex);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--cs-space-md);
-  color: var(--cs-text-color-primary);
-  background: var(--cs-bg-color);
-}
 
 .app-container.macos .titlebar,
 .app-container.windows .titlebar{

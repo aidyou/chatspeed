@@ -922,7 +922,7 @@ test('message history loading renders an Element Plus skeleton from the store lo
 
   assert.match(messageList, /v-if="props\.isLoading" class="message-skeleton"/)
   assert.match(messageList, /<el-skeleton animated>/)
-  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages"/)
+  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
   assert.match(
     workflowStore,
     /const requestRevision = \+\+messageLoadRevision;\s*isLoadingMessages\.value = true;/
@@ -932,6 +932,20 @@ test('message history loading renders an Element Plus skeleton from the store lo
     /messages\.value = appendMissingPendingToolMessages\([\s\S]*?isLoadingMessages\.value = false;/
   )
   assert.match(styles, /\.message-skeleton/)
+})
+
+test('workflow startup uses the primary message skeleton without covering the window', async () => {
+  const [workflowView, workflowSessionPane] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8')
+  ])
+
+  assert.match(workflowView, /const isInitializing = ref\(true\)/)
+  assert.match(workflowView, /agent-role="primary"\s+:is-initializing="isInitializing"/)
+  assert.match(workflowView, /isInitializing\.value = false/)
+  assert.doesNotMatch(workflowView, /workflow-startup-overlay/)
+  assert.match(workflowSessionPane, /isInitializing: \{ type: Boolean, default: false \}/)
+  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
 })
 
 test('tool duration badges use structured backend metadata and preserve the requested exclusions', async () => {
