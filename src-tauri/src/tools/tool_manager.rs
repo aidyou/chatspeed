@@ -1207,7 +1207,7 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<Arc<dyn McpClient>, ToolError>` - The result of the server retrieval.
-    pub async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
+    pub(crate) async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
         let servers_guard: tokio::sync::RwLockReadGuard<
             '_,
             HashMap<String, Arc<dyn McpClient + 'static>>,

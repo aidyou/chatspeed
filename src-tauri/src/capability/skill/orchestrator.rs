@@ -510,19 +510,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unsupported_target_is_reported_per_target_and_never_created() {
+    async fn a_verified_target_is_reported_per_target_and_created_safely() {
         let fixture = fixture();
         let result = fixture
             .service
             .skill_install(
                 &fixture.source_json(),
-                &["cursor".to_string()],
+                &["codex".to_string()],
                 "key-1",
                 "test",
             )
             .await
             .expect("install");
-        assert_eq!(result.result["install"]["outcomes"][0]["status"], "unsupported");
+        assert_eq!(result.result["install"]["outcomes"][0]["status"], "installed");
         assert_eq!(result.result["stage"], "applied");
     }
 

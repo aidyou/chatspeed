@@ -2647,6 +2647,117 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
     }
 
+    /// A local stdio child completes the real handshake and declares tools,
+    /// while install, reads, disable and uninstall never invoke those tools.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn local_stdio_mcp_fixture_completes_lifecycle_without_tool_calls() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/mcp_stdio.py");
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-install"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "fixture-install")
+            .json(&serde_json::json!({
+                "name": "local-stdio-fixture",
+                "type": "stdio",
+                "command": "python3",
+                "args": ["-u", fixture.to_str().expect("fixture path")],
+            }))
+            .send()
+            .await
+            .expect("install fixture");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let installed: serde_json::Value = response.json().await.expect("install json");
+        assert_eq!(installed["result"]["disabled"], true);
+        let id = installed["result"]["id"].as_i64().expect("record id");
+
+        let status: serde_json::Value = http
+            .get(auth_url(&app, &format!("/control/v1/mcp-status?id={id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("disabled status")
+            .json()
+            .await
+            .expect("status json");
+        assert_eq!(status["desired"]["enabled"], false);
+        assert_ne!(status["runtime"]["state"], "running");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-enable"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "fixture-enable")
+            .json(&serde_json::json!({ "id": id }))
+            .send()
+            .await
+            .expect("enable fixture");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let enabled: serde_json::Value = response.json().await.expect("enable json");
+        assert_eq!(enabled["result"]["status"], "enabled");
+
+        let tools: serde_json::Value = http
+            .get(auth_url(&app, &format!("/control/v1/mcp-tools?id={id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("list tools")
+            .json()
+            .await
+            .expect("tools json");
+        assert_eq!(tools["source"], "runtime");
+        assert_eq!(tools["freshness"], "unknown");
+        assert_eq!(tools["tools"].as_array().map(Vec::len), Some(1));
+        assert!(tools.to_string().contains("fixture_echo"));
+
+        let status: serde_json::Value = http
+            .get(auth_url(&app, &format!("/control/v1/mcp-status?id={id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("running status")
+            .json()
+            .await
+            .expect("status json");
+        assert_eq!(status["desired"]["enabled"], true);
+        assert_eq!(status["runtime"]["state"], "running");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-disable"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "fixture-disable")
+            .json(&serde_json::json!({ "id": id }))
+            .send()
+            .await
+            .expect("disable fixture");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let disabled: serde_json::Value = response.json().await.expect("disable json");
+        assert_eq!(disabled["result"]["status"], "disabled");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-uninstall"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "fixture-uninstall")
+            .json(&serde_json::json!({ "id": id }))
+            .send()
+            .await
+            .expect("uninstall fixture");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let servers: serde_json::Value = http
+            .get(auth_url(&app, "/control/v1/mcp-servers"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("list after uninstall")
+            .json()
+            .await
+            .expect("servers json");
+        assert_eq!(servers.as_array().map(Vec::len), Some(0));
+    }
+
     /// A blocked source is refused over HTTP and installs nothing.
     #[tokio::test]
     async fn a_blocked_skill_source_is_refused_over_http() {

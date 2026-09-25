@@ -505,17 +505,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_target_is_never_created() {
+    fn an_verified_target_is_resolved_and_not_created_until_apply() {
         let fixture = fixture();
         let installer = SkillInstaller::new(fixture.environment.clone());
         let out = installer.apply_one(
             &plan(&fixture, &[SkillTargetId::Chatspeed]),
-            "cursor",
+            "codex",
             &fixture.repository,
             "op-1",
         );
-        assert_eq!(out.status, TargetOutcomeStatus::Unsupported);
-        assert!(out.install_path.is_none());
+        assert_eq!(out.status, TargetOutcomeStatus::Installed);
+        assert!(out.install_path.is_some());
     }
 
     #[test]

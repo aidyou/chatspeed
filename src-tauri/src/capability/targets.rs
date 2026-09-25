@@ -35,6 +35,13 @@ const CLAUDE_CODE_HOME_RELATIVE: &[&str] = &[".claude", "skills"];
 /// `.agents/skills` compatibility location used above.
 const OPENCODE_HOME_RELATIVE: &[&str] = &[".config", "opencode", "skills"];
 
+/// Global skill locations documented by the respective tool vendors.
+const CURSOR_HOME_RELATIVE: &[&str] = &[".cursor", "skills"];
+const WINDSURF_HOME_RELATIVE: &[&str] = &[".codeium", "windsurf", "skills"];
+const CLINE_HOME_RELATIVE: &[&str] = &[".cline", "skills"];
+const CODEX_HOME_RELATIVE: &[&str] = &[".codex", "skills"];
+const TRAE_HOME_RELATIVE: &[&str] = &[".agents", "skills"];
+
 /// Why a target cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -167,9 +174,9 @@ const REGISTRY: &[SkillTargetSpec] = &[
     SkillTargetSpec {
         id: SkillTargetId::Codex,
         default_selected: false,
-        home_relative: None,
-        verified_against: None,
-        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+        home_relative: Some(CODEX_HOME_RELATIVE),
+        verified_against: Some("https://github.com/openai/codex/tree/main/.codex/skills"),
+        unsupported_reason: None,
     },
     SkillTargetSpec {
         id: SkillTargetId::Opencode,
@@ -181,30 +188,30 @@ const REGISTRY: &[SkillTargetSpec] = &[
     SkillTargetSpec {
         id: SkillTargetId::Cursor,
         default_selected: false,
-        home_relative: None,
-        verified_against: None,
-        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+        home_relative: Some(CURSOR_HOME_RELATIVE),
+        verified_against: Some("https://cursor.com/docs/context/skills"),
+        unsupported_reason: None,
     },
     SkillTargetSpec {
         id: SkillTargetId::Windsurf,
         default_selected: false,
-        home_relative: None,
-        verified_against: None,
-        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+        home_relative: Some(WINDSURF_HOME_RELATIVE),
+        verified_against: Some("https://docs.windsurf.com/windsurf/cascade/skills"),
+        unsupported_reason: None,
     },
     SkillTargetSpec {
         id: SkillTargetId::Cline,
         default_selected: false,
-        home_relative: None,
-        verified_against: None,
-        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+        home_relative: Some(CLINE_HOME_RELATIVE),
+        verified_against: Some("https://docs.cline.bot/features/skills"),
+        unsupported_reason: None,
     },
     SkillTargetSpec {
         id: SkillTargetId::Trae,
         default_selected: false,
-        home_relative: None,
-        verified_against: None,
-        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+        home_relative: Some(TRAE_HOME_RELATIVE),
+        verified_against: Some("https://docs.trae.ai/ide/skills"),
+        unsupported_reason: None,
     },
 ];
 
@@ -416,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn every_registered_target_is_listed_and_unverified_ones_are_unsupported() {
+    fn every_registered_target_is_listed_and_verified_targets_are_supported() {
         let (_temp, environment) = environment();
         let resolved = resolve_targets(&environment);
         assert_eq!(resolved.len(), SkillTargetId::ALL.len());
@@ -426,19 +433,26 @@ mod tests {
             .filter(|entry| entry.supported)
             .map(|entry| entry.id.as_str())
             .collect();
-        assert!(supported.contains(&"chatspeed"));
-        assert!(supported.contains(&"agents"));
-        assert!(supported.contains(&"claude-code"));
-        assert!(supported.contains(&"opencode"));
+        for id in [
+            "chatspeed",
+            "agents",
+            "claude-code",
+            "opencode",
+            "codex",
+            "cursor",
+            "windsurf",
+            "cline",
+            "trae",
+        ] {
+            assert!(supported.contains(&id), "expected {id} supported");
+        }
 
         let unsupported: Vec<&str> = resolved
             .iter()
             .filter(|entry| !entry.supported)
             .map(|entry| entry.id.as_str())
             .collect();
-        for id in ["codex", "cursor", "windsurf", "cline", "trae"] {
-            assert!(unsupported.contains(&id), "expected {id} unsupported");
-        }
+        assert!(unsupported.is_empty());
 
         // A supported external target resolves under HOME; the ChatSpeed
         // target resolves under CHATSPEED_HOME.
@@ -450,13 +464,43 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_target_selection_is_refused() {
+    fn verified_external_targets_resolve_to_documented_directories() {
         let (_temp, environment) = environment();
-        for id in ["codex", "cursor", "windsurf", "cline", "trae"] {
-            let error = resolve_selection(&[id.to_string()], &environment)
-                .expect_err("unsupported target must be refused");
-            assert_eq!(error.code(), super::super::error::code::UNSUPPORTED_TARGET);
+        let resolved = resolve_targets(&environment);
+        for (id, suffix) in [
+            ("codex", ".codex/skills"),
+            ("cursor", ".cursor/skills"),
+            ("windsurf", ".codeium/windsurf/skills"),
+            ("cline", ".cline/skills"),
+            ("trae", ".agents/skills"),
+        ] {
+            let target = resolved.iter().find(|entry| entry.id == id).expect("target");
+            assert!(target.supported);
+            assert!(target.path.as_deref().unwrap_or_default().ends_with(suffix));
+            assert!(target.verified_against.is_some());
         }
+    }
+
+    #[test]
+    fn explicit_target_selection_is_resolved_for_every_verified_tool() {
+        let (_temp, environment) = environment();
+        let selection = resolve_selection(
+            &[
+                "codex".to_string(),
+                "cursor".to_string(),
+                "windsurf".to_string(),
+                "cline".to_string(),
+                "trae".to_string(),
+            ],
+            &environment,
+        )
+        .expect("verified target selection");
+        assert_eq!(selection.len(), 5);
+    }
+
+    #[test]
+    fn unknown_target_selection_is_refused() {
+        let (_temp, environment) = environment();
         let unknown = resolve_selection(&["not-a-target".to_string()], &environment)
             .expect_err("unknown target must be refused");
         assert_eq!(unknown.code(), super::super::error::code::INVALID_REQUEST);

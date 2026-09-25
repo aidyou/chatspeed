@@ -625,18 +625,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_target_is_refused_without_deleting_anything() {
+    fn a_verified_target_missing_install_is_not_found_without_deletion() {
         let fixture = fixture();
         let uninstaller = SkillUninstaller::new(fixture.environment.clone());
         let outcome = uninstaller
             .uninstall(
                 &fixture.repository,
                 &operation(&fixture, "uninstall-1"),
-                "cursor",
+                "codex",
                 "demo",
             )
             .expect("uninstall");
-        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert_eq!(outcome.status, UninstallOutcomeStatus::NotFound);
     }
 
     #[test]

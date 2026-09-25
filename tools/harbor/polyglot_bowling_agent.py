@@ -262,21 +262,29 @@ class PolyglotBowlingAgent(BaseInstalledAgent):
         command = (
             f"cd {WORKSPACE_ROOT} && "
             # /bin/bash (not dash) because dash's ulimit has no -u option.
+            "runner_output=$(mktemp) && "
+            "trap 'rm -f \"$runner_output\"' EXIT && "
             f"timeout {WALL_TIME_SEC + 10} su -s /bin/bash candidate "
-            f"-c {shlex.quote(inner)}"
+            f"-c {shlex.quote(inner)} >\"$runner_output\" 2>&1; "
+            "runner_exit=$?; cat \"$runner_output\"; "
+            "printf '\\n__BOWLING_RUNNER_EXIT__=%s\\n' \"$runner_exit\"; "
+            "exit 0"
         )
         result = await self.exec_as_root(environment, command=command, timeout_sec=WALL_TIME_SEC + 60)
-        # Harbor merges the exec streams, so the unittest summary may arrive on
-        # either stream; it is diagnostic only. The process exit status comes
-        # from Harbor's command result, not a sentinel that candidate code could
-        # print to stdout.
-        if not isinstance(result.return_code, int) or not 0 <= result.return_code <= 255:
-            raise RuntimeError(
-                f"the fixed runner returned an invalid exit status: {result.return_code!r}"
-            )
-        stdout = _truncate(result.stdout or "")
-        stderr = _truncate(result.stderr or "")
-        exit_status = result.return_code
+        # The wrapper deliberately exits successfully so Harbor does not turn a
+        # candidate test failure into an agent exception. Its final marker is
+        # emitted after the captured child output, making the runner status an
+        # adapter fact even when candidate code writes arbitrary stdout.
+        output = (result.stdout or "") + (result.stderr or "")
+        match = re.search(r"(?m)^__BOWLING_RUNNER_EXIT__=([0-9]+)$", output)
+        if match is None:
+            raise RuntimeError("the fixed runner did not publish an exit status")
+        exit_status = int(match.group(1))
+        if not 0 <= exit_status <= 255:
+            raise RuntimeError(f"the fixed runner returned an invalid exit status: {exit_status!r}")
+        output = output[: match.start()]
+        stdout = _truncate(output)
+        stderr = ""
         timed_out = exit_status == 124
         dependency_error = exit_status == 5
         return {
