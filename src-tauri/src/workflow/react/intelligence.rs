@@ -226,40 +226,48 @@ impl IntelligenceManager {
 
     pub async fn review_completion(
         &self,
-        report: &str,
-        todo_summary: &str,
-        implementation_started: bool,
-        active_sub_agents: bool,
-    ) -> Option<bool> {
-        if let Some(result) = self
-            .try_decision_completion(report, todo_summary, implementation_started, active_sub_agents)
-            .await
-        {
-            return Some(result);
+        candidates: &[String],
+        detailed_report: bool,
+        segment_id: i32,
+    ) -> Option<usize> {
+        if let Some(index) = self.try_decision_completion(candidates, detailed_report).await {
+            return Some(index);
         }
-        self.review_completion_with_lite(report, todo_summary, implementation_started, active_sub_agents)
-            .await
+        self.review_completion_with_lite(candidates, detailed_report, segment_id).await
+    }
+
+    fn parse_completion_choice(response: &str, count: usize) -> Option<usize> {
+        let value: serde_json::Value = serde_json::from_str(response).ok()?;
+        let content = value.get("content").and_then(|value| value.as_str()).unwrap_or(response);
+        let result: serde_json::Value = serde_json::from_str(content).ok()?;
+        let choice = result.get("selected_candidate")?.as_str()?;
+        let index = choice.strip_prefix("report_")?.parse::<usize>().ok()?;
+        (index < count && result.get("report_meets_requirement")?.as_bool() == Some(true))
+            .then_some(index)
     }
 
     async fn review_completion_with_lite(
         &self,
-        report: &str,
-        todo_summary: &str,
-        implementation_started: bool,
-        active_sub_agents: bool,
-    ) -> Option<bool> {
-        if self.lite_model_name.trim().is_empty() {
+        candidates: &[String],
+        detailed_report: bool,
+        segment_id: i32,
+    ) -> Option<usize> {
+        if self.lite_provider_id <= 0 || self.lite_model_name.trim().is_empty() {
             return None;
         }
-        let (provider_id, model_name) = (self.lite_provider_id, self.lite_model_name.clone());
         let messages = vec![
             serde_json::json!({
                 "role": "system",
-                "content": "Judge whether a workflow completion report is sufficiently specific and coherent. Return exactly COMPLETE or CONTINUE. This is advisory only; runtime hard gates are authoritative.",
+                "content": "Choose the one accurate completion report satisfying the required detail. Return only JSON: {\"selected_candidate\":\"report_0\",\"report_meets_requirement\":true}. Use selected_candidate null when uncertain. Do not generate or merge a report.",
             }),
             serde_json::json!({
                 "role": "user",
-                "content": format!("Report:\n{report}\nTodo state:\n{todo_summary}\nImplementation started: {implementation_started}\nActive sub-agents: {active_sub_agents}"),
+                "content": serde_json::json!({
+                    "required_detail": if detailed_report { "detailed" } else { "brief" },
+                    "candidates": candidates.iter().enumerate().map(|(index, content)| {
+                        serde_json::json!({"id": format!("report_{index}"), "content": content})
+                    }).collect::<Vec<_>>(),
+                }).to_string(),
             }),
         ];
         let chat_interface = {
@@ -273,8 +281,8 @@ impl IntelligenceManager {
         };
         match chat_interface
             .chat(
-                provider_id,
-                &model_name,
+                self.lite_provider_id,
+                &self.lite_model_name,
                 self.session_id.clone() + "_completion_reviewer",
                 messages,
                 None,
@@ -283,7 +291,7 @@ impl IntelligenceManager {
                     workflow_usage_attribution: Some(WorkflowUsageAttribution {
                         workflow_session_id: self.session_id.clone(),
                         workflow_task_run_id: self.workflow_task_run_id.clone(),
-                        workflow_segment_id: 0,
+                        workflow_segment_id: segment_id,
                         root_session_id: self.root_session_id.clone(),
                         root_task_run_id: self.root_task_run_id.clone(),
                         request_kind: "completion_review_lite".to_string(),
@@ -294,14 +302,7 @@ impl IntelligenceManager {
             )
             .await
         {
-            Ok(response) => {
-                let normalized = response.trim().to_ascii_uppercase();
-                match normalized.as_str() {
-                    "COMPLETE" => Some(true),
-                    "CONTINUE" => Some(false),
-                    _ => None,
-                }
-            }
+            Ok(response) => Self::parse_completion_choice(&response, candidates.len()),
             Err(error) => {
                 log::warn!(
                     "[Workflow][session={}][completion] Lite review unavailable; using existing completion path: {error}",
@@ -844,5 +845,24 @@ mod tests {
             ),
             "English"
         );
+    }
+
+    #[test]
+    fn completion_choice_requires_valid_structured_selection() {
+        assert_eq!(
+            IntelligenceManager::parse_completion_choice(
+                r#"{"content":"{\"selected_candidate\":\"report_1\",\"report_meets_requirement\":true}"}"#,
+                2,
+            ),
+            Some(1)
+        );
+        for invalid in [
+            r#"{"selected_candidate":"report_2","report_meets_requirement":true}"#,
+            r#"{"selected_candidate":"report_0","report_meets_requirement":false}"#,
+            r#"{"selected_candidate":null,"report_meets_requirement":true}"#,
+            "COMPLETE",
+        ] {
+            assert_eq!(IntelligenceManager::parse_completion_choice(invalid, 2), None);
+        }
     }
 }

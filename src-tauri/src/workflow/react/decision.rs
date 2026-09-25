@@ -255,44 +255,48 @@ impl IntelligenceManager {
 
     pub(crate) async fn try_decision_completion(
         &self,
-        report: &str,
-        todo_summary: &str,
-        implementation_started: bool,
-        active_sub_agents: bool,
-    ) -> Option<bool> {
+        candidates: &[String],
+        detailed_report: bool,
+    ) -> Option<usize> {
         let Some((provider_id, model)) = self.decision_model() else {
             return None;
         };
+        if candidates.is_empty() || candidates.len() > 16 {
+            return None;
+        }
+        let criteria = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, _)| (format!("report_{index}"), format!("Select report {index} if it accurately represents the final work and satisfies the required report detail")))
+            .chain(std::iter::once(("ambiguous".into(), "No candidate can be reliably selected or the reports materially contradict each other".into())))
+            .collect();
         let request = DecisionRequest {
             state: serde_json::json!({
-                "completion_report": Self::truncate_text(report, 6000),
-                "todo_summary": Self::truncate_text(todo_summary, 3000),
-                "implementation_started": implementation_started,
-                "active_sub_agents": active_sub_agents,
-            })
-            .to_string(),
+                "required_detail": if detailed_report { "detailed" } else { "brief" },
+                "candidates": candidates.iter().enumerate().map(|(index, content)| {
+                    serde_json::json!({"id": format!("report_{index}"), "content": Self::truncate_text(content, 6000)})
+                }).collect::<Vec<_>>(),
+            }).to_string(),
             model,
             questions: BTreeMap::from([(
-                "completion".into(),
+                "report_selection".into(),
                 Question::Choice {
-                    instructions: "Judge only whether the supplied completion report is sufficiently consistent and credible to submit after the runtime has already verified all hard completion gates. Do not re-evaluate or override runtime gates. Choose complete only when the report clearly describes completed work and verification; otherwise choose continue.".into(),
-                    criteria: BTreeMap::from([
-                        ("complete".into(), "The report is coherent, specific, and states completed work and verification without a material contradiction".into()),
-                        ("continue".into(), "The report is vague, contradictory, or does not provide credible completion and verification details".into()),
-                    ]),
+                    instructions: "Select the single report that best reflects the final work and meets the required level of detail. Brief reports are acceptable when required_detail is brief. Choose ambiguous if no candidate is reliable or they materially contradict each other. Return a typed choice, not generated text.".into(),
+                    criteria,
                 },
             )]),
         };
         match decision::evaluate(self.chat_state.main_store.clone(), provider_id, request).await {
-            Ok(response) => response.answers.get("completion").and_then(|answer| {
-                confident_choice(answer, &["complete", "continue"], 0.80, 0.80)
-                    .map(|choice| choice == "complete")
-            }),
+            Ok(response) => {
+                let allowed = (0..candidates.len()).map(|index| format!("report_{index}")).collect::<Vec<_>>();
+                let allowed_refs = allowed.iter().map(String::as_str).collect::<Vec<_>>();
+                response.answers.get("report_selection")
+                    .and_then(|answer| confident_choice(answer, &allowed_refs, 0.80, 0.80))
+                    .and_then(|choice| choice.strip_prefix("report_")?.parse::<usize>().ok())
+                    .filter(|index| *index < candidates.len())
+            }
             Err(error) => {
-                log::warn!(
-                    "[Workflow][session={}][completion] Decision model unavailable or response invalid; falling back to lite: {error}",
-                    self.session_id
-                );
+                log::warn!("[Workflow][session={}][completion] Decision response invalid; falling back to lite: {error}", self.session_id);
                 None
             }
         }

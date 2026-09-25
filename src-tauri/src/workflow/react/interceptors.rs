@@ -1671,13 +1671,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         !Self::completion_reports_have_material_conflict(left, right)
     }
 
-    fn resolve_completion_report_at_step(
-        args: &serde_json::Value,
+    fn completion_report_candidates(
+        args: &Value,
         text_part: &str,
         pending_reports: &[PendingCompletionReport],
         current_segment_id: i32,
-        current_step: usize,
-    ) -> Result<ResolvedCompletionReport, &'static str> {
+    ) -> Result<Vec<ResolvedCompletionReport>, &'static str> {
         let object = args
             .as_object()
             .ok_or("complete_workflow arguments must be an object")?;
@@ -1685,7 +1684,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         if object.contains_key("summary") && summary.is_none() {
             return Err("complete_workflow summary must be a string");
         }
-
         let mut candidates = Vec::<ResolvedCompletionReport>::new();
 
         if Self::is_valid_finish_task_summary(text_part) {
@@ -1753,6 +1751,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
 
+        Ok(unique)
+    }
+
+    fn resolve_completion_report_at_step(
+        args: &Value,
+        text_part: &str,
+        pending_reports: &[PendingCompletionReport],
+        current_segment_id: i32,
+        current_step: usize,
+    ) -> Result<ResolvedCompletionReport, &'static str> {
+        let mut unique = Self::completion_report_candidates(
+            args,
+            text_part,
+            pending_reports,
+            current_segment_id,
+        )?;
         match unique.len() {
             0 => Err("no valid completion report is available"),
             1 => Ok(unique.remove(0)),
@@ -2398,14 +2412,24 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        let mut completion_report = match Self::resolve_completion_report_at_step(
-            args,
-            text_part,
-            &self.pending_completion_reports,
-            self.context.current_segment_id,
-            self.current_step,
-        ) {
+        let candidate_reports = Self::completion_report_candidates(
+            args, text_part, &self.pending_completion_reports, self.context.current_segment_id,
+        ).unwrap_or_default();
+        let report_result = Self::resolve_completion_report_at_step(
+            args, text_part, &self.pending_completion_reports,
+            self.context.current_segment_id, self.current_step,
+        );
+        let mut completion_report = match report_result {
             Ok(report) => report,
+            Err("multiple different completion reports are available") => {
+                // Defer semantic ambiguity until the deterministic completion gates have passed.
+                ResolvedCompletionReport {
+                    content: String::new(),
+                    source_message_id: None,
+                    persist_as_message: false,
+                    recency: (0, 0, 0),
+                }
+            }
             Err(reason) => {
                 let has_current_segment_pending_report = self
                     .pending_completion_reports
@@ -2510,33 +2534,29 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        let completion_review_todo_summary = self
-            .context
-            .main_store
-            .get_todo_list_for_workflow(&self.session_id)
-            .ok()
-            .map(|todos| {
-                serde_json::to_string(&todos).unwrap_or_else(|_| "[]".to_string())
-            })
-            .unwrap_or_else(|| "[]".to_string());
-        if self
-            .intelligence_manager
-            .review_completion(
-                &completion_report.content,
-                &completion_review_todo_summary,
-                !self.implementation_completion_is_blocked(),
-                !active_sub_agents.is_empty(),
-            )
-            .await
-            == Some(false)
-        {
+        if candidate_reports.len() > 1 || completion_report.content.is_empty() {
+            let reports = candidate_reports.iter().map(|candidate| candidate.content.clone()).collect::<Vec<_>>();
+            if let Some(index) = self.intelligence_manager.review_completion(
+                &reports, self.final_review_mode_enabled(), self.context.current_segment_id,
+            ).await {
+                if let Some(selected) = candidate_reports.get(index) {
+                    completion_report = ResolvedCompletionReport {
+                        content: selected.content.clone(),
+                        source_message_id: selected.source_message_id,
+                        persist_as_message: selected.persist_as_message,
+                        recency: selected.recency,
+                    };
+                }
+            }
+        }
+        if completion_report.content.is_empty() {
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Completion review did not confirm that the report is sufficiently specific and consistent. Continue with the requested work or verification, then submit a fresh completion report. Runtime hard gates remain authoritative.</SYSTEM_REMINDER>".to_string(),
+                content: Self::completion_report_rejection_reminder("multiple different completion reports are available", true),
                 llm_content: None,
-                title: "Completion Review Required".to_string(),
-                summary: "Completion report requires further work or verification".to_string(),
+                title: "FinishTask Error".to_string(),
+                summary: "Invalid completion report source".to_string(),
                 is_error: true,
-                error_type: Some("CompletionReviewRejected".into()),
+                error_type: Some("InvalidFinishSummary".into()),
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
