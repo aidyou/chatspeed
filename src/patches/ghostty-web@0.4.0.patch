@@ -2,14 +2,15 @@ diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
 index a4ca427b95288e70c782ce303013cd644893dcec..e324825a81d3c43691c3e89b2c8d5dd96d35a8ff 100644
 --- a/dist/ghostty-web.js
 +++ b/dist/ghostty-web.js
-@@ -848,7 +848,8 @@ class P {
+@@ -848,7 +848,9 @@ class P {
     * @param event - KeyboardEvent
     */
    handleKeyDown(A) {
 -    if (this.isDisposed || this.isComposing || A.isComposing || A.keyCode === 229)
-+    this.imeSkippedKeydown = !this.isDisposed && (this.isComposing || A.isComposing || A.keyCode === 229);
++    this.imeSkippedKeydown = !this.isDisposed && (this.isComposing || A.isComposing || A.keyCode === 229 || A.key === "Process" || A.key === "Unidentified");
 +    if (this.isDisposed || this.imeSkippedKeydown)
        return;
++    this.lastKeyDownData = A.key.length === 1 && !A.ctrlKey && !A.altKey && !A.metaKey ? A.key : "", this.lastKeyDownTime = Date.now();
      if (this.onKeyCallback && this.onKeyCallback({ key: A.key, domEvent: A }), this.customKeyEventHandler && this.customKeyEventHandler(A)) {
        A.preventDefault();
 @@ -1363,7 +1364,7 @@ class $ {
@@ -21,16 +22,20 @@ index a4ca427b95288e70c782ce303013cd644893dcec..e324825a81d3c43691c3e89b2c8d5dd9
      return { width: E, height: D, baseline: i };
    }
    /**
-@@ -2327,7 +2328,13 @@ class IA {
+@@ -2327,7 +2328,17 @@ class IA {
        throw new Error("Terminal has been disposed");
      this.element = A, this.isOpen = !0;
      try {
 -      A.hasAttribute("tabindex") || A.setAttribute("tabindex", "0"), A.setAttribute("contenteditable", "true"), A.addEventListener("beforeinput", (E) => E.preventDefault()), A.setAttribute("role", "textbox"), A.setAttribute("aria-label", "Terminal input"), A.setAttribute("aria-multiline", "true");
 +      A.hasAttribute("tabindex") || A.setAttribute("tabindex", "0"), A.setAttribute("contenteditable", "true"), A.addEventListener("beforeinput", (E) => {
 +        E.preventDefault();
-+        if (this.inputHandler?.imeSkippedKeydown && E.inputType === "insertText" && E.data && !E.isComposing && /^[\x20-\x7e]+$/.test(E.data) && !this.options.disableStdin) {
-+          this.dataEmitter.fire(E.data);
-+          this.inputHandler.imeSkippedKeydown = !1;
++        const C = this.inputHandler;
++        if (E.data && !E.isComposing && !this.options.disableStdin && (E.inputType === "insertText" || E.inputType === "insertReplacementText") && /^[\x20-\x7e]+$/.test(E.data)) {
++          const I = C && C.lastKeyDownData === E.data && Date.now() - (C.lastKeyDownTime || 0) < 100;
++          if (C && (C.imeSkippedKeydown || E.inputType === "insertReplacementText" || !I)) {
++            C.imeSkippedKeydown = !1, C.lastKeyDownData = "";
++            this.dataEmitter.fire(E.data);
++          }
 +        }
 +      }), A.setAttribute("role", "textbox"), A.setAttribute("aria-label", "Terminal input"), A.setAttribute("aria-multiline", "true");
        const B = this.buildWasmConfig();

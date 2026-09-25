@@ -296,7 +296,10 @@ export function useTerminal(
     writer: { write: (data: Uint8Array) => void; clear: () => Uint8Array }
   ) => {
     writers.set(sessionId, writer)
-    for (const chunk of outputBuffers.get(sessionId)?.chunks || []) writer.write(chunk)
+    // A rebuilt instance has no pending buffer, so the retained history stands in and restores the
+    // session screen instead of leaving it blank.
+    const replay = outputBuffers.get(sessionId) ?? outputHistory.get(sessionId)
+    for (const chunk of replay?.chunks || []) writer.write(chunk)
     outputBuffers.delete(sessionId)
   }
   const unregisterWriter = (sessionId: string) => writers.delete(sessionId)

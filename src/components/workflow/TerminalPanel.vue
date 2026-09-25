@@ -82,7 +82,6 @@ import type { TerminalTab } from '@/composables/workflow/useTerminal'
 const props = defineProps<{ terminal: any; preferences: any }>()
 const { t } = useI18n()
 const terminal = props.terminal
-const preferences = props.preferences
 const ghosttyReady = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const panelHeight = computed(() =>
@@ -97,7 +96,7 @@ const pageDark = ref(document.documentElement.classList.contains('dark'))
 const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
 const terminalTheme = computed(() => {
-  const scheme = preferences.colorScheme || 'auto'
+  const scheme = props.preferences.colorScheme || 'auto'
   const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
   return dark
     ? {
@@ -114,6 +113,15 @@ const terminalTheme = computed(() => {
       }
 })
 
+// ghostty-web bakes the output limit and the colour scheme into a terminal when it is created, so a
+// mounted instance keeps the old values until it is rebuilt.
+const configuredScrollback = () =>
+  Math.min(Math.max(100, Number(props.preferences.outputLineLimit || 2000)), 20000)
+let mountedScrollback = configuredScrollback()
+let mountedTheme = terminalTheme.value
+const mountedInstancesAreStale = () =>
+  mountedScrollback !== configuredScrollback() || mountedTheme !== terminalTheme.value
+
 const tabTitle = (tab: TerminalTab) =>
   `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} - ${tab.shellName}`
 const selectTab = (sessionId: string) => {
@@ -121,6 +129,12 @@ const selectTab = (sessionId: string) => {
 }
 const focus = (sessionId: string) => instances.get(sessionId)?.terminal.focus()
 const shortcutMainKey = (shortcut: string | undefined) => shortcut?.split('+').pop()?.toLowerCase()
+// The workflow window already resolves the platform, so prefer that over sniffing the user agent.
+const isCommandKeyPlatform = () => {
+  const detected = props.preferences.usesCommandKey
+  if (typeof detected === 'boolean') return detected
+  return /Macintosh|Mac OS/.test(`${navigator.platform} ${navigator.userAgent}`)
+}
 const matchesTerminalShortcut = (
   event: KeyboardEvent,
   shortcut: string | undefined,
@@ -130,7 +144,7 @@ const matchesTerminalShortcut = (
   const parts = shortcut.split('+')
   const requiresCommandOrControl =
     parts.includes('CommandOrControl') || parts.includes('CommandOrCtrl')
-  const isMacPlatform = /Macintosh|Mac OS/.test(`${navigator.platform} ${navigator.userAgent}`)
+  const isMacPlatform = isCommandKeyPlatform()
   const commandOrControlPressed = isMacPlatform
     ? (event.metaKey || commandModifierDown) && !event.ctrlKey
     : (event.ctrlKey || commandModifierDown) && !event.metaKey
@@ -188,8 +202,8 @@ const mountTab = (tab: TerminalTab) => {
     }
     // Both terminal shortcuts are consumed on the way down: the workflow window listener runs after
     // this capture phase and would otherwise repeat the same toggle, leaving the panel unchanged.
-    const clears = matchesTerminalShortcut(event, preferences.clearShortcut, commandModifierDown)
-    const toggles = matchesTerminalShortcut(event, preferences.toggleShortcut, commandModifierDown)
+    const clears = matchesTerminalShortcut(event, props.preferences.clearShortcut, commandModifierDown)
+    const toggles = matchesTerminalShortcut(event, props.preferences.toggleShortcut, commandModifierDown)
     if (!clears && !toggles) return
     event.preventDefault()
     event.stopImmediatePropagation()
@@ -201,11 +215,13 @@ const mountTab = (tab: TerminalTab) => {
   }
   host.addEventListener('keydown', onKeyDown, true)
   host.addEventListener('keyup', onKeyUp, true)
+  mountedScrollback = configuredScrollback()
+  mountedTheme = terminalTheme.value
   const instance = new Terminal({
     cursorBlink: true,
     convertEol: false,
     fontSize: 13,
-    scrollback: Math.min(Math.max(100, Number(preferences.outputLineLimit || 2000)), 20000),
+    scrollback: mountedScrollback,
     overviewRuler: { width: 10 },
     theme: terminalTheme.value
   })
@@ -363,6 +379,9 @@ const reconcile = async () => {
   }
   if (!terminal.visible || !terminal.activeTab) return
   await nextTick()
+  // A preference changed while the panel was hidden has no live instance rebuilt yet, so apply it
+  // here before the tab is mounted.
+  if (mountedInstancesAreStale()) rebuildMountedInstances()
   mountTab(terminal.activeTab)
   syncSize(terminal.activeTab.sessionId)
   focus(terminal.activeTab.sessionId)
@@ -416,24 +435,29 @@ const startResize = (event: MouseEvent) => {
   window.addEventListener('mouseup', stopResize)
 }
 
+// The output limit and the colour scheme cannot be changed on a live ghostty terminal, so a mounted
+// tab is rebuilt in place; remounting replays the retained history to restore its screen.
+const rebuildMountedInstances = () => {
+  const focusedSessionId = [...instances.keys()].find(sessionId =>
+    hosts.get(sessionId)?.contains(document.activeElement)
+  )
+  mountedScrollback = configuredScrollback()
+  mountedTheme = terminalTheme.value
+  for (const sessionId of [...instances.keys()]) {
+    const tab = terminal.tabs.find((item: TerminalTab) => item.sessionId === sessionId)
+    disposeTab(sessionId)
+    if (tab) mountTab(tab)
+  }
+  if (focusedSessionId) focus(focusedSessionId)
+}
+
 let themeObserver: MutationObserver | null = null
 
-watch(terminalTheme, theme => {
-  for (const instance of instances.values()) {
-    instance.terminal.options.theme = theme
-    const renderer = (instance.terminal as unknown as {
-      renderer?: { setTheme: (nextTheme: typeof theme) => void }
-    }).renderer
-    renderer?.setTheme(theme)
-  }
+// A live ghostty terminal keeps the output limit and the colour palette it was created with, so a
+// changed preference rebuilds the mounted instances; a hidden panel does it on the next reconcile.
+watch([terminalTheme, () => props.preferences.outputLineLimit], () => {
+  if (terminal.visible) rebuildMountedInstances()
 })
-watch(
-  () => preferences.outputLineLimit,
-  limit => {
-    const scrollback = Math.min(Math.max(100, Number(limit || 2000)), 20000)
-    for (const instance of instances.values()) instance.terminal.options.scrollback = scrollback
-  }
-)
 watch(
   () => [
     terminal.visible,

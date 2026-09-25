@@ -1394,7 +1394,7 @@ const clearShortcut = shortcutKey => {
 }
 
 const restoreDefaultShortcut = shortcutKey => {
-  setSetting(shortcutKey, null)
+  setSetting(shortcutKey, defaultShortcutMap[shortcutKey] || null)
 }
 
 // =================================================

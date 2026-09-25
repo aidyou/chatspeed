@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
 
@@ -78,11 +79,12 @@ test('shell switching is transactional and OSC 7 preserves Windows drive paths',
 })
 
 test('terminal preferences bound output, preserve terminal input, and use detected shell choices', async () => {
-  const [panel, composable, general, env, workflow] = await Promise.all([
+  const [panel, composable, general, env, environment, workflow] = await Promise.all([
     read('src/components/workflow/TerminalPanel.vue'),
     read('src/composables/workflow/useTerminal.ts'),
     read('src/components/setting/General.vue'),
     read('src-tauri/src/commands/env.rs'),
+    read('src-tauri/src/environment.rs'),
     read('src/views/Workflow.vue')
   ])
 
@@ -90,6 +92,10 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.match(general, /v-for="shell in terminalShells"/)
   assert.doesNotMatch(general, /<el-option label="PowerShell"/)
   assert.match(env, /get_available_shells/)
+  // `/bin/bash` and `/usr/bin/bash` are one shell on merged-usr systems, so candidates are deduped
+  // on the resolved executable instead of the spelling of the path.
+  assert.match(environment, /fn dedupe_shells/)
+  assert.match(environment, /std::fs::canonicalize\(&self\.path\)/)
   assert.match(composable, /keepTrailingLines/)
   assert.match(composable, /TERMINAL_OUTPUT_STORAGE_KEY/)
   assert.match(composable, /TERMINAL_PANEL_STORAGE_KEY/)
@@ -130,7 +136,26 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.match(panel, /host\.addEventListener\('keyup', onKeyUp, true\)/)
   assert.match(panel, /host\.removeEventListener\('keyup', onKeyUp, true\)/)
   assert.match(panel, /commandModifierDown/)
-  assert.match(panel, /matchesTerminalShortcut\(event, preferences\.toggleShortcut, commandModifierDown\)/)
+  assert.match(panel, /matchesTerminalShortcut\(event, props\.preferences\.toggleShortcut, commandModifierDown\)/)
+  assert.match(panel, /matchesTerminalShortcut\(event, props\.preferences\.clearShortcut, commandModifierDown\)/)
+  // Preferences must be read through the props: destructuring them into a plain const froze the
+  // values captured at mount, so later setting changes never reached the mounted terminal.
+  assert.doesNotMatch(panel, /const preferences = props\.preferences/)
+  assert.match(panel, /props\.preferences\.colorScheme/)
+  assert.match(panel, /props\.preferences\.usesCommandKey/)
+  assert.match(panel, /props\.preferences\.outputLineLimit/)
+  // ghostty-web bakes the output limit and the colour palette into a terminal when it is created, so
+  // both preferences rebuild the mounted instances instead of patching a live canvas.
+  assert.match(panel, /watch\(\[terminalTheme, \(\) => props\.preferences\.outputLineLimit\]/)
+  assert.match(
+    panel,
+    /mountedScrollback !== configuredScrollback\(\) \|\| mountedTheme !== terminalTheme\.value/
+  )
+  assert.match(panel, /mountedInstancesAreStale\(\)/)
+  assert.match(panel, /rebuildMountedInstances\(\)/)
+  assert.doesNotMatch(panel, /options\.theme = /)
+  assert.match(composable, /outputBuffers\.get\(sessionId\) \?\? outputHistory\.get\(sessionId\)/)
+  assert.match(general, /setSetting\(shortcutKey, defaultShortcutMap\[shortcutKey\] \|\| null\)/)
   assert.match(panel, /terminalBlockTopRow/)
   assert.match(panel, /terminalClearSequence/)
   assert.match(composable, /const retained = writers\.get\(sessionId\)\?\.clear\(\)/)
@@ -173,6 +198,56 @@ test('ghostty fit uses all available width because its scrollbar is drawn inside
   const patch = await read('src/patches/ghostty-web@0.4.0.patch')
   assert.match(patch, /\+    const k = s - i - w, M = N - I - D/)
   assert.match(patch, /-    const k = s - i - w - gA, M = N - I - D/)
+})
+
+test('ghostty keeps input-method keys out of its own key encoder', async () => {
+  const patch = await read('src/patches/ghostty-web@0.4.0.patch')
+  // WebKitGTK reports the first key of an input-method session as Process/Unidentified without
+  // keyCode 229. Encoding that key swallowed the letter and cancelled the browser insertion, so the
+  // character never reached the PTY.
+  assert.match(patch, /A\.keyCode === 229/)
+  assert.match(patch, /A\.key === "Process"/)
+  assert.match(patch, /A\.key === "Unidentified"/)
+  // Text insertions are forwarded when the encoder did not already deliver them: some input methods
+  // report the insertion without any keydown at all, which must still reach the PTY exactly once.
+  assert.match(patch, /this\.lastKeyDownData = A\.key\.length === 1/)
+  assert.match(patch, /C\.lastKeyDownData === E\.data && Date\.now\(\)/)
+  assert.match(patch, /C\.imeSkippedKeydown \|\| E\.inputType === "insertReplacementText" \|\| !I/)
+})
+
+test('the ghostty patch stays in sync with the lockfile and its own hunk counters', async () => {
+  const [patch, lockfile] = await Promise.all([
+    read('src/patches/ghostty-web@0.4.0.patch'),
+    read('pnpm-lock.yaml')
+  ])
+
+  // pnpm refuses to install when the recorded hash no longer matches the patch file.
+  const hash = createHash('sha256').update(patch).digest('hex')
+  assert.match(lockfile, new RegExp(`ghostty-web@0\\.4\\.0:\\n\\s+hash: ${hash}`))
+
+  // A wrong counter makes the patch unapplicable, and the built file is not readable from here.
+  let hunk = null
+  const counters = []
+  for (const line of patch.split('\n')) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
+    if (header) {
+      hunk = { old: Number(header[2] ?? 1), next: Number(header[4] ?? 1), oldSeen: 0, nextSeen: 0 }
+      counters.push(hunk)
+      continue
+    }
+    if (!hunk) continue
+    if (line.startsWith('+')) hunk.nextSeen += 1
+    else if (line.startsWith('-')) hunk.oldSeen += 1
+    else if (line.startsWith(' ')) {
+      hunk.oldSeen += 1
+      hunk.nextSeen += 1
+    }
+  }
+  assert.equal(counters.length, 5)
+  for (const hunk of counters) {
+    assert.equal(hunk.oldSeen, hunk.old)
+    assert.equal(hunk.nextSeen, hunk.next)
+  }
 })
 
 test('every shipped locale contains the terminal label and toolbar strings', async () => {

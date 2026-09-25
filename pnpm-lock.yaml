@@ -29,7 +29,7 @@ overrides:
 
 patchedDependencies:
   ghostty-web@0.4.0:
-    hash: 3f797a1291be804a626a9bae8c1e388c7286eaaefc32f34b82a02ae2ed649f87
+    hash: c840774e6c3308900e55d4e301ab89ab5756e79756e7be4d7bf17a6cf67f8e87
     path: src/patches/ghostty-web@0.4.0.patch
 
 importers:
