@@ -23,6 +23,8 @@ pub struct IntelligenceManager {
     pub utility_model_name: String,
     pub lite_provider_id: i64,
     pub lite_model_name: String,
+    pub decision_provider_id: i64,
+    pub decision_model_name: String,
     pub approval_provider_id: i64,
     pub approval_model_name: String,
     pub workflow_task_run_id: String,
@@ -184,6 +186,8 @@ impl IntelligenceManager {
         active_model_name: String,
         lite_provider_id: i64,
         lite_model_name: String,
+        decision_provider_id: i64,
+        decision_model_name: String,
         workflow_task_run_id: String,
         root_session_id: String,
         root_task_run_id: String,
@@ -197,6 +201,8 @@ impl IntelligenceManager {
             utility_model_name: active_model_name.clone(),
             lite_provider_id,
             lite_model_name,
+            decision_provider_id,
+            decision_model_name,
             approval_provider_id: active_provider_id,
             approval_model_name: active_model_name,
             workflow_task_run_id,
@@ -218,7 +224,94 @@ impl IntelligenceManager {
         }
     }
 
-    /// Reviews a proposed tool call in smart approval mode.
+    pub async fn review_completion(
+        &self,
+        report: &str,
+        todo_summary: &str,
+        implementation_started: bool,
+        active_sub_agents: bool,
+    ) -> Option<bool> {
+        if let Some(result) = self
+            .try_decision_completion(report, todo_summary, implementation_started, active_sub_agents)
+            .await
+        {
+            return Some(result);
+        }
+        self.review_completion_with_lite(report, todo_summary, implementation_started, active_sub_agents)
+            .await
+    }
+
+    async fn review_completion_with_lite(
+        &self,
+        report: &str,
+        todo_summary: &str,
+        implementation_started: bool,
+        active_sub_agents: bool,
+    ) -> Option<bool> {
+        if self.lite_model_name.trim().is_empty() {
+            return None;
+        }
+        let (provider_id, model_name) = (self.lite_provider_id, self.lite_model_name.clone());
+        let messages = vec![
+            serde_json::json!({
+                "role": "system",
+                "content": "Judge whether a workflow completion report is sufficiently specific and coherent. Return exactly COMPLETE or CONTINUE. This is advisory only; runtime hard gates are authoritative.",
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": format!("Report:\n{report}\nTodo state:\n{todo_summary}\nImplementation started: {implementation_started}\nActive sub-agents: {active_sub_agents}"),
+            }),
+        ];
+        let chat_interface = {
+            let mut chats_guard = self.chat_state.chats.lock().await;
+            chats_guard
+                .entry(crate::ccproxy::ChatProtocol::OpenAI)
+                .or_default()
+                .entry(self.session_id.clone() + "_completion_reviewer")
+                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
+                .clone()
+        };
+        match chat_interface
+            .chat(
+                provider_id,
+                &model_name,
+                self.session_id.clone() + "_completion_reviewer",
+                messages,
+                None,
+                Some(ChatMetadata {
+                    stream: Some(false),
+                    workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                        workflow_session_id: self.session_id.clone(),
+                        workflow_task_run_id: self.workflow_task_run_id.clone(),
+                        workflow_segment_id: 0,
+                        root_session_id: self.root_session_id.clone(),
+                        root_task_run_id: self.root_task_run_id.clone(),
+                        request_kind: "completion_review_lite".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                |_| {},
+            )
+            .await
+        {
+            Ok(response) => {
+                let normalized = response.trim().to_ascii_uppercase();
+                match normalized.as_str() {
+                    "COMPLETE" => Some(true),
+                    "CONTINUE" => Some(false),
+                    _ => None,
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "[Workflow][session={}][completion] Lite review unavailable; using existing completion path: {error}",
+                    self.session_id
+                );
+                None
+            }
+        }
+    }
+
     pub async fn review_tool_approval(
         &self,
         context: &ContextManager,

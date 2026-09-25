@@ -125,6 +125,26 @@ pub(crate) fn parse_tool_approval_review(result: &str) -> ToolApprovalReview {
 }
 
 impl IntelligenceManager {
+    fn configured_decision_model(&self) -> Option<(i64, String)> {
+        if self.decision_provider_id <= 0 || self.decision_model_name.trim().is_empty() {
+            return None;
+        }
+        let provider = self
+            .chat_state
+            .main_store
+            .config
+            .get_ai_model_by_id(self.decision_provider_id)
+            .ok()?;
+        if provider.disabled || provider.api_protocol != "decision" {
+            return None;
+        }
+        provider
+            .models
+            .iter()
+            .any(|entry| entry.id == self.decision_model_name)
+            .then(|| (self.decision_provider_id, self.decision_model_name.clone()))
+    }
+
     fn global_decision_model(&self) -> Option<(i64, String)> {
         let config: serde_json::Value = self
             .chat_state
@@ -151,6 +171,10 @@ impl IntelligenceManager {
             .then(|| (provider_id, model.to_string()))
     }
 
+    fn decision_model(&self) -> Option<(i64, String)> {
+        self.configured_decision_model().or_else(|| self.global_decision_model())
+    }
+
     pub(crate) async fn try_decision_approval(
         &self,
         context: &ContextManager,
@@ -162,7 +186,7 @@ impl IntelligenceManager {
         tool_args: &serde_json::Value,
         assistant_text: &str,
     ) -> Option<ToolApprovalReview> {
-        let Some((provider_id, model)) = self.global_decision_model() else {
+        let Some((provider_id, model)) = self.decision_model() else {
             return None;
         };
         let state = serde_json::json!({
@@ -229,12 +253,57 @@ impl IntelligenceManager {
         }
     }
 
+    pub(crate) async fn try_decision_completion(
+        &self,
+        report: &str,
+        todo_summary: &str,
+        implementation_started: bool,
+        active_sub_agents: bool,
+    ) -> Option<bool> {
+        let Some((provider_id, model)) = self.decision_model() else {
+            return None;
+        };
+        let request = DecisionRequest {
+            state: serde_json::json!({
+                "completion_report": Self::truncate_text(report, 6000),
+                "todo_summary": Self::truncate_text(todo_summary, 3000),
+                "implementation_started": implementation_started,
+                "active_sub_agents": active_sub_agents,
+            })
+            .to_string(),
+            model,
+            questions: BTreeMap::from([(
+                "completion".into(),
+                Question::Choice {
+                    instructions: "Judge only whether the supplied completion report is sufficiently consistent and credible to submit after the runtime has already verified all hard completion gates. Do not re-evaluate or override runtime gates. Choose complete only when the report clearly describes completed work and verification; otherwise choose continue.".into(),
+                    criteria: BTreeMap::from([
+                        ("complete".into(), "The report is coherent, specific, and states completed work and verification without a material contradiction".into()),
+                        ("continue".into(), "The report is vague, contradictory, or does not provide credible completion and verification details".into()),
+                    ]),
+                },
+            )]),
+        };
+        match decision::evaluate(self.chat_state.main_store.clone(), provider_id, request).await {
+            Ok(response) => response.answers.get("completion").and_then(|answer| {
+                confident_choice(answer, &["complete", "continue"], 0.80, 0.80)
+                    .map(|choice| choice == "complete")
+            }),
+            Err(error) => {
+                log::warn!(
+                    "[Workflow][session={}][completion] Decision model unavailable or response invalid; falling back to lite: {error}",
+                    self.session_id
+                );
+                None
+            }
+        }
+    }
+
     pub(crate) async fn try_decision_language(
         &self,
         user_input: &str,
         max_input_tokens: usize,
     ) -> Option<String> {
-        let Some((provider_id, model)) = self.global_decision_model() else {
+        let Some((provider_id, model)) = self.decision_model() else {
             return None;
         };
         if user_input.trim().is_empty() {
@@ -265,8 +334,8 @@ impl IntelligenceManager {
                     );
                 }),
             Err(error) => {
-                log::info!(
-                    "[Workflow][session={}][language] Decision unavailable; falling back to lite: {error}",
+                log::warn!(
+                    "[Workflow][session={}][language] Decision model unavailable or response invalid; falling back to lite: {error}",
                     self.session_id
                 );
                 None

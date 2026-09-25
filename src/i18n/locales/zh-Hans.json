@@ -230,6 +230,7 @@
       "imageRecognitionPrompt": "图片识别提示词",
       "imageRecognitionPromptPlaceholder": "留空则使用默认图片分析提示词。若自定义，请描述你希望的识别重点和输出风格。",
       "finalAudit": "执行终审",
+      "decisionModel": "决策模型",
       "liteModel": "轻量模型",
       "mcpToolsTitle": "MCP 工具",
       "mcpToolsHint": "分别配置 MCP 工具的可用、自动审批和完整参数展开状态。",

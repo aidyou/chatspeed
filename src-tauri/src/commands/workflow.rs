@@ -147,7 +147,7 @@ fn spawn_workflow_title_generation_if_missing(
         return Ok(());
     }
 
-    let (provider_id, model_name) = {
+    let (provider_id, model_name, decision_provider_id, decision_model_name) = {
         let store = &*state;
         let workflow = store
             .get_workflow_snapshot(&session_id)
@@ -162,9 +162,17 @@ fn spawn_workflow_title_generation_if_missing(
             .models
             .as_ref()
             .and_then(|models| models.act.as_ref().or(models.plan.as_ref()));
-        let provider_id = model.map(|model| model.id).unwrap_or(0);
-        let model_name = model.map(|model| model.model.clone()).unwrap_or_default();
-        (provider_id, model_name)
+        let decision = agent_config
+            .models
+            .as_ref()
+            .filter(|models| models.decision_enabled)
+            .and_then(|models| models.decision.as_ref());
+        (
+            model.map(|model| model.id).unwrap_or(0),
+            model.map(|model| model.model.clone()).unwrap_or_default(),
+            decision.map(|model| model.id).unwrap_or(0),
+            decision.map(|model| model.model.clone()).unwrap_or_default(),
+        )
     };
 
     let intelligence_manager = IntelligenceManager::new(
@@ -174,6 +182,8 @@ fn spawn_workflow_title_generation_if_missing(
         model_name.clone(),
         provider_id,
         model_name.clone(),
+        decision_provider_id,
+        decision_model_name,
         format!("{session_id}:task:1"),
         session_id.clone(),
         format!("{session_id}:task:1"),

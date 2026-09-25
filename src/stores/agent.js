@@ -89,7 +89,8 @@ const _transformFromBackend = (backendAgent) => {
     act: { ...defaultModel },
     vision: { ...defaultModel },
     utility: { ...defaultModel },
-    lite: { ...defaultModel }
+    lite: { ...defaultModel },
+    decision: null
   };
 
   if (backendAgent.models) {
@@ -108,6 +109,9 @@ const _transformFromBackend = (backendAgent) => {
     }
     if (backendAgent.models.lite) {
       models.lite = { ...defaultModel, ...backendAgent.models.lite };
+    }
+    if (backendAgent.models.decision) {
+      models.decision = { ...defaultModel, ...backendAgent.models.decision };
     }
   }
 
@@ -141,9 +145,8 @@ const _transformFromBackend = (backendAgent) => {
     visionModel: models.vision,
     utilityModel: models.utility,
     liteModel: models.lite,
-    // Decision model selection is global and stored in the application config.
-    decisionEnabled: false,
-    decisionModel: null,
+    decisionEnabled: Boolean(backendAgent.models?.decisionEnabled),
+    decisionModel: models.decision,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     sandboxExecutionMode: backendAgent.sandbox_execution_mode || 'host_only',
@@ -192,9 +195,10 @@ const _transformToBackend = (frontendAgent) => {
     vision: buildModelConfig(frontendAgent.visionModel),
     utility: buildModelConfig(frontendAgent.utilityModel),
     lite: buildModelConfig(frontendAgent.liteModel),
-    // Legacy per-agent decision fields are intentionally ignored.
-    decisionEnabled: false,
-    decision: null
+    decisionEnabled: frontendAgent.decisionEnabled === true,
+    decision: frontendAgent.decisionEnabled === true
+      ? buildModelConfig(frontendAgent.decisionModel)
+      : null
   };
 
   const mcpTools = frontendAgent.mcpTools || { available: [], autoApprove: [], autoExpand: [] }

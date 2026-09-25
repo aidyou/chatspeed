@@ -1013,6 +1013,12 @@ impl WorkflowExecutor {
         let selected_model = Self::phase_runtime_model(&self.agent_config, &self.policy.phase);
         let utility_model = Self::utility_runtime_model(&self.agent_config);
         let lite_model = Self::dedicated_lite_model(&self.agent_config);
+        let decision_model = self
+            .agent_config
+            .models
+            .as_ref()
+            .filter(|models| models.decision_enabled)
+            .and_then(|models| models.decision.as_ref());
 
         let model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
         let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
@@ -1041,6 +1047,10 @@ impl WorkflowExecutor {
 
         self.intelligence_manager.lite_provider_id = lite_model.map(|model| model.id).unwrap_or(0);
         self.intelligence_manager.lite_model_name = lite_model
+            .map(|model| model.model.clone())
+            .unwrap_or_default();
+        self.intelligence_manager.decision_provider_id = decision_model.map(|model| model.id).unwrap_or(0);
+        self.intelligence_manager.decision_model_name = decision_model
             .map(|model| model.model.clone())
             .unwrap_or_default();
         let (compressor_provider_id, compressor_model) =
@@ -1795,6 +1805,13 @@ impl WorkflowExecutor {
         let (lite_provider_id, lite_model_name) = Self::dedicated_lite_model(&agent_config)
             .map(|model| (model.id, model.model.clone()))
             .unwrap_or((0, String::new()));
+        let (decision_provider_id, decision_model_name) = agent_config
+            .models
+            .as_ref()
+            .filter(|models| models.decision_enabled)
+            .and_then(|models| models.decision.as_ref())
+            .map(|model| (model.id, model.model.clone()))
+            .unwrap_or((0, String::new()));
 
         let child_agents_for_llm = main_store
             .get_delegatable_child_agents(&agent_config.id)
@@ -1852,6 +1869,8 @@ impl WorkflowExecutor {
                 initial_model_name.clone(),
                 lite_provider_id,
                 lite_model_name,
+                decision_provider_id,
+                decision_model_name,
                 workflow_task_run_id,
                 root_session_id,
                 root_task_run_id,
@@ -2427,6 +2446,12 @@ impl WorkflowExecutor {
                     Self::dedicated_lite_model(&self.agent_config)
                         .map(|model| (model.id, model.model.clone()))
                         .unwrap_or((0, String::new()));
+                    let decision_model = self
+                        .agent_config
+                        .models
+                        .as_ref()
+                        .filter(|models| models.decision_enabled)
+                        .and_then(|models| models.decision.as_ref());
                 let im = IntelligenceManager::new(
                     self.session_id.clone(),
                     self.chat_state.clone(),
@@ -2434,6 +2459,8 @@ impl WorkflowExecutor {
                     self.llm_processor.active_model_name.clone(),
                     lite_provider_id,
                     lite_model_name,
+                    decision_model.map(|model| model.id).unwrap_or(0),
+                    decision_model.map(|model| model.model.clone()).unwrap_or_default(),
                     self.llm_processor.workflow_task_run_id.clone(),
                     self.llm_processor.root_session_id.clone(),
                     self.llm_processor.root_task_run_id.clone(),

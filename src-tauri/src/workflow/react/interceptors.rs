@@ -2510,6 +2510,39 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        let completion_review_todo_summary = self
+            .context
+            .main_store
+            .get_todo_list_for_workflow(&self.session_id)
+            .ok()
+            .map(|todos| {
+                serde_json::to_string(&todos).unwrap_or_else(|_| "[]".to_string())
+            })
+            .unwrap_or_else(|| "[]".to_string());
+        if self
+            .intelligence_manager
+            .review_completion(
+                &completion_report.content,
+                &completion_review_todo_summary,
+                !self.implementation_completion_is_blocked(),
+                !active_sub_agents.is_empty(),
+            )
+            .await
+            == Some(false)
+        {
+            return Ok(Some(ReinforcedResult {
+                content: "<SYSTEM_REMINDER>Completion review did not confirm that the report is sufficiently specific and consistent. Continue with the requested work or verification, then submit a fresh completion report. Runtime hard gates remain authoritative.</SYSTEM_REMINDER>".to_string(),
+                llm_content: None,
+                title: "Completion Review Required".to_string(),
+                summary: "Completion report requires further work or verification".to_string(),
+                is_error: true,
+                error_type: Some("CompletionReviewRejected".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
         let pending_source = self.pending_completion_reports.iter().find(|pending| {
             pending.segment_id == self.context.current_segment_id
                 && pending.content_hash

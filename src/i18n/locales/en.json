@@ -230,6 +230,7 @@
       "imageRecognitionPrompt": "Image Recognition Prompt",
       "imageRecognitionPromptPlaceholder": "Leave blank to use the default image analysis prompt. If customizing, describe the recognition focus and output style you want.",
       "finalAudit": "Final Audit",
+      "decisionModel": "Decision Model",
       "liteModel": "Lite Model",
       "mcpToolsTitle": "MCP Tools",
       "mcpToolsHint": "Configure MCP availability, automatic approval, and full schema expansion independently.",

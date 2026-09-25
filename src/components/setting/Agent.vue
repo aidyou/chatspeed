@@ -197,7 +197,8 @@
               v-for="role in modelRoles" :key="role.key">
               <div class="header">
                 <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
-                <el-radio-group v-model="modelModes[role.key]" size="small">
+                <el-switch v-if="role.key === 'decision'" v-model="agentForm.decisionEnabled" size="small" />
+                <el-radio-group v-if="role.key !== 'decision'" v-model="modelModes[role.key]" size="small">
                   <el-radio-button value="provider">{{
                     $t('settings.agent.modeProvider')
                   }}</el-radio-button>
@@ -208,10 +209,10 @@
               </div>
               <div class="body">
                 <div class="selectors-row">
-                  <template v-if="modelModes[role.key] === 'provider'">
+                  <template v-if="modelModes[role.key] === 'provider' || role.key === 'decision'">
                     <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
                       @change="onModelIdChange(role.key)" style="flex: 1">
-                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                      <el-option v-for="provider in getModelProviders(role.key)" :key="provider.id"
                         :label="provider.name" :value="provider.id" />
                     </el-select>
                     <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
@@ -756,7 +757,7 @@ const shouldBackfillSelectedSkills = ref(false)
 const groupedPrimaryAgents = ref([])
 const groupedChildAgents = ref({})
 
-const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }, { key: 'lite' }]
+const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }, { key: 'lite' }, { key: 'decision' }]
 
 const modelRoles = computed(() => {
   if (agentForm.value.role === AGENT_ROLE.CHILD) {
@@ -1440,8 +1441,8 @@ const normalizeAgentFormForSave = form => {
     normalized.visionModel = defaultAgentModelConfig()
     normalized.utilityModel = defaultAgentModelConfig()
     normalized.liteModel = defaultAgentModelConfig()
+    normalized.decisionModel = defaultAgentModelConfig()
     normalized.decisionEnabled = false
-    normalized.decisionModel = null
     normalized.allowedPaths = []
     normalized.shellPolicy = []
     normalized.sandboxExecutionMode = 'host_only'
@@ -1505,9 +1506,15 @@ const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
   }
 }
 
+const getModelProviders = key => key === 'decision'
+  ? decisionProviders.value
+  : modelStore.getAvailableProviders
+
 const getModelList = key => {
   const id = agentForm.value[key + 'Model']?.id
-  return id ? modelStore.getModelProviderById(id)?.models || [] : []
+  const provider = id ? modelStore.getModelProviderById(id) : null
+  if (key === 'decision' && provider?.apiProtocol !== 'decision') return []
+  return provider?.models || []
 }
 
 const onModelIdChange = key => {
@@ -1634,6 +1641,10 @@ const editAgent = async id => {
         try {
           const modelsObj =
             typeof agentData.models === 'string' ? JSON.parse(agentData.models) : agentData.models
+          agentForm.value.decisionEnabled = Boolean(modelsObj.decisionEnabled)
+          if (modelsObj.decision) {
+            agentForm.value.decisionModel = normalizeModelDraft(modelsObj.decision)
+          }
           allModelRoles.forEach(role => {
             if (modelsObj[role.key]) {
               agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
