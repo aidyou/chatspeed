@@ -1,5 +1,5 @@
-> 本文件是 Phase 1/2 完成后的**下一阶段正式路线文档与实施计划**。
-> 当前开发入口是 **Phase 3：能力管理（3A + 3B + 3C）**；3D、3E 只登记边界，不进入本次实现。
+> 本文件是 Phase 1/2 完成后的 Phase 3 正式路线文档、实施记录与最终验证状态。
+> Phase 3 已追加记录 3A、3B、3C、3D 与 3E；当前仅保留未闭环的外部目标路径核实项。
 > 事实来源：当前仓库代码、`work/agent-cli-phase-1-implementation-plan.md`、
 > `work/agent-cli-phase-2-implementation-plan.md` 以及
 > `work/agent-cli-evaluation-self-improvement-design.md`。
@@ -10,17 +10,16 @@
 
 - **已完成基础**：Phase 1 的共享 workflow application service、loopback control plane 与 `cs` CLI；
   Phase 2 的本地 artifact、budget、experiment、campaign、隔离 owner、Harbor contract 与 promotion 闭环。
-- **当前开发计划**：把以下三个步骤作为一个开发计划，按三个可独立验收的桌面端垂直切片小步推进：
-  1. **3A：共享能力管理 service 与 operation/doctor 基础**；
-  2. **3B：Skills 检查、安装、卸载与多目标投放**；
-  3. **3C：MCP 安装、卸载、状态检查与可用工具查询**。
-- **后续两次独立实现**：
-  - **3D：本地自动化 facade 与桌面端操作/观测**；
-  - **3E：外部实验数据与公开 benchmark 扩展评测**。
-- **明确排除**：当前与后续已登记范围均不新增通用数据导出/导入功能；不扩展 config transfer，
-  不实现 Agent、Skills、MCP、实验数据或用户配置的一键导出/导入。
-- **推进规则**：3A → 3B → 3C。每个切片必须形成桌面端可见、CLI 可调用、可自动验证的完整能力，
-  通过该切片验证后再进入下一切片；不等待三个切片全部写完才进行第一次可用性验证。
+- **Phase 3 交付状态**：3A、3B、3C、3D 与 3E 的代码、focused 验证及真实 Harbor Bowling 记录均已追加到本文件。
+- **当前验证状态**：V-7 的 deterministic stdio MCP fixture 完整生命周期、V-10 的 GUI/CLI 交错 mutation
+  与重启 smoke 均已完成；AC-4 仍有五个外部工具的官方 Skills 目录约定未在本环境核实，继续按
+  `unsupported(path_not_verified)` fail closed。
+- **当前阶段结论**：Phase 3 的实现与已可执行验证项已完成；Phase 3 最终关闭仍仅待 AC-4 外部目标路径核实，
+  不猜测路径、不向未核实目录写入。
+- **明确排除**：不新增通用数据导出/导入功能；不扩展 config transfer，不实现 Agent、Skills、MCP、实验数据
+  或用户配置的一键导出/导入。
+- **历史推进规则**：3A → 3B → 3C；3D、3E 在后续追加记录中独立验收。每个切片须形成桌面端可见、CLI
+  可调用、可自动验证的完整能力后再记录推进。
 
 ## 1. 目标与交付物
 
@@ -1487,3 +1486,29 @@ sidecars、以及一次 ChatSpeed agent candidate smoke。旧 `chatspeed-smoke@2
   digest 不变）。
 - **回归**：3E 测试 15/15 通过；旧 smoke verifier self-test 通过；`git diff --check` 通过；旧
   `chatspeed-smoke@2` 相关文件仍零 diff。
+
+### 16.9 最新 Bowling candidate 重跑（2026-09-25）
+
+本节追加当前 Bowling runner 提交后的真实 ChatSpeed candidate 结果；不改写 16.1–16.8 的历史 trial 记录。
+
+- **运行**：使用当前 `tools/harbor` runner/verifier、Harbor 0.23.0、镜像 `chatspeed-bowling-task:3e`、
+  agent `polyglot_bowling_chatspeed:PolyglotBowlingChatSpeedAgent` 与模型 `cs@qwen3.8-flash`；通过临时
+  `172.17.0.1` bridge 访问本机模型代理，未使用 host-network overlay。临时 bridge 在 trial 完成后停止，
+  没有留下运行中的 Harbor trial 或 task 容器。
+- **Trial**：job `bowling-candidate-final`，trial `harbor-chatspeed__PfxAnkf`，candidate session
+  `0rqm3dgar0400`，workflow status `completed`；Harbor `n_completed_trials=1`、`n_errored_trials=0`、
+  reward `1.0`。
+- **Runner/verifier**：`31 discovered / 5 failed / 0 errors`，exit status `1`；独立 verdict 为
+  `status=candidate_failure`、`reason=public_test_failure`、`public_tests=true`、`internal_only=true`、
+  `promotion_eligible=false`、`official_aider_score=false`。这是有效的候选质量失败分类，不是基础设施失败，
+  也不产生官方分数或 promotion 语义。
+- **边界与凭据**：trial metadata 记录 `proxy route open; public egress denied`；verifier 标记
+  `dependency_error=false`、`infrastructure_error=false`、`timed_out=false`；最新 trial artifact 扫描
+  `markers=2 token=0 files=17`，其中 marker 为已知 capability 文件名误报，token 未命中。临时 bridge
+  与 task 资源已清理。
+- **验证**：从 `tools/harbor` 目录运行 `python3 -m unittest test_polyglot_bowling_contract
+  test_polyglot_bowling_verify`，16 tests OK；旧 Harbor verifier self-test 正向通过且 5 个负向 fixture
+  全部拒绝；`git diff --check` 通过。
+- **当前结论**：最新代码的 ChatSpeed candidate 重跑已完成并得到可信的 `candidate_failure` 结果；
+  不再有 Bowling candidate 重跑阻塞。Phase 3 当前唯一记录中的剩余验证限制仍是 AC-4 的五个外部工具官方
+  Skills 目录约定尚未核实，继续保持 `unsupported(path_not_verified)`，不猜测路径、不向未核实目录写入。
