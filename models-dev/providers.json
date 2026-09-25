@@ -941,7 +941,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 392,
+      "modelCount": 394,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 592,
+      "modelCount": 593,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1470,7 +1470,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 385,
+      "modelCount": 387,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2278,9 +2278,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "244084865a398941d02a72abf58b89c2a75ef9d22df65a3a5fe40139a132b42c",
-    "generatedAt": "2026-09-24T08:29:33Z",
+    "catalogSha256": "792ea00f09c6f69c9a42fd8d452ec52be0596f9226215ebd18fb4ea8ed6ae51d",
+    "generatedAt": "2026-09-25T08:51:12Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "ae4a802894c72c7cbbd893ea36d3f637b50b5587"
+    "revision": "a668908cfe7073faa0363699486fc41a3ff52412"
   }
 }
