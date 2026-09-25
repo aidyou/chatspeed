@@ -41,6 +41,7 @@ pub enum OutputFormat {
 #[derive(Debug, Parser)]
 #[command(
     name = "cs",
+    disable_help_subcommand = true,
     version,
     about = "ChatSpeed workflow CLI",
     long_about = "ChatSpeed workflow CLI.\n\n\
@@ -74,6 +75,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Print the bundled Help Skill and capability/documentation index offline.
+    Help,
     /// Check connectivity, authentication and protocol compatibility.
     Doctor {
         #[command(subcommand)]

@@ -32,6 +32,8 @@ mod error;
 mod evaluate;
 #[path = "cs/experiment.rs"]
 mod experiment;
+#[path = "cs/help.rs"]
+mod help;
 #[path = "cs/mcp.rs"]
 mod mcp;
 #[path = "cs/output.rs"]
@@ -81,6 +83,10 @@ async fn main() {
 async fn run(cli: &Cli) -> Result<(), CliError> {
     // Offline experiment commands run before discovery loading so they work
     // without a running main process, discovery file, database or network.
+    if let Command::Help = &cli.command {
+        return help::run(cli);
+    }
+
     if let Command::Experiment { command } = &cli.command {
         match command {
             ExperimentCommand::Inspect { artifact_dir } => {
@@ -123,6 +129,7 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
     let client = ControlPlaneClient::new(&discovery)?;
 
     match &cli.command {
+        Command::Help => Ok(()),
         Command::Doctor { command } => match command {
             // Bare `cs doctor` keeps its exact connectivity/identity check.
             None => doctor(cli, &discovery, &client).await,
