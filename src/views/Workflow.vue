@@ -734,6 +734,7 @@ const terminalPreferences = computed(() => ({
   defaultShell: settingStore.settings.terminalDefaultShell,
   outputLineLimit: settingStore.settings.terminalOutputLineLimit,
   colorScheme: settingStore.settings.terminalColorScheme,
+  skin: settingStore.settings.terminalSkin,
   clearShortcut: settingStore.settings.terminalClearShortcut,
   toggleShortcut: settingStore.settings.terminalToggleShortcut,
   usesCommandKey: osType.value === 'macos'

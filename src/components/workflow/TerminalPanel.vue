@@ -76,6 +76,7 @@ import { ElMessageBox } from 'element-plus'
 import { FitAddon, init, Terminal, UrlRegexProvider } from 'ghostty-web'
 import { writeClipboard } from '@/libs/clipboard'
 import { openUrl } from '@/libs/util'
+import { terminalSkinPalette } from '@/constants/terminalThemes'
 import { terminalBlockTopRow, terminalClearSequence } from '@/composables/workflow/terminalClear'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
@@ -98,6 +99,10 @@ const getCssColor = name => getComputedStyle(document.documentElement).getProper
 const terminalTheme = computed(() => {
   const scheme = props.preferences.colorScheme || 'auto'
   const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
+  // A selected skin replaces the application tokens entirely, including the ANSI palette that the
+  // application tokens never define.
+  const skinPalette = terminalSkinPalette(props.preferences.skin, dark)
+  if (skinPalette) return skinPalette
   return dark
     ? {
         background: getCssColor('--cs-terminal-dark-background'),

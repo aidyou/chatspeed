@@ -404,6 +404,20 @@
       <div class="item">
         <div class="label">
           <div class="label-text">
+            {{ $t('settings.general.terminalSkin') }}
+            <small class="tooltip">{{ $t('settings.general.terminalSkinTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 200px">
+          <el-select v-model="settings.terminalSkin" @change="onTerminalSkinChange">
+            <el-option v-for="skin in TERMINAL_SKINS" :key="skin.id" :label="$t(skin.labelKey)"
+              :value="skin.id" />
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
             {{ $t('settings.general.terminalOutputLineLimit') }}
             <small class="tooltip">{{ $t('settings.general.terminalOutputLineLimitTooltip') }}</small>
           </div>
@@ -959,6 +973,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
 import { useUpdateStore } from '@/stores/update'
+import { DEFAULT_TERMINAL_SKIN, TERMINAL_SKINS } from '@/constants/terminalThemes'
 
 const { t } = useI18n()
 const modelStore = useModelStore()
@@ -1268,6 +1283,10 @@ const onTerminalOutputLineLimitChange = value => {
 
 const onTerminalColorSchemeChange = value => {
   setSetting('terminalColorScheme', value || 'auto')
+}
+
+const onTerminalSkinChange = value => {
+  setSetting('terminalSkin', value || DEFAULT_TERMINAL_SKIN)
 }
 
 /**

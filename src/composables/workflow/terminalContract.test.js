@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
 
+import { TERMINAL_SKINS } from '../../constants/terminalThemes.js'
+
 const read = path => readFile(new URL(`../../../${path}`, import.meta.url), 'utf8')
 
 test('workflow terminal stays isolated from the workflow runtime and is workflow-window gated', async () => {
@@ -79,13 +81,14 @@ test('shell switching is transactional and OSC 7 preserves Windows drive paths',
 })
 
 test('terminal preferences bound output, preserve terminal input, and use detected shell choices', async () => {
-  const [panel, composable, general, env, environment, workflow] = await Promise.all([
+  const [panel, composable, general, env, environment, workflow, store] = await Promise.all([
     read('src/components/workflow/TerminalPanel.vue'),
     read('src/composables/workflow/useTerminal.ts'),
     read('src/components/setting/General.vue'),
     read('src-tauri/src/commands/env.rs'),
     read('src-tauri/src/environment.rs'),
-    read('src/views/Workflow.vue')
+    read('src/views/Workflow.vue'),
+    read('src/stores/setting.js')
   ])
 
   assert.match(general, /get_available_terminal_shells/)
@@ -156,6 +159,16 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.doesNotMatch(panel, /options\.theme = /)
   assert.match(composable, /outputBuffers\.get\(sessionId\) \?\? outputHistory\.get\(sessionId\)/)
   assert.match(general, /setSetting\(shortcutKey, defaultShortcutMap\[shortcutKey\] \|\| null\)/)
+  // A selected skin replaces the application tokens with its own palette for the resolved scheme;
+  // the default skin keeps reading the application tokens.
+  assert.match(panel, /terminalSkinPalette\(props\.preferences\.skin, dark\)/)
+  assert.match(panel, /--cs-terminal-dark-background/)
+  assert.match(panel, /--cs-terminal-light-background/)
+  assert.match(workflow, /skin: settingStore\.settings\.terminalSkin/)
+  assert.match(store, /terminalSkin: 'default'/)
+  assert.match(general, /import \{ DEFAULT_TERMINAL_SKIN, TERMINAL_SKINS \} from '@\/constants\/terminalThemes'/)
+  assert.match(general, /settings\.terminalSkin/)
+  assert.match(general, /setSetting\('terminalSkin', value \|\| DEFAULT_TERMINAL_SKIN\)/)
   assert.match(panel, /terminalBlockTopRow/)
   assert.match(panel, /terminalClearSequence/)
   assert.match(composable, /const retained = writers\.get\(sessionId\)\?\.clear\(\)/)
@@ -268,5 +281,9 @@ test('every shipped locale contains the terminal label and toolbar strings', asy
     assert.match(content, /"closeConfirmTitle"\s*:/)
     assert.match(content, /"switchShellConfirmTitle"\s*:/)
     assert.match(content, /"switchShellConfirmMessage"\s*:/)
+    // Every skin needs a label in every shipped locale.
+    for (const skin of TERMINAL_SKINS) {
+      assert.match(content, new RegExp(`"${skin.labelKey.split('.').pop()}"\\s*:`))
+    }
   }
 })

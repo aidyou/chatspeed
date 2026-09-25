@@ -46,6 +46,7 @@ export function useTerminal(
       defaultShell?: string
       outputLineLimit?: number
       colorScheme?: 'auto' | 'light' | 'dark'
+      skin?: string
     }
   } = {}
 ) {

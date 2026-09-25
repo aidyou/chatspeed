@@ -32,6 +32,7 @@ const defaultSettings = {
   terminalDefaultShell: 'system',
   terminalOutputLineLimit: 2000,
   terminalColorScheme: 'auto',
+  terminalSkin: 'default',
   terminalToggleShortcut: 'CommandOrControl+J',
   terminalClearShortcut: 'CommandOrControl+K',
   // chat settings
