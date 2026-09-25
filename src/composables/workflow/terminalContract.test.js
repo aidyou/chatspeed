@@ -130,12 +130,26 @@ test('terminal preferences bound output, preserve terminal input, and use detect
   assert.match(panel, /host\.addEventListener\('keyup', onKeyUp, true\)/)
   assert.match(panel, /host\.removeEventListener\('keyup', onKeyUp, true\)/)
   assert.match(panel, /commandModifierDown/)
-  assert.match(composable, /const prompt = new TextEncoder\(\)\.encode/)
-  assert.match(composable, /outputBuffers\.set\(sessionId, \{ chunks: \[prompt\], lines: 0 \}\)/)
-  assert.match(composable, /outputHistory\.set\(sessionId, \{ chunks: \[prompt\], lines: 0 \}\)/)
-  assert.match(composable, /void write\(sessionId, '\\u000c'\)/)
+  assert.match(panel, /matchesTerminalShortcut\(event, preferences\.toggleShortcut, commandModifierDown\)/)
+  assert.match(panel, /terminalBlockTopRow/)
+  assert.match(panel, /terminalClearSequence/)
+  assert.match(composable, /const retained = writers\.get\(sessionId\)\?\.clear\(\)/)
+  assert.match(
+    composable,
+    /outputBuffers\.set\(sessionId, \{ chunks: \[history\], lines: countLines\(history\) \}\)/
+  )
+  assert.match(
+    composable,
+    /outputHistory\.set\(sessionId, \{ chunks: \[history\], lines: countLines\(history\) \}\)/
+  )
+  assert.match(composable, /new TextEncoder\(\)\.encode\(`\$\{tab\?\.cwd \|\| ''\} > `\)/)
+  // Clearing happens in the emulator: writing Ctrl+L to the PTY disturbed running programs and left
+  // the erased rows in the scrollback, which is the behaviour this contract now forbids.
+  assert.match(panel, /instance\.write\(terminalClearSequence/)
+  assert.doesNotMatch(panel, /instance\.clear\(\)/)
+  assert.doesNotMatch(panel, /attachCustomKeyEventHandler/)
+  assert.doesNotMatch(composable, /\\u000c/)
   assert.doesNotMatch(composable, /void write\(sessionId, 'clear\\n'\)/)
-  assert.match(panel, /instance\.clear\(\)/)
   assert.match(panel, /\.workflow-terminal__content \{[^}]*padding: var\(--cs-space-sm\);[^}]*box-sizing: border-box/s)
   assert.match(panel, /\.workflow-terminal__content \{[^}]*caret-color: transparent;/s)
   assert.match(panel, /\.workflow-terminal__content \{[^}]*background: var\(--workflow-terminal-background\)[^}]*\}/s)

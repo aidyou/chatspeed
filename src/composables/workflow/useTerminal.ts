@@ -325,13 +325,16 @@ export function useTerminal(
   const clear = (sessionId = state.activeSessionId) => {
     if (!sessionId) return
     const tab = state.tabs.find(item => item.sessionId === sessionId)
-    // Keep the current prompt as bounded history so a live shell remains usable after a reload.
-    const prompt = new TextEncoder().encode(`${tab?.cwd || ''} > `)
-    outputBuffers.set(sessionId, { chunks: [prompt], lines: 0 })
-    outputHistory.set(sessionId, { chunks: [prompt], lines: 0 })
+    // The mounted terminal erases its own screen and reports the text it kept, so a reload or a
+    // remount replays the live input line rather than a fabricated prompt. Sessions without a
+    // mounted terminal fall back to a prompt derived from the working directory.
+    const retained = writers.get(sessionId)?.clear()
+    const history = retained?.length
+      ? retained
+      : new TextEncoder().encode(`${tab?.cwd || ''} > `)
+    outputBuffers.set(sessionId, { chunks: [history], lines: countLines(history) })
+    outputHistory.set(sessionId, { chunks: [history], lines: countLines(history) })
     scheduleOutputPersistence()
-    writers.get(sessionId)?.clear()
-    void write(sessionId, '\u000c')
   }
   const updateCwd = (sessionId: string, cwd: string) => {
     const tab = state.tabs.find(item => item.sessionId === sessionId)

@@ -76,6 +76,7 @@ import { ElMessageBox } from 'element-plus'
 import { FitAddon, init, Terminal, UrlRegexProvider } from 'ghostty-web'
 import { writeClipboard } from '@/libs/clipboard'
 import { openUrl } from '@/libs/util'
+import { terminalBlockTopRow, terminalClearSequence } from '@/composables/workflow/terminalClear'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
 const props = defineProps<{ terminal: any; preferences: any }>()
@@ -185,10 +186,15 @@ const mountTab = (tab: TerminalTab) => {
       commandModifierDown = true
       return
     }
-    if (!matchesTerminalShortcut(event, preferences.clearShortcut, commandModifierDown)) return
+    // Both terminal shortcuts are consumed on the way down: the workflow window listener runs after
+    // this capture phase and would otherwise repeat the same toggle, leaving the panel unchanged.
+    const clears = matchesTerminalShortcut(event, preferences.clearShortcut, commandModifierDown)
+    const toggles = matchesTerminalShortcut(event, preferences.toggleShortcut, commandModifierDown)
+    if (!clears && !toggles) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    terminal.clear(tab.sessionId)
+    if (clears) terminal.clear(tab.sessionId)
+    else terminal.visible = !terminal.visible
   }
   const onKeyUp = (event: KeyboardEvent) => {
     if (event.key === 'Meta' || event.key === 'Control') commandModifierDown = false
@@ -221,18 +227,6 @@ const mountTab = (tab: TerminalTab) => {
       })
     },
     dispose: () => urlProvider.dispose()
-  })
-  instance.attachCustomKeyEventHandler(event => {
-    if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
-      terminal.clear(tab.sessionId)
-      return true
-    }
-    if (matchesTerminalShortcut(event, preferences.toggleShortcut)) {
-      terminal.visible = !terminal.visible
-      return true
-    }
-    // ghostty-web treats a truthy return as "handled" and suppresses its own key encoder.
-    return false
   })
   instance.onData(data => {
     // Forward each xterm input chunk to the per-session FIFO bridge so rapid typing reaches the
@@ -330,6 +324,15 @@ const mountTab = (tab: TerminalTab) => {
     clearPendingProgress()
     outputQueue = []
   }
+  const bufferRowIndex = (row: number) => instance.buffer.active.length - instance.rows + row
+  const retainedInputText = (blockTopRow: number, cursorY: number) => {
+    const buffer = instance.buffer.active
+    let text = ''
+    for (let row = blockTopRow; row <= cursorY; row += 1) {
+      text += buffer.getLine(bufferRowIndex(row))?.translateToString(true) || ''
+    }
+    return text
+  }
   instances.set(tab.sessionId, { terminal: instance, fit, observer, disposeSelection, clearOutputQueue })
   terminal.registerWriter(tab.sessionId, {
     write: enqueueOutput,
@@ -337,8 +340,16 @@ const mountTab = (tab: TerminalTab) => {
       clearPendingProgress()
       outputQueue = []
       writeInFlight = false
-      instance.clear()
-      return new Uint8Array()
+      const { cursorX, cursorY } = instance.buffer.active
+      const blockTopRow = terminalBlockTopRow(
+        cursorY,
+        row => instance.buffer.active.getLine(bufferRowIndex(row))?.isWrapped === true
+      )
+      const retained = retainedInputText(blockTopRow, cursorY)
+      instance.write(terminalClearSequence({ rows: instance.rows, cursorX, cursorY, blockTopRow }))
+      // Replayed as the bounded history of a reloaded or remounted session, so the live input line
+      // survives instead of a fabricated prompt.
+      return new TextEncoder().encode(retained)
     }
   })
   syncSize(tab.sessionId)
