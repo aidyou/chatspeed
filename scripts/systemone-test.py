@@ -22,8 +22,8 @@ Usage:
   SYSTEMONE_KEY='<key>' python3 scripts/systemone-test.py --limit 5
   python3 scripts/systemone-test.py --dry-run             # no network
 
-The key is intentionally not hard-coded: pass --key or $SYSTEMONE_KEY, or leave
-it empty to see how the proxy refuses empty credentials.
+The key is intentionally not hard-coded: pass --key or $SYSTEMONE_KEY. An empty
+key omits the Authorization header and is rejected by ccproxy's entry authentication.
 """
 import argparse
 import json
@@ -37,7 +37,7 @@ from pathlib import Path
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:11436/v1/systemone"
 DEFAULT_MODEL = "jev"
-DEFAULT_KEY = ""  # placeholder; the ccproxy refuses empty keys (DecisionError::Unavailable)
+DEFAULT_KEY = ""  # empty means no client Authorization header
 
 SAMPLES_DIR = Path(__file__).resolve().parent / "systemone-samples"
 
@@ -133,12 +133,18 @@ def distribution_stats(probabilities):
 
 def validate_choice_answer(answer, criteria, question_id, violations):
     """Same rules as DecisionResponse::validate, appending human-readable violations."""
+    if not isinstance(answer, dict):
+        violations.append(f"{question_id}: answer is missing or not an object")
+        return False
     if answer.get("type") != "choice":
         violations.append(f"{question_id}: answer type {answer.get('type')!r}, expected choice")
         return False
     choice = answer.get("choice")
-    probabilities = answer.get("probabilities") or {}
+    probabilities = answer.get("probabilities")
     confidence = answer.get("confidence")
+    if not isinstance(probabilities, dict):
+        violations.append(f"{question_id}: probabilities must be an object")
+        return False
     if choice not in criteria:
         violations.append(f"{question_id}: choice {choice!r} not in criteria")
         return False
@@ -344,9 +350,10 @@ def run_task(task, args, key):
             rows.append((name, expected, None, "-", "-", "network_error", response["_error"]))
             stats["network_error"] += 1
             continue
-        answer = (response.get("answers") or {}).get(next(iter(request["questions"])))
-        violations = []
         question_id = next(iter(request["questions"]))
+        answers = response.get("answers")
+        answer = answers.get(question_id) if isinstance(answers, dict) else None
+        violations = []
         criteria = request["questions"][question_id]["criteria"]
         valid = validate_choice_answer(answer, criteria, question_id, violations)
         if not valid:
@@ -408,8 +415,7 @@ def main():
     )
 
     if not args.key:
-        print("note: --key is empty (placeholder); the ccproxy refuses empty keys, so requests will fail "
-              "with a credential error. Pass --key or $SYSTEMONE_KEY.", file=sys.stderr)
+        print("note: --key is empty; no Authorization header will be sent and ccproxy entry authentication will reject the request. Pass --key or $SYSTEMONE_KEY.", file=sys.stderr)
     tasks = ["language", "report", "approval"] if args.task == "all" else [args.task]
     combined = {"correct": 0, "wrong": 0, "declined": 0, "accepted_wrong": 0, "network_error": 0, "violations": 0}
     for task in tasks:
