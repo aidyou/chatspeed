@@ -35,7 +35,7 @@
       "documentationUrl": "https://above.dev/docs",
       "id": "above",
       "logo": "https://models.dev/logos/above.svg",
-      "modelCount": 9,
+      "modelCount": 10,
       "name": "above.dev",
       "protocol": "openai",
       "responses": false
@@ -592,7 +592,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 285,
+      "modelCount": 287,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -633,7 +633,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 34,
+      "modelCount": 33,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -941,7 +941,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 394,
+      "modelCount": 391,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1111,7 +1111,7 @@
       "documentationUrl": "https://melious.ai/docs/reference/models",
       "id": "melious",
       "logo": "https://models.dev/logos/melious.svg",
-      "modelCount": 15,
+      "modelCount": 12,
       "name": "Melious",
       "protocol": "openai",
       "responses": false
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 593,
+      "modelCount": 595,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1439,7 +1439,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 110,
+      "modelCount": 111,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1470,7 +1470,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 387,
+      "modelCount": 384,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2250,7 +2250,7 @@
       "documentationUrl": "https://docs.zenmux.ai",
       "id": "zenmux",
       "logo": "https://models.dev/logos/zenmux.svg",
-      "modelCount": 122,
+      "modelCount": 129,
       "name": "ZenMux",
       "protocol": "openai",
       "responses": false
@@ -2278,9 +2278,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "792ea00f09c6f69c9a42fd8d452ec52be0596f9226215ebd18fb4ea8ed6ae51d",
-    "generatedAt": "2026-09-25T08:51:12Z",
+    "catalogSha256": "1e559956cfa16dad77e1fd5f1f38ae533276b397aca15c2b0ebb71d6e50e64a3",
+    "generatedAt": "2026-09-26T08:37:38Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "a668908cfe7073faa0363699486fc41a3ff52412"
+    "revision": "a8815a71809b8943ee60262619c04587afbe4e44"
   }
 }
