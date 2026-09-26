@@ -1,4 +1,76 @@
 mod ai;
+/// The typed budget/admission domain is a crate-level contract: the
+/// persistence layer, ccproxy admission gate, workflow tool gate and the
+/// future experiment service (2C/2F) all consume it.
+pub mod budget;
+/// The Phase 3 capability-management contract: one transport-neutral
+/// application service owns every Agent Skill and MCP mutation, backed by the
+/// shared desktop `MainStore` journal. It never opens its own database
+/// connection and never owns a runtime, so it stays inside the single desktop
+/// owner (INV-1) while the Tauri, HTTP and CLI adapters all delegate to it.
+pub mod capability;
+/// The Phase 2F campaign/candidate contract, re-exported narrowly so the `cs`
+/// CLI binary can reuse exactly one strict parser, one canonical-hash
+/// implementation and one checked-in prompt catalog instead of duplicating
+/// them (a duplicated validator would silently drift from the backend's).
+///
+/// The exposed items are pure contract types and pure functions: they never
+/// reach the database, the workflow runtime, an executor or the control plane.
+/// The CLI therefore still never opens SQLite or starts a runtime (INV-1);
+/// only build-time linkage grows.
+pub mod campaign {
+    pub use crate::workflow::react::campaign::*;
+}
+/// The Phase 2G+2H durable-schedule and benchmark-fixture contract, re-exported
+/// narrowly for the same reason as [`campaign`]: the `cs` CLI and the backend
+/// scheduler must share exactly one strict fixture resolver and one job-state
+/// machine, or a durable request could be accepted by one and rejected by the
+/// other.
+///
+/// Only pure contract items are exposed. The CLI still never opens SQLite,
+/// starts a scheduler, creates an owner or runs an executor (INV-1); the
+/// re-export is compile-time linkage of pure functions and value types only.
+pub mod experiment_schedule {
+    pub use crate::workflow::react::experiment_schedule::fixture;
+    pub use crate::workflow::react::experiment_schedule::scheduler;
+    pub use crate::workflow::react::experiment_schedule::types;
+}
+/// The Phase 2G isolated execution-owner contract, re-exported narrowly for the
+/// same reason as [`campaign`]: the `chatspeed-headless` binary, the scheduler
+/// (U-8) and the Harbor adapter must all drive exactly one owner contract, one
+/// patch/publication implementation and one bundle saga.
+///
+/// Only the owner contract is exposed. The owners never open the database and
+/// never run a workflow; they own a workspace, a container or a task sandbox.
+pub mod experiment_owner {
+    pub use crate::workflow::react::experiment_owner::bundle;
+    pub use crate::workflow::react::experiment_owner::capabilities;
+    pub use crate::workflow::react::experiment_owner::docker;
+    pub use crate::workflow::react::experiment_owner::harbor_task;
+    pub use crate::workflow::react::experiment_owner::patch;
+    /// The Phase 2I promotion checkpoint owner: the only component that mutates
+    /// a persistent Git ref. It is a separate contract from the run-scoped
+    /// [`ExecutionOwner`] precisely so the ordinary scheduler can never obtain
+    /// branch-mutation capability.
+    pub use crate::workflow::react::experiment_owner::promotion;
+    pub use crate::workflow::react::experiment_owner::worktree;
+}
+/// The Phase 2I promotion contract, re-exported narrowly for the same reason as
+/// [`campaign`]: the `cs` CLI must build exactly the same strict evidence
+/// projection, the same canonical evidence hash and the same promotion id the
+/// backend will re-derive, or a submission could be accepted by one and
+/// rejected by the other.
+///
+/// Only pure contract items are exposed: the promotion documents, the FSM, the
+/// target/policy validators and the gate evaluation. The CLI still never opens
+/// SQLite, starts a scheduler, resolves a Git repository or runs a container
+/// (INV-2); the re-export is compile-time linkage of pure functions and value
+/// types only.
+pub mod experiment_promotion {
+    pub use crate::workflow::react::experiment_promotion::binding;
+    pub use crate::workflow::react::experiment_promotion::policy;
+    pub use crate::workflow::react::experiment_promotion::types;
+}
 mod builtin_agents;
 mod ccproxy;
 pub mod chat_hub;
@@ -7,6 +79,10 @@ mod constants;
 mod db;
 mod environment;
 pub mod error;
+/// The Phase 2H headless runtime: experiment-domain layout/guard and the
+/// durable schedule store facade. Public so the `chatspeed-headless` binary and
+/// integration tests can drive the same authority the desktop app uses.
+pub mod headless;
 mod http;
 mod libs;
 mod logger;
@@ -46,6 +122,7 @@ use crate::error::AppError;
 use ai::interaction::chat_completion::ChatState;
 use ai::model_catalog_updater::ModelsDevCatalogService;
 use commands::agent::*;
+use commands::capability::*;
 use commands::ccproxy::*;
 use commands::chat::*;
 use commands::chat_hub::*;
@@ -217,6 +294,17 @@ pub async fn run() -> crate::error::Result<()> {
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
         .invoke_handler(tauri::generate_handler![
+            // capability command (Phase 3 read-only surface)
+            capability_skill_targets,
+            capability_skill_inventory,
+            capability_mcp_servers,
+            capability_operation,
+            capability_doctor,
+            capability_reconcile,
+            // capability command (Phase 3 Skill mutations)
+            capability_skill_check,
+            capability_skill_install,
+            capability_skill_uninstall,
             // agent command
             add_agent,
             update_agent,
@@ -419,10 +507,13 @@ pub async fn run() -> crate::error::Result<()> {
             workflow_start,
             workflow_stop,
             workflow_automation_delete,
+            workflow_automation_draft,
+            workflow_automation_apply,
             workflow_automation_get,
             workflow_automation_list,
             workflow_automation_list_runs,
             workflow_automation_run_now,
+            workflow_automation_run_views,
             workflow_automation_save,
             workflow_automation_set_enabled,
             get_workflow_events,
@@ -731,6 +822,21 @@ pub async fn run() -> crate::error::Result<()> {
             // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
 
+            // Best-effort budget ledger recovery at startup: reservations
+            // whose lease expired while still reserved are conservatively
+            // frozen as unknown; recovery never releases or replays (INV-5).
+            {
+                let store_for_recovery = main_store.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        crate::budget::recovery::recover_expired_reservations(&store_for_recovery)
+                            .await
+                    {
+                        log::warn!("[Budget][recovery] startup recovery failed: {}", error);
+                    }
+                });
+            }
+
             // Load the Models.dev catalog off the startup critical path: it is only used by
             // the model settings UI, so parsing the multi-MB snapshot must not block setup.
             {
@@ -868,8 +974,19 @@ pub async fn run() -> crate::error::Result<()> {
             let tsid_generator = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("Failed to init TSID generator"));
             app.manage(tsid_generator.clone());
 
-            // State 7: TauriGateway (Singleton for ReAct signals)
-            let gateway = Arc::new(crate::workflow::react::gateway::TauriGateway::new(app.handle().clone()));
+            // State 7: WorkflowRuntimeHub (unique Gateway: Tauri output transport
+            // + single session input registry + live SSE event source)
+            let tauri_gateway = Arc::new(crate::workflow::react::client::tauri::gateway::TauriGateway::new(app.handle().clone()));
+            let server_instance_id: String = {
+                use rand::Rng;
+                let mut instance_bytes = [0u8; 16];
+                rand::rng().fill_bytes(&mut instance_bytes);
+                hex::encode(instance_bytes)
+            };
+            let gateway = Arc::new(crate::workflow::react::client::hub::WorkflowRuntimeHub::new(
+                tauri_gateway,
+                server_instance_id,
+            ));
             app.manage(gateway.clone());
 
             // State 8: WorkflowManager (Session lifecycle manager)
@@ -894,7 +1011,102 @@ pub async fn run() -> crate::error::Result<()> {
                 app_data_dir: app.path().app_data_dir().unwrap_or_default(),
                 tsid_generator: tsid_generator.clone(),
             });
-            app.manage(factory);
+            app.manage(factory.clone());
+
+            // State 11: WorkflowApplicationService (transport-neutral canonical
+            // path shared by Tauri commands, automation and the control plane)
+            let application_service = Arc::new(
+                crate::workflow::react::application::WorkflowApplicationService::new(
+                    main_store.clone(),
+                    chat_state.clone(),
+                    tsid_generator.clone(),
+                    gateway.clone(),
+                    factory.clone(),
+                    workflow_manager.clone(),
+                    app.path().app_data_dir().unwrap_or_default(),
+                ),
+            );
+            app.manage(application_service.clone());
+
+            // State 12: CapabilityApplicationService (Agent Skills + MCP)
+            //
+            // Same instance the application service (and therefore the control
+            // plane) uses, so the durable journal and in-process single-flight
+            // locks cannot diverge between the Tauri and HTTP adapters.
+            //
+            // The startup recovery gate runs before the control plane starts
+            // accepting requests and before any capability mutation is
+            // admitted: operations a crash left in flight are classified as
+            // failed-before-effect (retryable) or needs_reconcile, never
+            // blindly retried (INV-8).
+            {
+                let capability = application_service.capability().clone();
+                match capability.recover_interrupted_operations() {
+                    Ok(report) if !report.is_empty() => {
+                        log::warn!(
+                            "[Capability][recovery] {} operation(s) failed before any effect, {} need reconcile",
+                            report.failed_before_effect.len(),
+                            report.needs_reconcile.len()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => log::error!(
+                        "[Capability][recovery] startup recovery failed: {}",
+                        error.redacted_message()
+                    ),
+                }
+                app.manage(capability.clone());
+
+                // Evidence-driven convergence runs once after boot, on the async
+                // runtime so it can observe MCP. It finalizes quarantined Skill
+                // moves, discards orphaned private staging, and rolls forward any
+                // needs_reconcile operation whose durable + runtime evidence now
+                // proves the effect; anything unproven is left as needs_reconcile
+                // rather than blind-retried (AC-2/AC-7/INV-8).
+                tokio::spawn(async move {
+                    match capability.reconcile().await {
+                        Ok(report) if !report.is_noop() => log::info!(
+                            "[Capability][reconcile] converged {} quarantine(s), {} install(s), {} mcp effect(s), removed {} staging residue, left {} needing reconcile",
+                            report.quarantines_finalized.len(),
+                            report.installs_recovered.len(),
+                            report.mcp_effects_recovered.len(),
+                            report.staging_residue_removed,
+                            report.still_needs_reconcile.len()
+                        ),
+                        Ok(_) => {}
+                        Err(error) => log::error!(
+                            "[Capability][reconcile] startup reconcile failed: {}",
+                            error.redacted_message()
+                        ),
+                    }
+                });
+            }
+
+            // Control plane: independent loopback HTTP/JSON + SSE server.
+            // Startup failures are logged (without secrets) and must not block
+            // the desktop app, static server or ccproxy.
+            {
+                let control_plane_svc = application_service.clone();
+                tokio::spawn(async move {
+                    match crate::workflow::react::client::http::server::start(control_plane_svc)
+                        .await
+                    {
+                        Ok(handle) => {
+                            log::info!(
+                                "[ControlPlane] Started on port {} (instance {})",
+                                handle.port,
+                                handle.server_instance_id
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[ControlPlane] Disabled: {}. Desktop workflows continue to work.",
+                                error
+                            );
+                        }
+                    }
+                });
+            }
 
             // State 11: ChatHubPageState
             // Owns the single ChatHub page docked inside the Workflow window.
@@ -999,7 +1211,15 @@ pub async fn run() -> crate::error::Result<()> {
             Ok(())
         })
         // Run the Tauri application with the generated context
-        .run(tauri::generate_context!()).map_err(|e| AppError::General{message:e.to_string()})?;
+        .build(tauri::generate_context!())
+        .map_err(|e| AppError::General{message:e.to_string()})?
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // Gracefully stop the control plane and remove its discovery
+                // document when it still belongs to this instance.
+                crate::workflow::react::client::http::server::request_shutdown();
+            }
+        });
     Ok(())
 }
 

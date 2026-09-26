@@ -45,6 +45,10 @@ fn configure_no_window(command: &mut std::process::Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_no_window(_command: &mut std::process::Command) {}
 
+pub(crate) fn budgeted_from_scope_lookup<T, E>(result: Result<Option<T>, E>) -> bool {
+    matches!(result, Ok(Some(_)))
+}
+
 pub struct LlmProcessor {
     pub session_id: String,
     pub agent_config: Agent,
@@ -59,6 +63,11 @@ pub struct LlmProcessor {
     pub workflow_task_run_id: String,
     pub root_session_id: String,
     pub root_task_run_id: String,
+    /// True when this session has a durable backend-created budget scope
+    /// chain (a Phase 2C experiment). A budgeted session must run every LLM
+    /// effect as a single attempt: the application-level retry loop is
+    /// disabled so an overrun/unknown is never silently retried (AC-4).
+    pub budgeted: bool,
     // Cached prompt inputs that should remain stable for the workflow lifetime.
     cached_global_agents_path: Option<PathBuf>,
     cached_project_agents_path: Option<PathBuf>,
@@ -495,7 +504,7 @@ impl LlmProcessor {
         child_agents: Vec<Agent>,
         available_skills: HashMap<String, SkillManifest>,
         path_guard: Arc<RwLock<PathGuard>>,
-        _chat_state: Arc<ChatState>,
+        chat_state: Arc<ChatState>,
         active_provider_id: i64,
         active_model_name: String,
         reasoning: bool,
@@ -505,6 +514,16 @@ impl LlmProcessor {
         root_session_id: String,
         root_task_run_id: String,
     ) -> Self {
+        // A durable backend-created scope chain marks this session as a
+        // budgeted experiment. Ordinary workflows resolve to `None` and keep
+        // the normal retry behavior (INV-4). A lookup failure must not change
+        // a normal workflow into an experiment; the scope is authoritative
+        // only when it was read successfully.
+        let budgeted = budgeted_from_scope_lookup(
+            chat_state
+                .main_store
+                .get_budget_scope_chain(&root_session_id),
+        );
         let (cached_global_agents, cached_project_agents) =
             AgentsMdScanner::scan(project_root.clone());
         let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());
@@ -527,6 +546,7 @@ impl LlmProcessor {
             workflow_task_run_id,
             root_session_id,
             root_task_run_id,
+            budgeted,
             cached_global_agents_path,
             cached_project_agents_path,
             cached_global_agents,
@@ -557,7 +577,10 @@ impl LlmProcessor {
 
         // 2. Retry Loop for transient LLM failures with exponential backoff
         let mut retry_count = 0;
-        let max_retries = 10;
+        // A budgeted experiment session runs a single attempt: application
+        // retries would re-issue an LLM effect under a fresh identity and
+        // silently mask an overrun/unknown, which 2C forbids (AC-4).
+        let max_retries = if self.budgeted { 0 } else { 10 };
         let mut last_error = None;
 
         while retry_count <= max_retries {
@@ -1619,7 +1642,7 @@ pub fn generate_error_reminder(error_type: &str, tool_name: &str, content: &str)
 
 #[cfg(test)]
 mod tests {
-    use super::LlmProcessor;
+    use super::{budgeted_from_scope_lookup, LlmProcessor};
     use crate::ai::traits::chat::{ChatResponse, MCPToolDeclaration, MessageType};
     use crate::db::WorkflowMessage;
     use crate::db::{Agent, ThinkingConfig};
@@ -1641,6 +1664,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock};
 
+    #[test]
+    fn budget_scope_lookup_only_marks_successful_scope_as_budgeted() {
+        assert!(budgeted_from_scope_lookup::<_, ()>(Ok(Some("scope"))));
+        assert!(!budgeted_from_scope_lookup::<&str, ()>(Ok(None)));
+        assert!(!budgeted_from_scope_lookup::<&str, _>(Err("database unavailable")));
+    }
     #[test]
     fn required_tool_choice_is_disabled_for_thinking_requests() {
         let thinking = ThinkingConfig {
@@ -2095,6 +2124,7 @@ mod tests {
             workflow_task_run_id: "test-session:task:1".to_string(),
             root_session_id: "test-session".to_string(),
             root_task_run_id: "test-session:task:1".to_string(),
+            budgeted: false,
             cached_global_agents_path: None,
             cached_project_agents_path: None,
             cached_global_agents: None,
@@ -2459,6 +2489,53 @@ mod tests {
         assert!(with_audit_system.contains("Key deliverables or changes:"));
         assert!(with_audit_system.contains("Verification:"));
         assert!(with_audit_system.contains("Remaining notes:"));
+    }
+
+    #[test]
+    fn campaign_prompt_override_changes_the_single_assembled_system_prompt() {
+        use crate::workflow::react::campaign;
+
+        let history = vec![json!({ "role": "user", "content": "Run the smoke task" })];
+
+        // Baseline: the Agent defaults must be used unchanged.
+        let baseline = test_llm_processor();
+        let baseline_system = baseline
+            .inject_prompts(history.clone(), &ExecutionPolicy::standard())[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(baseline_system.contains("System prompt"));
+        assert!(!baseline_system.contains("Output only the token"));
+
+        // A campaign run resolves the checked-in candidate prompt from the
+        // workflow snapshot's ref/hash and applies it to the workflow-local
+        // Agent exactly like `workflow_start_core` does.
+        let surface = campaign::CandidatePromptCatalog::embedded()
+            .surfaces()
+            .first()
+            .expect("checked-in surface");
+        let resolved =
+            campaign::resolve_candidate_prompt(&surface.agent_prompt_ref, &surface.prompt_hash)
+                .expect("resolves");
+        let mut override_processor = test_llm_processor();
+        override_processor.agent_config.system_prompt = resolved.system_prompt.clone();
+
+        let overridden_system = override_processor
+            .inject_prompts(history, &ExecutionPolicy::standard())[0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(overridden_system.contains("Output only the token"));
+        assert!(!overridden_system.contains("System prompt"));
+        // Still exactly one Agent-instructions block: the override changes the
+        // value injected into the existing assembly point, not the number of
+        // prompt assembly paths.
+        assert_eq!(
+            overridden_system
+                .matches("<AGENT_SPECIFIC_INSTRUCTIONS>")
+                .count(),
+            1
+        );
     }
 
     #[test]

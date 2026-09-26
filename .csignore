@@ -6,3 +6,5 @@
 !dev_data/
 !dev_data/**
 !.cs
+!src-tauri/target/debug/
+!src-tauri/target/release/bundle/

@@ -2825,6 +2825,49 @@ impl MainStore {
         })
     }
 
+    /// Maximum number of durable events returned by one bounded query.
+    pub const WORKFLOW_EVENTS_MAX_LIMIT: u32 = 500;
+
+    /// Bounded durable-events query for transport adapters.
+    ///
+    /// Returns events with durable ID strictly greater than `after`, in
+    /// ascending ID order, capped at `limit` (default 200, maximum
+    /// [`Self::WORKFLOW_EVENTS_MAX_LIMIT`]). `after` is a durable DB event ID;
+    /// live stream cursors must never be passed here.
+    pub fn list_workflow_events_after(
+        &self,
+        session_id: &str,
+        after: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<Vec<WorkflowEventRecord>, StoreError> {
+        const DEFAULT_LIMIT: u32 = 200;
+        let limit = limit
+            .unwrap_or(DEFAULT_LIMIT)
+            .min(Self::WORKFLOW_EVENTS_MAX_LIMIT);
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, session_id, event_type, event_version, event_data, created_at
+                 FROM workflow_events
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)
+                 ORDER BY id ASC
+                 LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![session_id, after, limit as i64], |row| {
+                Ok(WorkflowEventRecord::from(row))
+            })?;
+            let events = rows.collect::<Result<Vec<_>, _>>()?;
+            log::info!(
+                "[Workflow][session={}] event.list_after - count={}, after={:?}, limit={}",
+                session_id,
+                events.len(),
+                after,
+                limit
+            );
+            Ok(events)
+        })
+    }
+
     pub fn latest_workflow_event_type(
         &self,
         session_id: &str,

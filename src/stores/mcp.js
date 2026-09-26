@@ -4,6 +4,7 @@ import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
 
 import { sendSyncState } from '@/libs/sync.js';
+import { useCapabilityStore } from '@/stores/capability.js';
 
 /**
  * @typedef {Object} McpServerConfigEnv
@@ -77,6 +78,16 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const fetchedServers = await invokeWrapper('list_mcp_servers');
+      // The legacy list is the editable record; the capability projection is what
+      // the runtime actually observed. Refreshing both here means the badges can
+      // never lag behind a mutation the list already reflects (AC-12). A
+      // projection failure is reported, not fatal: the page keeps its existing
+      // behaviour.
+      try {
+        await useCapabilityStore().loadMcpServers();
+      } catch (projectionError) {
+        console.warn('MCP capability projection unavailable:', projectionError);
+      }
       servers.value = fetchedServers.map(server => {
         // Ensure server.config exists and disabled_tools is an array
         const config = server.config || {}; // Defensive, though McpServer type implies config exists

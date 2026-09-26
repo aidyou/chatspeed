@@ -4,10 +4,12 @@
 //! to various AI models, offering a unified interface and centralized key management.
 pub(crate) mod adapter;
 pub(crate) mod decision;
+pub(crate) mod admission;
 mod auth;
 mod errors;
 mod handler;
 mod helper;
+pub mod launcher;
 mod router;
 mod types;
 pub mod utils;

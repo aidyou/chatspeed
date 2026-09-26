@@ -1,0 +1,35 @@
+schema_version = "1.0"
+
+[task]
+name = "exercism-polyglot/bowling-chatspeed"
+description = "Generates one Bowling candidate through the ChatSpeed control-plane inside a Harbor task sandbox."
+keywords = ["exercism", "bowling", "python", "chatspeed"]
+
+[environment]
+# The same digest-verified image as the deterministic Bowling task: the
+# candidate smoke additionally hosts the ChatSpeed control-plane binaries, so
+# the glibc base (not musl) is required.
+docker_image = "chatspeed-bowling-task:3e"
+workdir = "/workspace"
+cpus = 1
+memory_mb = 4096
+# Harbor-enforced minimal egress: the egress-control sidecar (nftables +
+# gost transparent proxy) denies everything except the host's docker bridge
+# gateway address, which carries the operator's local model proxy during the
+# trial. The agent phase inherits the same policy; the verifier phase stays
+# fully no-network. No host-network namespace sharing is used.
+network_mode = "allowlist"
+allowed_hosts = ["172.17.0.1"]
+
+[agent]
+network_mode = "allowlist"
+allowed_hosts = ["172.17.0.1"]
+timeout_sec = 2100.0
+
+[verifier]
+environment_mode = "separate"
+network_mode = "no-network"
+timeout_sec = 300.0
+
+[[artifacts]]
+source = "/logs/artifacts"

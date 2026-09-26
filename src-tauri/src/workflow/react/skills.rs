@@ -43,6 +43,18 @@ fn default_source() -> String {
     "builtin".to_string()
 }
 
+/// A skill found on disk with the search root it was found under.
+#[derive(Debug, Clone)]
+pub struct ScannedSkill {
+    pub manifest: SkillManifest,
+    /// The search path (skills directory) the skill was found in.
+    pub root: PathBuf,
+    /// The skill's own directory.
+    pub directory: PathBuf,
+    /// Whether the root is a bundled-resource root.
+    pub builtin: bool,
+}
+
 pub struct SkillScanner {
     search_paths: Vec<PathBuf>,
 }
@@ -75,6 +87,32 @@ impl SkillScanner {
 
     pub fn get_search_paths(&self) -> Vec<PathBuf> {
         self.search_paths.clone()
+    }
+
+    /// Creates a scanner over an explicit search-path list, in precedence
+    /// order (earlier paths win).
+    ///
+    /// Used by isolated capability tests and by a hosted run that must resolve
+    /// skills from an injected environment instead of the process HOME.
+    pub fn with_search_paths(search_paths: Vec<PathBuf>) -> Self {
+        Self { search_paths }
+    }
+
+    /// Adds a run-scoped skill directory to this session's search paths.
+    ///
+    /// Used for the verified capability bundle of one dispatched run: the
+    /// directory is visible to this session only, and [`Self::remove_run_scoped_path`]
+    /// takes it away again when the run ends (AC-4). Adding a path that is
+    /// already present is a no-op, so repeated registration cannot duplicate it.
+    pub fn add_run_scoped_path(&mut self, path: PathBuf) {
+        if !self.search_paths.iter().any(|existing| existing == &path) {
+            self.search_paths.push(path);
+        }
+    }
+
+    /// Removes a run-scoped skill directory. Idempotent.
+    pub fn remove_run_scoped_path(&mut self, path: &std::path::Path) {
+        self.search_paths.retain(|existing| existing != path);
     }
 
     /// Scans all paths and returns a map of skill_name -> manifest.
@@ -113,6 +151,52 @@ impl SkillScanner {
         );
 
         Ok(skills)
+    }
+
+    /// A skill discovered on disk together with its provenance.
+    ///
+    /// Unlike [`SkillScanner::scan`], this keeps per-location detail instead of
+    /// collapsing same-named skills by priority, which the capability
+    /// inventory needs to classify managed/discovered/builtin installations
+    /// without changing the resolver's precedence rules.
+    pub fn scan_detailed(&self) -> Result<Vec<ScannedSkill>, WorkflowEngineError> {
+        let builtin_roots = crate::constants::resolve_resource_subdirs("skills");
+        let mut found = Vec::new();
+
+        for path in &self.search_paths {
+            if !path.exists() {
+                continue;
+            }
+            let builtin = builtin_roots.iter().any(|root| root == path);
+            let entries = match std::fs::read_dir(path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    log::debug!("Skipping unreadable skill root {:?}: {}", path, error);
+                    continue;
+                }
+            };
+            for entry in entries.flatten() {
+                let skill_dir = entry.path();
+                if !skill_dir.is_dir() {
+                    continue;
+                }
+                if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
+                    manifest.source = if builtin {
+                        "builtin".to_string()
+                    } else {
+                        "user".to_string()
+                    };
+                    found.push(ScannedSkill {
+                        manifest,
+                        root: path.clone(),
+                        directory: skill_dir,
+                        builtin,
+                    });
+                }
+            }
+        }
+
+        Ok(found)
     }
 
     fn try_load_skill(&self, dir: &std::path::Path) -> Option<SkillManifest> {
@@ -407,5 +491,41 @@ mod tests {
 
         let manifest = skills.get("builtin-help").unwrap();
         assert_eq!(manifest.source, "builtin");
+    }
+
+    /// A run-scoped capability bundle exposes its skills only to the run that
+    /// owns it, and taking the path away again removes them (AC-4).
+    #[test]
+    fn a_run_scoped_skill_path_is_scoped_to_its_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let skills_root = directory.path().join("staged-skills");
+        let skill_dir = skills_root.join("run-capability");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: run-capability\ndescription: Run scoped\n---\n\nInstructions...",
+        )
+        .unwrap();
+
+        let mut scanner = SkillScanner::new(directory.path().to_path_buf());
+        assert!(scanner.scan().unwrap().get("run-capability").is_none());
+
+        scanner.add_run_scoped_path(skills_root.clone());
+        // Adding the same path twice must not duplicate it.
+        scanner.add_run_scoped_path(skills_root.clone());
+        assert_eq!(
+            scanner
+                .get_search_paths()
+                .iter()
+                .filter(|path| **path == skills_root)
+                .count(),
+            1
+        );
+        assert!(scanner.scan().unwrap().contains_key("run-capability"));
+
+        scanner.remove_run_scoped_path(&skills_root);
+        assert!(scanner.scan().unwrap().get("run-capability").is_none());
+        // Removing it again is a no-op.
+        scanner.remove_run_scoped_path(&skills_root);
     }
 }

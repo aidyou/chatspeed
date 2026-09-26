@@ -172,7 +172,7 @@ pub trait McpClientInternal: Send + Sync {
 /// Main trait containing methods for an MCP client.
 /// This trait is designed to be object-safe for use with `dyn McpClient`.
 #[async_trait::async_trait]
-pub trait McpClient: Send + Sync + McpClientInternal {
+pub(crate) trait McpClient: Send + Sync + McpClientInternal {
     /// Gets the name of the MCP client
     async fn name(&self) -> String;
 

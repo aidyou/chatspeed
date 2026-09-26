@@ -122,7 +122,11 @@ const SWITCH_MODE_PREFIX: &str = "switch";
 
 // A struct to hold the shared state, which is passed to all route handlers.
 pub struct SharedState {
-    pub app_handle: tauri::AppHandle,
+    /// The application package version reported by `/api/version`. It is an
+    /// explicit value rather than a `tauri::AppHandle`, so the same router can
+    /// be mounted by a windowless (`chatspeed-headless`) process without
+    /// fabricating a desktop handle (INV-1/INV-4).
+    pub package_version: String,
     pub main_store: Arc<MainStore>,
     pub chat_state: Arc<ChatState>,
 }
@@ -815,7 +819,7 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
         .route(
             "/api/version",
             get(|State(state): State<Arc<SharedState>>| async move {
-                let version = state.app_handle.package_info().version.to_string();
+                let version = state.package_version.clone();
                 (StatusCode::OK, axum::Json(json!({ "version": version }))).into_response()
             }),
         )
@@ -869,13 +873,18 @@ fn decision_routes(mode: GroupMode) -> Router<Arc<SharedState>> {
 // ----------------------------------------------------------------------------
 
 /// Defines all routes for the ccproxy module.
+///
+/// `package_version` replaces the former `tauri::AppHandle` dependency: it is
+/// the only value the router ever read from the handle (`/api/version`), so the
+/// router is now transport-neutral. Route composition, order, auth middleware,
+/// model resolution and response header filtering are unchanged.
 pub async fn routes(
-    app_handle: tauri::AppHandle,
+    package_version: String,
     main_store_arc: Arc<MainStore>,
     chat_state: Arc<ChatState>,
 ) -> Router {
     let shared_state = Arc::new(SharedState {
-        app_handle,
+        package_version,
         main_store: main_store_arc,
         chat_state,
     });
@@ -1048,6 +1057,7 @@ fn strip_untrusted_workflow_attribution_headers(headers: &mut HeaderMap) {
         "x-cs-root-session-id",
         "x-cs-root-task-run-id",
         "x-cs-request-kind",
+        "x-cs-experiment-admission",
     ] {
         headers.remove(header);
     }
@@ -1145,11 +1155,19 @@ mod usage_attribution_tests {
             "victim-session".parse().unwrap(),
         );
         headers.insert("x-cs-root-task-run-id", "victim-task".parse().unwrap());
+        headers.insert(
+            "x-cs-experiment-admission",
+            "{\"forged\":true}".parse().unwrap(),
+        );
 
         assert!(!is_trusted_internal_request(&headers));
         strip_untrusted_workflow_attribution_headers(&mut headers);
 
         assert!(!headers.contains_key("x-cs-workflow-session-id"));
         assert!(!headers.contains_key("x-cs-root-task-run-id"));
+        assert!(
+            !headers.contains_key("x-cs-experiment-admission"),
+            "external callers must not be able to mint admission ownership"
+        );
     }
 }

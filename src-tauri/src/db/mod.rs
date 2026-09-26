@@ -3,11 +3,14 @@ pub mod api_key_crypto;
 pub mod automation;
 pub mod backup;
 pub mod backup_crypto;
+pub mod budget;
 pub mod chat;
 pub mod chat_hub;
 pub mod config;
 pub mod config_transfer;
 pub mod error;
+pub mod experiment_promotion;
+pub mod experiment_schedule;
 pub mod main_store;
 pub mod runtime;
 // pub mod plugin;
@@ -22,10 +25,7 @@ mod workflow;
 pub mod workflow_usage;
 
 pub use agent::{Agent, AgentConfig, McpToolConfig};
-pub use automation::{
-    WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationRunInsert,
-    WorkflowAutomationUpsert,
-};
+pub use automation::{WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
 pub use backup::{BackupConfig, DbBackup};
 pub use chat_hub::ChatHub;
 pub use error::StoreError;

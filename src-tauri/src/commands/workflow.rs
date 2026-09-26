@@ -5,12 +5,16 @@ use crate::db::{
     WorkflowSnapshot,
 };
 use crate::libs::tsid::TsidGenerator;
+use crate::workflow::react::application::{
+    ApplicationError, WorkflowApplicationService, WorkflowCreateRequest, WorkflowEventsQuery,
+};
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
+use crate::workflow::react::client::hub::WorkflowRuntimeHub;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::events::WorkflowEvent;
-use crate::workflow::react::gateway::{Gateway, TauriGateway};
+use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
 use crate::workflow::react::orchestrator::{
@@ -117,7 +121,7 @@ fn spawn_workflow_title_generation_if_missing(
     user_query: String,
     state: Arc<MainStore>,
     chat_state: Arc<ChatState>,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
 ) -> Result<(), String> {
     if user_query.trim().is_empty() {
         return Ok(());
@@ -313,7 +317,7 @@ fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus
 }
 
 async fn inject_runtime_config_signal(
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
     state: &Arc<MainStore>,
     session_id: &str,
@@ -1172,7 +1176,30 @@ fn build_agent_config_from_agent(
 
 fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     let mut inherited_config = AgentConfig::from_json(inherited)?;
+
+    // AgentConfig::from_json normalizes a missing tool list into an explicit
+    // empty restriction. A partial inherited config (e.g. the CLI --model
+    // shortcut, which only carries models.act) must not shrink the Agent's
+    // tool set, so restore "no preference" when the key is absent from the
+    // raw JSON. Full configs inherited from an existing workflow always carry
+    // availableTools and are unaffected.
+    let has_available_tools_key = serde_json::from_str::<serde_json::Value>(inherited)
+        .ok()
+        .and_then(|value| value.get("availableTools").map(|_| ()))
+        .is_some();
+    if !has_available_tools_key {
+        inherited_config.available_tools = None;
+    }
+
     inherited_config.sync_legacy_final_audit_flag();
+
+    // Phase 2F: a candidate prompt reference is frozen run identity minted by
+    // the backend campaign facade, never an inheritable workflow preference.
+    // Dropping it here keeps `--agent-config` and inherited workflow snapshots
+    // from selecting an experiment surface outside a campaign run.
+    inherited_config.experiment_agent_prompt_ref = None;
+    inherited_config.experiment_agent_prompt_hash = None;
+    inherited_config.experiment_prompt_catalog_digest = None;
 
     if let Some(models) = &inherited_config.models {
         let mut validated_models = models.clone();
@@ -1441,6 +1468,7 @@ fn resolve_agent_sandbox_snapshot(
     store: &MainStore,
     agent: &Agent,
     config: &mut AgentConfig,
+    owner: Option<&OwnerExecutionContext>,
 ) -> Result<(), String> {
     let (execution_mode, scheme_id) = if config.sandbox_override == Some(true) {
         (
@@ -1461,7 +1489,7 @@ fn resolve_agent_sandbox_snapshot(
     config.sandbox_scheme_id = scheme_id.clone();
     config.sandbox_config = None;
 
-    match execution_mode {
+    let outcome: Result<(), String> = match execution_mode {
         crate::tools::ShellExecutionMode::HostOnly => Ok(()),
         crate::tools::ShellExecutionMode::Auto | crate::tools::ShellExecutionMode::SandboxOnly => {
             let scheme_id = scheme_id
@@ -1498,6 +1526,165 @@ fn resolve_agent_sandbox_snapshot(
             });
             Ok(())
         }
+    };
+    outcome?;
+
+    // A durable scheduled run is pinned to its owner's environment *after* the
+    // agent/scheme snapshot, so the owner always wins and the sandbox resolver
+    // can never fall back to host execution for it (AC-3/INV-4).
+    if let Some(owner) = owner {
+        owner.apply(config)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2H: the owner-confirmed execution context of a scheduled run
+// ---------------------------------------------------------------------------
+
+/// The owner-confirmed execution environment of one durable scheduled run.
+///
+/// The scheduler builds this from the owner it actually acquired, so it never
+/// comes from a caller, a candidate or a request body. Applying it to the run's
+/// resolved configuration is what stops a scheduled run from resolving its shell
+/// execution environment through the ordinary host-capable path (AC-3/INV-4).
+#[derive(Debug, Clone)]
+pub(crate) struct OwnerExecutionContext {
+    /// The owner kind that prepared the environment.
+    pub owner_kind: crate::workflow::react::experiment_schedule::types::OwnerKind,
+    /// The persistent instance the run's shell calls must execute in.
+    pub instance_name: Option<String>,
+    /// The digest-pinned image behind that instance.
+    pub image_reference: Option<String>,
+    /// The verified capability set of this run, when the campaign declares
+    /// bundles. Its resolved secrets stay in memory and never enter persisted
+    /// workflow configuration (INV-6).
+    pub capabilities:
+        Option<crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities>,
+    /// The target for verified bundle MCP stdio processes. Docker owners must
+    /// provide their read-only bundle mount; Harbor's proven task sandbox runs
+    /// directly on its own host.
+    pub capability_execution_target:
+        Option<crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget>,
+}
+
+impl OwnerExecutionContext {
+    /// The context of a container-owned run.
+    pub(crate) fn container(
+        instance_name: impl Into<String>,
+        image_reference: impl Into<String>,
+    ) -> Self {
+        Self {
+            owner_kind:
+                crate::workflow::react::experiment_schedule::types::OwnerKind::PersistentDocker,
+            instance_name: Some(instance_name.into()),
+            image_reference: Some(image_reference.into()),
+            capabilities: None,
+            capability_execution_target: None,
+        }
+    }
+
+    /// Attaches the run's verified capability set and its owner-proven process
+    /// target. The pair remains in memory only.
+    pub(crate) fn with_capabilities(
+        mut self,
+        capabilities: Option<
+            crate::workflow::react::experiment_owner::capabilities::PreparedCapabilityLeaseSet,
+        >,
+    ) -> Result<Self, String> {
+        let Some(leases) = capabilities else {
+            return Ok(self);
+        };
+        let execution_target = self.capability_execution_target.clone().ok_or_else(|| {
+            "the owner provides no verified execution target for bundle MCP servers".to_string()
+        })?;
+        self.capabilities = Some(
+            crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities {
+                leases,
+                execution_target,
+            },
+        );
+        Ok(self)
+    }
+
+    pub(crate) fn with_capability_execution_target_opt(
+        mut self,
+        target: Option<
+            crate::workflow::react::experiment_owner::capabilities::CapabilityExecutionTarget,
+        >,
+    ) -> Self {
+        self.capability_execution_target = target;
+        self
+    }
+
+    /// Pins one run's resolved configuration to this owner's environment.
+    ///
+    /// - a container owner pins the run to that persistent instance with
+    ///   `sandbox_only` resolution, so the sandbox resolver can never pick the
+    ///   host for it;
+    /// - a Harbor task owner runs on the "host" *of the proven task sandbox*,
+    ///   which is itself the isolation boundary;
+    /// - a filesystem-only owner is refused: it prepares a worktree but provides
+    ///   no isolated execution environment, so a scheduled run under it would
+    ///   execute on the user's host (INV-4).
+    pub(crate) fn apply(&self, config: &mut AgentConfig) -> Result<(), String> {
+        use crate::tools::{
+            AgentSandboxConfig, SandboxProfileConfig, SandboxRuntimePreference, ShellExecutionMode,
+        };
+
+        match self.owner_kind {
+            crate::workflow::react::experiment_schedule::types::OwnerKind::HostWorktree => Err(
+                "a filesystem-only execution owner provides no isolated execution \
+                     environment, so a scheduled run cannot be dispatched under it"
+                    .to_string(),
+            ),
+            crate::workflow::react::experiment_schedule::types::OwnerKind::HarborTask => {
+                // Inside a proven Harbor task environment the sandbox *is* the
+                // isolation boundary, so the run executes there directly.
+                config.sandbox_execution_mode = Some(ShellExecutionMode::HostOnly);
+                config.sandbox_scheme_id = None;
+                config.sandbox_config = None;
+                Ok(())
+            }
+            crate::workflow::react::experiment_schedule::types::OwnerKind::PersistentDocker => {
+                let instance_name = self
+                    .instance_name
+                    .clone()
+                    .ok_or_else(|| "the container owner acquired no instance name".to_string())?;
+                let image = self.image_reference.clone().ok_or_else(|| {
+                    "the container owner acquired no digest-pinned image".to_string()
+                })?;
+                let profile = SandboxProfileConfig {
+                    id: "owner".to_string(),
+                    name: "owner".to_string(),
+                    enabled: true,
+                    priority: 0,
+                    // A catch-all profile: every command of this run executes in
+                    // the owner's instance.
+                    command_patterns: Vec::new(),
+                    runtime_preference: SandboxRuntimePreference::Docker,
+                    image,
+                    instance_name: Some(instance_name),
+                    image_size_bytes: None,
+                    network: Default::default(),
+                    resources: Default::default(),
+                    workspace_access: Default::default(),
+                };
+                let mut profiles = std::collections::BTreeMap::new();
+                profiles.insert(profile.id.clone(), profile);
+                config.sandbox_execution_mode = Some(ShellExecutionMode::SandboxOnly);
+                config.sandbox_scheme_id = None;
+                config.sandbox_config = Some(AgentSandboxConfig {
+                    scheme_id: None,
+                    scheme_revision: None,
+                    execution_mode: ShellExecutionMode::SandboxOnly,
+                    runtime_preference: SandboxRuntimePreference::Docker,
+                    profiles,
+                    host_rules: Vec::new(),
+                });
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1530,7 +1717,20 @@ fn sync_workflow_agent_config_at_tool_boundary(
         .map(|inherited| merge_inherited_workflow_config(&agent_config, &inherited))
         .unwrap_or(agent_config);
     fill_missing_agent_config_fields(&mut merged, &agent);
-    resolve_agent_sandbox_snapshot(store, &agent, &mut merged)?;
+    // Phase 2F: preserve the workflow-local experiment prompt identity. This
+    // sync rebuilds the config from the current Agent, so the frozen run
+    // surface is re-applied from this workflow's own snapshot only. It is
+    // deliberately never taken from any other workflow's inherited config.
+    if let Some(existing) = workflow
+        .agent_config
+        .as_deref()
+        .and_then(AgentConfig::from_json)
+    {
+        merged.experiment_agent_prompt_ref = existing.experiment_agent_prompt_ref;
+        merged.experiment_agent_prompt_hash = existing.experiment_agent_prompt_hash;
+        merged.experiment_prompt_catalog_digest = existing.experiment_prompt_catalog_digest;
+    }
+    resolve_agent_sandbox_snapshot(store, &agent, &mut merged, None)?;
     enforce_auto_approve_tool_visibility(&mut merged);
 
     let merged_json = merged.to_json();
@@ -1715,25 +1915,24 @@ fn normalize_workflow_agent_config_in_memory(
 }
 
 #[tauri::command]
-pub async fn create_workflow(
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    request: CreateWorkflowRequest,
-) -> Result<String, String> {
+pub(crate) async fn create_workflow_core(
+    svc: &WorkflowApplicationService,
+    request: WorkflowCreateRequest,
+) -> Result<String, ApplicationError> {
     let (agent, runtime) = {
-        let store = &*state;
+        let store = &*svc.main_store;
         let agent = store
             .get_agent(&request.agent_id)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", request.agent_id))?;
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.agent_id))
+            })?;
         let runtime = store.db_runtime().map_err(|e| e.to_string())?;
         (agent, runtime)
     };
 
     // Always use TSID for new workflow sessions
-    let session_id = tsid_generator.generate().map_err(|e| e.to_string())?;
+    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
 
     log::info!(
         "[Workflow][session={}][phase=create] Creating workflow for agent_id={}",
@@ -1742,16 +1941,23 @@ pub async fn create_workflow(
     );
 
     if agent.role.as_deref() == Some("child") {
-        return Err("Child agents cannot be used as top-level workflow agents".to_string());
+        return Err(ApplicationError::invalid_input(
+            "Child agents cannot be used as top-level workflow agents",
+        ));
     }
 
-    let mut config = build_workflow_config_for_request(&agent, &request);
-    {
-        let store = &*state;
-        resolve_agent_sandbox_snapshot(store, &agent, &mut config)?;
-    }
-
-    let agent_config_json = config.to_json();
+    // The config builder is shared with the Tauri wire shape; adapt the
+    // transport-neutral request into it once at this boundary.
+    let wire_request = CreateWorkflowRequest {
+        user_query: request.user_query.clone(),
+        agent_id: request.agent_id.clone(),
+        allowed_paths: request.allowed_paths.clone(),
+        auto_approve_plan: request.auto_approve_plan,
+        final_audit: request.final_audit,
+        inherited_agent_config: request.inherited_agent_config.clone(),
+    };
+    let agent_config_json =
+        build_resolved_workflow_config(&*svc.main_store, &agent, &wire_request, None, None)?;
 
     // Use empty string for user_query if not provided (new workflow creation)
     let user_query = request.user_query.as_deref().unwrap_or("");
@@ -1769,7 +1975,7 @@ pub async fn create_workflow(
 
     // Generate and store session key for proxy authentication
     let session_key = format!("sk-{}", uuid::Uuid::new_v4());
-    chat_state
+    svc.chat_state
         .workflow_keys
         .insert(session_id.clone(), session_key);
 
@@ -1782,21 +1988,648 @@ pub async fn create_workflow(
     let _ = spawn_workflow_title_generation_if_missing(
         session_id.clone(),
         user_query.to_string(),
-        state.inner().clone(),
-        chat_state.inner().clone(),
-        gateway.inner().clone(),
+        svc.main_store.clone(),
+        svc.chat_state.clone(),
+        svc.gateway.clone(),
     );
 
     Ok(session_id)
 }
 
-#[tauri::command]
-pub async fn list_workflows(state: State<'_, Arc<MainStore>>) -> Result<Vec<Workflow>, String> {
-    let runtime = state.db_runtime().map_err(|e| e.to_string())?;
+/// Builds the effective agent config for a create request and resolves its
+/// sandbox snapshot. Shared by the normal create path and the experiment
+/// facades so all of them use one canonical config resolver (no parallel
+/// path).
+///
+/// `experiment_prompt` is only supplied by the Phase 2F campaign run facade:
+/// it attaches the resolved checked-in candidate prompt reference to the
+/// workflow snapshot. The normal create path passes `None`, so its behavior is
+/// unchanged (INV-2/INV-4).
+fn build_resolved_workflow_config(
+    store: &MainStore,
+    agent: &Agent,
+    wire_request: &CreateWorkflowRequest,
+    experiment_prompt: Option<&crate::workflow::react::campaign::ResolvedCandidatePrompt>,
+    owner: Option<&OwnerExecutionContext>,
+) -> Result<String, ApplicationError> {
+    let mut config = build_workflow_config_for_request(agent, wire_request);
+    if let Some(resolved) = experiment_prompt {
+        config.experiment_agent_prompt_ref = Some(resolved.agent_prompt_ref.clone());
+        config.experiment_agent_prompt_hash = Some(resolved.prompt_hash.clone());
+        config.experiment_prompt_catalog_digest = Some(resolved.catalog_digest.clone());
+    }
+    resolve_agent_sandbox_snapshot(store, agent, &mut config, owner)?;
+    Ok(config.to_json())
+}
 
+/// The scope layout one budgeted run is created with.
+pub(crate) enum BudgetedRunScope {
+    /// 2C single-run experiment: a fresh per-run canonical scope chain.
+    Standalone(crate::budget::types::BudgetEnvelope),
+    /// 2F campaign run: the shared campaign/candidate/trial scopes plus a
+    /// fresh per-run request scope. Every id is derived by the backend from
+    /// the frozen plan; the caller only names a candidate/trial key.
+    Campaign {
+        campaign_id: String,
+        candidate_key: String,
+        trial_key: String,
+        envelope: crate::budget::types::BudgetEnvelope,
+    },
+}
+
+/// Everything a budgeted run needs after its strict request/plan has already
+/// been validated, so the 2C experiment facade and the 2F campaign facade
+/// share one run kernel instead of two lifecycle paths (INV-1).
+pub(crate) struct BudgetedRunSetup {
+    pub agent: Agent,
+    pub agent_id: String,
+    pub prompt: String,
+    pub planning_mode: bool,
+    pub wire_request: CreateWorkflowRequest,
+    /// Resolved checked-in candidate prompt, only ever set by the campaign
+    /// facade. `None` keeps the run on the Agent defaults (baseline arm).
+    pub experiment_prompt: Option<crate::workflow::react::campaign::ResolvedCandidatePrompt>,
+    pub title_prefix: &'static str,
+    pub scope: BudgetedRunScope,
+    /// The owner-confirmed execution context of a durable scheduled run.
+    ///
+    /// `None` for every immediate path (2C/2F), so their behaviour is unchanged;
+    /// `Some` only when the scheduler dispatches a job it prepared.
+    pub owner: Option<OwnerExecutionContext>,
+}
+
+/// Creates one backend-owned budgeted run atomically (workflow row plus its
+/// budget scopes) and starts it on the shared runtime authority.
+///
+/// A runtime start failure keeps the single created run as an auditable fact;
+/// it is never deleted and never replaced by a second run (INV-6). The
+/// workflow is created with a non-empty deterministic title so the reused
+/// start kernel's "generate title if missing" helper does not fire an extra,
+/// uncontrolled LLM effect.
+async fn create_and_start_budgeted_run(
+    svc: &WorkflowApplicationService,
+    setup: BudgetedRunSetup,
+) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
+    use crate::db::budget::{NewCampaignRun, NewCampaignRunScopes, NewExperimentWorkflowRow};
+    use crate::workflow::react::campaign;
+    use crate::workflow::react::experiment::{ExperimentRunResult, ExperimentScopeRefs};
+
+    let agent_config_json = build_resolved_workflow_config(
+        &*svc.main_store,
+        &setup.agent,
+        &setup.wire_request,
+        setup.experiment_prompt.as_ref(),
+        setup.owner.as_ref(),
+    )?;
+
+    // Backend-owned identity: one TSID serves as session id, run id and the
+    // request-scope id; the outer scopes are either the canonical 2C suffix
+    // chain or the shared 2F campaign scopes.
+    let session_id = svc.tsid_generator.generate().map_err(|e| e.to_string())?;
+    // A scheduled run's verified capabilities travel in memory, keyed by the
+    // session they belong to: the run's executor injects them into that session's
+    // tool registry, and the terminal/failure path releases them (INV-6).
+    if let Some(lease) = setup
+        .owner
+        .as_ref()
+        .and_then(|owner| owner.capabilities.clone())
+    {
+        svc.register_prepared_lease(&session_id, lease);
+    }
+    let title = format!("{} {session_id}", setup.title_prefix);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+
+    let workflow = NewExperimentWorkflowRow {
+        session_id: session_id.clone(),
+        title,
+        user_query: setup.prompt.clone(),
+        agent_id: setup.agent_id.clone(),
+        agent_config: Some(agent_config_json),
+    };
+
+    let chain = {
+        let store = &*svc.main_store;
+        match &setup.scope {
+            BudgetedRunScope::Standalone(envelope) => {
+                MainStore::create_experiment_run_atomic(store, workflow, envelope.clone(), now_ms)
+            }
+            BudgetedRunScope::Campaign {
+                campaign_id,
+                candidate_key,
+                trial_key,
+                envelope,
+            } => {
+                // The backend derives every campaign scope id from the frozen
+                // plan hash; the caller can only name a declared candidate and
+                // trial key (INV-2).
+                let candidate_scope_id =
+                    campaign::candidate_scope_id_for(campaign_id, candidate_key);
+                let trial_scope_id = campaign::trial_scope_id_for(&candidate_scope_id, trial_key);
+                MainStore::create_campaign_run_atomic(
+                    store,
+                    NewCampaignRun {
+                        workflow,
+                        scopes: NewCampaignRunScopes {
+                            campaign_id: campaign_id.clone(),
+                            candidate_scope_id,
+                            trial_scope_id,
+                            request_scope_id: session_id.clone(),
+                        },
+                        envelope: envelope.clone(),
+                    },
+                    now_ms,
+                )
+            }
+        }
+        .map_err(|error| {
+            log::error!(
+                "[Workflow][session={}][phase=experiment] atomic run creation failed: {}",
+                session_id,
+                error.code.as_str()
+            );
+            ApplicationError::internal(format!(
+                "experiment creation failed: {}",
+                error.code.as_str()
+            ))
+        })?
+    };
+
+    // Install the proxy session key before start so the runtime's own LLM
+    // calls authenticate against ccproxy exactly like a normal workflow.
+    let session_key = format!("sk-{}", uuid::Uuid::new_v4());
+    svc.chat_state
+        .workflow_keys
+        .insert(session_id.clone(), session_key);
+
+    log::info!(
+        "[Workflow][session={}][phase=experiment] Budgeted run created, agent_id={}, campaign_scope={}",
+        session_id,
+        setup.agent_id,
+        chain.campaign_id
+    );
+
+    // Reuse the existing start kernel. A start failure keeps the created run
+    // (with its durable scope chain) as the single auditable fact.
+    let started = workflow_start_core(
+        svc,
+        session_id.clone(),
+        setup.agent_id.clone(),
+        Some(setup.prompt.clone()),
+        None,
+        None,
+        Some(setup.planning_mode),
+    )
+    .await;
+    if let Err(error) = started {
+        log::error!(
+            "[Workflow][session={}][phase=experiment] start failed after durable creation: {}",
+            session_id,
+            error.message
+        );
+        return Err(error);
+    }
+
+    Ok(ExperimentRunResult {
+        schema_version: crate::workflow::react::experiment::EXPERIMENT_RUN_SPEC_V1.to_string(),
+        run_id: session_id.clone(),
+        session_id,
+        scopes: ExperimentScopeRefs {
+            request_scope_id: chain.request_id,
+            trial_scope_id: chain.trial_id,
+            candidate_scope_id: chain.candidate_id,
+            campaign_scope_id: chain.campaign_id,
+        },
+        status: "started".to_string(),
+    })
+}
+
+/// Runs one budgeted, single-attempt experiment workflow end to end on the
+/// shared runtime authority. The backend alone mints the session/run id and
+/// the canonical scope chain; the caller cannot supply scope, effect or
+/// attempt identity (INV-2).
+///
+/// Sequence (AC-1/AC-2/INV-1/INV-6):
+/// 1. validate the strict spec into a frozen envelope *before* any effect;
+/// 2. generate the session id (TSID) and derive the canonical chain;
+/// 3. atomically create the workflow row and the four budget scopes in one
+///    writer transaction (any failure rolls back the whole unit);
+/// 4. install the proxy session key;
+/// 5. reuse the existing start kernel.
+pub(crate) async fn run_experiment_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment::ExperimentRunRequest,
+) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
+    use crate::workflow::react::experiment::{ExperimentSpecError, ExperimentSpecErrorCode};
+
+    let spec = request.spec.clone();
+    let envelope = spec.to_envelope().map_err(spec_validation_error)?;
+
+    if request.prompt.trim().is_empty() {
+        return Err(spec_validation_error(ExperimentSpecError::new(
+            ExperimentSpecErrorCode::EmptyPrompt,
+            "experiment prompt must be non-empty",
+        )));
+    }
+
+    let agent = {
+        let store = &*svc.main_store;
+        store
+            .get_agent(&request.agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.agent_id))
+            })?
+    };
+
+    if agent.role.as_deref() == Some("child") {
+        return Err(spec_validation_error(ExperimentSpecError::new(
+            ExperimentSpecErrorCode::ChildAgent,
+            "Child agents cannot be used as top-level workflow agents",
+        )));
+    }
+
+    // Adapt the experiment override into the shared create-request shape so
+    // the config resolver is reused unchanged.
+    let wire_request = CreateWorkflowRequest {
+        user_query: Some(request.prompt.clone()),
+        agent_id: request.agent_id.clone(),
+        allowed_paths: spec
+            .workflow
+            .allowed_paths
+            .clone()
+            .map(|paths| Value::Array(paths.into_iter().map(Value::String).collect())),
+        auto_approve_plan: spec.workflow.auto_approve_plan,
+        final_audit: spec.workflow.final_audit,
+        inherited_agent_config: experiment_inherited_config(spec.workflow.model.as_deref())?,
+    };
+
+    create_and_start_budgeted_run(
+        svc,
+        BudgetedRunSetup {
+            agent,
+            agent_id: request.agent_id.clone(),
+            prompt: request.prompt.clone(),
+            planning_mode: spec.planning_mode,
+            wire_request,
+            // The 2C single-run experiment never carries a candidate surface.
+            experiment_prompt: None,
+            title_prefix: "experiment",
+            scope: BudgetedRunScope::Standalone(envelope),
+            // The 2C single-run path is never owner-pinned.
+            owner: None,
+        },
+    )
+    .await
+}
+
+/// Maps a campaign contract rejection to a stable `InvalidInput` application
+/// error whose message carries only the machine code (never prompts or
+/// payloads), mirroring the 2C `experiment_spec_rejected` contract.
+fn campaign_validation_error(
+    error: crate::workflow::react::campaign::CampaignSpecError,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("campaign_spec_rejected: {}", error.code.as_str()))
+}
+
+/// Reads a campaign scope projection. The campaign id is the only campaign
+/// identity a caller may supply, and it is always re-checked against the
+/// durable scope table.
+fn load_campaign_projection(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    campaign::validate_campaign_id(campaign_id).map_err(campaign_validation_error)?;
+    let store = &*svc.main_store;
+    let scope = store
+        .get_budget_scope_status(campaign_id)
+        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .ok_or_else(|| ApplicationError::not_found(format!("campaign {campaign_id} not found")))?;
+    if scope.scope_kind != crate::budget::types::ScopeKind::Campaign {
+        return Err(campaign_validation_error(campaign::CampaignSpecError::new(
+            campaign::CampaignSpecErrorCode::InvalidCampaignId,
+            "scope is not a campaign scope",
+        )));
+    }
+    let candidates = store
+        .list_budget_child_scopes(campaign_id)
+        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .into_iter()
+        .map(
+            |child| crate::workflow::react::campaign::CampaignCandidateProjection {
+                candidate_scope_id: child.scope_id,
+                status: child.status,
+                committed: child.committed,
+                reserved: child.reserved,
+            },
+        )
+        .collect();
+    Ok(campaign::CampaignProjection {
+        campaign_id: scope.scope_id,
+        status: scope.status,
+        pause_reason: scope.pause_reason,
+        committed: scope.committed,
+        reserved: scope.reserved,
+        caps: scope.caps,
+        infra_failure_count: scope.infra_failure_count,
+        infra_failure_threshold: scope.infra_failure_threshold,
+        candidates,
+    })
+}
+
+/// Creates the shared campaign budget scope for one frozen Stage 0 plan.
+///
+/// The campaign id is derived by the backend from the canonical plan hash, so
+/// the same plan always maps to the same campaign and a caller can never mint
+/// a scope. Creation is idempotent for an identical plan/budget and fails
+/// closed on any envelope mismatch.
+pub(crate) fn campaign_create_core(
+    svc: &WorkflowApplicationService,
+    plan: crate::workflow::react::campaign::CampaignPlanV1,
+) -> Result<crate::workflow::react::campaign::CampaignCreateResult, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    plan.validate().map_err(campaign_validation_error)?;
+    let store = &*svc.main_store;
+    // The agent must exist before a budget scope is frozen for it.
+    store
+        .get_agent(&plan.agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| ApplicationError::not_found(format!("Agent {} not found", plan.agent_id)))?;
+
+    let envelope = plan.envelope().map_err(campaign_validation_error)?;
+    let campaign_id = campaign::campaign_id_for_plan(&plan.plan_hash());
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    store
+        .create_campaign_atomic(&campaign_id, envelope.clone(), now_ms)
+        .map_err(|error| {
+            log::error!(
+                "[Workflow][campaign={}][phase=create] campaign scope creation failed: {}",
+                campaign_id,
+                error.code.as_str()
+            );
+            ApplicationError::internal(format!("campaign creation failed: {}", error.code.as_str()))
+        })?;
+    let status = load_campaign_projection(svc, &campaign_id)?.status;
+    Ok(campaign::CampaignCreateResult {
+        schema_version: campaign::CAMPAIGN_PLAN_V1.to_string(),
+        campaign_id,
+        campaign_key: plan.campaign_key.clone(),
+        campaign_hash: plan.plan_hash(),
+        envelope_hash: campaign::envelope_hash(&envelope),
+        catalog_digest: campaign::CandidatePromptCatalog::embedded()
+            .digest()
+            .to_string(),
+        candidate_order: plan.candidate_order(),
+        concurrency: plan.concurrency,
+        status,
+    })
+}
+
+/// Reads one campaign projection (campaign scope plus its candidate scopes).
+pub(crate) fn campaign_get_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
+    load_campaign_projection(svc, campaign_id)
+}
+
+/// Closes a campaign scope so no further run or reservation is admitted.
+///
+/// Closing never rewrites existing runs, reservations or committed balances;
+/// it only stops new admissions. The path campaign id is authoritative and the
+/// body can never carry one.
+pub(crate) fn campaign_close_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    reason: &str,
+) -> Result<crate::workflow::react::campaign::CampaignCloseResult, ApplicationError> {
+    use crate::workflow::react::campaign;
+
+    // Fail closed on an unknown/non-campaign scope before mutating anything.
+    load_campaign_projection(svc, campaign_id)?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let reason = if reason.trim().is_empty() {
+        "campaign_closed"
+    } else {
+        reason
+    };
+    let changed = svc
+        .main_store
+        .close_budget_scope(campaign_id, reason, now_ms)
+        .map_err(|error| {
+            log::error!(
+                "[Workflow][campaign={}][phase=close] close failed: {}",
+                campaign_id,
+                error.code.as_str()
+            );
+            ApplicationError::internal(format!("campaign close failed: {}", error.code.as_str()))
+        })?;
+    let projection = load_campaign_projection(svc, campaign_id)?;
+    log::info!(
+        "[Workflow][campaign={}][phase=close] campaign status={} changed={}",
+        campaign_id,
+        projection.status,
+        changed
+    );
+    Ok(campaign::CampaignCloseResult {
+        campaign_id: campaign_id.to_string(),
+        status: projection.status,
+        pause_reason: projection.pause_reason,
+        changed,
+    })
+}
+
+/// Creates one run under an existing shared campaign scope.
+///
+/// The path campaign id is authoritative. The run intent must re-supply the
+/// immutable plan, and the backend re-derives the campaign id from that plan's
+/// canonical hash: a plan that does not belong to this campaign is rejected
+/// before any effect. The budget is the campaign's frozen envelope, so any run
+/// in the campaign is admitted against the same aggregate cap (AC-1).
+pub(crate) async fn campaign_run_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    request: crate::workflow::react::campaign::CampaignRunRequestV1,
+) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
+    campaign_run_core_with_owner(svc, campaign_id, request, None).await
+}
+
+/// The durable scheduler's entry point into the same run kernel.
+///
+/// Behaviour is identical to [`campaign_run_core`] except that the created run is
+/// pinned to the owner-confirmed execution context the scheduler prepared, so the
+/// run cannot resolve its shell execution environment through the host-capable
+/// path (AC-3/INV-4). The immediate 2C/2F paths pass `None`, so their behaviour
+/// is unchanged (INV-2).
+pub(crate) async fn campaign_run_core_with_owner(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    request: crate::workflow::react::campaign::CampaignRunRequestV1,
+    owner: Option<OwnerExecutionContext>,
+) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
+    use crate::workflow::react::campaign::{self, CampaignSpecError, CampaignSpecErrorCode};
+
+    request.validate().map_err(campaign_validation_error)?;
+    if request.campaign_id() != campaign_id {
+        return Err(campaign_validation_error(CampaignSpecError::new(
+            CampaignSpecErrorCode::CampaignPlanMismatch,
+            "run intent plan does not match the campaign id",
+        )));
+    }
+    // An unknown or already-closed campaign is refused before any workflow row
+    // or budget scope is created.
+    let projection = load_campaign_projection(svc, campaign_id)?;
+    if projection.status != "active" {
+        return Err(ApplicationError::invalid_input(format!(
+            "campaign_spec_rejected: {}",
+            "campaign_not_active"
+        )));
+    }
+
+    let envelope = request.envelope().map_err(campaign_validation_error)?;
+    let experiment_prompt = request
+        .resolved_prompt()
+        .map_err(campaign_validation_error)?;
+    let prompt_surface = experiment_prompt
+        .as_ref()
+        .map(campaign::CampaignPromptSurfaceRef::from);
+
+    let agent = {
+        let store = &*svc.main_store;
+        store
+            .get_agent(&request.plan.agent_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", request.plan.agent_id))
+            })?
+    };
+    if agent.role.as_deref() == Some("child") {
+        return Err(ApplicationError::invalid_input(
+            "campaign_spec_rejected: child_agent",
+        ));
+    }
+
+    // Only the frozen act-model knob is forwarded; every other workflow knob
+    // stays at the shared resolver's default for both arms (single variable).
+    let wire_request = CreateWorkflowRequest {
+        user_query: Some(request.fixture.instruction.clone()),
+        agent_id: request.plan.agent_id.clone(),
+        allowed_paths: None,
+        auto_approve_plan: None,
+        final_audit: None,
+        inherited_agent_config: experiment_inherited_config(request.plan.model.as_deref())?,
+    };
+    let trial_key = format!("{}/{}", request.plan.suite, request.fixture.task_id);
+
+    let result = create_and_start_budgeted_run(
+        svc,
+        BudgetedRunSetup {
+            agent,
+            agent_id: request.plan.agent_id.clone(),
+            prompt: request.fixture.instruction.clone(),
+            // Stage 0 fixes the execution phase: no separate planning run.
+            planning_mode: false,
+            wire_request,
+            experiment_prompt,
+            title_prefix: "campaign",
+            scope: BudgetedRunScope::Campaign {
+                campaign_id: campaign_id.to_string(),
+                candidate_key: request.candidate_key.clone(),
+                trial_key,
+                envelope,
+            },
+            // Owner-pinned only when the durable scheduler dispatched this job.
+            owner,
+        },
+    )
+    .await?;
+
+    Ok(campaign::CampaignRunResult {
+        schema_version: campaign::CAMPAIGN_RUN_REQUEST_V1.to_string(),
+        campaign_id: campaign_id.to_string(),
+        candidate_key: request.candidate_key.clone(),
+        candidate_scope_id: result.scopes.candidate_scope_id.clone(),
+        trial_scope_id: result.scopes.trial_scope_id.clone(),
+        request_scope_id: result.scopes.request_scope_id.clone(),
+        run_id: result.run_id.clone(),
+        session_id: result.session_id.clone(),
+        status: result.status,
+        prompt_surface,
+    })
+}
+
+/// Maps a spec validation error to a stable `InvalidInput` application error
+/// whose message carries only the machine code (never prompts or payloads).
+fn spec_validation_error(
+    error: crate::workflow::react::experiment::ExperimentSpecError,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("experiment_spec_rejected: {}", error.code.as_str()))
+}
+
+/// Builds the `inherited_agent_config` JSON for an experiment model override,
+/// matching the CLI `--model` shortcut shape exactly. `None` yields no
+/// override so the Agent defaults apply.
+fn experiment_inherited_config(model: Option<&str>) -> Result<Option<String>, ApplicationError> {
+    let Some(model) = model else {
+        return Ok(None);
+    };
+    if model.split('@').count() != 2 || model.starts_with('@') || model.ends_with('@') {
+        return Err(ApplicationError::invalid_input(format!(
+            "experiment_spec_rejected: {}",
+            crate::workflow::react::experiment::ExperimentSpecErrorCode::InvalidConfig.as_str()
+        )));
+    }
+    let value = json!({ "models": { "act": { "id": 0, "model": model } } });
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn create_workflow(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    request: CreateWorkflowRequest,
+) -> Result<String, String> {
+    create_workflow_core(
+        &svc,
+        WorkflowCreateRequest {
+            user_query: request.user_query,
+            agent_id: request.agent_id,
+            allowed_paths: request.allowed_paths,
+            auto_approve_plan: request.auto_approve_plan,
+            final_audit: request.final_audit,
+            inherited_agent_config: request.inherited_agent_config,
+        },
+    )
+    .await
+    .map_err(|e| e.message)
+}
+
+pub(crate) async fn list_workflows_core(
+    svc: &WorkflowApplicationService,
+) -> Result<Vec<Workflow>, ApplicationError> {
+    let runtime = svc.main_store.db_runtime().map_err(|e| e.to_string())?;
     MainStore::list_workflows_with_runtime(runtime)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn list_workflows(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+) -> Result<Vec<Workflow>, String> {
+    list_workflows_core(&svc).await.map_err(|e| e.message)
 }
 
 fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
@@ -2435,7 +3268,7 @@ fn reconcile_child_workflows_for_parent(
 pub async fn delete_workflow(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<(), String> {
@@ -2460,7 +3293,7 @@ pub async fn delete_workflow(
 pub async fn delete_last_workflow_message(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
 ) -> Result<bool, String> {
@@ -2688,7 +3521,7 @@ async fn clear_persisted_workflow_todo_list(
 async fn finalize_manual_clear_context_state(
     main_store: &Arc<MainStore>,
     workflow_manager: &Arc<WorkflowManager>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     session_id: &str,
 ) -> Result<(), String> {
     {
@@ -2724,7 +3557,7 @@ pub async fn workflow_begin_new_context_frame(
     chat_state: State<'_, Arc<ChatState>>,
     tsid_generator: State<'_, Arc<TsidGenerator>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     session_id: String,
 ) -> Result<WorkflowContextFrameResult, String> {
     let main_store = state.inner().clone();
@@ -2964,13 +3797,11 @@ pub async fn list_pending_sub_agent_approvals(
     .map_err(|error| format!("Failed to join pending sub-agent approval query: {error}"))?
 }
 
-#[tauri::command]
-pub async fn get_workflow_snapshot(
-    state: State<'_, Arc<MainStore>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn get_workflow_snapshot_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
-) -> Result<Value, String> {
-    let main_store = state.inner().clone();
+) -> Result<Value, ApplicationError> {
+    let main_store = svc.main_store.clone();
     let recovery_store = main_store.clone();
     let recovery_session_id = session_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -3014,7 +3845,7 @@ pub async fn get_workflow_snapshot(
     // Phase 0-3 UI State Reconciliation: Add hasLiveSession field.
     // Reconcile terminal executors first so the frontend does not keep seeing
     // zombie runtime sessions after a turn has already finished.
-    let workflow_manager_arc = workflow_manager.inner().clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
     let has_live_session =
         has_reconciled_live_session(&workflow_manager_arc, &session_id, "snapshot").await;
     let has_blocking_live_session = if has_live_session {
@@ -3094,6 +3925,16 @@ pub async fn get_workflow_snapshot(
 }
 
 #[tauri::command]
+pub async fn get_workflow_snapshot(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+) -> Result<Value, String> {
+    get_workflow_snapshot_core(&svc, session_id)
+        .await
+        .map_err(|e| e.message)
+}
+
+#[tauri::command]
 pub async fn get_earlier_workflow_message_page(
     state: State<'_, Arc<MainStore>>,
     session_id: String,
@@ -3170,7 +4011,7 @@ pub async fn get_workflow_agent_config(
 pub async fn add_workflow_message(
     state: State<'_, Arc<MainStore>>,
     chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
     let runtime = {
@@ -3394,7 +4235,7 @@ async fn try_resume_completed_live_session(
     clean_prompt: &str,
     attached_context: &str,
     message_metadata: Option<Value>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
     main_store: &Arc<MainStore>,
 ) -> Result<bool, String> {
@@ -3621,7 +4462,7 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
 async fn cleanup_workflow_resources(
     session_id: &str,
     chat_state: &Arc<ChatState>,
-    gateway: &Arc<TauriGateway>,
+    gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
 ) {
     interrupt_openai_session(chat_state, session_id).await;
@@ -3656,7 +4497,7 @@ const COMPLETED_SESSION_CLEANUP_DELAY_SECS: u64 = 600;
 fn schedule_completed_session_cleanup(
     session_id: String,
     completed_at_ms: i64,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
     workflow_manager: Arc<WorkflowManager>,
 ) {
     tokio::spawn(async move {
@@ -3866,22 +4707,15 @@ fn combine_attached_context(base: String, extra: Option<String>) -> String {
     format!("{}\n\n{}", base, extra)
 }
 
-#[tauri::command]
-pub async fn workflow_start(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn workflow_start_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
     initial_metadata: Option<Value>,
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
-) -> Result<String, String> {
+) -> Result<String, ApplicationError> {
     log::info!(
         "[Workflow][session={}][phase=start] Starting workflow, agent_id={}, planning_mode={}",
         session_id,
@@ -3889,13 +4723,13 @@ pub async fn workflow_start(
         planning_mode.unwrap_or(false)
     );
 
-    let main_store_arc = state.inner().clone();
-    let chat_state_arc = chat_state.inner().clone();
-    let tsid_generator = tsid_generator.inner().clone();
-    let gateway_arc = gateway.inner().clone();
-    let factory = factory.inner().clone();
-    let workflow_manager_arc = workflow_manager.inner().clone();
-    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let main_store_arc = svc.main_store.clone();
+    let chat_state_arc = svc.chat_state.clone();
+    let tsid_generator = svc.tsid_generator.clone();
+    let gateway_arc = svc.gateway.clone();
+    let factory = svc.factory.clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
+    let app_data_dir = svc.app_data_dir.clone();
     let planning_mode = planning_mode.unwrap_or(false);
 
     if initial_prompt.is_some() {
@@ -3993,12 +4827,59 @@ pub async fn workflow_start(
         }
     };
 
+    // Raw workflow agent_config JSON, kept so the Phase 2F experiment prompt
+    // resolution reads the exact persisted snapshot instead of a merged view.
+    let workflow_agent_config_raw: String = {
+        let store = &*main_store_arc;
+        store
+            .get_workflow_snapshot(&session_id)
+            .ok()
+            .and_then(|snapshot| snapshot.workflow.agent_config)
+            .unwrap_or_default()
+    };
+
     // Load agent_config from workflow record if available and merge into agent_config struct
     if let Some(config_str) = agent_config_json.as_str() {
         agent_config.merge_config(config_str);
     } else if !agent_config_json.is_null() {
         if let Ok(config_str) = serde_json::to_string(&agent_config_json) {
             agent_config.merge_config(&config_str);
+        }
+    }
+
+    // Phase 2F: resolve a workflow-local experiment prompt reference, if the
+    // snapshot carries one, into this executor's Agent. The prompt body is
+    // re-read from the checked-in candidate catalog; an unknown ref, a stale
+    // hash or a catalog drift fails closed instead of silently starting the
+    // run with the baseline prompt. `llm.rs::inject_prompts` stays the single
+    // prompt assembly point and reads `system_prompt`/`planning_prompt`
+    // exactly as before, so no second prompt path is introduced.
+    match crate::workflow::react::campaign::resolve_workflow_prompt_override(
+        &workflow_agent_config_raw,
+    ) {
+        Ok(Some(resolved)) => {
+            log::info!(
+                "[Workflow][session={}][phase=start] Applying experiment prompt ref={} surface_hash={}",
+                session_id,
+                resolved.agent_prompt_ref,
+                resolved.surface_hash()
+            );
+            agent_config.system_prompt = resolved.system_prompt;
+            if resolved.planning_prompt.is_some() {
+                agent_config.planning_prompt = resolved.planning_prompt;
+            }
+        }
+        Ok(None) => {}
+        Err(error) => {
+            log::error!(
+                "[Workflow][session={}][phase=start] experiment prompt rejected: {}",
+                session_id,
+                error.code.as_str()
+            );
+            return Err(ApplicationError::invalid_input(format!(
+                "experiment_prompt_rejected: {}",
+                error.code.as_str()
+            )));
         }
     }
 
@@ -4036,13 +4917,19 @@ pub async fn workflow_start(
                 "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
                 session_id
             );
-            return Err(format!("Session is stopping: {}", session_id));
+            return Err(ApplicationError::state(format!(
+                "Session is stopping: {}",
+                session_id
+            )));
         }
         log::info!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
         );
-        return Err(format!("Session already exists: {}", session_id));
+        return Err(ApplicationError::conflict(format!(
+            "Session already exists: {}",
+            session_id
+        )));
     }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
@@ -4117,6 +5004,11 @@ pub async fn workflow_start(
         reset_workflow_planning_note(&allowed_roots)?;
     }
 
+    // A run the durable scheduler dispatched carries its verified capability
+    // bundle in the in-memory registry, keyed by this session; an immediate run
+    // finds none and behaves exactly as before (INV-2/INV-6).
+    let owned_capabilities = svc.prepared_lease(&session_id);
+
     let shared_executor: Arc<
         tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>,
     > = if planning_mode {
@@ -4136,6 +5028,7 @@ pub async fn workflow_start(
                 global_tool_manager,
                 auto_compress_enabled,
                 policy,
+                owned_capabilities.clone(),
             ),
         ))
     } else {
@@ -4155,6 +5048,7 @@ pub async fn workflow_start(
                 global_tool_manager,
                 auto_compress_enabled,
                 policy,
+                owned_capabilities.clone(),
             ),
         ))
     };
@@ -4188,7 +5082,10 @@ pub async fn workflow_start(
             session_id,
             e
         );
-        return Err(format!("Failed to register workflow session: {}", e));
+        return Err(ApplicationError::internal(format!(
+            "Failed to register workflow session: {}",
+            e
+        )));
     }
 
     // BACKGROUND_TASKS as compatibility layer (secondary)
@@ -4213,7 +5110,11 @@ pub async fn workflow_start(
     let main_store_for_spawn = main_store_arc.clone();
     tokio::spawn(async move {
         let mut guard = shared_executor.lock().await;
-        if let Err(e) = guard.run_loop().await {
+        let run_result = guard.run_loop().await;
+        // The run is over, so its run-scoped capabilities are no longer needed:
+        // their servers are removed from this session's own tool manager.
+        guard.release_owned_capabilities().await;
+        if let Err(e) = run_result {
             if let crate::workflow::react::error::WorkflowEngineError::Cancelled(_) = e {
                 let _ = persist_cancelled_workflow_state(
                     main_store_for_spawn.as_ref(),
@@ -4311,12 +5212,35 @@ pub async fn workflow_start(
     Ok(session_id)
 }
 
+#[tauri::command]
+pub async fn workflow_start(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+    agent_id: String,
+    initial_prompt: Option<String>,
+    initial_metadata: Option<Value>,
+    initial_attached_context: Option<String>,
+    planning_mode: Option<bool>,
+) -> Result<String, String> {
+    workflow_start_core(
+        &svc,
+        session_id,
+        agent_id,
+        initial_prompt,
+        initial_metadata,
+        initial_attached_context,
+        planning_mode,
+    )
+    .await
+    .map_err(|e| e.message)
+}
+
 async fn run_terminal_manual_compression(
-    app: &AppHandle,
+    app_data_dir: PathBuf,
     main_store: Arc<MainStore>,
     chat_state: Arc<ChatState>,
     tsid_generator: Arc<TsidGenerator>,
-    gateway: Arc<TauriGateway>,
+    gateway: Arc<WorkflowRuntimeHub>,
     factory: Arc<dyn SubAgentFactory>,
     session_id: &str,
     workflow_snapshot: &WorkflowSnapshot,
@@ -4378,7 +5302,7 @@ async fn run_terminal_manual_compression(
         factory,
         agent_config,
         allowed_paths,
-        app.path().app_data_dir().unwrap_or_default(),
+        app_data_dir,
         None,
         None,
         tsid_generator,
@@ -4395,13 +5319,7 @@ async fn run_terminal_manual_compression(
 
 #[tauri::command]
 pub async fn workflow_approve_plan(
-    app: AppHandle,
-    main_store: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
     agent_id: String,
     plan: String,
@@ -4412,21 +5330,20 @@ pub async fn workflow_approve_plan(
         agent_id
     );
 
-    let submit_plan_tool_call_id =
-        restore_context_for_signal(main_store.inner().clone(), &session_id)
-            .and_then(|context| {
-                context
-                    .pending_tools
-                    .into_iter()
-                    .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
-                    .map(|tool| tool.tool_call_id)
-            })
-            .ok_or_else(|| {
-                format!(
+    let submit_plan_tool_call_id = restore_context_for_signal(svc.main_store.clone(), &session_id)
+        .and_then(|context| {
+            context
+                .pending_tools
+                .into_iter()
+                .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
+                .map(|tool| tool.tool_call_id)
+        })
+        .ok_or_else(|| {
+            format!(
                 "Cannot approve plan: no pending structured submit_plan approval for workflow {}",
                 session_id
             )
-            })?;
+        })?;
 
     let signal = json!({
         "type": SignalType::Approval.as_str(),
@@ -4440,33 +5357,17 @@ pub async fn workflow_approve_plan(
     })
     .to_string();
 
-    workflow_signal(
-        app,
-        main_store,
-        chat_state,
-        tsid_generator,
-        gateway,
-        factory,
-        workflow_manager,
-        session_id,
-        signal,
-    )
-    .await
-    .map(|_| ())
+    workflow_signal_core(&svc, session_id, signal)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.message)
 }
 
-#[tauri::command]
-pub async fn workflow_signal(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    factory: State<'_, Arc<dyn SubAgentFactory>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub(crate) async fn workflow_signal_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     signal: String,
-) -> Result<String, String> {
+) -> Result<String, ApplicationError> {
     let signal_type = serde_json::from_str::<serde_json::Value>(&signal)
         .ok()
         .and_then(|value| {
@@ -4485,9 +5386,9 @@ pub async fn workflow_signal(
         signal_type
     );
 
-    let workflow_manager_arc = workflow_manager.inner().clone();
-    let gateway_arc = gateway.inner().clone();
-    let main_store_arc = state.inner().clone();
+    let workflow_manager_arc = svc.workflow_manager.clone();
+    let gateway_arc = svc.gateway.clone();
+    let main_store_arc = svc.main_store.clone();
     let workflow_snapshot = {
         let store = &*main_store_arc;
         store
@@ -4518,12 +5419,12 @@ pub async fn workflow_signal(
             session_id
         );
         let applied = run_terminal_manual_compression(
-            &app,
+            svc.app_data_dir.clone(),
             main_store_arc.clone(),
-            chat_state.inner().clone(),
-            tsid_generator.inner().clone(),
+            svc.chat_state.clone(),
+            svc.tsid_generator.clone(),
             gateway_arc.clone(),
-            factory.inner().clone(),
+            svc.factory.clone(),
             &session_id,
             &workflow_snapshot,
         )
@@ -4588,7 +5489,10 @@ pub async fn workflow_signal(
                                 )
                                 .await;
                         } else {
-                            return Err(format!("Gateway injection failed: {}", e));
+                            return Err(ApplicationError::gateway(format!(
+                                "Gateway injection failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -4599,14 +5503,8 @@ pub async fn workflow_signal(
                 session_id,
                 workflow_snapshot.workflow.status
             );
-            workflow_start(
-                app,
-                state,
-                chat_state,
-                tsid_generator,
-                gateway,
-                factory,
-                workflow_manager,
+            workflow_start_core(
+                svc,
                 session_id.clone(),
                 workflow_snapshot.workflow.agent_id.clone(),
                 signal_json_content(&signal),
@@ -4630,7 +5528,7 @@ pub async fn workflow_signal(
                         session_id,
                         signal_type
                     );
-                    return Err(format!("Signal rejected: {}", e));
+                    return Err(ApplicationError::state(format!("Signal rejected: {}", e)));
                 }
                 let allow_recovery_for_terminal_user_message = matches!(
                     signal_type_enum,
@@ -4661,7 +5559,7 @@ pub async fn workflow_signal(
                         signal_type,
                         e
                     );
-                    return Err(format!("Signal rejected: {}", e));
+                    return Err(ApplicationError::state(format!("Signal rejected: {}", e)));
                 }
             } else {
                 log::info!(
@@ -4705,7 +5603,10 @@ pub async fn workflow_signal(
                                 session_id,
                                 e
                             );
-                            return Err(format!("Gateway injection failed: {}", e));
+                            return Err(ApplicationError::gateway(format!(
+                                "Gateway injection failed: {}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -4765,10 +5666,10 @@ pub async fn workflow_signal(
                         effective_wait_reason,
                         workflow_snapshot.workflow.status
                     );
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot resume: workflow is in '{}' state",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
                 log::info!(
@@ -4779,14 +5680,8 @@ pub async fn workflow_signal(
                     workflow_snapshot.workflow.status
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     if should_reinject_after_recovery {
@@ -4826,10 +5721,10 @@ pub async fn workflow_signal(
                         let err_msg = last_error
                             .map(|e| e.to_string())
                             .unwrap_or_else(|| "Unknown error".into());
-                        return Err(format!(
+                        return Err(ApplicationError::gateway(format!(
                             "Failed to inject user_message after resuming: {}",
                             err_msg
-                        ));
+                        )));
                     }
 
                     return Ok("Workflow resumed and user message reinjected".to_string());
@@ -4864,14 +5759,8 @@ pub async fn workflow_signal(
                     session_id
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -4933,14 +5822,8 @@ pub async fn workflow_signal(
                     );
                 }
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -4981,10 +5864,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject {} after resuming: {}",
                         signal_type, err_msg
-                    ));
+                    )));
                 }
 
                 return Ok(format!("Workflow resumed and {} processed", signal_type));
@@ -5002,10 +5885,10 @@ pub async fn workflow_signal(
                             )
                         ));
                 if !can_resume {
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
                 log::info!(
@@ -5013,14 +5896,8 @@ pub async fn workflow_signal(
                     session_id
                 );
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -5055,10 +5932,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject approval after resuming: {}",
                         err_msg
-                    ));
+                    )));
                 }
 
                 return Ok("Workflow resumed and approval processed".to_string());
@@ -5067,20 +5944,14 @@ pub async fn workflow_signal(
                 Some(WorkflowSignal::SubAgentComplete { .. })
             ) {
                 if effective_wait_reason != Some(WaitReason::SubAgent) {
-                    return Err(format!(
+                    return Err(ApplicationError::state(format!(
                         "Cannot process sub-agent completion: Workflow is in '{}' state.",
                         workflow_snapshot.workflow.status
-                    ));
+                    )));
                 }
 
-                workflow_start(
-                    app,
-                    state,
-                    chat_state,
-                    tsid_generator,
-                    gateway,
-                    factory,
-                    workflow_manager,
+                workflow_start_core(
+                    svc,
                     session_id.clone(),
                     workflow_snapshot.workflow.agent_id.clone(),
                     None,
@@ -5110,10 +5981,10 @@ pub async fn workflow_signal(
                     let err_msg = last_error
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Unknown error".into());
-                    return Err(format!(
+                    return Err(ApplicationError::gateway(format!(
                         "Failed to inject sub_agent_complete after resuming: {}",
                         err_msg
-                    ));
+                    )));
                 }
 
                 return Ok("Workflow resumed and sub-agent completion processed".to_string());
@@ -5121,36 +5992,68 @@ pub async fn workflow_signal(
         }
     }
 
-    Err(format!(
+    Err(ApplicationError::gateway(format!(
         "Failed to send signal: No active session for {}",
         session_id
-    ))
+    )))
 }
 
 #[tauri::command]
-pub async fn workflow_stop(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<TauriGateway>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+pub async fn workflow_signal(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
-) -> Result<(), String> {
+    signal: String,
+) -> Result<String, String> {
+    workflow_signal_core(&svc, session_id, signal)
+        .await
+        .map_err(|e| e.message)
+}
+
+/// Terminal workflow statuses that no longer have a live executor to consume a
+/// stop signal. See CONSTITUTION.md §5.3: stop stays actionable during active
+/// execution, waiting, retry/backoff windows, and temporary signal drains; only
+/// true terminal states are skipped.
+fn is_terminal_workflow_status(status: &str) -> bool {
+    matches!(status, "completed" | "error" | "cancelled")
+}
+
+pub(crate) async fn workflow_stop_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<(), ApplicationError> {
+    let state = &svc.main_store;
+    let chat_state = &svc.chat_state;
+    let gateway = &svc.gateway;
+    let workflow_manager = &svc.workflow_manager;
     let previous_status = {
-        let store = &**state.inner();
+        let store = &**state;
         store
             .get_workflow_snapshot(&session_id)
             .map(|snapshot| snapshot.workflow.status)
             .unwrap_or_else(|_| WorkflowState::Cancelled.to_string())
     };
 
-    interrupt_openai_session(chat_state.inner(), &session_id).await;
-    cleanup_owned_background_resources(&session_id, chat_state.inner()).await;
+    // A terminal session has no executor left to consume a stop signal:
+    // injecting one would flip the persisted status to `stopping` with nothing
+    // to resolve it, leaving the session stuck. Treat stop on a terminal
+    // session as a successful no-op (idempotent).
+    if is_terminal_workflow_status(&previous_status) {
+        log::info!(
+            "[Workflow][session={}][phase=stop] Session already terminal (status={}); stop is a no-op",
+            session_id,
+            previous_status
+        );
+        return Ok(());
+    }
+
+    interrupt_openai_session(chat_state, &session_id).await;
+    cleanup_owned_background_resources(&session_id, chat_state).await;
 
     // Keep stop as a runtime signal only.
     // Terminal persistence and session cleanup should happen on the executor's
     // normal shutdown path after it processes the stop signal.
-    let gateway_arc = gateway.inner().clone();
-    let workflow_manager = workflow_manager.inner().clone();
+    let gateway_arc = gateway.clone();
+    let workflow_manager = workflow_manager.clone();
     match gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await
@@ -5168,7 +6071,7 @@ pub async fn workflow_stop(
                 )
                 .await;
             {
-                let store = &**state.inner();
+                let store = &**state;
                 store
                     .update_workflow_status(&session_id, &WorkflowState::Stopping.to_string())
                     .map_err(|e| e.to_string())?;
@@ -5198,7 +6101,7 @@ pub async fn workflow_stop(
                 let mut guard = executor.lock().await;
                 guard.set_state(WorkflowState::Cancelled);
             }
-            let _ = persist_cancelled_workflow_state(state.inner().as_ref(), &session_id);
+            let _ = persist_cancelled_workflow_state(state.as_ref(), &session_id);
             let _ = workflow_manager
                 .update_session_status(&session_id, ManagedSessionStatus::Cancelled);
             let _ = gateway_arc
@@ -5221,15 +6124,23 @@ pub async fn workflow_stop(
                     "workflow_stop.gateway_injection_failed",
                 )
                 .await;
-            Err(e.to_string())
+            Err(ApplicationError::gateway(e.to_string()))
         }
         Err(e) => {
-            let _ = state
-                .inner()
-                .update_workflow_status(&session_id, &previous_status);
-            Err(e.to_string())
+            let _ = state.update_workflow_status(&session_id, &previous_status);
+            Err(ApplicationError::gateway(e.to_string()))
         }
     }
+}
+
+#[tauri::command]
+pub async fn workflow_stop(
+    svc: State<'_, Arc<WorkflowApplicationService>>,
+    session_id: String,
+) -> Result<(), String> {
+    workflow_stop_core(&svc, session_id)
+        .await
+        .map_err(|e| e.message)
 }
 
 #[tauri::command]
@@ -5395,7 +6306,7 @@ pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, Str
 #[tauri::command]
 pub async fn update_workflow_allowed_paths(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     allowed_paths: Value,
@@ -5450,7 +6361,7 @@ pub async fn get_workflow_session_key(
 #[tauri::command]
 pub async fn update_workflow_final_audit(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     final_audit: bool,
@@ -5495,7 +6406,7 @@ pub async fn update_workflow_final_audit(
 #[tauri::command]
 pub async fn update_workflow_auto_compress(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     auto_compress: bool,
@@ -5535,7 +6446,7 @@ pub async fn update_workflow_auto_compress(
 #[tauri::command]
 pub async fn update_workflow_personality(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     personality: String,
@@ -5597,7 +6508,7 @@ pub async fn update_workflow_personality(
 #[tauri::command]
 pub async fn update_workflow_model_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     configs: Value,
@@ -5639,7 +6550,7 @@ pub async fn update_workflow_model_config(
 #[tauri::command]
 pub async fn update_workflow_skills_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     skill_enabled: bool,
@@ -5682,7 +6593,7 @@ pub async fn update_workflow_skills_config(
 #[tauri::command]
 pub async fn update_workflow_approval_level(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     approval_level: String,
@@ -5722,7 +6633,7 @@ pub async fn update_workflow_approval_level(
 #[tauri::command]
 pub async fn update_workflow_phase(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     phase: String,
@@ -5762,7 +6673,7 @@ pub async fn update_workflow_phase(
 #[tauri::command]
 pub async fn update_workflow_sandbox_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     execution_mode: crate::tools::ShellExecutionMode,
@@ -5787,7 +6698,7 @@ pub async fn update_workflow_sandbox_config(
         config.sandbox_override = Some(true);
         config.sandbox_execution_mode = Some(execution_mode.clone());
         config.sandbox_scheme_id = sandbox_scheme_id;
-        resolve_agent_sandbox_snapshot(&store, &agent, &mut config)?;
+        resolve_agent_sandbox_snapshot(&store, &agent, &mut config, None)?;
         let sandbox_config = config.sandbox_config.clone();
         store
             .update_workflow_agent_config(&session_id, &config.to_json())
@@ -5816,7 +6727,7 @@ pub async fn update_workflow_sandbox_config(
 #[tauri::command]
 pub async fn update_workflow_agent_config(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     agent_config: String,
@@ -6000,7 +6911,7 @@ pub async fn get_auto_approved_tools(
 #[tauri::command]
 pub async fn remove_auto_approved_tool(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     tool_name: String,
@@ -6047,7 +6958,7 @@ pub async fn remove_auto_approved_tool(
 #[tauri::command]
 pub async fn remove_shell_policy_item(
     state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<TauriGateway>>,
+    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
     workflow_manager: State<'_, Arc<WorkflowManager>>,
     session_id: String,
     pattern: String,
@@ -6092,14 +7003,31 @@ pub async fn remove_shell_policy_item(
 }
 
 #[tauri::command]
+pub(crate) async fn get_workflow_events_core(
+    svc: &WorkflowApplicationService,
+    query: WorkflowEventsQuery,
+) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, ApplicationError> {
+    svc.main_store
+        .list_workflow_events_after(&query.session_id, query.after, query.limit)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[tauri::command]
 pub async fn get_workflow_events(
-    state: State<'_, Arc<MainStore>>,
+    svc: State<'_, Arc<WorkflowApplicationService>>,
     session_id: String,
 ) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
-    let store = &*state;
-    store
-        .list_workflow_events(&session_id)
-        .map_err(|e| e.to_string())
+    // The Tauri wire keeps returning the full durable event list.
+    get_workflow_events_core(
+        &svc,
+        WorkflowEventsQuery {
+            session_id,
+            after: None,
+            limit: None,
+        },
+    )
+    .await
+    .map_err(|e| e.message)
 }
 
 #[tauri::command]
@@ -6154,6 +7082,32 @@ mod tests {
         let terminal = error.terminal_error();
         assert_eq!(terminal.content, raw_body);
         assert!(!terminal.content.contains("Critical Error:"));
+    }
+
+    #[test]
+    fn terminal_workflow_statuses_skip_stop() {
+        assert!(is_terminal_workflow_status("completed"));
+        assert!(is_terminal_workflow_status("error"));
+        assert!(is_terminal_workflow_status("cancelled"));
+
+        // Non-terminal states must keep stop actionable (CONSTITUTION.md §5.3).
+        for status in [
+            "pending",
+            "thinking",
+            "executing",
+            "auditing",
+            "stopping",
+            "paused",
+            "awaiting_user",
+            "awaiting_approval",
+            "awaiting_auto_approval",
+            "awaiting_sub_agent",
+        ] {
+            assert!(
+                !is_terminal_workflow_status(status),
+                "stop must stay actionable for status={status}"
+            );
+        }
     }
 
     #[test]
@@ -6275,7 +7229,7 @@ mod tests {
 
         // First resolution snapshots the current scheme content.
         let mut config = crate::db::agent::AgentConfig::default();
-        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config)
+        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config, None)
             .expect("resolve sandbox snapshot");
         let first = config.sandbox_config.as_ref().expect("has sandbox config");
         assert_eq!(first.scheme_id.as_deref(), Some("scheme-1"));
@@ -6291,7 +7245,7 @@ mod tests {
 
         // Re-resolution must observe the edited scheme, not a cached snapshot.
         let mut config = crate::db::agent::AgentConfig::default();
-        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config)
+        resolve_agent_sandbox_snapshot(&test_store, &agent, &mut config, None)
             .expect("resolve sandbox snapshot again");
         let second = config.sandbox_config.as_ref().expect("has sandbox config");
         assert_eq!(second.profiles["common"].image, "node:22");
@@ -8024,6 +8978,96 @@ mod tests {
     }
 
     #[test]
+    fn experiment_prompt_identity_survives_sync_and_is_never_inherited() {
+        use crate::workflow::react::campaign;
+
+        let store = create_test_store();
+        let session_id = "campaign-prompt-identity";
+        seed_agent(&store, "agent-test");
+
+        let surface = campaign::CandidatePromptCatalog::embedded()
+            .surfaces()
+            .first()
+            .expect("checked-in candidate surface")
+            .clone();
+        let resolved =
+            campaign::resolve_candidate_prompt(&surface.agent_prompt_ref, &surface.prompt_hash)
+                .expect("resolves");
+
+        // The campaign run facade attaches the ref/hash/catalog digest to the
+        // workflow snapshot through the single config resolver.
+        let config = AgentConfig {
+            experiment_agent_prompt_ref: Some(resolved.agent_prompt_ref.clone()),
+            experiment_agent_prompt_hash: Some(resolved.prompt_hash.clone()),
+            experiment_prompt_catalog_digest: Some(resolved.catalog_digest.clone()),
+            ..AgentConfig::default()
+        };
+        store
+            .create_workflow(
+                session_id,
+                "Reply with exactly: OK",
+                "agent-test",
+                Some(config.to_json()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        // The snapshot round-trips the reference (nothing but the ref/hash and
+        // the catalog digest is persisted, never the prompt body).
+        let persisted_json = store
+            .get_workflow(session_id)
+            .expect("read")
+            .and_then(|workflow| workflow.agent_config)
+            .expect("workflow config present");
+        assert!(!persisted_json.contains("Output only the token"));
+        assert_eq!(
+            campaign::resolve_workflow_prompt_override(&persisted_json)
+                .expect("resolves")
+                .expect("override present"),
+            resolved
+        );
+
+        // The tool-boundary capability sync rebuilds the config from the
+        // current Agent; the frozen run surface must survive it.
+        let synced =
+            sync_workflow_agent_config_at_tool_boundary(&store, session_id).expect("sync succeeds");
+        assert_eq!(
+            synced.experiment_agent_prompt_ref.as_deref(),
+            Some(resolved.agent_prompt_ref.as_str())
+        );
+        assert_eq!(
+            synced.experiment_agent_prompt_hash.as_deref(),
+            Some(resolved.prompt_hash.as_str())
+        );
+        let persisted_after_sync = store
+            .get_workflow(session_id)
+            .expect("read")
+            .and_then(|workflow| workflow.agent_config)
+            .expect("workflow config present");
+        assert_eq!(
+            campaign::resolve_workflow_prompt_override(&persisted_after_sync)
+                .expect("resolves")
+                .expect("override present"),
+            resolved
+        );
+
+        // An inherited payload can never select an experiment surface: the
+        // validated inherited config strips these fields, so a normal
+        // `--agent-config` or "create from workflow" cannot opt in.
+        let injected = AgentConfig {
+            experiment_agent_prompt_ref: Some(resolved.agent_prompt_ref.clone()),
+            experiment_agent_prompt_hash: Some(resolved.prompt_hash.clone()),
+            experiment_prompt_catalog_digest: Some(resolved.catalog_digest.clone()),
+            ..AgentConfig::default()
+        }
+        .to_json();
+        let validated = validated_inherited_agent_config(&injected).expect("parses");
+        assert!(validated.experiment_agent_prompt_ref.is_none());
+        assert!(validated.experiment_agent_prompt_hash.is_none());
+        assert!(validated.experiment_prompt_catalog_digest.is_none());
+    }
+
+    #[test]
     fn auto_approved_tools_are_filtered_by_visible_tool_capabilities() {
         let mut config = AgentConfig {
             available_tools: Some(vec!["read_file".to_string()]),
@@ -8358,6 +9402,89 @@ mod tests {
         assert_eq!(persisted.approval_level, Some("smart".to_string()));
     }
 
+    #[test]
+    fn partial_inherited_config_keeps_agent_tool_capabilities() {
+        // The CLI --model shortcut synthesizes a minimal inherited config that
+        // only carries models.act. AgentConfig::from_json normalizes a missing
+        // tool list into an explicit empty restriction, which must not shrink
+        // the Agent's built-in tool capabilities (built-in tool scope comes
+        // from the Agent config; skills/MCP come from user installation and
+        // preferences).
+        let mut agent = Agent::new(
+            "agent-test".to_string(),
+            "Agent Test".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "You are a test agent.".to_string(),
+            None,
+            None,
+            Some(
+                serde_json::to_string(&vec![
+                    crate::tools::TOOL_BASH.to_string(),
+                    crate::tools::TOOL_READ_FILE.to_string(),
+                ])
+                .expect("serialize available tools"),
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let request = CreateWorkflowRequest {
+            user_query: Some("test".to_string()),
+            agent_id: agent.id.clone(),
+            allowed_paths: None,
+            auto_approve_plan: None,
+            final_audit: None,
+            inherited_agent_config: Some(
+                r#"{"models":{"act":{"id":0,"model":"test-model"}}}"#.to_string(),
+            ),
+        };
+
+        let config = build_workflow_config_for_request(&agent, &request);
+
+        assert_eq!(
+            config.available_tools,
+            Some(vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ])
+        );
+        assert_eq!(
+            config.models.and_then(|models| models.act).map(|m| m.model),
+            Some("test-model".to_string())
+        );
+
+        // An inherited config that explicitly carries availableTools still
+        // intersects with the Agent's capabilities.
+        agent.available_tools = Some(
+            serde_json::to_string(&vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ])
+            .expect("serialize available tools"),
+        );
+        let request = CreateWorkflowRequest {
+            inherited_agent_config: Some(r#"{"availableTools":["read_file"]}"#.to_string()),
+            ..request
+        };
+        let config = build_workflow_config_for_request(&agent, &request);
+        assert_eq!(
+            config.available_tools,
+            Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+        );
+    }
+
     #[tokio::test]
     async fn test_manual_clear_context_clears_persisted_todo_list() {
         let store = create_test_store();
@@ -8658,5 +9785,715 @@ mod tests {
         assert_eq!(hydrated.state, RuntimeState::Cancelled);
         assert_eq!(hydrated.wait_reason, None);
         assert_eq!(hydrated.current_context_tokens, Some(128));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2G+2H durable campaign schedule facade
+// ---------------------------------------------------------------------------
+//
+// These cores are the transport-neutral half of the durable scheduling surface
+// (AC-2/AC-6). They are reached only through `WorkflowApplicationService`, so
+// the Tauri adapter, the loopback control plane and the CLI all share exactly
+// one implementation and one set of rejections (INV-1).
+//
+// Ordering is the safety contract for every entry point: validate the document,
+// prove the database is a marked experiment domain, resolve the server-side
+// execution profile, verify the fixture refs against the pinned catalog, check
+// the agent, and only then write. Nothing is persisted before every check
+// passes, and no caller can widen the resource set.
+
+/// Maps a durable-schedule rejection onto a stable application error. The
+/// machine code travels in the message exactly like the 2F
+/// `campaign_spec_rejected: <code>` contract, so a caller can branch without
+/// parsing prose.
+fn schedule_validation_error(
+    code: crate::workflow::react::experiment_schedule::types::ScheduleErrorCode,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("schedule_rejected: {}", code.as_str()))
+}
+
+/// Rejects a request with a stable `schedule_rejected: <code>` message, keeping
+/// the original 2F machine code verbatim.
+fn schedule_validation_error_text(code: &str, message: &str) -> ApplicationError {
+    log::warn!("[Workflow][phase=schedule] rejected: {code}: {message}");
+    ApplicationError::invalid_input(format!("schedule_rejected: {code}"))
+}
+
+/// Flattens a typed schedule error into the application error surface.
+fn schedule_error(
+    error: crate::workflow::react::experiment_schedule::types::ScheduleError,
+) -> ApplicationError {
+    match error.code {
+        crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownCampaign => {
+            ApplicationError::not_found(error.message)
+        }
+        crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::UnknownJob => {
+            ApplicationError::not_found(error.message)
+        }
+        code => schedule_validation_error(code),
+    }
+}
+
+fn durable_schedule_store(
+    svc: &WorkflowApplicationService,
+) -> crate::db::experiment_schedule::ExperimentScheduleStore {
+    crate::db::experiment_schedule::ExperimentScheduleStore::new(svc.main_store.clone())
+}
+
+fn require_experiment_domain(
+    store: &crate::db::experiment_schedule::ExperimentScheduleStore,
+) -> Result<(), ApplicationError> {
+    let marked = store.domain_is_marked().map_err(schedule_error)?;
+    if marked {
+        Ok(())
+    } else {
+        Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::DomainUnmarked,
+        ))
+    }
+}
+
+/// Persists one validated durable schedule request and its ordered job list.
+pub(crate) fn campaign_schedule_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment_schedule::types::CampaignScheduleRequestV1,
+    idempotency_key: &str,
+) -> Result<
+    crate::workflow::react::experiment_schedule::types::CampaignScheduleAcceptedV1,
+    ApplicationError,
+> {
+    use crate::headless::profiles::ExecutionProfileRegistry;
+    use crate::workflow::react::experiment_schedule::fixture::resolve_task_ref;
+    use crate::workflow::react::experiment_schedule::types::validate_campaign_schedule_request;
+
+    // 1. The document itself must be internally consistent, and the frozen plan
+    //    must satisfy the exact 2F rules (including the allowlisted candidate
+    //    surface). The durable queue therefore never holds a plan the run path
+    //    would reject later.
+    validate_campaign_schedule_request(&request).map_err(schedule_error)?;
+    request
+        .plan
+        .validate()
+        .map_err(|error| schedule_validation_error_text(error.code.as_str(), &error.message))?;
+    if idempotency_key.trim().is_empty() {
+        return Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::InvalidJobState,
+        ));
+    }
+
+    // 2. Only a marked experiment domain may enqueue durable work (AC-1).
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+
+    // 3. The execution profile is server-registered, never caller-supplied.
+    let registry = ExecutionProfileRegistry::new(&svc.app_data_dir);
+    let profile = registry
+        .load(&request.execution_profile_ref)
+        .map_err(schedule_error)?;
+    registry
+        .authorize_bundles(&profile, &request.bundle_refs)
+        .map_err(schedule_error)?;
+
+    let profile_hash = profile.profile_hash();
+    // 4. The fixture refs must still resolve against the pinned catalog: a
+    //    drifted catalog is a pre-dispatch rejection, never a different run.
+    for reference in &request.fixture_refs {
+        resolve_task_ref(reference).map_err(|error| {
+            log::warn!(
+                "[Workflow][phase=schedule] fixture ref rejected: {}: {}",
+                error.code,
+                error.message
+            );
+            schedule_validation_error(
+                crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::FixtureDigestMismatch,
+            )
+        })?;
+    }
+
+    // 5. The agent must exist and be runnable as a top-level workflow agent.
+    let agent = svc
+        .main_store
+        .get_agent(&request.plan.agent_id)
+        .map_err(|e| ApplicationError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApplicationError::not_found(format!("Agent {} not found", request.plan.agent_id))
+        })?;
+    if agent.role.as_deref() == Some("child") {
+        return Err(schedule_validation_error(
+            crate::workflow::react::experiment_schedule::types::ScheduleErrorCode::InvalidAgentId,
+        ));
+    }
+
+    // 6. Persist the frozen plan and its ordered jobs in one transaction.
+    let outcome = store
+        .schedule_campaign(
+            &request,
+            idempotency_key,
+            &profile_hash,
+            crate::headless::domain::now_ms(),
+        )
+        .map_err(schedule_error)?;
+    log::info!(
+        "[Workflow][campaign={}][phase=schedule] Durable schedule {} ({} jobs, profile {})",
+        outcome.accepted.campaign_id,
+        if outcome.created {
+            "created"
+        } else {
+            "replayed"
+        },
+        outcome.accepted.job_ids.len(),
+        outcome.accepted.execution_profile_ref
+    );
+    Ok(outcome.accepted)
+}
+
+/// The durable job list of one campaign.
+pub(crate) fn campaign_jobs_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignJobListV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_schedule::types::CAMPAIGN_JOB_LIST_V1;
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let jobs = store
+        .list_jobs(campaign_id)
+        .map_err(schedule_error)?
+        .into_iter()
+        .map(|record| record.job)
+        .collect();
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignJobListV1 {
+            schema_version: CAMPAIGN_JOB_LIST_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            jobs,
+        },
+    )
+}
+
+/// One durable job by id.
+pub(crate) fn campaign_job_core(
+    svc: &WorkflowApplicationService,
+    job_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignJobV1, ApplicationError> {
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    store
+        .get_job(job_id)
+        .map(|record| record.job)
+        .map_err(schedule_error)
+}
+
+/// Cancels the campaign's pre-dispatch work and stops admitting new work.
+///
+/// Already-dispatched jobs are reported, never cancelled: their effect may have
+/// happened, so only the run kernel or an explicit reconciliation may resolve
+/// them (INV-5).
+pub(crate) async fn campaign_cancel_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+    reason: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignCancelV1, ApplicationError>
+{
+    use crate::db::experiment_schedule::CampaignStatus;
+    use crate::workflow::react::experiment_schedule::types::{DispatchMarker, CAMPAIGN_CANCEL_V1};
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let now = crate::headless::domain::now_ms();
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let reason = if reason.trim().is_empty() {
+        "campaign_cancelled"
+    } else {
+        reason
+    };
+    let cancelled = store
+        .cancel_pre_dispatch_jobs(campaign_id, now)
+        .map_err(schedule_error)?;
+    let status = store
+        .set_campaign_status(campaign_id, CampaignStatus::Cancelled, now)
+        .map_err(schedule_error)?
+        .status;
+    // A dispatched job is never cancelled by the durable surface: its effect
+    // may have happened. A *known* running job is stopped through the existing
+    // run kernel instead, and anything uncertain is left for reconciliation
+    // (INV-5).
+    let mut dispatched_job_ids = Vec::new();
+    for record in store.list_jobs(campaign_id).map_err(schedule_error)? {
+        let job = record.job;
+        if job.state.is_terminal() || job.dispatch_marker == DispatchMarker::NotDispatched {
+            continue;
+        }
+        if let Some(run_id) = job.run_id.as_deref() {
+            match workflow_stop_core(svc, run_id.to_string()).await {
+                Ok(()) => log::info!(
+                    "[Workflow][campaign={}][job={}][phase=cancel] Stopped the running workflow {}",
+                    campaign.campaign_id,
+                    job.job_id,
+                    run_id
+                ),
+                Err(error) => log::warn!(
+                    "[Workflow][campaign={}][job={}][phase=cancel] Could not stop run {}: {}",
+                    campaign.campaign_id,
+                    job.job_id,
+                    run_id,
+                    error.message
+                ),
+            }
+        }
+        dispatched_job_ids.push(job.job_id);
+    }
+    log::info!(
+        "[Workflow][campaign={}][phase=cancel] Cancelled {} pre-dispatch job(s), reason={}",
+        campaign.campaign_id,
+        cancelled.len(),
+        reason
+    );
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignCancelV1 {
+            schema_version: CAMPAIGN_CANCEL_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            status: status.as_str().to_string(),
+            cancelled_job_ids: cancelled,
+            dispatched_job_ids,
+        },
+    )
+}
+
+/// Evidence-only reconciliation: re-read the durable state plus the workflow
+/// authority and apply the deterministic classifier.
+///
+/// It never requeues and never calls the run kernel. The only write it may
+/// perform is parking a job whose effect cannot be proven absent.
+pub(crate) fn campaign_reconcile_core(
+    svc: &WorkflowApplicationService,
+    campaign_id: &str,
+) -> Result<crate::workflow::react::experiment_schedule::types::CampaignReconcileV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_schedule::types::{
+        classify_restart_recovery, RecoveryDecision, CAMPAIGN_RECONCILE_V1,
+    };
+
+    let store = durable_schedule_store(svc);
+    require_experiment_domain(&store)?;
+    let campaign = store.get_campaign(campaign_id).map_err(schedule_error)?;
+    let now = crate::headless::domain::now_ms();
+
+    let mut projections = Vec::new();
+    for record in store.list_jobs(campaign_id).map_err(schedule_error)? {
+        let job = record.job;
+        if job.state.is_terminal() {
+            continue;
+        }
+        // The workflow authority — not a log or a transcript — decides whether
+        // a recorded run is terminal.
+        let run_terminal = job.run_id.as_deref().map(|run_id| {
+            svc.main_store
+                .get_workflow_snapshot(run_id)
+                .map(|snapshot| is_terminal_workflow_status(&snapshot.workflow.status))
+                .unwrap_or(false)
+        });
+        let decision = classify_restart_recovery(
+            job.state,
+            job.dispatch_marker,
+            job.run_id.as_deref(),
+            run_terminal,
+        );
+        let mut parked = false;
+        if decision == RecoveryDecision::UnknownManual {
+            store
+                .park_unknown_manual(&job.job_id, run_terminal, "reconcile", now)
+                .map_err(schedule_error)?;
+            parked = true;
+            log::warn!(
+                "[Workflow][campaign={}][job={}][phase=reconcile] Parked as unknown_manual",
+                campaign.campaign_id,
+                job.job_id
+            );
+        }
+        let state = if parked {
+            crate::workflow::react::experiment_schedule::types::JobState::UnknownManual
+        } else {
+            job.state
+        };
+        projections.push(
+            crate::workflow::react::experiment_schedule::types::JobRecoveryProjectionV1 {
+                job_id: job.job_id,
+                state,
+                dispatch_marker: job.dispatch_marker,
+                run_id: job.run_id,
+                run_terminal,
+                decision,
+                parked,
+            },
+        );
+    }
+
+    Ok(
+        crate::workflow::react::experiment_schedule::types::CampaignReconcileV1 {
+            schema_version: CAMPAIGN_RECONCILE_V1.to_string(),
+            campaign_id: campaign.campaign_id,
+            jobs: projections,
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2I promotion surface
+// ---------------------------------------------------------------------------
+//
+// Additive to the 2G+2H schedule surface above: a promotion is submitted,
+// read, reconciled and audited through exactly those four operations, and every
+// one of them resolves its server-side resources here. The CLI and the HTTP
+// control plane both delegate to this module; neither opens the database,
+// starts a runtime or touches Git (INV-2).
+
+/// Maps a promotion rejection onto a stable `promotion_rejected: <code>`
+/// message, so a caller can branch without parsing prose.
+fn promotion_validation_error(
+    code: crate::workflow::react::experiment_promotion::types::PromotionErrorCode,
+) -> ApplicationError {
+    ApplicationError::invalid_input(format!("promotion_rejected: {}", code.as_str()))
+}
+
+/// Flattens a typed promotion error into the application error surface.
+fn promotion_error(
+    error: crate::workflow::react::experiment_promotion::types::PromotionError,
+) -> ApplicationError {
+    use crate::workflow::react::experiment_promotion::types::PromotionErrorCode::*;
+    match error.code {
+        UnknownPromotion => ApplicationError::not_found(error.message),
+        IdempotencyConflict | PromotionInFlight => {
+            ApplicationError::conflict(format!("promotion_rejected: {}", error.code.as_str()))
+        }
+        code => promotion_validation_error(code),
+    }
+}
+
+fn durable_promotion_store(
+    svc: &WorkflowApplicationService,
+) -> crate::db::experiment_promotion::ExperimentPromotionStore {
+    crate::db::experiment_promotion::ExperimentPromotionStore::new(svc.main_store.clone())
+}
+
+/// Projects one durable promotion row (plus its stages) for the operator
+/// surface. It carries refs, digests and typed state only (INV-8).
+fn promotion_projection(
+    store: &crate::db::experiment_promotion::ExperimentPromotionStore,
+    record: &crate::db::experiment_promotion::PromotionRecord,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    use crate::workflow::react::experiment_promotion::types::{
+        PromotionDecisionProjectionV1, PromotionProjectionV1, PromotionStageProjectionV1,
+        PROMOTION_PROJECTION_V1,
+    };
+    let stages = store
+        .canary_stage_results(&record.promotion_id)
+        .map_err(promotion_error)?
+        .into_iter()
+        .map(|stage| PromotionStageProjectionV1 {
+            stage_index: stage.stage_index,
+            stage_id: stage.stage_id,
+            metric: stage.metric,
+            samples: stage.samples,
+            baseline_passed: stage.baseline_passed,
+            candidate_passed: stage.candidate_passed,
+            baseline_mean: stage.baseline_mean,
+            candidate_mean: stage.candidate_mean,
+            declared_status: stage.declared_status,
+            recomputed_status: stage.recomputed_status,
+            output_sha256: stage.output_sha256,
+        })
+        .collect();
+    Ok(PromotionProjectionV1 {
+        schema_version: PROMOTION_PROJECTION_V1.to_string(),
+        promotion_id: record.promotion_id.clone(),
+        campaign_id: record.campaign_id.clone(),
+        candidate_key: record.candidate_key.clone(),
+        target_ref: record.target_ref.clone(),
+        state: record.state.as_str().to_string(),
+        request_hash: record.request_hash.clone(),
+        evidence_hash: record.evidence_hash.clone(),
+        target_hash: record.target_hash.clone(),
+        policy_hash: record.policy_hash.clone(),
+        base_revision: record.base_revision.clone(),
+        patch_sha256: record.patch_sha256.clone(),
+        patch_manifest_hash: record.patch_manifest_hash.clone(),
+        expected_old_head: record.expected_old_head.clone(),
+        observed_head: record.observed_head.clone(),
+        checkpoint_commit: record.checkpoint_commit.clone(),
+        checkpoint_ref: record.checkpoint_ref.clone(),
+        checkpoint_intent: record.checkpoint_intent.as_str().to_string(),
+        branch_intent: record.branch_intent.as_str().to_string(),
+        canary_result_hash: record.canary_result_hash.clone(),
+        decision: record
+            .decision
+            .as_ref()
+            .map(|decision| PromotionDecisionProjectionV1 {
+                outcome: decision.outcome.clone(),
+                code: decision.code.clone(),
+                detail: decision.detail.clone(),
+            }),
+        error_code: record.error_code.clone(),
+        lease_generation: record.lease_generation,
+        attempt: record.attempt,
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+        stages,
+    })
+}
+
+/// Persists one validated promotion submission.
+///
+/// The request hash, the evidence hash and the promotion id are all re-derived
+/// by the store, so a caller cannot mint a promotion identity: the id it
+/// computes is only a hint and a mismatch is rejected.
+pub(crate) fn promotion_submit_core(
+    svc: &WorkflowApplicationService,
+    request: crate::workflow::react::experiment_promotion::types::PromotionRequestV1,
+    idempotency_key: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    use crate::db::experiment_promotion::SubmitOutcome;
+    use crate::workflow::react::experiment_promotion::types::PROMOTION_REQUEST_V1;
+
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    if request.schema_version != PROMOTION_REQUEST_V1 {
+        return Err(promotion_validation_error(
+            crate::workflow::react::experiment_promotion::types::PromotionErrorCode::UnsupportedVersion,
+        ));
+    }
+    if idempotency_key.trim().is_empty() {
+        return Err(promotion_validation_error(
+            crate::workflow::react::experiment_promotion::types::PromotionErrorCode::IdempotencyConflict,
+        ));
+    }
+    request.validate().map_err(promotion_error)?;
+    let promotion_id = request.promotion_id();
+    let now = crate::headless::domain::now_ms();
+    let outcome = store
+        .submit(&request, &promotion_id, idempotency_key, now)
+        .map_err(promotion_error)?;
+    let record = match outcome {
+        SubmitOutcome::Created(record) | SubmitOutcome::Existing(record) => record,
+    };
+    promotion_projection(&store, &record)
+}
+
+/// One promotion by its backend-minted id.
+pub(crate) fn promotion_get_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
+    ApplicationError,
+> {
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    promotion_projection(&store, &record)
+}
+
+/// Evidence-only reconciliation of one promotion.
+///
+/// It performs no effect and needs no repository: the recovery decision is
+/// derived from the durable intents and the recorded checkpoint/branch state,
+/// so it is always answerable, even on a host that does not own the repository.
+/// The daemon's own startup classification additionally re-observes the real
+/// repository before it acts.
+pub(crate) fn promotion_reconcile_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<
+    crate::workflow::react::experiment_promotion::types::PromotionReconcileV1,
+    ApplicationError,
+> {
+    use crate::workflow::react::experiment_promotion::types::{
+        BranchObservation, CheckpointObservation, EffectIntent, PROMOTION_RECONCILE_V1,
+    };
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    let checkpoint = if record.checkpoint_intent == EffectIntent::Completed {
+        CheckpointObservation::PresentConsistent
+    } else {
+        CheckpointObservation::Absent
+    };
+    let branch = if record.branch_intent == EffectIntent::Completed {
+        BranchObservation::AtCheckpoint
+    } else {
+        BranchObservation::AtOld
+    };
+    let recovery = record.recovery_decision(checkpoint, branch);
+    let journal = store.journal(promotion_id).map_err(promotion_error)?;
+    let journal_digest = store
+        .journal_digest(promotion_id)
+        .map_err(promotion_error)?;
+    Ok(
+        crate::workflow::react::experiment_promotion::types::PromotionReconcileV1 {
+            schema_version: PROMOTION_RECONCILE_V1.to_string(),
+            promotion: promotion_projection(&store, &record)?,
+            recovery: recovery.as_str().to_string(),
+            journal,
+            journal_digest,
+        },
+    )
+}
+
+/// The offline-verifiable audit bundle of one promotion.
+pub(crate) fn promotion_audit_core(
+    svc: &WorkflowApplicationService,
+    promotion_id: &str,
+) -> Result<crate::workflow::react::experiment_promotion::types::PromotionAuditV1, ApplicationError>
+{
+    use crate::workflow::react::experiment_promotion::types::{
+        audit_hash, AuditIntegrityV1, PromotionAuditV1, HASH_ALGORITHM, PROMOTION_AUDIT_V1,
+    };
+    let store = durable_promotion_store(svc);
+    let schedule = durable_schedule_store(svc);
+    require_experiment_domain(&schedule)?;
+    let record = store.get(promotion_id).map_err(promotion_error)?;
+    let promotion = promotion_projection(&store, &record)?;
+    let journal = store.journal(promotion_id).map_err(promotion_error)?;
+    let journal_digest = store
+        .journal_digest(promotion_id)
+        .map_err(promotion_error)?;
+    // The registered branch is server-owned, so it is read from the registry
+    // when the target is still present; it is never taken from a caller.
+    let branch_ref =
+        crate::headless::promotion_targets::PromotionTargetRegistry::new(&svc.app_data_dir)
+            .load(&record.target_ref)
+            .ok()
+            .map(|target| target.branch_ref);
+    let decision = promotion.decision.clone();
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    // The integrity digest covers everything except `created_at` and the digest
+    // block itself, so a reader can verify the claim offline without trusting
+    // the producer's clock.
+    let unsigned = serde_json::json!({
+        "schema_version": PROMOTION_AUDIT_V1,
+        "promotion": promotion.clone(),
+        "evidence": record.evidence.clone(),
+        "decision": decision.clone(),
+        "branch_ref": branch_ref.clone(),
+        "journal": journal.clone(),
+        "journal_digest": journal_digest.clone(),
+        "created_at": created_at.clone(),
+    });
+    let audit_hash = audit_hash(&unsigned);
+    Ok(PromotionAuditV1 {
+        schema_version: PROMOTION_AUDIT_V1.to_string(),
+        promotion,
+        evidence: record.evidence,
+        decision,
+        branch_ref,
+        journal,
+        journal_digest,
+        integrity: AuditIntegrityV1 {
+            algorithm: HASH_ALGORITHM.to_string(),
+            audit_hash,
+        },
+        created_at,
+    })
+}
+
+#[cfg(test)]
+mod owner_execution_context_tests {
+    use super::*;
+    use crate::workflow::react::experiment_schedule::types::OwnerKind;
+
+    /// A container-owned scheduled run is pinned to the owner's instance, so the
+    /// sandbox resolver can never fall back to the host for it.
+    #[test]
+    fn a_container_owner_pins_the_run_to_its_instance() {
+        let mut config = AgentConfig::default();
+        OwnerExecutionContext::container("cs-run-job-1-g1", format!("sha256:{}", "a".repeat(64)))
+            .apply(&mut config)
+            .expect("container owner");
+
+        assert_eq!(
+            config.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::SandboxOnly),
+            "a scheduled run never resolves through Auto"
+        );
+        let sandbox = config.sandbox_config.expect("pinned sandbox config");
+        assert_eq!(
+            sandbox.execution_mode,
+            crate::tools::ShellExecutionMode::SandboxOnly
+        );
+        assert_eq!(
+            sandbox.runtime_preference,
+            crate::tools::SandboxRuntimePreference::Docker
+        );
+        let profile = sandbox.profiles.get("owner").expect("owner profile");
+        assert!(profile.enabled);
+        assert!(
+            profile.command_patterns.is_empty(),
+            "the owner profile must be a catch-all"
+        );
+        assert_eq!(profile.instance_name.as_deref(), Some("cs-run-job-1-g1"));
+    }
+
+    /// A filesystem-only owner prepares a worktree but no isolated execution
+    /// environment, so it can never carry a scheduled run (INV-4).
+    #[test]
+    fn a_filesystem_owner_cannot_carry_a_scheduled_run() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::HostWorktree,
+            instance_name: None,
+            image_reference: None,
+            capabilities: None,
+            capability_execution_target: None,
+        };
+        let error = owner.apply(&mut config).expect_err("must refuse");
+        assert!(error.contains("no isolated execution environment"));
+    }
+
+    /// A container owner without its instance identity cannot be honoured.
+    #[test]
+    fn a_container_owner_without_an_instance_is_refused() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::PersistentDocker,
+            instance_name: None,
+            image_reference: Some(format!("sha256:{}", "a".repeat(64))),
+            capabilities: None,
+            capability_execution_target: None,
+        };
+        let error = owner.apply(&mut config).expect_err("must refuse");
+        assert!(error.contains("instance name"));
+    }
+
+    /// Inside a proven Harbor task sandbox the sandbox itself is the isolation
+    /// boundary, so the run executes there directly.
+    #[test]
+    fn a_harbor_owner_runs_inside_the_proven_task_sandbox() {
+        let mut config = AgentConfig::default();
+        let owner = OwnerExecutionContext {
+            owner_kind: OwnerKind::HarborTask,
+            instance_name: None,
+            image_reference: None,
+            capabilities: None,
+            capability_execution_target: None,
+        };
+        owner.apply(&mut config).expect("harbor owner");
+        assert_eq!(
+            config.sandbox_execution_mode,
+            Some(crate::tools::ShellExecutionMode::HostOnly)
+        );
+        assert!(config.sandbox_config.is_none());
     }
 }

@@ -175,6 +175,18 @@ pub struct AgentConfig {
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
+    /// Phase 2F experiment surface: the checked-in candidate prompt reference
+    /// this workflow was created with. This is frozen run identity, not a user
+    /// preference: it is never inherited from another workflow and never
+    /// written to an Agent record. Only the reference is persisted here; the
+    /// prompt body is re-resolved from the checked-in candidate catalog when
+    /// the executor is constructed.
+    pub experiment_agent_prompt_ref: Option<String>,
+    /// Domain-separated hash of the referenced checked-in prompt body.
+    pub experiment_agent_prompt_hash: Option<String>,
+    /// Digest of the whole checked-in prompt catalog at run creation time, so
+    /// a later catalog edit fails closed instead of silently changing the run.
+    pub experiment_prompt_catalog_digest: Option<String>,
 }
 
 impl AgentConfig {

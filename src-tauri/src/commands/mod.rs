@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capability;
 pub mod ccproxy;
 pub mod chat;
 pub mod chat_hub;

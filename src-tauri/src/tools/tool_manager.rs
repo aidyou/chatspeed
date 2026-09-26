@@ -271,9 +271,6 @@ pub struct ToolManager {
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
     /// A channel for notifying consumers that the externally visible MCP tool list changed.
     mcp_tool_change_event_sender: broadcast::Sender<()>,
-    /// A set to track MCP server IDs with ongoing operations (start, stop, restart, refresh).
-    /// This is used to prevent race conditions from rapid UI clicks.
-    pub ops_in_progress: tokio::sync::Mutex<HashSet<i64>>,
 }
 
 impl ToolManager {
@@ -288,7 +285,6 @@ impl ToolManager {
             mcp_alias_registry: RwLock::new(McpAliasRegistry::default()),
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
-            ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -399,6 +395,25 @@ impl ToolManager {
         self.register_tool(Arc::new(crate::tools::WebFetch::new(app_handle.clone())))
             .await?;
 
+        self.register_core_tools(main_store.clone()).await
+    }
+
+    /// Registers every tool that needs no Tauri/window state.
+    ///
+    /// This is the AppHandle-free core of the tool surface: the file-system and
+    /// search tools. The desktop app calls it after the Tauri-bound web tools; a
+    /// headless process calls it directly, so it never has to fabricate a window
+    /// handle (INV-1/INV-4). Web tools are deliberately *not* part of this set: a
+    /// headless instance must refuse a web-tool requirement up front rather
+    /// than silently run without it.
+    ///
+    /// The system/workflow/interaction tools (shell execute, todo, skills,
+    /// task orchestration) remain unregistered for both runtimes, exactly as
+    /// before this split; enabling them is a separate change.
+    pub async fn register_core_tools(
+        self: Arc<Self>,
+        _main_store: Arc<MainStore>,
+    ) -> Result<(), ToolError> {
         // =================================================
         // FileSystem & Search tools
         // =================================================
@@ -452,7 +467,7 @@ impl ToolManager {
         // let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
         // let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
         // let skills = scanner.scan().unwrap_or_default();
-        // self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
+        // self.register_tool(Arc::new(crate::workflow::react::skills::SkillExecute::new(skills)))
         //     .await?;
 
         // let factory = app_handle
@@ -668,14 +683,41 @@ impl ToolManager {
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
     pub async fn native_tool_call(&self, name: &str, params: Value) -> NativeToolResult {
-        let tool = self.get_tool(name).await?;
+        self.tool_call_with_dispatch(name, params, None).await.0
+    }
+
+    /// Call a tool and report whether the physical owner
+    /// (`ToolDefinition::call`) was actually entered.
+    ///
+    /// `dispatched == false` means the failure happened before owner entry
+    /// (registry lookup miss, disabled MCP tool) — a proven no-effect
+    /// outcome. When `owner_entered` is supplied, it is set to `true`
+    /// exactly at the owner boundary so callers can classify cancellations
+    /// that race with dispatch.
+    pub async fn tool_call_with_dispatch(
+        &self,
+        name: &str,
+        params: Value,
+        owner_entered: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> (NativeToolResult, bool) {
+        use std::sync::atomic::Ordering;
+        let tool = match self.get_tool(name).await {
+            Ok(tool) => tool,
+            Err(error) => return (Err(error), false),
+        };
         if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
-            return Err(ToolError::Security(format!(
-                "MCP tool '{}' is disabled",
-                name
-            )));
+            return (
+                Err(ToolError::Security(format!(
+                    "MCP tool '{}' is disabled",
+                    name
+                ))),
+                false,
+            );
         }
-        match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
+        if let Some(flag) = &owner_entered {
+            flag.store(true, Ordering::SeqCst);
+        }
+        let result = match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
             Ok(result) => result,
             Err(payload) => {
                 let panic_message = if let Some(message) = payload.downcast_ref::<&str>() {
@@ -691,7 +733,8 @@ impl ToolManager {
                     name, panic_message
                 )))
             }
-        }
+        };
+        (result, true)
     }
 
     /// Call a native tool or mcp tool by its name.
@@ -849,8 +892,7 @@ impl ToolManager {
     ) -> Result<(), ToolError> {
         #[cfg(debug_assertions)]
         {
-            log::debug!("Register MCP server {} ... ", &mcp_server_config.name,);
-            log::debug!("MCP server config: {:?}", &mcp_server_config);
+            log::debug!("Register MCP server {} ... ", &mcp_server_config.name);
         }
 
         // Clone for logging in case of early error
@@ -1221,7 +1263,7 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<Arc<dyn McpClient>, ToolError>` - The result of the server retrieval.
-    pub async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
+    pub(crate) async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
         let servers_guard: tokio::sync::RwLockReadGuard<
             '_,
             HashMap<String, Arc<dyn McpClient + 'static>>,
@@ -1752,6 +1794,37 @@ mod tests {
         manager.notify_mcp_tools_changed();
 
         receiver.recv().await.expect("tool change event");
+    }
+
+    #[tokio::test]
+    async fn tool_call_with_dispatch_reports_owner_entry_fact() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let manager = ToolManager::new();
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "ok_tool".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("mock tool should register");
+
+        // Registry lookup miss: failure happens before owner entry.
+        let (result, dispatched) = manager
+            .tool_call_with_dispatch("missing_tool", json!({}), None)
+            .await;
+        assert!(matches!(result, Err(ToolError::FunctionNotFound(_))));
+        assert!(!dispatched);
+
+        // Owner entered even when the tool itself fails; the flag is set
+        // exactly at the owner boundary.
+        let flag = Arc::new(AtomicBool::new(false));
+        let (result, dispatched) = manager
+            .tool_call_with_dispatch("ok_tool", json!({}), Some(Arc::clone(&flag)))
+            .await;
+        assert!(result.is_ok());
+        assert!(dispatched);
+        assert!(flag.load(Ordering::SeqCst));
     }
 }
 

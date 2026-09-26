@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "catalog_id": "chatspeed-candidate-surfaces",
+  "catalog_version": 1,
+  "surfaces": [
+    {
+      "agent_prompt_ref": "smoke-terse-v1",
+      "surface_version": 1,
+      "prompt_hash": "bb41d700c9a2cdd26bffe26b5a3deac849188ce1966414c32700e38d51d2bf88",
+      "system_prompt": "Reply with the exact token the user requests and nothing else. Output only the token: no punctuation, no quotes, no explanations, no markdown, and no trailing text."
+    }
+  ]
+}
