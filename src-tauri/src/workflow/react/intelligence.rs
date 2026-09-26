@@ -5,7 +5,7 @@ use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::decision::parse_tool_approval_review;
+use crate::workflow::react::decision::{parse_tool_approval_review, CompletionReportCandidate};
 use crate::workflow::react::error::WorkflowEngineError;
 
 use std::sync::Arc;
@@ -226,14 +226,23 @@ impl IntelligenceManager {
 
     pub async fn review_completion(
         &self,
-        candidates: &[String],
+        candidates: &[CompletionReportCandidate],
         detailed_report: bool,
+        user_request: &str,
         segment_id: i32,
     ) -> Option<usize> {
-        if let Some(index) = self.try_decision_completion(candidates, detailed_report).await {
+        if let Some(index) = self
+            .try_decision_completion(candidates, detailed_report, user_request)
+            .await
+        {
             return Some(index);
         }
-        self.review_completion_with_lite(candidates, detailed_report, segment_id).await
+        let contents: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.content.clone())
+            .collect();
+        self.review_completion_with_lite(&contents, detailed_report, segment_id)
+            .await
     }
 
     fn parse_completion_choice(response: &str, count: usize) -> Option<usize> {

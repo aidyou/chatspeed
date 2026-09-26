@@ -731,6 +731,7 @@
       "customParamsTip": "在傳送給 AI 的請求體 (JSON) 中注入附加欄位。支援布林值 (true/false) 和數字自動轉換。例如：enable_thinking: false",
       "defaultModel": "預設模型",
       "decisionConfigurationRequired": "請填寫決策供應商的 API 金鑰和模型 ID",
+      "decisionContextSizeHint": "評估端點每次只評估一個 state。這裡填寫端點實際可接受的輸入大小；System One 約為 8192 tokens。",
       "decisionEndpoint": "完整評估位址",
       "decisionEndpointInvalid": "請填寫不含憑證與查詢參數的有效 HTTPS 評估位址（本機可使用 HTTP）",
       "decisionEndpointHint": "填寫完整評估 URL；位址以 /systemone 結尾時可匯入模型。",

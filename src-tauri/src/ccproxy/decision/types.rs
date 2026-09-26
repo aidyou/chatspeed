@@ -120,6 +120,62 @@ fn valid_distribution(values: impl Iterator<Item = f64>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choice_validation_tolerates_upstream_probability_rounding() {
+        use serde_json::json;
+        // Shape of a real /v1/systemone answer for a 17-option Choice: every option is reported and
+        // the probabilities sum to 0.9997, so the distribution check must keep a rounding tolerance.
+        let criteria: BTreeMap<String, String> = (0..16)
+            .map(|index| (format!("report_{index}"), "faithful report".to_string()))
+            .chain(std::iter::once((
+                "ambiguous".to_string(),
+                "cannot decide".to_string(),
+            )))
+            .collect();
+        let request = DecisionRequest {
+            state: "candidates".into(),
+            model: "jev-latest".into(),
+            questions: BTreeMap::from([(
+                "report_selection".into(),
+                Question::Choice {
+                    instructions: "choose".into(),
+                    criteria: criteria.clone(),
+                },
+            )]),
+        };
+        let mut probabilities: BTreeMap<String, f64> = BTreeMap::new();
+        probabilities.insert("ambiguous".to_string(), 0.1497);
+        probabilities.insert("report_0".to_string(), 0.4);
+        for index in 1..16 {
+            probabilities.insert(format!("report_{index}"), 0.03);
+        }
+        let body = json!({
+            "model": "jev-1.13.0",
+            "answers": {"report_selection": {
+                "type": "choice",
+                "choice": "report_0",
+                "probabilities": probabilities,
+                "confidence": 0.5,
+            }},
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        });
+        let valid: DecisionResponse = serde_json::from_value(body.clone()).unwrap();
+        valid
+            .validate(&request)
+            .expect("upstream rounding must stay inside the tolerance");
+
+        let mut out_of_tolerance = body.clone();
+        out_of_tolerance["answers"]["report_selection"]["probabilities"]["ambiguous"] = json!(0.13);
+        assert!(
+            serde_json::from_value::<DecisionResponse>(out_of_tolerance)
+                .unwrap()
+                .validate(&request)
+                .is_err(),
+            "a distribution outside the tolerance must be rejected"
+        );
+    }
+
     #[test]
     fn typed_answers_reject_mismatch_and_bad_probabilities() {
         use serde_json::json;

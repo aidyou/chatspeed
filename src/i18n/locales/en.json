@@ -736,6 +736,7 @@
       "customParamsTip": "Inject additional fields into the request body (JSON) sent to the AI. Supports Boolean (true/false) and Number auto-conversion. Example: enable_thinking: false",
       "defaultModel": "Default Model",
       "decisionConfigurationRequired": "Enter an API key and a model ID for the decision provider",
+      "decisionContextSizeHint": "The evaluation endpoint assesses one state per request. Enter the input size the endpoint actually accepts; System One takes about 8192 tokens.",
       "decisionEndpoint": "Evaluation endpoint",
       "decisionEndpointInvalid": "Enter a valid HTTPS evaluation URL (or a local HTTP URL) without credentials or query parameters",
       "decisionEndpointHint": "Enter the complete evaluation URL. Model import is available when it ends in /systemone.",

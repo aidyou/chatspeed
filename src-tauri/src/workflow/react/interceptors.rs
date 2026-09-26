@@ -17,7 +17,9 @@ use crate::workflow::react::file_preview::{
     attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
     render_preview_details_text,
 };
-use crate::workflow::react::decision::ToolApprovalReview;
+use crate::workflow::react::decision::{
+    CompletionReportCandidate, CompletionReportOrigin, ToolApprovalReview,
+};
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
@@ -1671,6 +1673,30 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         !Self::completion_reports_have_material_conflict(left, right)
     }
 
+    /// True when every candidate is a near-identical representation of one completion report.
+    ///
+    /// The assistant text and the identical `complete_workflow.summary` argument are alternate
+    /// representations of one completion attempt, so choosing between them needs no model call: the
+    /// deterministic resolution already selected the canonical report. Measured on real completions,
+    /// candidate pairs at or above this similarity never produced an accepted decision answer.
+    fn completion_candidates_are_equivalent(candidates: &[ResolvedCompletionReport]) -> bool {
+        const EQUIVALENT_SIMILARITY: f64 = 0.85;
+        if candidates.len() < 2 {
+            return false;
+        }
+        let texts: Vec<Vec<char>> = candidates
+            .iter()
+            .map(|candidate| Self::completion_report_similarity_text(&candidate.content))
+            .collect();
+        (0..texts.len()).all(|left| {
+            ((left + 1)..texts.len()).all(|right| {
+                let (dice, containment) =
+                    Self::completion_report_trigram_scores(&texts[left], &texts[right]);
+                dice >= EQUIVALENT_SIMILARITY && containment >= EQUIVALENT_SIMILARITY
+            })
+        })
+    }
+
     fn completion_report_candidates(
         args: &Value,
         text_part: &str,
@@ -2534,10 +2560,26 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        if candidate_reports.len() > 1 || completion_report.content.is_empty() {
-            let reports = candidate_reports.iter().map(|candidate| candidate.content.clone()).collect::<Vec<_>>();
+        // Equivalent candidates need no decision call: the deterministic resolution above already
+        // selected the canonical report, and no model answer could change which text is published.
+        let candidates_are_equivalent = !completion_report.content.is_empty()
+            && Self::completion_candidates_are_equivalent(&candidate_reports);
+        if !candidates_are_equivalent
+            && (candidate_reports.len() > 1 || completion_report.content.is_empty())
+        {
+            let reports = candidate_reports.iter().map(|candidate| CompletionReportCandidate {
+                content: candidate.content.clone(),
+                origin: if candidate.persist_as_message {
+                    CompletionReportOrigin::ThisCallSummary
+                } else if candidate.recency.0 == 1 {
+                    CompletionReportOrigin::ThisCallText
+                } else {
+                    CompletionReportOrigin::EarlierDraft
+                },
+            }).collect::<Vec<_>>();
+            let user_request = self.context.current_user_request_since_last_completion();
             if let Some(index) = self.intelligence_manager.review_completion(
-                &reports, self.final_review_mode_enabled(), self.context.current_segment_id,
+                &reports, self.final_review_mode_enabled(), &user_request, self.context.current_segment_id,
             ).await {
                 if let Some(selected) = candidate_reports.get(index) {
                     completion_report = ResolvedCompletionReport {
@@ -3025,7 +3067,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
 #[cfg(test)]
 mod tests {
-    use super::{SmartApprovalDecision, WorkflowExecutor};
+    use super::{ResolvedCompletionReport, SmartApprovalDecision, WorkflowExecutor};
     use crate::db::WorkflowMessage;
     use crate::tools::{
         TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE,
@@ -3201,6 +3243,33 @@ mod tests {
 
         assert_eq!(resolved.content, full_report);
         assert_eq!(resolved.source_message_id, Some(42));
+    }
+
+    #[test]
+    fn equivalent_completion_candidates_skip_the_decision_call() {
+        let resolved = |content: &str| ResolvedCompletionReport {
+            content: content.to_string(),
+            source_message_id: None,
+            persist_as_message: false,
+            recency: (1, 0, 0),
+        };
+        let text = "已完成首页样式优化，改动写入 pages/home/index.vue，并通过 vite build 验证。";
+        // The summary argument repeats the visible text with different whitespace and backticks.
+        let reformatted =
+            "已完成首页样式优化，改动写入 pages/home/index.vue，\n并通过 `vite build` 验证。";
+        let unrelated = "只读分析：中继转发与重连链路按设计工作，未修改任何代码。";
+
+        assert!(WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text),
+            resolved(reformatted),
+        ]));
+        assert!(!WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text),
+            resolved(unrelated),
+        ]));
+        assert!(!WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text)
+        ]));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::ccproxy::decision::{self, Answer, DecisionRequest, Question};
+use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::workflow::react::context::ContextManager;
 use crate::workflow::react::intelligence::IntelligenceManager;
 use std::collections::BTreeMap;
@@ -14,6 +15,122 @@ const LANGUAGE_DECISION_CONFIDENCE: f64 = 0.92;
 const LANGUAGE_DECISION_PROBABILITY: f64 = 0.95;
 const APPROVAL_DECISION_CONFIDENCE: f64 = 0.98;
 const APPROVAL_DECISION_PROBABILITY: f64 = 0.99;
+
+/// Acceptance bar for the completion-report choice.
+///
+/// Calibration against real completion reports from the local database: candidates that differ in
+/// provenance land at 0.77+ probability with 0.65+ confidence, while two faithful representations of
+/// the same work stay under 0.68 probability, and choosing `ambiguous` is never accepted.
+const COMPLETION_DECISION_CONFIDENCE: f64 = 0.62;
+const COMPLETION_DECISION_PROBABILITY: f64 = 0.72;
+
+/// Input ceiling of the decision protocol's evaluation endpoint. Measured against the live
+/// `/v1/systemone` route: 7997 input tokens succeeds and roughly 8300 is rejected, so requests above
+/// 8192 tokens are refused by the upstream.
+const DECISION_INPUT_TOKEN_CEILING: usize = 8_192;
+
+/// A refused request silently degrades the review to the lite model, so keep the whole candidate
+/// payload clearly below the measured ceiling.
+const COMPLETION_DECISION_TOKEN_BUDGET: usize = DECISION_INPUT_TOKEN_CEILING * 7 / 8;
+const COMPLETION_CANDIDATE_CHAR_CEILING: usize = 6_000;
+const COMPLETION_CANDIDATE_CHAR_FLOOR: usize = 200;
+const COMPLETION_REQUEST_CHAR_LIMIT: usize = 600;
+
+const COMPLETION_DECISION_INSTRUCTIONS: &str = concat!(
+    "Exactly one candidate will be published as the workflow's final completion report and shown to ",
+    "the user, so accuracy matters more than style. Decide from the candidate text alone which single ",
+    "candidate is a faithful, sufficiently detailed account of the work this workflow actually ",
+    "finished. A candidate produced by this complete_workflow call is the current answer; a candidate ",
+    "captured earlier is only a draft and may describe superseded intermediate reasoning, so prefer ",
+    "the current answer unless it is clearly not a completion report. Prefer a candidate that states ",
+    "what was done, what was verified and what remains over one that merely narrates analysis or gives ",
+    "a single line without evidence. Several candidates may be equally faithful; pick the best single ",
+    "one instead of refusing. Choose ambiguous only when no candidate is a plausible completion report ",
+    "or two candidates materially contradict each other."
+);
+
+/// Where a completion-report candidate came from, as far as the program can prove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompletionReportOrigin {
+    /// The `summary` argument of the current `complete_workflow` call.
+    ThisCallSummary,
+    /// Assistant text written in the same turn as the current `complete_workflow` call.
+    ThisCallText,
+    /// An assistant message captured earlier in this segment, before the current call.
+    EarlierDraft,
+}
+
+impl CompletionReportOrigin {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ThisCallSummary => "this_call_summary",
+            Self::ThisCallText => "this_call_text",
+            Self::EarlierDraft => "earlier_draft",
+        }
+    }
+
+    fn note(self) -> &'static str {
+        match self {
+            Self::ThisCallSummary => "the summary argument of this complete_workflow call",
+            Self::ThisCallText => {
+                "assistant text written in the same turn as this complete_workflow call"
+            }
+            Self::EarlierDraft => {
+                "an assistant message captured earlier in this segment, before this call"
+            }
+        }
+    }
+}
+
+/// One candidate report the task-completion decision may publish.
+#[derive(Debug, Clone)]
+pub(crate) struct CompletionReportCandidate {
+    pub content: String,
+    pub origin: CompletionReportOrigin,
+}
+
+fn truncate_decision_text(text: &str, max_chars: usize) -> &str {
+    match text.char_indices().nth(max_chars) {
+        Some((index, _)) => &text[..index],
+        None => text,
+    }
+}
+
+/// Per-candidate character limits that keep the uploaded payload inside the endpoint's token budget.
+///
+/// Candidates are only shortened when the whole payload would overflow, so ordinary reports reach the
+/// model in full.
+fn completion_candidate_limits(texts: &[&str]) -> Vec<usize> {
+    let base: Vec<usize> = texts
+        .iter()
+        .map(|text| text.chars().count().min(COMPLETION_CANDIDATE_CHAR_CEILING))
+        .collect();
+    let limit_at = |index: usize, scale_permille: usize| -> usize {
+        (base[index] * scale_permille / 1000).max(COMPLETION_CANDIDATE_CHAR_FLOOR)
+    };
+    let estimate = |scale_permille: usize| -> f64 {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                estimate_tokens(truncate_decision_text(text, limit_at(index, scale_permille)))
+            })
+            .sum()
+    };
+    if estimate(1000) <= COMPLETION_DECISION_TOKEN_BUDGET as f64 {
+        return base;
+    }
+    let (mut low, mut high) = (0usize, 1000usize);
+    while low < high {
+        let middle = (low + high + 1) / 2;
+        if estimate(middle) <= COMPLETION_DECISION_TOKEN_BUDGET as f64 {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    (0..texts.len()).map(|index| limit_at(index, low)).collect()
+}
 
 /// Fifteen most-spoken varieties by total speakers (Berlitz/Ethnologue, 2025).
 /// `other` makes unsupported or uncertain inputs fall back to the lite model.
@@ -255,8 +372,9 @@ impl IntelligenceManager {
 
     pub(crate) async fn try_decision_completion(
         &self,
-        candidates: &[String],
+        candidates: &[CompletionReportCandidate],
         detailed_report: bool,
+        user_request: &str,
     ) -> Option<usize> {
         let Some((provider_id, model)) = self.decision_model() else {
             return None;
@@ -264,24 +382,46 @@ impl IntelligenceManager {
         if candidates.is_empty() || candidates.len() > 16 {
             return None;
         }
+        let texts: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.content.as_str())
+            .collect();
+        let limits = completion_candidate_limits(&texts);
         let criteria = candidates
             .iter()
             .enumerate()
-            .map(|(index, _)| (format!("report_{index}"), format!("Select report {index} if it accurately represents the final work and satisfies the required report detail")))
-            .chain(std::iter::once(("ambiguous".into(), "No candidate can be reliably selected or the reports materially contradict each other".into())))
+            .map(|(index, _)| {
+                (
+                    format!("report_{index}"),
+                    "a faithful, sufficiently detailed account of the work this workflow actually finished"
+                        .to_string(),
+                )
+            })
+            .chain(std::iter::once((
+                "ambiguous".into(),
+                "no candidate is a plausible completion report, or two candidates materially contradict each other"
+                    .into(),
+            )))
             .collect();
         let request = DecisionRequest {
             state: serde_json::json!({
                 "required_detail": if detailed_report { "detailed" } else { "brief" },
-                "candidates": candidates.iter().enumerate().map(|(index, content)| {
-                    serde_json::json!({"id": format!("report_{index}"), "content": Self::truncate_text(content, 6000)})
+                "user_request": truncate_decision_text(user_request.trim(), COMPLETION_REQUEST_CHAR_LIMIT),
+                "candidates": candidates.iter().zip(limits.iter()).enumerate().map(|(index, (candidate, limit))| {
+                    serde_json::json!({
+                        "id": format!("report_{index}"),
+                        "origin": candidate.origin.label(),
+                        "origin_note": candidate.origin.note(),
+                        "produced_by_this_call": candidate.origin != CompletionReportOrigin::EarlierDraft,
+                        "content": truncate_decision_text(&candidate.content, *limit),
+                    })
                 }).collect::<Vec<_>>(),
             }).to_string(),
             model,
             questions: BTreeMap::from([(
                 "report_selection".into(),
                 Question::Choice {
-                    instructions: "Select the single report that best reflects the final work and meets the required level of detail. Brief reports are acceptable when required_detail is brief. Choose ambiguous if no candidate is reliable or they materially contradict each other. Return a typed choice, not generated text.".into(),
+                    instructions: COMPLETION_DECISION_INSTRUCTIONS.into(),
                     criteria,
                 },
             )]),
@@ -291,7 +431,7 @@ impl IntelligenceManager {
                 let allowed = (0..candidates.len()).map(|index| format!("report_{index}")).collect::<Vec<_>>();
                 let allowed_refs = allowed.iter().map(String::as_str).collect::<Vec<_>>();
                 response.answers.get("report_selection")
-                    .and_then(|answer| confident_choice(answer, &allowed_refs, 0.80, 0.80))
+                    .and_then(|answer| confident_choice(answer, &allowed_refs, COMPLETION_DECISION_CONFIDENCE, COMPLETION_DECISION_PROBABILITY))
                     .and_then(|choice| choice.strip_prefix("report_")?.parse::<usize>().ok())
                     .filter(|index| *index < candidates.len())
             }
@@ -314,7 +454,10 @@ impl IntelligenceManager {
             return None;
         }
         let request = DecisionRequest {
-            state: Self::truncate_to_token_budget(user_input.trim(), max_input_tokens),
+            state: Self::truncate_to_token_budget(
+                user_input.trim(),
+                max_input_tokens.min(DECISION_INPUT_TOKEN_CEILING),
+            ),
             model,
             questions: BTreeMap::from([(
                 "language".into(),
@@ -351,12 +494,72 @@ impl IntelligenceManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        confident_choice, language_criteria, parse_tool_approval_review, selected_language,
-        APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY,
+        completion_candidate_limits, confident_choice, language_criteria,
+        parse_tool_approval_review, selected_language, truncate_decision_text,
+        CompletionReportOrigin, APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY,
+        COMPLETION_CANDIDATE_CHAR_FLOOR, COMPLETION_DECISION_TOKEN_BUDGET,
         LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY, TOP_LANGUAGES,
     };
     use crate::ccproxy::decision::Answer;
+    use crate::ccproxy::utils::token_estimator::estimate_tokens;
     use std::collections::{BTreeMap, HashSet};
+
+    #[test]
+    fn completion_candidate_limits_fit_the_endpoint_budget() {
+        let short = "简短报告。".repeat(4);
+        let long = "中继转发镜像重连链路按设计工作，上游释放超时是唯一异常。".repeat(600);
+        let texts = [short.as_str(), long.as_str()];
+        let limits = completion_candidate_limits(&texts);
+        let estimated: f64 = texts
+            .iter()
+            .zip(limits.iter())
+            .map(|(text, limit)| estimate_tokens(truncate_decision_text(text, *limit)))
+            .sum();
+        assert!(estimated <= COMPLETION_DECISION_TOKEN_BUDGET as f64);
+        assert!(limits[1] < long.chars().count());
+        assert!(limits
+            .iter()
+            .all(|limit| *limit >= COMPLETION_CANDIDATE_CHAR_FLOOR));
+    }
+
+    #[test]
+    fn completion_candidate_limits_keep_fitting_reports_untruncated() {
+        let reports = [
+            "报告一：完成改动并已通过测试。".repeat(30),
+            "报告二：只读分析，未修改任何代码。".repeat(30),
+        ];
+        let texts: Vec<&str> = reports.iter().map(String::as_str).collect();
+        assert_eq!(
+            completion_candidate_limits(&texts),
+            reports
+                .iter()
+                .map(|report| report.chars().count())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn completion_origins_describe_their_provenance() {
+        assert_eq!(
+            CompletionReportOrigin::ThisCallSummary.label(),
+            "this_call_summary"
+        );
+        assert_eq!(
+            CompletionReportOrigin::ThisCallText.label(),
+            "this_call_text"
+        );
+        assert_eq!(
+            CompletionReportOrigin::EarlierDraft.label(),
+            "earlier_draft"
+        );
+        assert_eq!(
+            truncate_decision_text("abcdef", 3),
+            "abc",
+            "characters outside the limit must be dropped"
+        );
+        assert_eq!(truncate_decision_text("abc", 9), "abc");
+        assert_eq!(truncate_decision_text("中文报告", 2), "中文");
+    }
 
     #[test]
     fn language_decision_exposes_fifteen_languages_and_other_fallback() {

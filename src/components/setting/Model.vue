@@ -401,9 +401,12 @@
           <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.imageInput')" prop="imageInput">
             <el-switch v-model="modelConfigForm.imageInput" />
           </el-form-item>
-          <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.contextSize')" prop="contextSize">
+          <el-form-item :label="$t('settings.model.contextSize')" prop="contextSize">
             <el-input-number v-model="modelConfigForm.contextSize" :min="1024" :step="1024" controls-position="right"
               style="width: 100%" />
+            <span v-if="modelForm.apiProtocol === 'decision'" class="form-tip">
+              {{ $t('settings.model.decisionContextSizeHint') }}
+            </span>
           </el-form-item>
           <el-form-item v-if="modelForm.apiProtocol !== 'decision'" :label="$t('settings.model.maxTokens')" prop="maxTokens">
             <el-input-number v-model="modelConfigForm.maxTokens" :min="0" :step="1024" controls-position="right"
@@ -1220,6 +1223,10 @@ const createDefaultModelConfig = () => ({
   pricing: { ...createDefaultPricing(), reasoningPricingMode: 'output' },
   customParams: []
 })
+// The System One evaluation endpoint judges one state per request and rejects payloads above
+// roughly 8192 input tokens, so the decision protocol's usable input is far below the 128000 that
+// chat models default to.
+const DECISION_CONTEXT_SIZE = 8192
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
@@ -1661,7 +1668,8 @@ const onProviderModelSave = async () => {
           ...createDefaultModelConfig(),
           id: model.id.trim(),
           name: model.name || model.id,
-          group: model.family || ''
+          group: model.family || '',
+          contextSize: DECISION_CONTEXT_SIZE
         }
       }
       let profile = null

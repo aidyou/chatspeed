@@ -10,9 +10,15 @@ test('decision editor preserves import, hides chat fields and retains prices', a
   assert.match(component, /Decision: 'decision'/)
   assert.match(component, /v-if="modelForm\.apiProtocol !== 'decision'" :label="\$t\('settings\.model\.supportsResponsesApi'\)"/)
   assert.equal((component.match(/<el-tab-pane v-if="modelForm\.apiProtocol !== 'decision'" :label="\$t\('settings\.model\.additionalInfo'\)"/g) || []).length, 2)
-  for (const key of ['reasoning', 'functionCall', 'imageInput', 'contextSize', 'maxTokens', 'temperature']) {
+  for (const key of ['reasoning', 'functionCall', 'imageInput', 'maxTokens', 'temperature']) {
     assert.match(component, new RegExp(`v-if="modelForm.apiProtocol !== 'decision'" :label="\\$t\\('settings.model.${key}'\\)"`))
   }
+  // The evaluation endpoint's usable input is far below the chat default, so the decision editor
+  // keeps the context size visible instead of hiding it and imports the endpoint's own value.
+  assert.doesNotMatch(component, /v-if="modelForm\.apiProtocol !== 'decision'" :label="\$t\('settings\.model\.contextSize'\)"/)
+  assert.match(component, /\{\{ \$t\('settings\.model\.decisionContextSizeHint'\) \}\}/)
+  assert.match(component, /const DECISION_CONTEXT_SIZE = 8192/)
+  assert.match(component, /contextSize: DECISION_CONTEXT_SIZE/)
   for (const field of ['inputPerMillion', 'outputPerMillion', 'multiplier']) {
     assert.match(component, new RegExp(`v-model="modelConfigForm.pricing.${field}"`))
   }
