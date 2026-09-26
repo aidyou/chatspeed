@@ -120,6 +120,8 @@ pub enum ChatProtocol {
     Gemini,
     Ollama,
     HuggingFace,
+    /// System One decision models. They are served on `/v1/systemone` and are not chat protocols.
+    Decision,
 }
 
 impl Default for ChatProtocol {
@@ -139,6 +141,7 @@ impl Display for ChatProtocol {
                 ChatProtocol::Gemini => "gemini",
                 ChatProtocol::Ollama => "ollama",
                 ChatProtocol::HuggingFace => "huggingface",
+                ChatProtocol::Decision => "decision",
             }
         )
     }
@@ -154,6 +157,7 @@ impl FromStr for ChatProtocol {
             "gemini" => Ok(ChatProtocol::Gemini),
             "ollama" => Ok(ChatProtocol::Ollama),
             "huggingface" => Ok(ChatProtocol::HuggingFace),
+            "decision" => Ok(ChatProtocol::Decision),
             _ => Err(CCProxyError::InvalidProtocolError(
                 t!("chat.invalid_api_protocol", protocol = s).to_string(),
             )),
@@ -165,5 +169,25 @@ impl TryFrom<String> for ChatProtocol {
     type Error = String;
     fn try_from(value: String) -> Result<Self, Self::Error> {
         value.parse().map_err(|e: CCProxyError| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::ChatProtocol;
+    use std::str::FromStr;
+
+    #[test]
+    fn decision_protocol_round_trips_through_its_wire_name() {
+        assert_eq!(ChatProtocol::Decision.to_string(), "decision");
+        assert_eq!(
+            ChatProtocol::from_str("Decision").unwrap(),
+            ChatProtocol::Decision
+        );
+        assert_eq!(
+            ChatProtocol::try_from("decision".to_string()).unwrap(),
+            ChatProtocol::Decision
+        );
+        assert!(ChatProtocol::from_str("systemone").is_err());
     }
 }

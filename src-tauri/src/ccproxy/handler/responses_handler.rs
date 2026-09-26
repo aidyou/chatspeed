@@ -15,6 +15,7 @@ use crate::ccproxy::{
     handler::chat_handler::{
         execute_unified_chat_request, prepare_unified_request_for_proxy_model,
     },
+    handler::decision_is_not_a_chat_protocol,
     helper::{get_msg_id, send_with_retry, CcproxyQuery, ModelResolver, RetryConfig},
     types::{openai_responses::OpenAIResponsesRequest, ProxyModel},
     utils::token_estimator::{estimate_known_request_json_tokens, token_usage_is_missing_or_zero},
@@ -467,6 +468,11 @@ pub async fn handle_responses(
         )
         .await?
     };
+
+    // A proxy alias may point at a decision provider; that backend cannot serve Responses traffic.
+    if proxy_model.chat_protocol == ChatProtocol::Decision {
+        return Err(decision_is_not_a_chat_protocol());
+    }
 
     let final_tool_compat_mode = match proxy_model.tool_compat_mode.as_deref() {
         Some("compat") => true,

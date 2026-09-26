@@ -6,6 +6,7 @@ use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use std::sync::{Arc, RwLock};
 
+use crate::ccproxy::handler::decision_is_not_a_chat_protocol;
 use crate::ccproxy::handler::request_preprocessor::{
     preprocess_client_request_body, preprocess_unified_request,
 };
@@ -98,6 +99,7 @@ fn get_proxy_alias_from_body(
             Ok(payload.model)
         }
         ChatProtocol::Gemini => Ok(route_model_alias.to_string()),
+        ChatProtocol::Decision => Err(decision_is_not_a_chat_protocol()),
     }
 }
 
@@ -237,6 +239,7 @@ fn build_unified_request(
             let is_streaming_request = unified_request.stream;
             Ok((unified_request, proxy_alias, is_streaming_request))
         }
+        ChatProtocol::Decision => Err(decision_is_not_a_chat_protocol()),
     }
 }
 
@@ -312,6 +315,7 @@ pub(crate) async fn execute_unified_chat_request(
         ChatProtocol::Ollama => Arc::new(backend::OllamaBackendAdapter),
         ChatProtocol::Claude => Arc::new(backend::ClaudeBackendAdapter),
         ChatProtocol::Gemini => Arc::new(backend::GeminiBackendAdapter),
+        ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
     };
 
     let http_client = ModelResolver::build_http_client(
@@ -749,6 +753,11 @@ pub async fn handle_chat_completion(
             .await?
     };
 
+    // A proxy alias may point at a decision provider; that backend cannot serve chat traffic.
+    if proxy_model.chat_protocol == ChatProtocol::Decision {
+        return Err(decision_is_not_a_chat_protocol());
+    }
+
     //======================================================
     // Direct send request to ai server
     //======================================================
@@ -793,6 +802,7 @@ pub async fn handle_chat_completion(
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Gemini => generate_action == "streamGenerateContent",
+            ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
         };
 
         let result = super::handle_direct_forward(
@@ -828,6 +838,7 @@ pub async fn handle_chat_completion(
         ChatProtocol::Claude => OutputAdapterEnum::Claude(ClaudeOutputAdapter),
         ChatProtocol::Gemini => OutputAdapterEnum::Gemini(GeminiOutputAdapter),
         ChatProtocol::Ollama => OutputAdapterEnum::Ollama(OllamaOutputAdapter),
+        ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
     };
 
     execute_unified_chat_request(

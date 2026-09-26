@@ -196,6 +196,7 @@ network:
   response_read_error: '读取响应失败: %{error}'
 proxy:
   error:
+    decision_not_chat_protocol: 决策模型不是对话模型，请改用 /v1/systemone 接口
     internal_server_error: '内部服务器错误: %{error}'
     invalid_api_key: API 密钥无效，请检查密钥是否正确或已过期，并在设置中更新
     invalid_protocol: '模型配置的协议无效: %{protocol}。'

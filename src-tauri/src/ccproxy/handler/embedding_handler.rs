@@ -63,6 +63,9 @@ fn get_proxy_alias_from_body(
             "Claude protocol does not support embeddings".to_string(),
         )),
         ChatProtocol::Gemini => Ok(route_model_alias.to_string()),
+        ChatProtocol::Decision => Err(CCProxyError::InvalidProtocolError(
+            "Decision protocol does not support embeddings".to_string(),
+        )),
     }
 }
 
@@ -98,6 +101,9 @@ fn build_unified_request(
         }
         ChatProtocol::Claude => Err(CCProxyError::InvalidProtocolError(
             "Claude protocol does not support embeddings".to_string(),
+        )),
+        ChatProtocol::Decision => Err(CCProxyError::InvalidProtocolError(
+            "Decision protocol does not support embeddings".to_string(),
         )),
     }
 }
@@ -138,6 +144,11 @@ pub async fn handle_embedding(
         ChatProtocol::Gemini => Arc::new(GeminiBackendAdapter),
         ChatProtocol::Ollama => Arc::new(OllamaBackendAdapter),
         ChatProtocol::Claude => Arc::new(ClaudeBackendAdapter),
+        ChatProtocol::Decision => {
+            return Err(CCProxyError::InvalidProtocolError(
+                "Decision protocol does not support embeddings".to_string(),
+            ))
+        }
     };
 
     let client = reqwest::Client::new();
@@ -237,6 +248,11 @@ pub async fn handle_embedding(
         ChatProtocol::Claude => Box::new(OutputAdapterEnum::Claude(ClaudeOutputAdapter)),
         ChatProtocol::Gemini => Box::new(OutputAdapterEnum::Gemini(GeminiOutputAdapter)),
         ChatProtocol::Ollama => Box::new(OutputAdapterEnum::Ollama(OllamaOutputAdapter)),
+        ChatProtocol::Decision => {
+            return Err(CCProxyError::InvalidProtocolError(
+                "Decision protocol does not support embeddings".to_string(),
+            ))
+        }
     };
 
     let usage = unified_response.usage.clone();

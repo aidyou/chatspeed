@@ -196,6 +196,7 @@ network:
   response_read_error: 讀取回應失敗：%{error}
 proxy:
   error:
+    decision_not_chat_protocol: 決策模型不是對話模型，請改用 /v1/systemone 介面
     internal_server_error: 內部伺服器錯誤：%{error}
     invalid_api_key: API 金鑰無效，請檢查金鑰是否正確或已過期，並在設定中更新
     invalid_protocol: 模型配置的協定無效：%{protocol}。

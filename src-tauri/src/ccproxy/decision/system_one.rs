@@ -1,13 +1,21 @@
 //! HTTP adapter for System One evaluation and same-origin model discovery.
 use super::{catalog, types::{Answer, DecisionError, DecisionRequest, DecisionResponse}};
 use crate::{ai::{network::ProxyType, util::get_proxy_type_for_key}, ccproxy::helper::CC_PROXY_ROTATOR, db::MainStore};
-use reqwest::{Client, Url};
+use bytes::Bytes;
+use reqwest::{header::HeaderMap, Client, StatusCode, Url};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{sync::Arc, time::{Duration, Instant}};
 
 const TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_BODY: usize = 256 * 1024;
+
+/// Upstream response kept raw so callers can forward status, headers and body untouched.
+pub(crate) struct RawResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: Bytes,
+}
 
 fn client(store: Arc<MainStore>, mut metadata: Option<Value>, key_index: Option<usize>) -> Result<Client, DecisionError> {
     crate::commands::chat::setup_chat_proxy(store, &mut metadata)
@@ -27,7 +35,7 @@ fn client(store: Arc<MainStore>, mut metadata: Option<Value>, key_index: Option<
     builder.build().map_err(|_| DecisionError::Transport("client construction"))
 }
 
-async fn send(client: &Client, url: Url, key: &str, payload: Option<&DecisionRequest>) -> Result<Value, DecisionError> {
+async fn send_raw(client: &Client, url: Url, key: &str, payload: Option<&Value>) -> Result<RawResponse, DecisionError> {
     if key.trim().is_empty() { return Err(DecisionError::Unavailable); }
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     for attempt in 0..=1 {
@@ -41,13 +49,32 @@ async fn send(client: &Client, url: Url, key: &str, payload: Option<&DecisionReq
             tokio::time::sleep(Duration::from_millis(150)).await;
             continue;
         }
-        if !status.is_success() { return Err(DecisionError::Http(status.as_u16())); }
         if response.content_length().is_some_and(|length| length > MAX_BODY as u64) { return Err(DecisionError::InvalidResponse("oversized body")); }
-        let bytes = tokio::time::timeout_at(deadline, response.bytes()).await.map_err(|_| DecisionError::Transport("timeout"))?.map_err(|_| DecisionError::Transport("response read"))?;
-        if bytes.len() > MAX_BODY { return Err(DecisionError::InvalidResponse("oversized body")); }
-        return serde_json::from_slice(&bytes).map_err(|_| DecisionError::InvalidResponse("JSON"));
+        let headers = response.headers().clone();
+        let body = tokio::time::timeout_at(deadline, response.bytes()).await.map_err(|_| DecisionError::Transport("timeout"))?.map_err(|_| DecisionError::Transport("response read"))?;
+        if body.len() > MAX_BODY { return Err(DecisionError::InvalidResponse("oversized body")); }
+        return Ok(RawResponse { status, headers, body });
     }
     Err(DecisionError::Transport("retry exhausted"))
+}
+
+async fn send(client: &Client, url: Url, key: &str, payload: Option<&DecisionRequest>) -> Result<Value, DecisionError> {
+    let payload = payload.map(|request| serde_json::to_value(request).map_err(|_| DecisionError::InvalidRequest("payload encoding"))).transpose()?;
+    let response = send_raw(client, url, key, payload.as_ref()).await?;
+    if !response.status.is_success() { return Err(DecisionError::Http(response.status.as_u16())); }
+    serde_json::from_slice(&response.body).map_err(|_| DecisionError::InvalidResponse("JSON"))
+}
+
+/// Forwards a decision payload with a credential resolved by the caller, keeping the upstream status intact.
+pub(crate) async fn forward(store: Arc<MainStore>, endpoint: &str, key: &str, key_index: Option<usize>, metadata: Option<Value>, payload: &Value) -> Result<RawResponse, DecisionError> {
+    let url = catalog::endpoint(endpoint)?;
+    let (adapter, rule) = catalog::resolve(&url)?;
+    log::debug!("decision forward: rule={}, adapter={:?}", rule, adapter);
+    match adapter {
+        catalog::Adapter::SystemOne => {}
+    }
+    let client = client(store, metadata, key_index)?;
+    send_raw(&client, url, key, Some(payload)).await
 }
 
 fn result_summary(response: &DecisionResponse) -> String {

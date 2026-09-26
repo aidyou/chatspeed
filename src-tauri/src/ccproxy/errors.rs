@@ -39,6 +39,9 @@ pub enum CCProxyError {
     /// Invalid protocol string from AI model details.
     #[error("{}", t!("proxy.error.invalid_protocol", protocol = _0))]
     InvalidProtocolError(String),
+    /// The client request body does not satisfy the endpoint protocol.
+    #[error("{}", t!("proxy.error.invalid_request_format", error = _0))]
+    InvalidRequestBody(String),
     /// Failed to acquire lock on the MainStore.
     #[error("{}", t!("proxy.error.store_lock_failed", error = _0))]
     StoreLockError(String),
@@ -71,6 +74,11 @@ impl IntoResponse for CCProxyError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Configuration Error",
                 t!("proxy.error.invalid_protocol", protocol = protocol).to_string(),
+            ),
+            CCProxyError::InvalidRequestBody(error) => (
+                StatusCode::BAD_REQUEST,
+                "Invalid Request",
+                t!("proxy.error.invalid_request_format", error = error).to_string(),
             ),
             CCProxyError::InternalError(message) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -119,7 +119,8 @@ pub async fn handle_direct_forward(
             ChatProtocol::OpenAI
             | ChatProtocol::Ollama
             | ChatProtocol::Claude
-            | ChatProtocol::HuggingFace => {
+            | ChatProtocol::HuggingFace
+            | ChatProtocol::Decision => {
                 obj.insert(
                     "model".to_string(),
                     Value::String(proxy_model.model.trim().to_string()),
@@ -600,6 +601,8 @@ fn enhance_direct_request_body(
                         }
                     }
                 }
+                // Decision requests carry state and questions, so there is no chat prompt to inject.
+                ChatProtocol::Decision => {}
             }
         }
     }
@@ -1275,6 +1278,8 @@ fn chunk_parser_and_log(
                             recorder.output_tokens = Some(eval_count);
                         }
                     }
+                    // System One answers are not streamed, so there is no stream chunk to record.
+                    ChatProtocol::Decision => {}
                 }
             }
         }
@@ -1348,6 +1353,10 @@ fn direct_response_has_output(value: &Value, protocol: &ChatProtocol) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|tool_calls| !tool_calls.is_empty())
         }),
+        ChatProtocol::Decision => value
+            .get("answers")
+            .and_then(Value::as_object)
+            .is_some_and(|answers| !answers.is_empty()),
     }
 }
 
@@ -1409,6 +1418,10 @@ fn estimate_direct_response_output_tokens(value: &Value, protocol: &ChatProtocol
         ChatProtocol::Ollama => value
             .get("message")
             .map(|message| estimate_tokens(&message.to_string()))
+            .unwrap_or(0.0),
+        ChatProtocol::Decision => value
+            .get("answers")
+            .map(|answers| estimate_tokens(&answers.to_string()))
             .unwrap_or(0.0),
     }
 }
@@ -1531,6 +1544,18 @@ fn extract_usage_from_value(
                 .unwrap_or(0);
             let output = value
                 .get("eval_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, 0, 0, 0, 0, 0)
+        }
+        ChatProtocol::Decision => {
+            let usage = value.get("usage");
+            let input = usage
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = usage
+                .and_then(|u| u.get("output_tokens"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
             (input, output, 0, 0, 0, 0, 0)

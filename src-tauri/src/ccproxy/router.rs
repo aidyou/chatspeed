@@ -58,6 +58,10 @@
 //! - `POST /api/chat`: Creates a chat completion with an Ollama model.
 //! - `POST /api/embed` or `/api/embeddings`: Creates embedding vectors.
 //!
+//! ### System One Decision Endpoint
+//! - `POST /v1/systemone`: Evaluates one state against typed questions through a decision model.
+//!   Decision requests are never a chat protocol, so no compatibility mode applies to this path.
+//!
 //! ### Integrated Module Endpoints (Non-ccproxy core)
 //! These routes are integrated into this router for unified access but handled by separate modules:
 //! - **MCP (Model Context Protocol)**:
@@ -91,8 +95,8 @@ use crate::ccproxy::errors::CCProxyError;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
     auth::{authenticate_request, is_trusted_internal_request},
-    handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
-    handle_responses,
+    handle_chat_completion, handle_decision, handle_embedding, handle_list_models,
+    handle_ollama_tags, handle_responses,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
     helper::CcproxyQuery,
 };
@@ -385,6 +389,19 @@ async fn ollama_list_tags_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
     handle_ollama_tags(final_group, state.main_store.clone())
+        .await
+        .map(|res| res.into_response())
+}
+
+async fn decision_logic(
+    state: Arc<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    handle_decision(headers, body, final_group, state.main_store.clone())
         .await
         .map(|res| res.into_response())
 }
@@ -814,6 +831,39 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
         )
 }
 
+/// Creates routes for the System One decision endpoint.
+///
+/// Decision requests have no compatibility mode, so only direct and grouped access exist.
+fn decision_routes(mode: GroupMode) -> Router<Arc<SharedState>> {
+    match mode {
+        GroupMode::Path => {
+            let decision_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    decision_logic(state, headers, body, Some(group_name))
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new().route("/v1/systemone", decision_handler)
+        }
+        GroupMode::None => {
+            let decision_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    decision_logic(state, headers, body, None)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new().route("/v1/systemone", decision_handler)
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Main Router Definition
 // ----------------------------------------------------------------------------
@@ -882,7 +932,8 @@ pub async fn routes(
     let normal_routes = Router::new()
         .merge(openai_routes(false, GroupMode::None))
         .merge(claude_routes(false, GroupMode::None))
-        .merge(gemini_routes(false, GroupMode::None));
+        .merge(gemini_routes(false, GroupMode::None))
+        .merge(decision_routes(GroupMode::None));
 
     let compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::None))
@@ -892,7 +943,8 @@ pub async fn routes(
     let grouped_normal_routes = Router::new()
         .merge(openai_routes(false, GroupMode::Path))
         .merge(claude_routes(false, GroupMode::Path))
-        .merge(gemini_routes(false, GroupMode::Path));
+        .merge(gemini_routes(false, GroupMode::Path))
+        .merge(decision_routes(GroupMode::Path));
 
     let grouped_compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::Path))
@@ -1043,6 +1095,8 @@ fn log_registered_routes() {
     log::info!("  - /v1/messages, /v1/claude/embeddings");
     log::info!("[Gemini-Compatible]");
     log::info!("  - /v1beta/models, /v1beta/models/{{model_id}}:{{action}}");
+    log::info!("[System One Decision]");
+    log::info!("  - /v1/systemone");
     log::info!("[Ollama-Specific]");
     log::info!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
     log::info!("[Access Modes]");

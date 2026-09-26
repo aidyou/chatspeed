@@ -201,6 +201,7 @@ network:
   response_read_error: 'Failed to read response: %{error}'
 proxy:
   error:
+    decision_not_chat_protocol: Decision models are not chat models, call the /v1/systemone endpoint instead
     internal_server_error: 'Internal server error: %{error}'
     invalid_api_key: Invalid API key, please check if the key is correct or expired, and update in settings
     invalid_protocol: 'Invalid protocol in model configuration: %{protocol}.'

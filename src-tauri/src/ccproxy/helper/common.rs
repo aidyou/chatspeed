@@ -497,7 +497,8 @@ impl ModelResolver {
             &ai_model_details.name,
             &ai_model_details.base_url,
             &ai_model_details.api_protocol,
-            &global_key.key[std::cmp::max(0, global_key.key.len() - 8)..] // Log last 8 chars for debugging
+            // Log last 8 chars for debugging
+            api_key_suffix(&global_key.key)
         );
 
         if ai_model_details.base_url.is_empty() {
@@ -984,7 +985,7 @@ impl ModelResolver {
 
         // 3. Add protocol-specific authentication and version headers
         match proxy_model.chat_protocol {
-            ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+            ChatProtocol::OpenAI | ChatProtocol::HuggingFace | ChatProtocol::Decision => {
                 if !proxy_model.api_key.is_empty() {
                     if let Ok(h) = reqwest::header::HeaderValue::from_str(&format!(
                         "Bearer {}",
@@ -1106,6 +1107,8 @@ pub fn get_provider_chat_full_url(
                 )
             }),
         ChatProtocol::Claude => format!("{}/messages", base_url.trim_end_matches('/')),
+        // A decision provider stores the complete evaluation endpoint as its base URL.
+        ChatProtocol::Decision => base_url.trim_end_matches('/').to_string(),
         ChatProtocol::Gemini => {
             if is_streaming_request {
                 format!(
@@ -1166,6 +1169,7 @@ pub fn get_provider_embedding_full_url(
             )
         }
         ChatProtocol::Claude => String::new(),
+        ChatProtocol::Decision => String::new(),
     }
 }
 

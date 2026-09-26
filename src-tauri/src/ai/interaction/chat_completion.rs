@@ -311,7 +311,9 @@ pub async fn list_models_async(
     api_key: Option<&str>,
     metadata: Option<Value>,
 ) -> crate::error::Result<Vec<ModelDetails>> {
-    if api_protocol == "decision" {
+    let chat_protocol = ChatProtocol::from_str(&api_protocol)
+        .map_err(|_| CCProxyError::InvalidProtocolError(api_protocol.clone()))?;
+    if chat_protocol == ChatProtocol::Decision {
         let models = decision::list_models(
             main_store,
             api_url.unwrap_or_default(),
@@ -339,8 +341,6 @@ pub async fn list_models_async(
             })
             .collect());
     }
-    let chat_protocol = ChatProtocol::from_str(&api_protocol)
-        .map_err(|_| CCProxyError::InvalidProtocolError(api_protocol.clone()))?;
     let (api_url_clone, api_key_clone) = prepare_chat_parameters(
         chat_protocol.clone(),
         api_url.as_deref(),
@@ -364,7 +364,8 @@ pub async fn list_models_async(
 }
 
 fn is_decision_chat_provider(provider: &crate::db::AiModel) -> bool {
-    provider.api_protocol == "decision"
+    ChatProtocol::from_str(&provider.api_protocol)
+        .is_ok_and(|protocol| protocol == ChatProtocol::Decision)
 }
 
 fn validate_chat_provider(store: &MainStore, provider_id: i64) -> crate::error::Result<()> {
