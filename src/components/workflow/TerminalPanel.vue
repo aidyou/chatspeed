@@ -78,6 +78,7 @@ import { writeClipboard } from '@/libs/clipboard'
 import { openUrl } from '@/libs/util'
 import { terminalSkinPalette } from '@/constants/terminalThemes'
 import { terminalBlockTopRow, terminalClearSequence } from '@/composables/workflow/terminalClear'
+import { createWwwLinkProvider } from '@/composables/workflow/terminalWwwLink'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
 const props = defineProps<{ terminal: any; preferences: any }>()
@@ -249,6 +250,14 @@ const mountTab = (tab: TerminalTab) => {
     },
     dispose: () => urlProvider.dispose()
   })
+  // A second provider layers bare www hosts on top of the scheme URLs. ghostty-web merges every
+  // registered provider per row, and the regex excludes scheme-prefixed hosts, so the two never
+  // overlap on the same range. A matched host has no scheme, so resolve it to https before opening.
+  instance.registerLinkProvider(
+    createWwwLinkProvider(instance, (event, host) => {
+      if (event.ctrlKey || event.metaKey) void openUrl(`https://${host}`)
+    })
+  )
   instance.onData(data => {
     // Forward each xterm input chunk to the per-session FIFO bridge so rapid typing reaches the
     // PTY in order without debounce/coalescing dropping intermediate characters.
