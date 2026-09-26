@@ -29,6 +29,23 @@ test('decision editor preserves import, hides chat fields and retains prices', a
   assert.match(component, /if \(protocol === 'decision'\) \{\s*showMessage\(t\('settings\.model\.decisionImportFailed'/)
 })
 
+test('decision editor keeps the context size it shows', async () => {
+  const component = await source()
+  // The decision save path rebuilds the model entry from a fixed set of fields, so a context size
+  // left out of it would silently disappear and the editor would show the chat default on reopen.
+  assert.match(component, /contextSize: decisionContextSize\(modelConfigForm\.value\.contextSize\)/)
+  // A newly added decision model starts from the chat default, which the endpoint refuses.
+  assert.match(component, /if \(modelForm\.value\.apiProtocol === 'decision'\) \{\s*modelConfigForm\.value\.contextSize = DECISION_CONTEXT_SIZE/)
+  const declaration = component.match(/const decisionContextSize = [\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration)
+  const resolve = runInNewContext(`${declaration}; decisionContextSize`, { DECISION_CONTEXT_SIZE: 8192 })
+  assert.equal(resolve(4096), 4096)
+  assert.equal(resolve(128000), 128000)
+  for (const missing of [undefined, null, 0, -1, '', 'nope', Number.NaN]) {
+    assert.equal(resolve(missing), 8192)
+  }
+})
+
 test('ordinary model provider selection excludes decision providers', async () => {
   const store = await readFile(new URL('../../stores/model.js', import.meta.url), 'utf8')
   assert.match(store, /getAvailableProviders = computed\(\(\) => providers\.value\.filter\(m => !m\.disabled && m\.apiProtocol !== 'decision'\)\)/)

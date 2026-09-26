@@ -1227,6 +1227,12 @@ const createDefaultModelConfig = () => ({
 // roughly 8192 input tokens, so the decision protocol's usable input is far below the 128000 that
 // chat models default to.
 const DECISION_CONTEXT_SIZE = 8192
+// A decision model without a stored size would otherwise keep the 128000 chat default, a value the
+// evaluation endpoint refuses, so the editor resolves it to the System One ceiling instead.
+const decisionContextSize = value => {
+  const size = Number(value)
+  return Number.isFinite(size) && size > 0 ? size : DECISION_CONTEXT_SIZE
+}
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
@@ -1356,6 +1362,9 @@ const onModelConfig = model => {
   } else {
     prevModelConfigId.value = ''
     modelConfigForm.value = createDefaultModelConfig()
+    if (modelForm.value.apiProtocol === 'decision') {
+      modelConfigForm.value.contextSize = DECISION_CONTEXT_SIZE
+    }
     void resolveNewModelCatalog()
   }
   modelConfigDialogVisible.value = true
@@ -1395,6 +1404,7 @@ const updateModelConfig = () => {
       id: trimmedId,
       name: modelConfigForm.value.name?.trim() || modelAliasFromId(trimmedId),
       group: modelConfigForm.value.group?.trim() || '',
+      contextSize: decisionContextSize(modelConfigForm.value.contextSize),
       pricing: {
         ...pricing,
         reasoningPricingMode: modelConfigForm.value.pricing.reasoningPricingMode,
