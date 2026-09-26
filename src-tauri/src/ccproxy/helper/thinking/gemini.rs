@@ -1,4 +1,4 @@
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[cfg(test)]
 use super::common::host_matches;
@@ -27,6 +27,12 @@ fn supported_thinking_levels(model: &str) -> Option<&'static [&'static str]> {
         Some(&["minimal", "high"])
     } else if model.contains("gemini-3-pro-preview") {
         Some(&["low", "high"])
+    } else if model.contains("gemini-2.5-") {
+        // The catalog resolves every 2.5 variant to the Gemini transport, so an unlisted one still
+        // has to pull a client effort such as `xhigh` down to a level the family accepts.
+        Some(&["low", "medium", "high"])
+    } else if model.contains("gemini-3") {
+        Some(&["minimal", "low", "medium", "high"])
     } else {
         None
     }
@@ -67,28 +73,33 @@ pub(super) fn normalize_request(body: &mut Value, model: &str, _base_url: &str) 
         return;
     };
 
-    let thinking_config = generation_config
-        .entry("thinkingConfig".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(thinking_config) = thinking_config.as_object_mut() else {
-        return;
-    };
-
-    let level = thinking_config
-        .get("thinkingLevel")
-        .and_then(Value::as_str)
-        .or_else(|| {
+    // Only a level the client already asked for is rewritten; thinking is never enabled here.
+    let Some(level) = generation_config
+        .get("thinkingConfig")
+        .and_then(Value::as_object)
+        .and_then(|thinking_config| {
             thinking_config
-                .get("thinking_level")
+                .get("thinkingLevel")
                 .and_then(Value::as_str)
-        });
-    let Some(level) = level else {
+                .or_else(|| {
+                    thinking_config
+                        .get("thinking_level")
+                        .and_then(Value::as_str)
+                })
+        })
+    else {
         return;
     };
     let Some(level) = normalize_thinking_level(level, supported) else {
         return;
     };
 
+    let Some(thinking_config) = generation_config
+        .get_mut("thinkingConfig")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
     thinking_config.remove("thinking_level");
     thinking_config.insert(
         "thinkingLevel".to_string(),
