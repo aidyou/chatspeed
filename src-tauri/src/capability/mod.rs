@@ -35,6 +35,7 @@ pub mod types;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::ai::network::ProxyType;
 use crate::db::MainStore;
 
 use error::{code, CapabilityError};
@@ -189,6 +190,18 @@ impl CapabilityApplicationService {
         &self.environment
     }
 
+    /// The current global proxy configuration used by network-backed capability installs.
+    pub fn proxy_type(&self) -> ProxyType {
+        match self.repository.store().get_config("proxy_type", "none".to_string()).as_str() {
+            "http" => ProxyType::Http(
+                self.repository.store().get_config("proxy_server", String::new()),
+                Some(self.repository.store().get_config("proxy_username", String::new())),
+                Some(self.repository.store().get_config("proxy_password", String::new())),
+            ),
+            "system" => ProxyType::System,
+            _ => ProxyType::None,
+        }
+    }
     /// Per-resource serialization for in-process single-flight.
     pub fn locks(&self) -> &ResourceLocks {
         &self.locks

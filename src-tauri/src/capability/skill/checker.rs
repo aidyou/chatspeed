@@ -11,8 +11,10 @@
 
 use std::path::{Path, PathBuf};
 
+use reqwest::Proxy;
 use serde::Serialize;
 
+use crate::ai::network::ProxyType;
 use crate::capability::error::CapabilityError;
 use crate::capability::skill::archive;
 use crate::capability::skill::manifest::compute_file_manifest;
@@ -356,13 +358,15 @@ pub struct SkillSourceResolver {
     /// Test seam: overrides the GitHub download origin. Production always uses
     /// the constant inside [`SkillSource::github_archive_url`].
     download_origin: Option<String>,
+    proxy_type: ProxyType,
 }
 
 impl SkillSourceResolver {
-    pub fn new(app_data_dir: PathBuf) -> Self {
+    pub fn new(app_data_dir: PathBuf, proxy_type: ProxyType) -> Self {
         Self {
             app_data_dir,
             download_origin: None,
+            proxy_type,
         }
     }
 
@@ -371,6 +375,7 @@ impl SkillSourceResolver {
         Self {
             app_data_dir,
             download_origin: Some(origin),
+            proxy_type: ProxyType::None,
         }
     }
 
@@ -493,13 +498,29 @@ impl SkillSourceResolver {
             None => source.github_archive_url()?,
         };
 
-        let client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
-            .redirect(reqwest::redirect::Policy::limited(4))
-            .build()
-            .map_err(|error| {
-                CapabilityError::internal(format!("failed to build the download client: {error}"))
-            })?;
+            .redirect(reqwest::redirect::Policy::limited(4));
+        match &self.proxy_type {
+            ProxyType::None => {
+                client_builder = client_builder.no_proxy();
+            }
+            ProxyType::System => {}
+            ProxyType::Http(proxy_url, username, password) => {
+                let mut proxy = Proxy::all(proxy_url).map_err(|error| {
+                    CapabilityError::internal(format!("failed to configure the download proxy: {error}"))
+                })?;
+                if let (Some(username), Some(password)) = (username, password) {
+                    if !username.is_empty() && !password.is_empty() {
+                        proxy = proxy.basic_auth(username, password);
+                    }
+                }
+                client_builder = client_builder.proxy(proxy);
+            }
+        }
+        let client = client_builder.build().map_err(|error| {
+            CapabilityError::internal(format!("failed to build the download client: {error}"))
+        })?;
 
         let response = client.get(&url).send().await.map_err(|_| {
             CapabilityError::new(
@@ -964,6 +985,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_invalid_download_proxy_is_rejected_before_request() {
+        let temp = TempDir::new().expect("temp dir");
+        let resolver = SkillSourceResolver {
+            app_data_dir: temp.path().join("app-data"),
+            download_origin: Some("http://127.0.0.1:1".to_string()),
+            proxy_type: ProxyType::Http("not a proxy url".to_string(), None, None),
+        };
+        let source = SkillSource::GitHub {
+            owner: "acme".to_string(),
+            repo: "skills".to_string(),
+            git_ref: None,
+            path: None,
+        };
+        let environment =
+            TargetEnvironment::injected(temp.path().join("home"), temp.path().join("chatspeed"));
+
+        let error = resolver
+            .check(&source, &environment, "op-skill-invalid-proxy")
+            .await
+            .expect_err("an invalid proxy must fail before the download");
+        assert_eq!(error.code(), crate::capability::error::code::INTERNAL);
+    }
+    #[tokio::test]
     async fn a_local_zip_source_is_staged_checked_and_cleaned() {
         use std::io::Write as _;
         use zip::write::SimpleFileOptions;
@@ -983,7 +1027,7 @@ mod tests {
         }
 
         let app_data = temp.path().join("app-data");
-        let resolver = SkillSourceResolver::new(app_data.clone());
+        let resolver = SkillSourceResolver::new(app_data.clone(), ProxyType::None);
         let source = SkillSource::LocalZip {
             path: archive_path.to_string_lossy().to_string(),
         };

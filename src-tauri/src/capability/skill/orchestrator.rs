@@ -79,7 +79,7 @@ impl CapabilityApplicationService {
         source_value: &Value,
     ) -> Result<SkillCheckReport, CapabilityError> {
         let source = SkillSource::parse(source_value)?;
-        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf());
+        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
         let staging_id = format!("skill-check-{}", now_ms());
         resolver
             .check(&source, self.environment(), &staging_id)
@@ -349,7 +349,7 @@ impl CapabilityApplicationService {
         source: &SkillSource,
     ) -> Result<crate::capability::skill::checker::MaterializedSource, CapabilityError> {
         self.set_state(operation_id, OperationState::Staging, Some("materialize"))?;
-        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf());
+        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
         resolver
             .materialize(source, self.environment(), operation_id)
             .await
