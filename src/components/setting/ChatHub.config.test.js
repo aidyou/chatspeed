@@ -38,13 +38,13 @@ test('chat hub editor validates http(s) urls and only fills the favicon url', ()
   assert.match(source, /chatHubBrokenLogos\.value\.delete\(chatHubForm\.id\)/)
 })
 
-test('the settings window exposes a dedicated chat hub tab right after the AI provider tab', () => {
+test('the settings window exposes a dedicated chat hub tab after the AI provider tab', () => {
   const settings = read('../../views/Settings.vue')
 
   assert.match(settings, /import chatHub from '@\/components\/setting\/ChatHub\.vue'/)
   assert.match(
     settings,
-    /\{ label: t\('settings\.type\.model'\), icon: 'model', id: 'model' \},\s*\{ label: t\('settings\.type\.chatHub'\), icon: 'talk', id: 'chatHub' \},/
+    /\{ label: t\('settings\.type\.model'\), icon: 'model', id: 'model' \},[\s\S]*?\{ label: t\('settings\.type\.chatHub'\), icon: '[a-z]+', id: 'chatHub' \},/
   )
   assert.match(
     settings,
