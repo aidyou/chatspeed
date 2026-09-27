@@ -2889,7 +2889,7 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::Interaction)
         {
-            if is_allowed(TOOL_ASK_USER) {
+            if !self.is_child_agent_workflow() && is_allowed(TOOL_ASK_USER) {
                 tm.register_tool(Arc::new(AskUser)).await?;
             }
             if self.policy.is_strict_manual_planning() && is_allowed(TOOL_SUBMIT_PLAN) {

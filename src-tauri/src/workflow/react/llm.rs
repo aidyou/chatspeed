@@ -1668,7 +1668,9 @@ mod tests {
     fn budget_scope_lookup_only_marks_successful_scope_as_budgeted() {
         assert!(budgeted_from_scope_lookup::<_, ()>(Ok(Some("scope"))));
         assert!(!budgeted_from_scope_lookup::<&str, ()>(Ok(None)));
-        assert!(!budgeted_from_scope_lookup::<&str, _>(Err("database unavailable")));
+        assert!(!budgeted_from_scope_lookup::<&str, _>(Err(
+            "database unavailable"
+        )));
     }
     #[test]
     fn required_tool_choice_is_disabled_for_thinking_requests() {
@@ -2102,6 +2104,7 @@ mod tests {
             max_contexts: None,
             created_at: None,
             updated_at: None,
+            report_required_sections: None,
         }
     }
 
