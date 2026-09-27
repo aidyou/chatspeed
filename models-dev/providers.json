@@ -633,7 +633,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 33,
+      "modelCount": 22,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 595,
+      "modelCount": 597,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1439,7 +1439,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 111,
+      "modelCount": 112,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1449,7 +1449,7 @@
       "documentationUrl": "https://opencode.ai/docs/go",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 41,
+      "modelCount": 42,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -2278,9 +2278,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "1e559956cfa16dad77e1fd5f1f38ae533276b397aca15c2b0ebb71d6e50e64a3",
-    "generatedAt": "2026-09-26T08:37:38Z",
+    "catalogSha256": "63478135ac54ad0af6ee2182dcf128469cb1052a5fd4bd0ced8cc04bb072b052",
+    "generatedAt": "2026-09-27T09:17:45Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "a8815a71809b8943ee60262619c04587afbe4e44"
+    "revision": "142aece954f0932db4002d62878c466dd482fba0"
   }
 }
