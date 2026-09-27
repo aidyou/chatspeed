@@ -23,6 +23,7 @@ pub struct AgentPayload {
     pub allowed_paths: Option<String>,
     pub final_audit: Option<bool>,
     pub approval_level: Option<String>,
+    pub report_required_sections: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<String>,
     pub mcp_tool_exposure: Option<String>,
@@ -64,6 +65,7 @@ impl From<AgentPayload> for Agent {
             .unwrap_or(crate::tools::ShellExecutionMode::HostOnly);
         agent.sandbox_scheme_id = payload.sandbox_scheme_id;
         agent.sub_agent_role = payload.sub_agent_role;
+        agent.report_required_sections = payload.report_required_sections;
         agent
     }
 }

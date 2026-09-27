@@ -195,6 +195,8 @@
       "allowShell": "Allow Shell Execution",
       "allowShellTip": "When enabled, the agent can use the bash tool. Specific commands are still governed by shell audit rules and approval policy.",
       "approvalLevel": "Approval Level",
+      "approvalLevelInherit": "Inherit from Parent Agent",
+      "approvalLevelInheritDescription": "Inherit the parent agent's approval policy",
       "approvalLevelDefault": "Follow Agent Configuration",
       "approvalLevelDefaultDescription": "Follow the agent's tool and Shell approval rules.",
       "approvalLevelFull": "Unrestricted",

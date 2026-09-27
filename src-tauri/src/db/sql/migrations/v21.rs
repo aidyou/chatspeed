@@ -49,6 +49,13 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 /// this one; `run_migrations` then skips the SQL step, and without this hook the
 /// columns and index would be missing while the facade is running.
 fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<(), StoreError> {
+    if !column_exists(conn, "agents", "report_required_sections")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN report_required_sections TEXT",
+            [],
+        )?;
+    }
+
     if !column_exists(conn, "workflow_automations", "revision")? {
         conn.execute(
             "ALTER TABLE workflow_automations ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",

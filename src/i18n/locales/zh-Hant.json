@@ -195,6 +195,8 @@
       "allowShell": "允許執行 Shell",
       "allowShellTip": "啟用後，智能體可使用 bash 工具。具體命令仍受 Shell 審計規則和審批策略約束。",
       "approvalLevel": "審批級別",
+      "approvalLevelInherit": "繼承父智能體",
+      "approvalLevelInheritDescription": "繼承父智能體的審批策略",
       "approvalLevelDefault": "按智能體配置",
       "approvalLevelDefaultDescription": "依照智能體的工具與 Shell 審批規則審批",
       "approvalLevelFull": "完全放開",

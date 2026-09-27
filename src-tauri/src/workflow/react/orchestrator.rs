@@ -548,12 +548,9 @@ fn append_sub_agent_event(
 fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
     let mut tools = tools_json.and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())?;
     tools.retain(|tool| {
-        // System/internal tools that sub-agents should not access. User interaction remains
-        // available because its structured wait state is bridged to the parent session.
-        tool != crate::tools::TOOL_BASH
-            && tool != crate::tools::TOOL_SUB_AGENT_RUN
-            && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
-            && tool != crate::tools::TOOL_PLAN_NOTE
+        // Nested delegation is not supported. Bash remains controlled by the child
+        // agent's own tool configuration and inherited security snapshot.
+        tool != crate::tools::TOOL_SUB_AGENT_RUN && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
     });
     serde_json::to_string(&tools).ok()
 }
@@ -798,17 +795,35 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.mcp_tool_exposure =
             filtered_mcp_config.and_then(|config| serde_json::to_string(&config).ok());
 
-        let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
-            let store = self.main_store.as_ref();
-            store
-                .get_workflow_snapshot(parent_session_id)
-                .ok()
-                .and_then(|snapshot| snapshot.workflow.agent_config)
-                .and_then(|config_json| AgentConfig::from_json(&config_json))
-                .and_then(|config| config.allowed_paths)
+        let child_is_write_capable = agent_config
+            .available_tools
+            .as_deref()
+            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    matches!(
+                        tool.as_str(),
+                        crate::tools::TOOL_WRITE_FILE
+                            | crate::tools::TOOL_EDIT_FILE
+                            | crate::tools::TOOL_BASH
+                    )
+                })
+            });
+        let inherited_parent_config = if child_is_write_capable {
+            parent_session_id.and_then(|parent_session_id| {
+                let store = self.main_store.as_ref();
+                store
+                    .get_workflow_snapshot(parent_session_id)
+                    .ok()
+                    .and_then(|snapshot| snapshot.workflow.agent_config)
+                    .and_then(|config_json| AgentConfig::from_json(&config_json))
+            })
         } else {
             None
         };
+        let inherited_allowed_paths = inherited_parent_config
+            .as_ref()
+            .and_then(|config| config.allowed_paths.clone());
 
         if let Some(paths) = inherited_allowed_paths.clone() {
             agent_config.allowed_paths = serde_json::to_string(&paths).ok();
@@ -827,18 +842,55 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             .map(PathBuf::from)
             .collect::<Vec<_>>();
 
+        let configured_approval_level = agent_config.approval_level.clone();
+        let effective_approval_level = if configured_approval_level.as_deref() == Some("inherit")
+            && agent_config.role.as_deref() == Some("child")
+        {
+            inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.approval_level.as_deref())
+                .unwrap_or("default")
+        } else {
+            configured_approval_level.as_deref().unwrap_or("default")
+        };
+        agent_config.approval_level = Some(effective_approval_level.to_string());
+
         let workflow_config = AgentConfig {
             personality: agent_config.personality.clone(),
             allowed_paths: workflow_allowed_paths,
-            shell_policy: agent_config
-                .shell_policy
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok()),
-            sandbox_config: None,
-            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::HostOnly),
-            sandbox_scheme_id: None,
-            sandbox_override: None,
-            approval_level: agent_config.approval_level.clone(),
+            shell_policy: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.shell_policy.clone())
+                .or_else(|| {
+                    agent_config
+                        .shell_policy
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                }),
+            sandbox_config: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_config.clone())
+                .or_else(|| {
+                    agent_config
+                        .sandbox_config
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                }),
+            sandbox_execution_mode: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_execution_mode.clone())
+                .or_else(|| {
+                    Some(agent_config.sandbox_execution_mode.clone())
+                }),
+            sandbox_scheme_id: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_scheme_id.clone())
+                .or_else(|| agent_config.sandbox_scheme_id.clone()),
+            sandbox_override: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_override)
+                .or(Some(true)),
+            approval_level: Some(effective_approval_level.to_string()),
             auto_approve: agent_config
                 .auto_approve
                 .as_deref()
@@ -870,7 +922,10 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,
-            // A child-agent session never carries the parent's experiment
+            report_required_sections: agent_config
+                .report_required_sections
+                .as_deref()
+                .and_then(|sections| serde_json::from_str(sections).ok()),
             // prompt surface: a candidate may only change the top-level
             // Agent behavior, never the child agent prompt directory.
             experiment_agent_prompt_ref: None,

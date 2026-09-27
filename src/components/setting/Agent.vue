@@ -310,6 +310,7 @@
           <el-form-item :label="$t('settings.agent.approvalLevel')"
             prop="approvalLevel" :label-width="150">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
+              <el-option v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.approvalLevelInherit')" value="inherit" />
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
               <el-option :label="$t('settings.agent.approvalLevelSmart')" value="smart" />
               <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
@@ -772,7 +773,7 @@ const decisionModelValid = computed(() => true)
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
-const HIDDEN_AGENT_TOOL_IDS = ['bash']
+const HIDDEN_AGENT_TOOL_IDS = []
 const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
@@ -915,7 +916,7 @@ const sortedAvailableTools = computed(() => {
 const autoApproveOptions = computed(() => {
   if (!agentForm.value || !agentForm.value.availableTools) return []
   return sortedAvailableTools.value.filter(
-    t => agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
+    t => agentForm.value.availableTools.includes(t.id)
   )
 })
 
@@ -1422,7 +1423,7 @@ const normalizeAgentFormForSave = form => {
     : []
   normalized.autoApprove = Array.isArray(normalized.autoApprove)
     ? [...new Set(normalized.autoApprove)].filter(
-      tool => normalized.availableTools.includes(tool) && tool !== 'bash'
+      tool => normalized.availableTools.includes(tool)
     )
     : []
   normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
@@ -1446,9 +1447,7 @@ const normalizeAgentFormForSave = form => {
     normalized.allowedPaths = []
     normalized.shellPolicy = []
     normalized.sandboxExecutionMode = 'host_only'
-    normalized.sandboxSchemeId = null
-    normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
-    normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+    normalized.approvalLevel = normalized.approvalLevel || 'default'
     normalized.skillEnabled = false
     normalized.selectedSkills = []
     normalized.allowShell = false
@@ -2052,13 +2051,9 @@ watch(
     if (activeTab.value === 'personality') {
       activeTab.value = 'basic'
     }
-    agentForm.value.allowShell = false
-    agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
-      tool => tool !== 'bash'
-    )
-    agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
-      tool => tool !== 'bash'
-    )
+    agentForm.value.allowShell = agentForm.value.availableTools?.includes('bash') === true
+    agentForm.value.availableTools = (agentForm.value.availableTools || [])
+    agentForm.value.autoApprove = (agentForm.value.autoApprove || [])
 
     if (!agentForm.value.parentAgentId && primaryAgentOptions.value.length > 0) {
       agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
@@ -2087,17 +2082,18 @@ watch(
   () => agentForm.value.allowShell,
   enabled => {
     if (agentForm.value.role === AGENT_ROLE.CHILD) {
-      agentForm.value.allowShell = false
       return
     }
 
     if (!enabled) {
-      agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
-        tool => tool !== 'bash'
-      )
-      agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
-        tool => tool !== 'bash'
-      )
+      if (agentForm.value.role === AGENT_ROLE.PRIMARY) {
+        agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
+          tool => tool !== 'bash'
+        )
+        agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
+          tool => tool !== 'bash'
+        )
+      }
       if (activeTab.value === 'sandbox') {
         activeTab.value = 'security'
       }

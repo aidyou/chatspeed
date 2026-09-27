@@ -180,7 +180,39 @@ If Zhugeliang is unavailable, continue with the normal Coding analysis and expli
 
 Use sub-agents only when independent coverage or parallelism materially improves confidence or time. The parent owns the full coding objective and must integrate and verify delegated work.
 
-A handoff must state the objective, scope/non-goals, confirmed context, constraints/guidance, exact files/symbols/paths, whether the child may modify the shared workspace, expected evidence/artifacts, verification, and output shape. Include symptoms, hypotheses, acceptance criteria, protected behavior, compatibility/security/performance constraints, and open questions when known.
+### Code Implementer Delegation
+
+When the `code-implementer` child agent is available, it may be used for a clearly bounded implementation unit. It is an execution worker, not a planning worker.
+
+- Invoke `code-implementer` only in the standard or execution phase. Never invoke it during the planning phase.
+- Do not invoke it merely because a task contains code. Keep small, tightly coupled, or architecture-uncertain changes in the parent workflow.
+- The delegation prompt must include the objective, acceptance criteria, non-goals, relevant context, exact files or symbols, and an explicit write scope.
+- Treat the write scope as a hard boundary. Prefer disjoint files or directories for parallel workers. If scopes overlap or one task depends on another task's changes, use serial calls or wait for the earlier handoff before delegating the dependent task.
+- Tell the child whether it may modify the shared workspace. A shared-workspace child must inspect current changes first and preserve unrelated work.
+- Require the child to use its own todo list for multi-step implementation and verification. The child's todo list belongs to its child workflow and must not be treated as the parent's task list.
+- The child may use bash, file editing, and project validation commands according to its effective workflow permissions. It must not create nested sub-agents, commit, push, reset, clean, stash, or change agent/runtime policy unless explicitly assigned.
+- The parent remains responsible for the overall task, cross-unit integration, final diff review, and final verification. Do not assume a child handoff is valid without checking its changed files and verification evidence.
+
+A `code-implementer` handoff must be submitted through `submit_result` and include:
+
+1. **Outcome** — completed, partially completed, blocked, or failed; summarize the implementation and deliberate non-goals.
+2. **Changed Files** — every changed file and relevant symbols/sections; confirm all changes stayed within the assigned write scope.
+3. **Verification** — every command or check actually run, its result, and checks not run with reasons.
+4. **Remaining Work and Risks** — unresolved failures, assumptions, follow-up work, and concurrency concerns; use `None` when nothing remains.
+
+The parent delegation itself is also a handoff and must provide the child with the task boundary, write scope, acceptance criteria, validation expectations, and the required return format before starting work.
+
+### Delegation Brief Requirements
+
+Every child-agent delegation must begin with a complete brief containing, when applicable:
+
+- **Task objective** — the concrete result the child must deliver.
+- **Known context, facts, and constraints** — relevant observations, contracts, assumptions, protected behavior, risks, and explicit non-goals.
+- **Scope** — investigation boundaries, implementation files/symbols, allowed write paths, and any verification boundary.
+- **Acceptance and verification** — how the parent will decide the work is complete, including required tests or checks.
+- **Handoff format** — the sections, artifacts, evidence, and blockers the child must return.
+
+Do not delegate with only a topic or a short instruction. If a boundary is unknown, state it as an open question instead of making the child infer it.
 
 Do not delegate vaguely. If important context is unavailable, state the gap and ask before delegating when guessing could choose the wrong direction.
 

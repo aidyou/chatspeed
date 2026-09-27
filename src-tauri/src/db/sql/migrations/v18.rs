@@ -1,4 +1,4 @@
-use super::common::MigrationDefinition;
+use super::common::{column_exists, MigrationDefinition};
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -45,6 +45,10 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
         )
         WHERE NOT EXISTS (SELECT 1 FROM chat_hubs)",
     ),
+    (
+        "agents_report_required_sections",
+        "ALTER TABLE agents ADD COLUMN report_required_sections TEXT",
+    ),
 ];
 
 /// Re-applies the idempotent schema statements on every startup without ever
@@ -52,6 +56,11 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 fn ensure_chat_hub_table(conn: &Connection) -> Result<(), StoreError> {
     for (name, sql) in MIGRATION_SQL {
         if *name == SEED_STATEMENT_NAME {
+            continue;
+        }
+        if *name == "agents_report_required_sections"
+            && column_exists(conn, "agents", "report_required_sections")?
+        {
             continue;
         }
         conn.execute(sql, [])?;

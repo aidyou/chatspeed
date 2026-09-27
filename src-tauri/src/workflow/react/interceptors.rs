@@ -2660,6 +2660,20 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }))
     }
 
+    fn required_report_sections(&self) -> Vec<String> {
+        self.agent_config
+            .report_required_sections
+            .as_deref()
+            .and_then(|sections| serde_json::from_str::<Vec<String>>(sections).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn submit_result_report_is_complete(result: &str, sections: &[String]) -> bool {
+        sections.iter().all(|section| {
+            let heading = format!("## {}", section.trim());
+            result.lines().any(|line| line.trim() == heading)
+        })
+    }
     pub(crate) async fn handle_submit_result_intercept(
         &mut self,
         args: &serde_json::Value,
@@ -2687,6 +2701,74 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 approval_status: None,
                 observation_kind: None,
             }));
+        }
+
+        let mut required_sections = self.required_report_sections();
+        let write_capable = self
+            .agent_config
+            .available_tools
+            .as_deref()
+            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    matches!(
+                        tool.as_str(),
+                        TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_BASH
+                    )
+                })
+            });
+        if !required_sections.is_empty() && write_capable {
+            let todos = self
+                .context
+                .main_store
+                .get_todo_list_for_workflow(&self.session_id)
+                .map_err(WorkflowEngineError::Db)?;
+            let has_failed_todo = todos.iter().any(|todo| {
+                matches!(
+                    todo.get("status").and_then(serde_json::Value::as_str),
+                    Some("failed" | "blocked" | "data_missing")
+                )
+            });
+            if has_failed_todo && !required_sections.iter().any(|section| section == "Failed reason") {
+                required_sections.push("Failed reason".to_string());
+            }
+            if !Self::todos_allow_completion_report_capture(&todos) {
+                return Ok(Some(ReinforcedResult {
+                    content: "<SYSTEM_REMINDER>Before calling `submit_result`, finish every todo item. Terminal statuses are completed, done, failed, blocked, or data_missing.</SYSTEM_REMINDER>".into(),
+                    llm_content: None,
+                    title: "Submit Result Error".to_string(),
+                    summary: "Pending todos".to_string(),
+                    is_error: true,
+                    error_type: Some("PendingTodos".into()),
+                    display_type: "text".to_string(),
+                    approval_status: None,
+                    observation_kind: None,
+                }));
+            }
+
+            let missing_sections = required_sections
+                .iter()
+                .filter(|section| {
+                    !Self::submit_result_report_is_complete(result, std::slice::from_ref(section))
+                })
+                .map(|section| section.trim().to_string())
+                .collect::<Vec<_>>();
+            if !missing_sections.is_empty() {
+                return Ok(Some(ReinforcedResult {
+                    content: format!(
+                        "<SYSTEM_REMINDER>Report is missing required sections: {}. Add each section as a Markdown level-two heading, then call `submit_result` again.</SYSTEM_REMINDER>",
+                        missing_sections.join(", ")
+                    ),
+                    llm_content: None,
+                    title: "Submit Result Error".to_string(),
+                    summary: "Incomplete report".to_string(),
+                    is_error: true,
+                    error_type: Some("IncompleteSubmitResult".into()),
+                    display_type: "text".to_string(),
+                    approval_status: None,
+                    observation_kind: None,
+                }));
+            }
         }
 
         let sanitized_result = Self::completion_response_without_reasoning(result);

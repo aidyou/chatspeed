@@ -1218,6 +1218,8 @@ impl WorkflowExecutor {
             phase: Some(self.policy.phase.to_string()),
             models: self.agent_config.models.clone(),
             max_contexts: self.agent_config.max_contexts,
+            report_required_sections: preserved_config
+                .and_then(|config| config.report_required_sections.clone()),
             // A workflow-local experiment prompt reference is frozen run
             // identity carried by the snapshot, not an executor preference, so
             // it is copied through unchanged (never dropped by this rewrite).
@@ -2757,9 +2759,7 @@ impl WorkflowExecutor {
 
         // Helper to check if a tool is allowed in Workflow scope
         let is_allowed = |name: &str| {
-            if is_sub_agent
-                && matches!(name, TOOL_BASH | TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT)
-            {
+            if is_sub_agent && matches!(name, TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT) {
                 return false;
             }
 

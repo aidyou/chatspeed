@@ -83,6 +83,8 @@ struct BuiltinAgentConfig {
     #[serde(default)]
     models: Option<AgentModels>,
     #[serde(default)]
+    report_required_sections: Option<Vec<String>>,
+    #[serde(default)]
     max_contexts: Option<i32>,
 }
 
@@ -344,6 +346,7 @@ fn definition_to_agent(
         version: Some(manifest.builtin_version),
         sort_index: None,
         max_contexts: manifest.config.max_contexts,
+        report_required_sections: serialize_json(&manifest.config.report_required_sections),
         created_at: None,
         updated_at: None,
     })
@@ -389,6 +392,7 @@ fn sync_single_builtin_agent(
             updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.available_tools = available_tools;
             updated.auto_approve = desired.auto_approve;
+            updated.report_required_sections = desired.report_required_sections;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
             store.update_agent(&updated).map_err(|e| e.to_string())?;

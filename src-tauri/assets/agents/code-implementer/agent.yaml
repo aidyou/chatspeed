@@ -1,0 +1,46 @@
+schema_version: 1
+builtin_id: code-implementer
+builtin_version: 1
+name: Code Implementer
+description: A write-capable child agent for implementing and validating a clearly scoped coding task. It can edit the shared workspace, run project commands, maintain its own todo list, and return a structured handoff to the parent coding agent.
+role: child
+parent_builtin_id: coding
+sub_agent_role: code_implementer
+disabled: true
+prompts:
+  system: system.md
+config:
+  shell_policy: default
+  approval_level: inherit
+  report_required_sections:
+    - Outcome
+    - Changed Files
+    - Verification
+    - Remaining Work and Risks
+  auto_approve:
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - todo_create
+    - todo_list
+    - todo_update
+    - web_fetch
+    - web_search
+  available_tools:
+    - bash
+    - edit_file
+    - glob
+    - grep
+    - list_dir
+    - read_file
+    - todo_create
+    - todo_list
+    - todo_update
+    - web_fetch
+    - web_search
+    - write_file
+  final_audit: false
+  skill_enabled: false
+  selected_skills: []
+  phase: standard

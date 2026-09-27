@@ -15,11 +15,12 @@ use crate::tools::{AgentSandboxConfig, ShellExecutionMode};
 
 pub const SUB_AGENT_ROLE_EXPLORER: &str = "explorer";
 pub const SUB_AGENT_ROLE_FINAL_REVIEWER: &str = "final_reviewer";
+pub const SUB_AGENT_ROLE_CODE_IMPLEMENTER: &str = "code_implementer";
 
 pub fn is_supported_sub_agent_role(role: &str) -> bool {
     matches!(
         role,
-        SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER
+        SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER | SUB_AGENT_ROLE_CODE_IMPLEMENTER
     )
 }
 
@@ -175,6 +176,8 @@ pub struct AgentConfig {
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
+    /// Required headings that a write-capable child must include in its handoff.
+    pub report_required_sections: Option<Vec<String>>,
     /// Phase 2F experiment surface: the checked-in candidate prompt reference
     /// this workflow was created with. This is frozen run identity, not a user
     /// preference: it is never inherited from another workflow and never
@@ -314,7 +317,8 @@ pub struct Agent {
     pub final_audit: Option<bool>,
     /// Approval level for tool calls (default, smart, full)
     pub approval_level: Option<String>,
-    /// Whether skills are enabled for this agent
+    /// Required report section headings for delegated write tasks.
+    pub report_required_sections: Option<String>,
     pub skill_enabled: Option<bool>,
     /// JSON array of enabled skill names for this agent
     pub selected_skills: Option<String>,
@@ -394,6 +398,7 @@ impl Agent {
             version: None,
             sort_index: None,
             max_contexts,
+            report_required_sections: None,
             created_at: None,
             updated_at: None,
         }
@@ -539,6 +544,7 @@ impl From<&Row<'_>> for Agent {
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
+            report_required_sections: row.get("report_required_sections").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
             selected_skills: row.get("selected_skills").ok(),
             mcp_tool_exposure: row.get("mcp_tool_exposure").ok(),
@@ -577,8 +583,8 @@ impl MainStore {
             )?;
             let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
-                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
+                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, report_required_sections, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
                 params![
                     agent.id, agent.name, agent.description, agent.personality,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
@@ -587,7 +593,7 @@ impl MainStore {
                     agent.auto_approve, models, agent.shell_policy,
                     agent.sandbox_execution_mode.as_str(), agent.sandbox_scheme_id,
                     agent.allowed_paths, agent.final_audit, agent.approval_level,
-                    agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
+                    agent.report_required_sections, agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
                     agent.phase, agent.is_system, agent.disabled, agent.version.unwrap_or(0),
                     agent.sort_index.unwrap_or(sort_index + 1), agent.max_contexts,
                 ],
@@ -638,10 +644,10 @@ impl MainStore {
                     image_recognition_prompt = ?9, available_tools = ?10, auto_approve = ?11,
                     models = ?12, shell_policy = ?13, sandbox_execution_mode = ?14,
                     sandbox_scheme_id = ?15, allowed_paths = ?16,
-                    final_audit = ?17, approval_level = ?18, skill_enabled = ?19,
-                    selected_skills = ?20, mcp_tool_exposure = ?21, phase = ?22,
-                    is_system = ?23, disabled = ?24, version = ?25, sort_index = ?26,
-                    max_contexts = ?27, updated_at = CURRENT_TIMESTAMP WHERE id = ?28",
+                    final_audit = ?17, approval_level = ?18, report_required_sections = ?19,
+                    skill_enabled = ?20, selected_skills = ?21, mcp_tool_exposure = ?22, phase = ?23,
+                    is_system = ?24, disabled = ?25, version = ?26, sort_index = ?27,
+                    max_contexts = ?28, updated_at = CURRENT_TIMESTAMP WHERE id = ?29",
                 params![
                     effective_name,
                     agent.description,
@@ -661,6 +667,7 @@ impl MainStore {
                     agent.allowed_paths,
                     agent.final_audit,
                     agent.approval_level,
+                    agent.report_required_sections,
                     agent.skill_enabled,
                     agent.selected_skills,
                     agent.mcp_tool_exposure,
@@ -917,6 +924,7 @@ mod tests {
             version: None,
             sort_index: None,
             max_contexts: Some(128000),
+            report_required_sections: None,
             created_at: None,
             updated_at: None,
         }
