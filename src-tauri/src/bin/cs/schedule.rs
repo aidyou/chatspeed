@@ -16,8 +16,8 @@ use crate::args::Cli;
 use crate::client::ControlPlaneClient;
 use crate::error::CliError;
 use crate::output::render_result;
-use chatspeed_lib::campaign;
-use chatspeed_lib::experiment_schedule::{fixture, types};
+use chatspeed_contracts::campaign;
+use chatspeed_contracts::experiment_schedule::{fixture, types};
 use serde_json::{json, Value};
 use std::path::Path;
 

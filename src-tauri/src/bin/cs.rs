@@ -11,9 +11,9 @@
 rust_i18n::i18n!("i18n", fallback = "en");
 
 #[path = "cs/args.rs"]
-mod args;
+pub mod args;
 #[path = "cs/artifact.rs"]
-mod artifact;
+pub mod artifact;
 #[path = "cs/automation.rs"]
 mod automation;
 #[path = "cs/benchmark.rs"]
@@ -63,8 +63,28 @@ use serde_json::{json, Value};
 use sse::{SseFrame, SseParser};
 use std::io::Write;
 
+#[cfg(test)]
+#[cfg(not(feature = "standalone-cli"))]
+fn source_guard_root() -> &'static str {
+    env!("CARGO_MANIFEST_DIR")
+}
+#[cfg(test)]
+#[cfg(feature = "standalone-cli")]
+fn source_guard_root() -> &'static str {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../")
+}
+
+#[cfg(test)]
+fn source_guard_dir() -> std::path::PathBuf {
+    std::path::Path::new(source_guard_root()).join("src/bin/cs")
+}
+
 #[tokio::main]
 async fn main() {
+    main_entry().await;
+}
+
+async fn main_entry() {
     let cli = Cli::parse();
     if let Some(lang) = &cli.lang {
         rust_i18n::set_locale(lang);

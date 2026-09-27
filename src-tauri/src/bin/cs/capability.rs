@@ -189,9 +189,7 @@ fn human_doctor(value: &Value) -> Vec<String> {
             .map(|finding| cell(Some(finding)))
             .collect::<Vec<_>>()
             .join(",");
-        rows.push(
-            rust_i18n::t!("cs.capability_doctor_findings", findings = joined).to_string(),
-        );
+        rows.push(joined);
     }
 
     rows
@@ -217,10 +215,7 @@ fn human_reconcile(value: &Value) -> Vec<String> {
             .map(|id| cell(Some(id)))
             .collect::<Vec<_>>()
             .join(",");
-        rows.push(rust_i18n::t!(
-            "cs.capability_reconcile_pending",
-            ids = joined
-        ).to_string());
+        rows.push(joined);
     }
     rows
 }

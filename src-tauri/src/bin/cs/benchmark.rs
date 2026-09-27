@@ -17,7 +17,7 @@
 /// Re-export of the one shared resolver. A glob keeps this module a faithful
 /// alias of the library contract without silently narrowing (or widening) the
 /// CLI-facing surface as the contract grows.
-pub use chatspeed_lib::experiment_schedule::fixture::*;
+pub use chatspeed_contracts::experiment_schedule::fixture::*;
 
 // ---------------------------------------------------------------------------
 // CLI entry points

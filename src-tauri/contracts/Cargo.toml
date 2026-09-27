@@ -1,0 +1,20 @@
+[package]
+name = "chatspeed-contracts"
+version = "2.0.17"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[features]
+default = ["contracts-crate"]
+contracts-crate = []
+
+# This crate is the migration boundary for transport-neutral contracts. The
+# first extraction must move the canonical source modules here before any
+# client switches away from chatspeed_lib; duplicate compatibility types are
+# intentionally not introduced.
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+hex = "0.4"

@@ -28,7 +28,7 @@ use crate::evaluate::{self, SidecarBundle};
 use crate::experiment;
 use crate::output::{eprint_diagnostic, render_result};
 use crate::verifier;
-use chatspeed_lib::campaign as contract;
+use chatspeed_contracts::campaign as contract;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 

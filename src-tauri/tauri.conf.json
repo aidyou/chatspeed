@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/chatspeed_headless-$target src-tauri/target/release/cs-$target && pnpm build && cargo build --release --manifest-path src-tauri/Cargo.toml --bin chatspeed_headless && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cs && cp src-tauri/target/release/chatspeed_headless src-tauri/target/release/chatspeed_headless-$target && cp src-tauri/target/release/cs src-tauri/target/release/cs-$target",
     "frontendDist": "../dist"
   },
   "app": {
@@ -120,6 +120,10 @@
       "icons/icon.ico"
     ],
     "resources": ["assets"],
+    "externalBin": [
+      "target/release/chatspeed_headless",
+      "target/release/cs"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",

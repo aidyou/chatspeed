@@ -509,7 +509,7 @@ mod tests {
     /// CLI can never grow a second automation authority or execute a shell.
     #[test]
     fn the_cli_never_reaches_a_local_execution_or_storage_authority() {
-        let cs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/cs");
+        let cs_dir = crate::source_guard_dir();
         // Assembled via `concat!` so the forbidden token never appears as a
         // contiguous literal in this file's own source (which the guard scans).
         let forbidden = [

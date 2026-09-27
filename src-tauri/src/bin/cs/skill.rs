@@ -298,43 +298,32 @@ mod tests {
     fn human_install_lists_every_target_outcome_and_the_operation() {
         // The renderer is exercised against the real DTOs, so a renamed backend
         // field breaks this test instead of silently printing `-` (V-8).
-        use chatspeed_lib::capability::skill::installer::{
-            InstallSummary, TargetOutcome, TargetOutcomeStatus,
-        };
-        use chatspeed_lib::capability::skill::orchestrator::SkillMutationResult;
-
-        let summary = InstallSummary {
-            plan_id: "plan-1".to_string(),
-            skill_name: "demo".to_string(),
-            content_digest: "digest".to_string(),
-            outcomes: vec![
-                TargetOutcome {
-                    target_id: "chatspeed".to_string(),
-                    status: TargetOutcomeStatus::Installed,
-                    install_path: Some("/home/u/.chatspeed/skills/demo".to_string()),
-                    installation_id: Some("ins-1".to_string()),
-                    detail: None,
-                },
-                TargetOutcome {
-                    target_id: "codex".to_string(),
-                    status: TargetOutcomeStatus::Unsupported,
-                    install_path: None,
-                    installation_id: None,
-                    detail: Some("path_not_verified".to_string()),
-                },
-            ],
-        };
-        let value = serde_json::to_value(SkillMutationResult {
-            operation_id: "op-1".to_string(),
-            replayed: true,
-            // The recorded projection nests the install summary under `install`.
-            result: serde_json::json!({
+        let value = serde_json::json!({
+            "operation_id": "op-1",
+            "replayed": true,
+            "result": {
                 "stage": "applied",
                 "skill_name": "demo",
-                "install": serde_json::to_value(&summary).expect("summary json"),
-            }),
-        })
-        .expect("mutation json");
+                "install": {
+                    "plan_id": "plan-1",
+                    "skill_name": "demo",
+                    "content_digest": "digest",
+                    "outcomes": [
+                        {
+                            "target_id": "chatspeed",
+                            "status": "installed",
+                            "install_path": "/home/u/.chatspeed/skills/demo",
+                            "installation_id": "ins-1"
+                        },
+                        {
+                            "target_id": "codex",
+                            "status": "unsupported",
+                            "detail": "path_not_verified"
+                        }
+                    ]
+                }
+            }
+        });
 
         let rows = human_install(&value);
         assert_eq!(rows.len(), 4);
@@ -348,25 +337,20 @@ mod tests {
 
     #[test]
     fn human_uninstall_surfaces_a_refusal_instead_of_hiding_it() {
-        use chatspeed_lib::capability::skill::orchestrator::SkillMutationResult;
-        use chatspeed_lib::capability::skill::uninstaller::{
-            UninstallOutcome, UninstallOutcomeStatus,
-        };
-
-        let outcomes = vec![UninstallOutcome {
-            target_id: "chatspeed".to_string(),
-            skill_name: "demo".to_string(),
-            status: UninstallOutcomeStatus::Refused,
-            install_path: Some("/home/u/.chatspeed/skills/demo".to_string()),
-            quarantine_path: None,
-            detail: Some("content_drifted".to_string()),
-        }];
-        let value = serde_json::to_value(SkillMutationResult {
-            operation_id: "op-2".to_string(),
-            replayed: false,
-            result: serde_json::json!({ "skill_name": "demo", "outcomes": outcomes }),
-        })
-        .expect("mutation json");
+        let value = serde_json::json!({
+            "operation_id": "op-2",
+            "replayed": false,
+            "result": {
+                "skill_name": "demo",
+                "outcomes": [{
+                    "target_id": "chatspeed",
+                    "skill_name": "demo",
+                    "status": "refused",
+                    "install_path": "/home/u/.chatspeed/skills/demo",
+                    "detail": "content_drifted"
+                }]
+            }
+        });
 
         let rows = human_uninstall(&value);
         assert!(rows[1].contains("applied"));
