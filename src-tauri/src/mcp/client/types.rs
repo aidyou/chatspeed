@@ -223,18 +223,16 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
     /// Stops the running MCP client.
     /// This is a default implementation.
     async fn stop(&self) -> McpClientResult<()> {
-        let client_arc = self.client();
-        let mut guard = client_arc.write().await;
-        if let Some(service_instance) = guard.take() {
-            match service_instance.cancel().await {
+        let service_instance = self.client().write().await.take();
+        if let Some(service_instance) = service_instance {
+            let result = service_instance.cancel().await;
+            match result {
                 Ok(_) => {
                     self.set_status(McpStatus::Stopped).await;
                     Ok(())
                 }
                 Err(e) => {
                     let err_msg = e.to_string();
-                    // Even if stopping fails, the service instance has been taken.
-                    // The status should reflect the error.
                     self.set_status(McpStatus::Error(format!("Failed to stop: {}", err_msg)))
                         .await;
                     Err(McpError::ClientStopError(err_msg))
@@ -242,48 +240,52 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
             }
         } else {
             // If client was already None (e.g., already stopped or never started)
-            self.set_status(McpStatus::Stopped).await; // Ensure status is Stopped
-            Ok(()) // Considered successful as it's already in a stopped state
+            self.set_status(McpStatus::Stopped).await;
+            Ok(())
         }
     }
 
     /// Lists all available tools from the connected MCP server.
     /// This is a default implementation.
     async fn list_tools(&self) -> McpClientResult<Vec<MCPToolDeclaration>> {
-        let client_arc = self.client();
-        let guard = client_arc.read().await; // Use read lock
-        if let Some(service_instance) = guard.as_ref() {
-            let timeout_secs = self.config().await.timeout.unwrap_or(60);
-            match timeout(
+        let timeout_secs = self.config().await.timeout.unwrap_or(60);
+        let result = {
+            let peer = {
+                let client = self.client();
+                let guard = client.read().await;
+                match guard.as_ref() {
+                    Some(service_instance) => service_instance.peer().clone(),
+                    None => {
+                        return Err(McpError::ClientStatusError(
+                            t!("mcp.client.no_running", client = self.name().await).to_string(),
+                        ));
+                    }
+                }
+            };
+            timeout(
                 Duration::from_secs(timeout_secs),
-                service_instance.peer().list_tools(Default::default()),
+                peer.list_tools(Default::default()),
             )
             .await
-            {
-                Ok(result) => {
-                    let tools = result.map_err(|e| McpError::ClientCallError(e.to_string()))?; // Changed StatusError to CallError for tool listing
+        };
 
-                    // set status to running
-                    self.set_status(McpStatus::Running).await;
-
-                    Ok(get_tools(&tools))
-                }
-                Err(_) => {
-                    let err = McpError::ClientStatusError(
-                        t!(
-                            "mcp.client.list_tools_timeout",
-                            name = self.config().await.name
-                        )
-                        .to_string(),
-                    );
-                    self.set_status(McpStatus::Error(err.to_string())).await;
-                    Err(err)
-                }
+        match result {
+            Ok(result) => {
+                let tools = result.map_err(|e| McpError::ClientCallError(e.to_string()))?;
+                self.set_status(McpStatus::Running).await;
+                Ok(get_tools(&tools))
             }
-        } else {
-            Err(McpError::ClientStatusError(
-                t!("mcp.client.no_running", client = self.name().await).to_string(),
-            ))
+            Err(_) => {
+                let err = McpError::ClientStatusError(
+                    t!(
+                        "mcp.client.list_tools_timeout",
+                        name = self.config().await.name
+                    )
+                    .to_string(),
+                );
+                self.set_status(McpStatus::Error(err.to_string())).await;
+                Err(err)
+            }
         }
     }
 
@@ -295,12 +297,16 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
             Ok(val) => Ok(val),
             Err(e) => {
                 let error_string = e.to_string();
-                // Check for errors indicating a stale connection that might be fixed by reconnecting.
-                if error_string.contains("410") // HTTP 410 Gone
-                    || error_string.contains("channel closed") // Internal rmcp/tonic error
-                    || error_string.contains("Connection refused") // TCP error
-                    || error_string.contains("transport error")
-                // Generic reqwest/http error
+                let connection_error = error_string.to_ascii_lowercase();
+                // Rebuild transports that have lost their process, channel, or HTTP session.
+                if connection_error.contains(" 404")
+                    || connection_error.contains(" 410")
+                    || connection_error.contains("channel closed")
+                    || connection_error.contains("broken pipe")
+                    || connection_error.contains("connection refused")
+                    || connection_error.contains("connection reset")
+                    || connection_error.contains("transport error")
+                    || connection_error.contains("eof")
                 {
                     log::warn!(
                         "MCP call to '{}' failed with connection error: {}. Attempting to reconnect and retry.",
@@ -332,42 +338,42 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
 
     /// Internal method to perform a single tool call attempt without retry logic.
     async fn try_call(&self, tool_name: &str, args: Value) -> McpClientResult<Value> {
-        let client_arc = self.client();
-        let guard = client_arc.read().await; // Use read lock
-        if let Some(service_instance) = guard.as_ref() {
-            let call_tool_result = service_instance
-                .peer()
-                .call_tool({
-                    let mut request = CallToolRequestParams::default();
-                    request.name = tool_name.to_string().into();
-                    request.arguments = self.arg_parser(args);
-                    request
-                })
-                .await
-                .map_err(|e| McpError::ClientCallError(e.to_string()))?;
-
-            // Check the `is_error` field from rmcp::model::CallToolResult
-            // If `is_error` is Some(true), it indicates a tool execution error.
-            if call_tool_result.is_error.unwrap_or(false) {
-                // Serialize the content as the error message if an error occurred.
-                // This assumes `Content` can be serialized.
-                let error_content_str = serde_json::to_string(&call_tool_result.content)
-                    .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e));
-                return Err(McpError::ClientCallError(error_content_str));
-            }
-
-            // If not an error (is_error is Some(false) or None),
-            // serialize the content as the successful result.
-            // This assumes `Content` can be serialized to `Value`.
-            // We'll serialize the Vec<Content> into a JSON Value (likely an array).
-            serde_json::to_value(call_tool_result).map_err(|e| {
-                McpError::ClientCallError(format!("Failed to serialize successful content: {}", e))
+        let call_tool_result = {
+            let peer = {
+                let client = self.client();
+                let guard = client.read().await;
+                let service_name = self.name().await;
+                match guard.as_ref() {
+                    Some(service_instance) => service_instance.peer().clone(),
+                    None => {
+                        return Err(McpError::ClientStatusError(
+                            t!("mcp.client.no_running", client = service_name).to_string(),
+                        ));
+                    }
+                }
+            };
+            peer.call_tool({
+                let mut request = CallToolRequestParams::default();
+                request.name = tool_name.to_string().into();
+                request.arguments = self.arg_parser(args);
+                request
             })
-        } else {
-            Err(McpError::ClientStatusError(
-                t!("mcp.client.no_running", client = self.name().await).to_string(),
-            ))
+            .await
+            .map_err(|e| McpError::ClientCallError(e.to_string()))?
+        };
+
+        // Check the `is_error` field from rmcp::model::CallToolResult
+        // If `is_error` is Some(true), it indicates a tool execution error.
+        if call_tool_result.is_error.unwrap_or(false) {
+            // Serialize the content as the error message if an error occurred.
+            let error_content_str = serde_json::to_string(&call_tool_result.content)
+                .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e));
+            return Err(McpError::ClientCallError(error_content_str));
         }
+
+        serde_json::to_value(call_tool_result).map_err(|e| {
+            McpError::ClientCallError(format!("Failed to serialize successful content: {}", e))
+        })
     }
 
     /// Parses arguments for tool calls.
