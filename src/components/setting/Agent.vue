@@ -197,8 +197,7 @@
               v-for="role in modelRoles" :key="role.key">
               <div class="header">
                 <span class="title">{{ $t(`settings.agent.${role.key}Model`) }}</span>
-                <el-switch v-if="role.key === 'decision'" v-model="agentForm.decisionEnabled" size="small" />
-                <el-radio-group v-if="role.key !== 'decision'" v-model="modelModes[role.key]" size="small">
+                <el-radio-group v-model="modelModes[role.key]" size="small">
                   <el-radio-button value="provider">{{
                     $t('settings.agent.modeProvider')
                   }}</el-radio-button>
@@ -209,10 +208,10 @@
               </div>
               <div class="body">
                 <div class="selectors-row">
-                  <template v-if="modelModes[role.key] === 'provider' || role.key === 'decision'">
+                  <template v-if="modelModes[role.key] === 'provider'">
                     <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
                       @change="onModelIdChange(role.key)" style="flex: 1">
-                      <el-option v-for="provider in getModelProviders(role.key)" :key="provider.id"
+                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
                         :label="provider.name" :value="provider.id" />
                     </el-select>
                     <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
@@ -373,24 +372,28 @@
 
         <el-tab-pane :label="$t('settings.agent.security')" name="security" lazy>
           <div class="security-group">
-            <div class="shell-policy-header">
-              <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
-              <div class="shell-policy-actions">
-                <el-button type="primary" size="small" @click="addAuthorizedPath">
-                  {{ $t('settings.agent.authorizedPathsAdd') }}
-                </el-button>
+            <!-- Children inherit their authorized directories from the parent session. -->
+            <template v-if="canConfigureAuthorizedPaths">
+              <div class="shell-policy-header">
+                <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
+                <div class="shell-policy-actions">
+                  <el-button type="primary" size="small" @click="addAuthorizedPath">
+                    {{ $t('settings.agent.authorizedPathsAdd') }}
+                  </el-button>
+                </div>
               </div>
-            </div>
-            <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
-            <div class="shell-policy-list">
-              <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
-                <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
-                <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
-                  <cs name="trash" size="12px" />
-                </el-button>
+              <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
+              <div class="shell-policy-list">
+                <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
+                  <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
+                  <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
+                    <cs name="trash" size="12px" />
+                  </el-button>
+                </div>
               </div>
-            </div>
-            <div v-if="agentForm.role !== AGENT_ROLE.CHILD" class="security-switch-row">
+            </template>
+            <p v-else class="security-tip">{{ $t('settings.agent.authorizedPathsInherited') }}</p>
+            <div class="security-switch-row">
               <span class="security-switch-label">{{ $t('settings.agent.allowShell') }}</span>
               <el-switch v-model="agentForm.allowShell" />
               <span class="security-switch-tip">{{ $t('settings.agent.allowShellTip') }}</span>
@@ -758,7 +761,7 @@ const shouldBackfillSelectedSkills = ref(false)
 const groupedPrimaryAgents = ref([])
 const groupedChildAgents = ref({})
 
-const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }, { key: 'lite' }, { key: 'decision' }]
+const allModelRoles = [{ key: 'plan' }, { key: 'act' }, { key: 'vision' }, { key: 'utility' }, { key: 'lite' }]
 
 const modelRoles = computed(() => {
   if (agentForm.value.role === AGENT_ROLE.CHILD) {
@@ -767,13 +770,10 @@ const modelRoles = computed(() => {
   return allModelRoles
 })
 
-const decisionProviders = computed(() => modelStore.providers.filter(provider => !provider.disabled && provider.apiProtocol === 'decision'))
-const decisionModelOptions = computed(() => [])
-const decisionModelValid = computed(() => true)
-
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
-const HIDDEN_AGENT_TOOL_IDS = []
+// Shell execution is enabled by the security-policy switch, never by picking a tool.
+const HIDDEN_AGENT_TOOL_IDS = ['bash']
 const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
@@ -850,8 +850,6 @@ const defaultFormData = {
   visionModel: defaultAgentModelConfig(),
   utilityModel: defaultAgentModelConfig(),
   liteModel: defaultAgentModelConfig(),
-  decisionEnabled: false,
-  decisionModel: { id: '', model: '' },
   maxContexts: 128000,
   approvalLevel: 'default'
 }
@@ -916,7 +914,7 @@ const sortedAvailableTools = computed(() => {
 const autoApproveOptions = computed(() => {
   if (!agentForm.value || !agentForm.value.availableTools) return []
   return sortedAvailableTools.value.filter(
-    t => agentForm.value.availableTools.includes(t.id)
+    t => agentForm.value.availableTools.includes(t.id) && t.id !== 'bash'
   )
 })
 
@@ -1071,9 +1069,12 @@ const isSystemAgentReadOnly = computed(() => !!editId.value && agentForm.value.i
 const isSystemIdentityLocked = computed(() => isSystemAgentReadOnly.value)
 const isSystemPromptsLocked = computed(() => isSystemAgentReadOnly.value)
 
-const canConfigureShellPolicy = computed(
-  () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
-)
+// Children inherit their authorized directories from the parent session, so only a primary
+// agent owns that list.
+const canConfigureAuthorizedPaths = computed(() => agentForm.value.role !== AGENT_ROLE.CHILD)
+// Shell rules are a per-agent capability, so the security switch controls them for both roles.
+const canConfigureShellPolicy = computed(() => agentForm.value.allowShell)
+// Sandbox execution stays a primary-agent capability: children always run on the host.
 const canConfigureSandbox = computed(
   () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
 )
@@ -1423,7 +1424,7 @@ const normalizeAgentFormForSave = form => {
     : []
   normalized.autoApprove = Array.isArray(normalized.autoApprove)
     ? [...new Set(normalized.autoApprove)].filter(
-      tool => normalized.availableTools.includes(tool)
+      tool => normalized.availableTools.includes(tool) && tool !== 'bash'
     )
     : []
   normalized.selectedSkills = Array.isArray(normalized.selectedSkills)
@@ -1442,15 +1443,21 @@ const normalizeAgentFormForSave = form => {
     normalized.visionModel = defaultAgentModelConfig()
     normalized.utilityModel = defaultAgentModelConfig()
     normalized.liteModel = defaultAgentModelConfig()
-    normalized.decisionModel = defaultAgentModelConfig()
-    normalized.decisionEnabled = false
     normalized.allowedPaths = []
-    normalized.shellPolicy = []
+    normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
+      ? normalized.shellPolicy.filter(rule => rule.pattern && rule.pattern.trim() !== '')
+      : []
     normalized.sandboxExecutionMode = 'host_only'
     normalized.approvalLevel = normalized.approvalLevel || 'default'
+    // A child's shell access uses the same opt-in switch a primary agent uses.
+    if (normalized.allowShell) {
+      normalized.availableTools = [...new Set([...normalized.availableTools, 'bash'])]
+    } else {
+      normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
+      normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+    }
     normalized.skillEnabled = false
     normalized.selectedSkills = []
-    normalized.allowShell = false
   } else {
     normalized.parentAgentId = null
     normalized.subAgentRole = ''
@@ -1505,14 +1512,9 @@ const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
   }
 }
 
-const getModelProviders = key => key === 'decision'
-  ? decisionProviders.value
-  : modelStore.getAvailableProviders
-
 const getModelList = key => {
   const id = agentForm.value[key + 'Model']?.id
   const provider = id ? modelStore.getModelProviderById(id) : null
-  if (key === 'decision' && provider?.apiProtocol !== 'decision') return []
   return provider?.models || []
 }
 
@@ -1640,10 +1642,6 @@ const editAgent = async id => {
         try {
           const modelsObj =
             typeof agentData.models === 'string' ? JSON.parse(agentData.models) : agentData.models
-          agentForm.value.decisionEnabled = Boolean(modelsObj.decisionEnabled)
-          if (modelsObj.decision) {
-            agentForm.value.decisionModel = normalizeModelDraft(modelsObj.decision)
-          }
           allModelRoles.forEach(role => {
             if (modelsObj[role.key]) {
               agentForm.value[role.key + 'Model'] = normalizeModelDraft(modelsObj[role.key])
@@ -2081,19 +2079,13 @@ watch(
 watch(
   () => agentForm.value.allowShell,
   enabled => {
-    if (agentForm.value.role === AGENT_ROLE.CHILD) {
-      return
-    }
-
     if (!enabled) {
-      if (agentForm.value.role === AGENT_ROLE.PRIMARY) {
-        agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
-          tool => tool !== 'bash'
-        )
-        agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
-          tool => tool !== 'bash'
-        )
-      }
+      agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
+        tool => tool !== 'bash'
+      )
+      agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
+        tool => tool !== 'bash'
+      )
       if (activeTab.value === 'sandbox') {
         activeTab.value = 'security'
       }

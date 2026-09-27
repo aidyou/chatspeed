@@ -175,7 +175,9 @@ fn spawn_workflow_title_generation_if_missing(
             model.map(|model| model.id).unwrap_or(0),
             model.map(|model| model.model.clone()).unwrap_or_default(),
             decision.map(|model| model.id).unwrap_or(0),
-            decision.map(|model| model.model.clone()).unwrap_or_default(),
+            decision
+                .map(|model| model.model.clone())
+                .unwrap_or_default(),
         )
     };
 
@@ -1299,7 +1301,9 @@ fn enforce_auto_approve_tool_visibility(config: &mut AgentConfig) {
     }
 }
 
-fn merge_shell_allow_rules(
+/// Keeps the current Agent's shell rules authoritative and appends non-conflicting workflow
+/// `Allow` rules, so user-defined commands stay cumulative without weakening the Agent policy.
+pub(crate) fn merge_shell_allow_rules(
     agent_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
     inherited_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
 ) -> Option<Vec<crate::tools::ShellPolicyRule>> {

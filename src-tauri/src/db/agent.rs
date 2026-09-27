@@ -1186,5 +1186,10 @@ mod tests {
         let legacy: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null,"decisionEnabled":true}"#).unwrap();
         assert!(legacy.decision_enabled);
         assert!(legacy.decision.is_none());
+
+        // The agent editor no longer owns decision configuration, so its payload omits both fields.
+        let editor_payload: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null}"#).unwrap();
+        assert!(!editor_payload.decision_enabled);
+        assert!(editor_payload.decision.is_none());
     }
 }

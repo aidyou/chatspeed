@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const readAgentComponent = () => readFile(new URL('./Agent.vue', import.meta.url), 'utf8')
+const readSandboxComponent = () => readFile(new URL('./Sandbox.vue', import.meta.url), 'utf8')
 
 test('agent model settings expose and preserve the maximum reasoning level', async () => {
   const source = await readAgentComponent()
@@ -29,13 +30,16 @@ test('agent shell policy editor defers and bounds expensive control rendering', 
 })
 
 test('sandbox profiles use a bounded compact list and a dedicated editor', async () => {
-  const source = await readAgentComponent()
+  // Profile management moved from the agent dialog into the shared sandbox settings.
+  const agentSource = await readAgentComponent()
+  assert.doesNotMatch(agentSource, /SANDBOX_PROFILE_PAGE_SIZE|sandboxProfileEditorVisible/)
 
-  assert.match(source, /const SANDBOX_PROFILE_PAGE_SIZE = 5/)
-  assert.match(source, /v-for="profile in paginatedSandboxProfiles"/)
-  assert.match(source, /v-model:current-page="sandboxProfilePage"/)
-  assert.match(source, /v-model="sandboxProfileEditorVisible"/)
-  assert.match(source, /const openSandboxProfileEditor =/)
-  assert.match(source, /const saveSandboxProfile =/)
-  assert.doesNotMatch(source, /<el-card v-for="profile in sandboxProfiles"/)
+  const sandboxSource = await readSandboxComponent()
+  // Profile and host-rule rows render inside bounded tables, not an unbounded card list.
+  assert.match(sandboxSource, /<el-table[\s\S]*?max-height="320"/)
+  // Editing one profile owns a dedicated dialog with explicit open/save handlers.
+  assert.match(sandboxSource, /<el-dialog v-model="profileDialogVisible"/)
+  assert.match(sandboxSource, /const openProfileEditor = async profile =>/)
+  assert.match(sandboxSource, /const saveProfile = \(\) =>/)
+  assert.doesNotMatch(sandboxSource, /<el-card v-for="profile in sandboxProfiles/)
 })

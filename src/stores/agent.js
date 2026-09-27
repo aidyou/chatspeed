@@ -89,8 +89,7 @@ const _transformFromBackend = (backendAgent) => {
     act: { ...defaultModel },
     vision: { ...defaultModel },
     utility: { ...defaultModel },
-    lite: { ...defaultModel },
-    decision: null
+    lite: { ...defaultModel }
   };
 
   if (backendAgent.models) {
@@ -109,9 +108,6 @@ const _transformFromBackend = (backendAgent) => {
     }
     if (backendAgent.models.lite) {
       models.lite = { ...defaultModel, ...backendAgent.models.lite };
-    }
-    if (backendAgent.models.decision) {
-      models.decision = { ...defaultModel, ...backendAgent.models.decision };
     }
   }
 
@@ -145,8 +141,6 @@ const _transformFromBackend = (backendAgent) => {
     visionModel: models.vision,
     utilityModel: models.utility,
     liteModel: models.lite,
-    decisionEnabled: Boolean(backendAgent.models?.decisionEnabled),
-    decisionModel: models.decision,
     // These are JSON strings, need to parse
     shellPolicy: backendAgent.shell_policy ? JSON.parse(backendAgent.shell_policy) : [],
     sandboxExecutionMode: backendAgent.sandbox_execution_mode || 'host_only',
@@ -194,11 +188,7 @@ const _transformToBackend = (frontendAgent) => {
     act: buildModelConfig(frontendAgent.actModel),
     vision: buildModelConfig(frontendAgent.visionModel),
     utility: buildModelConfig(frontendAgent.utilityModel),
-    lite: buildModelConfig(frontendAgent.liteModel),
-    decisionEnabled: frontendAgent.decisionEnabled === true,
-    decision: frontendAgent.decisionEnabled === true
-      ? buildModelConfig(frontendAgent.decisionModel)
-      : null
+    lite: buildModelConfig(frontendAgent.liteModel)
   };
 
   const mcpTools = frontendAgent.mcpTools || { available: [], autoApprove: [], autoExpand: [] }
