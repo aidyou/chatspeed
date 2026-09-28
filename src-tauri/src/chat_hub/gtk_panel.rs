@@ -322,7 +322,7 @@ impl Page {
         // band of that edge back to the window as well (see `crate::frame_edges`). This webview
         // is built by wry, so the resize handler tauri installs on a Tauri webview never
         // reaches it.
-        give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN);
+        give_frame_band_to_window(&webview.webview(), Band::RIGHT_COLUMN);
 
         Ok(Self { webview, column })
     }
@@ -628,9 +628,7 @@ mod tests {
     fn the_page_gives_the_window_frame_band_back() {
         let source = include_str!("gtk_panel.rs");
 
-        assert!(
-            source.contains("give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN)")
-        );
+        assert!(source.contains("give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN)"));
     }
 
     /// Guard for the corners the page gives back: it stands next to the workflow window as a window
