@@ -79,6 +79,8 @@ mod constants;
 mod db;
 mod environment;
 pub mod error;
+#[cfg(target_os = "linux")]
+mod frame_edges;
 /// The Phase 2H headless runtime: experiment-domain layout/guard and the
 /// durable schedule store facade. Public so the `chatspeed-headless` binary and
 /// integration tests can drive the same authority the desktop app uses.

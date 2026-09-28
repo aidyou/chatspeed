@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use gtk::prelude::*;
 use tauri::{AppHandle, PhysicalSize, WebviewWindow, Wry};
-use wry::{WebContext, WebView, WebViewBuilderExtUnix};
+use wry::{WebContext, WebView, WebViewBuilderExtUnix, WebViewExtUnix};
 
 use super::{
     clamp_width, host_window, narrow_host_window, page_builder, page_data_directory, page_proxy,
@@ -23,6 +23,7 @@ use super::{
 };
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
+use crate::frame_edges::{give_frame_band_to_window, Band};
 
 /// State of the single docked ChatHub page.
 #[derive(Debug, Default)]
@@ -316,6 +317,12 @@ impl Page {
         }
 
         let webview = builder.build_gtk(&column)?;
+
+        // The page owns the right edge of the window while it is docked, so it gives the frame
+        // band of that edge back to the window as well (see `crate::frame_edges`). This webview
+        // is built by wry, so the resize handler tauri installs on a Tauri webview never
+        // reaches it.
+        give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN);
 
         Ok(Self { webview, column })
     }
@@ -613,6 +620,17 @@ mod tests {
 
         assert!(source.contains("build_gtk(&column)"));
         assert!(!source.contains(concat!("Webview", "Builder")));
+    }
+
+    /// Guard for the frame band: the page owns the right edge of the window while it is
+    /// docked, so a drag on that edge has to reach the window instead of the page.
+    #[test]
+    fn the_page_gives_the_window_frame_band_back() {
+        let source = include_str!("gtk_panel.rs");
+
+        assert!(
+            source.contains("give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN)")
+        );
     }
 
     /// Guard for the corners the page gives back: it stands next to the workflow window as a window

@@ -462,6 +462,9 @@ pub async fn create_or_focus_note_window(app_handle: tauri::AppHandle) -> Result
             .build()
             .map_err(|e| t!("main.failed_to_create_note_window", error = e))?;
 
+        #[cfg(target_os = "linux")]
+        release_frame_band(&webview_window);
+
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
     }
@@ -551,6 +554,9 @@ pub async fn create_or_focus_setting_window(
         let webview_window = webview_window_builder
             .build()
             .map_err(|e| t!("main.failed_to_create_settings_window", error = e))?;
+
+        #[cfg(target_os = "linux")]
+        release_frame_band(&webview_window);
 
         let _ = webview_window.show();
         let _ = webview_window.set_focus();
@@ -956,6 +962,27 @@ pub fn get_screen_name(window: &Window) -> Option<String> {
     }
 }
 
+/// Hands the frame band of a window back to the window itself.
+///
+/// On Linux the webview is the widget under the pointer on the whole window, so WebKitGTK
+/// claims a press on the frame band and neither the window nor the webview runs its resize
+/// handler. [`crate::frame_edges`] takes that band out of the webview, which is what lets the
+/// window see the press again.
+#[cfg(target_os = "linux")]
+fn release_frame_band(window: &WebviewWindow) {
+    use crate::frame_edges::{give_frame_band_to_window, Band};
+
+    if let Err(error) = window.with_webview(|webview| {
+        give_frame_band_to_window(&webview.inner(), Band::EVERY_SIDE);
+    }) {
+        warn!(
+            "Failed to give the frame band of window '{}' back to the window: {}",
+            window.label(),
+            error
+        );
+    }
+}
+
 /// Internal helper to create a webview window with consistent styling.
 fn create_window_internal(
     app: &tauri::AppHandle,
@@ -998,9 +1025,14 @@ fn create_window_internal(
         builder = builder.transparent(true).decorations(false);
     }
 
-    builder
+    let webview_window = builder
         .build()
-        .map_err(|e| format!("Failed to create window '{}': {}", label, e))
+        .map_err(|e| format!("Failed to create window '{}': {}", label, e))?;
+
+    #[cfg(target_os = "linux")]
+    release_frame_band(&webview_window);
+
+    Ok(webview_window)
 }
 
 pub fn create_main_window(app: &tauri::AppHandle, visible: bool) -> Result<WebviewWindow, String> {
