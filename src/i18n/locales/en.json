@@ -762,6 +762,7 @@
         "urlRequired": "SSE type requires a URL."
       },
       "statusStarting": "Starting",
+      "statusConnected": "Connected",
       "statusRunning": "Running",
       "statusStopped": "Not started",
       "toolsUnavailable": "No tool list yet",

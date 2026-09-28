@@ -968,9 +968,16 @@ impl ToolManager {
             .map_err(|e_mcp_start| ToolError::Initialization(e_mcp_start.to_string()))?;
         log::info!("MCP client {} started successfully.", &name);
 
-        // 3. Spawn a task to wait for status, list tools, and register
+        // 3. Publish the connected client before its tool list is read.
+        // Registration used to wait for the listing, which left the runtime unable to
+        // report a server that was up and still listing. The read projection reports a
+        // server the runtime does not know as a proven stop, so a healthy cold start
+        // showed as "enabled but not running" with zero tools for the whole listing.
+        self.publish_connected_mcp_client(client_arc.clone()).await;
+
+        // 4. Spawn a task to wait for status, list tools, and fill the tool cache.
         // This allows the main registration flow to return quickly, while the tool discovery
-        // and registration happens in the background.
+        // happens in the background.
         let tool_manager_arc = self.clone(); // Clone the Arc<Self> for the spawned task
         let client_arc_for_task = client_arc.clone(); // Clone the client Arc for the spawned task
         let server_name_for_task = name.clone(); // Clone name for logging in task
@@ -1001,8 +1008,8 @@ impl ToolManager {
                             })
                             .collect();
 
-                        // 4. Register the MCP server and tools in internal state
-                        // We register the server and its tools (with disabled flags) regardless of
+                        // 5. Fill the tool cache for the already published server
+                        // We register the tools (with disabled flags) regardless of
                         // whether all tools are disabled, so the frontend can see them.
                         if let Err(e) = tool_manager_arc
                             .register_mcp_server_inner(
@@ -1041,22 +1048,37 @@ impl ToolManager {
                     }
                 }
             } else {
+                // The client stays published, so the runtime keeps reporting its own
+                // status; only the tool listing is skipped.
                 log::warn!(
-                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing and registration.",
+                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing.",
                     server_name_for_task,
                     status
                 );
             }
         }); // Task spawned
 
-        // 5. Return immediately, the rest happens in the spawned task
+        // 6. Return immediately, the rest happens in the spawned task
         Ok(())
     }
 
+    /// Makes a started client visible to the runtime before its tool list is read.
+    ///
+    /// `register_mcp_server_inner` publishes a server together with its tools, which
+    /// is too late for the read projection: a server the runtime does not list is
+    /// reported as a proven stop, so the seconds a cold child needs to list its tools
+    /// were reported as an "enabled but not running" server with zero tools. Publishing
+    /// the connected client keeps its real status observable throughout.
+    async fn publish_connected_mcp_client(&self, client: Arc<dyn McpClient>) {
+        let name = client.name().await;
+        let mut servers_guard = self.mcp_servers.write().await;
+        servers_guard.insert(name, client);
+    }
+
     /// Registers a new MCP server and its tools with the manager's internal state.
-    /// This method should be called *after* the client has been created and started,
-    /// and its tools have been fetched. It primarily handles updating the internal HashMaps.
-    /// This is called from within the spawned task in `register_mcp_server`.
+    /// The server itself is already published by `publish_connected_mcp_client`; this
+    /// method fills in the tool list fetched from it, and it is called from within the
+    /// spawned task in `register_mcp_server`.
     ///
     /// # Arguments
     /// * `client` - The Arc to the started McpClient instance.
@@ -1794,6 +1816,37 @@ mod tests {
         manager.notify_mcp_tools_changed();
 
         receiver.recv().await.expect("tool change event");
+    }
+
+    #[tokio::test]
+    async fn a_published_client_is_observable_before_its_tool_list_arrives() {
+        let manager = Arc::new(ToolManager::new());
+        let client: Arc<dyn McpClient> = Arc::new(
+            StdioClient::new(McpServerConfig {
+                name: "weather".into(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("ls".into()),
+                args: Some(vec!["-la".into()]),
+                ..Default::default()
+            })
+            .expect("test MCP client"),
+        );
+
+        // Registration publishes the client before the tool listing, so the runtime
+        // answers with the client's own status while the cache is still empty. Staying
+        // absent until the listing finished is what made a cold start read as a proven
+        // "stopped" server ("enabled but not running") with zero tools.
+        manager.publish_connected_mcp_client(client.clone()).await;
+
+        let statuses = manager.get_mcp_serves_status().await.expect("status read");
+        let published = statuses
+            .get("weather")
+            .expect("a published server must be observable");
+        assert_eq!(published, &client.status().await);
+        assert!(
+            manager.get_mcp_server_tools("weather").await.is_err(),
+            "the tool cache is filled by the listing, not by the publish"
+        );
     }
 
     #[tokio::test]

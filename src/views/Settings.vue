@@ -82,7 +82,10 @@ import agentManagement from '@/components/setting/AgentManagement.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
 import titlebar from '@/components/window/Titlebar.vue'
 
+import { useMcpStore } from '@/stores/mcp'
+
 const { t } = useI18n()
+const mcpStore = useMcpStore()
 
 // const settingType = ref('model')
 // const settingLabel = ref(t(`settings.type.model`))
@@ -134,6 +137,14 @@ onUnmounted(() => {
 const switchSetting = id => {
   settingType.value = id
   settingLabel.value = t(`settings.type.${id}`)
+  if (id === 'mcp') {
+    // MCP rows show live runtime state, so opening the tab re-reads it. Without
+    // this, a window that was already open when the runtime settled keeps the
+    // snapshot it took while loading, and a restart is the only way out.
+    mcpStore.fetchMcpServers().catch(error => {
+      console.error('Failed to refresh MCP servers:', error)
+    })
+  }
 }
 </script>
 

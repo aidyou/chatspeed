@@ -185,6 +185,9 @@ onMounted(async () => {
         console.error('Failed to refresh available tools after MCP config update:', error)
       })
     } else if (eventType === 'mcp_tools_changed') {
+      // A tool-list change is also the settle signal for a registration, so the
+      // rows' runtime facts are re-read with it.
+      mcpStore.refreshCapabilityFacts()
       agentStore.fetchAvailableTools().catch(error => {
         console.error('Failed to refresh available tools after MCP tool list change:', error)
       })

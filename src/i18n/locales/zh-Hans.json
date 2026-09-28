@@ -762,6 +762,7 @@
         "urlRequired": "SSE 类型需要 URL。"
       },
       "statusStarting": "启动中",
+      "statusConnected": "已连接",
       "statusRunning": "运行中",
       "statusStopped": "未启动",
       "toolsUnavailable": "暂无工具列表",

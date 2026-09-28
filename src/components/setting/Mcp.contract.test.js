@@ -25,7 +25,7 @@ const referencedKeys = () => {
   // bare `status` capture is a prefix rather than a label. Its real expansions
   // are named here, which keeps the check meaningful.
   const dynamicPrefixes = new Set(['status'])
-  for (const state of ['Error', 'Unknown', 'Starting', 'Running', 'Stopped']) {
+  for (const state of ['Error', 'Unknown', 'Starting', 'Connected', 'Running', 'Stopped']) {
     keys.add(`status${state}`)
   }
   // The dynamic helpers resolve their key from a small fixed table.
@@ -84,6 +84,73 @@ test('the list refresh re-reads the projection so badges cannot lag a mutation',
   assert.match(store, /useCapabilityStore\(\)\.loadMcpServers\(\)/)
   // The projection failure is contained: the page keeps working without it.
   assert.match(store, /catch \(projectionError\)/)
+})
+
+/** The body of one store function, so a call site can be asserted individually. */
+const storeFunction = name => {
+  const start = store.indexOf(`const ${name} = `)
+  assert.ok(start > -1, `stores/mcp.js should define ${name}`)
+  const end = store.indexOf('\n  };', start)
+  assert.ok(end > start, `${name} should end at the store indentation`)
+  return store.slice(start, end)
+}
+
+test('every MCP state change re-reads the runtime facts', () => {
+  // Drift and the reported tool count come from the capability projection, which is
+  // a separate read from the legacy list. Each place that can change the runtime or
+  // the desired record re-reads it, or a row keeps the facts of the state it was
+  // loaded with — which is how a restarted server kept showing "enabled but not
+  // running" next to a "running" status.
+  for (const name of [
+    'fetchMcpServers',
+    'updateServerStatus',
+    'addMcpServer',
+    'updateMcpServer',
+    'deleteMcpServer',
+    'enableMcpServer',
+    'disableMcpServer',
+    'restartMcpServer',
+    'refreshMcpTools'
+  ]) {
+    assert.match(
+      storeFunction(name),
+      /refreshCapabilityFacts\(\)/,
+      `${name} must re-read the runtime facts`
+    )
+  }
+
+  // A record changed in another window changes the desired state too.
+  for (const event of [
+    'Added server via sync',
+    'Updated server via sync',
+    'Deleted server via sync'
+  ]) {
+    const at = store.indexOf(event)
+    assert.ok(at > -1, `the sync handler should cover: ${event}`)
+    assert.match(
+      store.slice(at, at + 120),
+      /refreshCapabilityFacts\(\)/,
+      `${event} must re-read the runtime facts`
+    )
+  }
+})
+
+test('a settled registration re-reads the runtime facts', () => {
+  const app = readFileSync(new URL('../../App.vue', import.meta.url), 'utf8')
+  // `mcp_tools_changed` is emitted once a registration has filled the tool cache, so
+  // re-reading on it is what replaces a cold start's "not running" answer.
+  const branch = app.slice(app.indexOf("eventType === 'mcp_tools_changed'"))
+  assert.ok(branch.length > 0, 'App.vue should handle mcp_tools_changed')
+  assert.match(branch.slice(0, 400), /mcpStore\.refreshCapabilityFacts\(\)/)
+})
+
+test('opening the MCP tab re-reads the servers and their facts', () => {
+  const settings = readFileSync(new URL('../../views/Settings.vue', import.meta.url), 'utf8')
+  const start = settings.indexOf('const switchSetting = ')
+  assert.ok(start > -1, 'Settings.vue should define switchSetting')
+  // A settings window can outlive the MCP runtime start, so opening the tab has to
+  // re-read instead of showing the snapshot the window loaded with.
+  assert.match(settings.slice(start, start + 600), /fetchMcpServers\(\)/)
 })
 
 test('the existing MCP command wire is still what the page calls', () => {
