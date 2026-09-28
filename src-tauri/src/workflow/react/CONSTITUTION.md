@@ -355,6 +355,7 @@ Current required thresholds:
 - initial task-boundary rollup must not trigger until three completed tasks exist and a new active task has resumed
 - after a summary already exists, rollup must preserve the current unfinished task and must not remove completed work from both the structured summary and durable transcript history
 - the system must not collapse AI context to only the current task while removing all structured completed-task carryover
+- rollup is an independent compression kind: it must not be forced to share the blocking handoff format, and its enablement default is a product decision rather than an engine detail. It is currently disabled by default because provider prefix caching makes retaining raw history cheaper than writing an extra archive, and re-enabling it must not weaken the blocking handoff contract
 
 Do not change these thresholds or retention rules unless the workflow compression design itself is explicitly being revised.
 
@@ -414,6 +415,30 @@ must expose the resolved result of stateful processing rather than its storage o
 intermediates. Once an intermediate state resolves, subsequent AI context must expose only the
 canonical result. Intermediate data already persisted by older versions must be filtered at
 projection boundaries and must not be interpreted as current runtime state.
+
+### 8.9 The blocking handoff goal is runtime-tracked
+
+The goal a blocking handoff carries is runtime-owned. Before the handoff is written, the runtime
+runs one goal-tracking call per compression window over that window's ordered user directives and
+completed-work summaries, and the tracked goal supersedes any goal wording the compressor reply
+supplies.
+
+Its contract is:
+
+- the tracked goal is the goal of record for the boundary, so the compressor must not be required to
+  reconstruct it from the raw directive history
+- the handoff must not carry a model-authored list of user execution requirements. A bounded list
+  that also demands verbatim retention of every prior entry has no legal move once it fills, so
+  that contract was removed deliberately and must not be reintroduced under a new name
+- a compressor reply that still carries legacy requirement fields is discarded rather than validated
+- goal-tracking failure is a fatal compression failure that terminates the workflow, because a
+  handoff without a tracked goal would silently drift. It is not the best-effort compression
+  failure that logs and lets the turn continue
+- tracking never becomes the authority for task scope: `workflow_messages`, the effective task
+  objective, and the recorded goal source IDs remain the durable sources, and the tracker only
+  projects them
+- blocking compression has one canonical path, so this applies to pressure, manual, and terminal
+  manual compression alike; it must not be special-cased per caller
 
 ## 9. Recovery Law
 
