@@ -104,7 +104,7 @@ sha2                         = "0.11.0"
 # The `unstable` feature is required for the same-window child webview API
 # (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view, and `macos-proxy` is
 # what makes `WebviewWindowBuilder::proxy_url` take effect on macOS.
-tauri                        = { version = "2.11.0", features = ["macos-private-api", "macos-proxy", "tray-icon", "unstable"] }
+tauri                        = { version = "2.12.0", features = ["macos-private-api", "macos-proxy", "tray-icon", "unstable"] }
 tauri-plugin-dialog          = "2.7.1"
 tauri-plugin-fs              = "2.5.1"
 tauri-plugin-global-shortcut = "2.3.1"
@@ -136,7 +136,7 @@ globset                      = "0.4.18"
 # inside that window would inherit, and on Linux it is placed through GTK, which is what
 # keeps the page inside the window layout instead of on top of it. `mac-proxy` is what
 # makes `WebViewBuilder::with_proxy_config` take effect on macOS.
-wry                          = { version = "0.55", features = ["mac-proxy"] }
+wry                          = { version = "0.57", features = ["mac-proxy"] }
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
@@ -158,7 +158,7 @@ vcpkg  = "0.2"
 vswhom = "0.1.0"
 
 [dev-dependencies]
-tauri      = { version = "2.11.0", features = ["test"] }
+tauri      = { version = "2.12.0", features = ["test"] }
 small_ctor = "0.1.2"
 # tauri-driver = "2.0.4"
 
