@@ -231,6 +231,13 @@ impl ContextManager {
         compacted
     }
 
+    /// Removes runtime `<SYSTEM_REMINDER>` blocks before a "is this the user's
+    /// own wording" decision, so runtime notices never read as user prose.
+    ///
+    /// Only the closing tag is a guaranteed boundary. An opening tag without a
+    /// closing tag therefore marks the remainder as runtime text and is dropped
+    /// to the end; passing it through unchanged would leak the (usually English)
+    /// runtime notice into the user's prose.
     pub(crate) fn strip_system_reminder_blocks(content: &str) -> String {
         const START: &str = "<SYSTEM_REMINDER>";
         const END: &str = "</SYSTEM_REMINDER>";
@@ -240,11 +247,47 @@ impl ContextManager {
         while let Some(start) = remainder.find(START) {
             let after_start = &remainder[start + START.len()..];
             let Some(end) = after_start.find(END) else {
-                // Do not silently discard a user-authored malformed literal.
-                return content.to_string();
+                stripped.push_str(&remainder[..start]);
+                return stripped;
             };
             stripped.push_str(&remainder[..start]);
             remainder = &after_start[end + END.len()..];
+        }
+        stripped.push_str(remainder);
+        stripped
+    }
+
+    /// Content view for one-shot language detection: the user's own prose with
+    /// runtime reminders and the reference blocks we inject ourselves removed.
+    ///
+    /// The language judged is the user's question or description, so referenced
+    /// file content, directory listings, image details, and quoted assistant
+    /// text must never reach the detector as if they were the user's words.
+    pub(crate) fn user_prose_for_language_detection(content: &str) -> String {
+        const INJECTED_BLOCK_TAGS: [&str; 4] =
+            ["file_content", "list_dir", "img_detail", "quoted-response"];
+        let mut prose = Self::strip_system_reminder_blocks(content);
+        for tag in INJECTED_BLOCK_TAGS {
+            prose = Self::strip_tagged_block(&prose, tag);
+        }
+        prose
+    }
+
+    /// Removes every `<tag ...>...</tag>` block, including an unterminated block
+    /// whose opening tag is never closed.
+    fn strip_tagged_block(content: &str, tag: &str) -> String {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        let mut stripped = String::with_capacity(content.len());
+        let mut remainder = content;
+        while let Some(start) = remainder.find(&open) {
+            let after_open = &remainder[start..];
+            let Some(end) = after_open.find(&close) else {
+                stripped.push_str(&remainder[..start]);
+                return stripped;
+            };
+            stripped.push_str(&remainder[..start]);
+            remainder = &after_open[end + close.len()..];
         }
         stripped.push_str(remainder);
         stripped
@@ -6061,6 +6104,44 @@ mod tests {
         assert!(llm_messages
             .iter()
             .any(|message| message.message.contains("Follow-up task")));
+    }
+
+    #[test]
+    fn language_detection_prose_excludes_reminders_and_injected_reference_blocks() {
+        // A well-formed runtime note is removed and the user's own words survive.
+        assert_eq!(
+            ContextManager::strip_system_reminder_blocks(
+                "修复这个按钮\n<SYSTEM_REMINDER>runtime note in English</SYSTEM_REMINDER>\n并补测试"
+            ),
+            "修复这个按钮\n\n并补测试"
+        );
+
+        // An unterminated reminder marks the remainder as runtime text, so its English
+        // wording can never be judged as the user's prose.
+        assert_eq!(
+            ContextManager::strip_system_reminder_blocks(
+                "帮我看看这段\n<SYSTEM_REMINDER>The runtime appended an unclosed note"
+            ),
+            "帮我看看这段\n"
+        );
+
+        // Injected reference blocks are not the user's wording: the mention text and the
+        // user's own question stay, while referenced code and English prose do not.
+        let content = "@src/app.vue 这个组件为什么卡顿？\n<file_content path=\"src/app.vue\">\nfn main() {}\n</file_content>\n<list_dir path=\"src\">\n- 1 KB app.vue\n</list_dir>\n<quoted-response>\nEarlier English answer\n</quoted-response>\n<img_detail>\nAn English image description\n</img_detail>";
+        let prose = ContextManager::user_prose_for_language_detection(content);
+        assert!(prose.contains("@src/app.vue 这个组件为什么卡顿？"));
+        for excluded in [
+            "fn main()",
+            "1 KB app.vue",
+            "Earlier English answer",
+            "An English image description",
+            "<file_content",
+            "<list_dir",
+            "<quoted-response",
+            "<img_detail",
+        ] {
+            assert!(!prose.contains(excluded), "leaked {excluded} into {prose}");
+        }
     }
 
     #[test]
