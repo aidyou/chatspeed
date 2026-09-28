@@ -38,10 +38,17 @@ path = "src/main.rs"
 # Keeping it out of this desktop package prevents Tauri/runtime dependencies
 # from becoming part of the CLI dependency graph.
 
-# Headless runtime binary bundled alongside the desktop application.
-[[bin]]
-name = "chatspeed_headless"
-path = "src/bin/chatspeed_headless.rs"
+# Headless runtime binary, currently excluded from the desktop compile and bundle.
+# The entry point (`src/bin/chatspeed_headless.rs`) and the runtime modules under
+# `src/headless` are kept for later use. Because the package sets `autobins = false`,
+# this commented target is what builds the binary.
+# Re-enable the target together with the `tauri.conf.json` restore points (that file is
+# strict JSON and cannot carry comments):
+#   "externalBin": ["target/release/chatspeed_headless", "target/release/cs"]
+#   and the headless steps kept in the trailing shell comment of `beforeBuildCommand`.
+# `[[bin]]`
+# name = "chatspeed_headless"
+# path = "src/bin/chatspeed_headless.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.0", features = [] }

@@ -556,7 +556,7 @@ pub const LANGUAGE_DETECTION_SYSTEM_PROMPT: &str = r#"You are a strict language 
 
 Reply with ONLY the language's native name, for example: 中文, English, Deutsch, Français, Español, 日本語, 한국어. No explanations, no quotes, no JSON, no punctuation.
 
-If the input mixes languages, choose the language of the user's own instructions or question and ignore quoted content, code, file paths, URLs, and identifiers. If the input contains no detectable natural language, reply with English."#;
+Judge only the language the user writes their own question or description in. Code, diffs, logs, command output, file paths, URLs, identifiers, referenced file or directory content, image details, and quoted assistant text are never the target, even when they dominate the input. If the input mixes languages, choose the language of the user's own instructions or question. If the input contains no detectable natural language, reply with English."#;
 
 /// Runtime reminder appended after a segment-opening user input so the agent
 /// replies in the language detected from that input. `{language}` is replaced

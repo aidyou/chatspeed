@@ -164,10 +164,11 @@ const LANGUAGE_DECISION_MARGIN: f64 = 2.0;
 
 const LANGUAGE_DECISION_INSTRUCTIONS: &str = concat!(
     "Identify the language the user writes their own instructions in. Judge the prose the user wrote, ",
-    "not code, paths, URLs, identifiers, or English technical terms embedded in another language; when ",
-    "the user's sentences are in one language but carry English technical terms, choose that language. ",
-    "Choose other when the prose is written in a language outside the list, mixes languages evenly, or ",
-    "carries no natural-language instruction."
+    "not code, diffs, logs, command output, paths, URLs, identifiers, referenced file or directory ",
+    "content, image details, or quoted assistant text; ignore those even when they dominate the input. ",
+    "When the user's sentences are in one language but carry English technical terms, choose that ",
+    "language. Choose other when the prose is written in a language outside the list, mixes languages ",
+    "evenly, or carries no natural-language instruction."
 );
 
 fn confident_choice(

@@ -611,11 +611,62 @@ impl IntelligenceManager {
         max_input_tokens: usize,
         segment_id: i32,
     ) -> Option<String> {
+        // The input is user content, so only its shape is logged; that is what
+        // makes a production misdetection diagnosable without leaking text.
+        log::info!(
+            "[Workflow][session={}][language] Detection input profile: {}",
+            self.session_id,
+            Self::language_detection_input_profile(user_input)
+        );
         if let Some(language) = self.try_decision_language(user_input, max_input_tokens).await {
             return Some(language);
         }
         self.detect_input_language_with_lite(user_input, max_input_tokens, segment_id)
             .await
+    }
+
+    /// Privacy-safe shape of one detection input: how much of it is CJK script
+    /// versus alphabetic and numeric text, and which runtime wrappers it still
+    /// carries, so a misdetection can be diagnosed without logging the content.
+    fn language_detection_input_profile(input: &str) -> String {
+        let mut cjk = 0usize;
+        let mut alpha = 0usize;
+        let mut digits = 0usize;
+        for character in input.chars() {
+            if matches!(
+                character as u32,
+                0x3040..=0x30FF
+                    | 0x3400..=0x4DBF
+                    | 0x4E00..=0x9FFF
+                    | 0xF900..=0xFAFF
+                    | 0xAC00..=0xD7AF
+            ) {
+                cjk += 1;
+            } else if character.is_numeric() {
+                digits += 1;
+            } else if character.is_alphabetic() {
+                alpha += 1;
+            }
+        }
+        let wrappers: Vec<&str> = [
+            "<SYSTEM_REMINDER>",
+            "<file_content",
+            "<list_dir",
+            "<img_detail",
+            "<quoted-response",
+            "<user_query>",
+        ]
+        .into_iter()
+        .filter(|wrapper| input.contains(wrapper))
+        .collect();
+        format!(
+            "chars={} cjk={} alpha={} digits={} wrappers={:?}",
+            input.chars().count(),
+            cjk,
+            alpha,
+            digits,
+            wrappers
+        )
     }
 
     async fn detect_input_language_with_lite(
@@ -867,6 +918,26 @@ mod tests {
                 r#"{"reasoning":"thinking","content":" English "}"#
             ),
             "English"
+        );
+    }
+
+    #[test]
+    fn language_detection_input_profile_reports_shape_without_content() {
+        let profile = IntelligenceManager::language_detection_input_profile(
+            "修复按钮 <file_content path=\"app.vue\">fn main() {}</file_content>",
+        );
+        assert!(profile.contains("cjk=4"), "profile was {profile}");
+        assert!(
+            profile.contains("wrappers=[\"<file_content\"]"),
+            "profile was {profile}"
+        );
+        assert!(
+            !profile.contains("修复按钮") && !profile.contains("fn main"),
+            "profile leaked content: {profile}"
+        );
+        assert_eq!(
+            IntelligenceManager::language_detection_input_profile("hello 123"),
+            "chars=9 cjk=0 alpha=5 digits=3 wrappers=[]"
         );
     }
 

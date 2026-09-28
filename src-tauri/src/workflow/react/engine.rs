@@ -1450,7 +1450,10 @@ impl WorkflowExecutor {
         &self,
         compression_candidate: &[WorkflowMessage],
     ) -> Result<Option<String>, WorkflowEngineError> {
-        if self.compressor.provider_id <= 0 || self.compressor.model.trim().is_empty() {
+        // A resolved compression identity is the model name. Provider 0 is the supported
+        // proxy-routing mode ("group@alias") that the chat layer resolves downstream, so only a
+        // missing model name proves the compressor has no model role.
+        if self.compressor.model.trim().is_empty() {
             return Err(WorkflowEngineError::CompressionFailed(
                 "Goal tracking requires a resolved compression model".to_string(),
             ));
@@ -8473,9 +8476,12 @@ impl WorkflowExecutor {
                 "[Workflow][session={}][phase=language] Fresh-conversation user input; running blocking one-shot language detection before ReAct",
                 self.session_id
             );
-            // Strip embedded SYSTEM_REMINDER blocks (e.g. the English
-            // new-segment scope note) so detection sees the user's own words.
-            let raw_input = ContextManager::strip_system_reminder_blocks(&content);
+            // Detection reads the user's own prose only: embedded
+            // SYSTEM_REMINDER blocks (e.g. the English new-segment scope note)
+            // and the reference blocks we inject (referenced file content,
+            // directory listings, image details, quoted text) are not the
+            // user's wording and must not decide the language.
+            let raw_input = ContextManager::user_prose_for_language_detection(&content);
             let input_budget = self.lite_model_input_token_budget();
             let segment_id = self.context.current_segment_id;
             match self
@@ -11395,6 +11401,75 @@ mod recovery_tests {
                 .all(|payload| !matches!(payload, GatewayPayload::State { .. })),
             "terminal-only compression must not publish a lifecycle transition"
         );
+    }
+
+    #[tokio::test]
+    async fn goal_tracking_accepts_proxy_routed_compression_model() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "goal-tracking-proxy-model";
+        let agent = test_agent("goal-tracking-proxy-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "Proxy routed task", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(32).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+
+        // Proxy routing stores provider 0 together with a "group@alias" model name, and the
+        // workflow agent config carries that identity into the compression role.
+        executor.agent_config.models = Some(crate::db::agent::AgentModels {
+            act: Some(crate::db::agent::ModelConfig {
+                id: 0,
+                model: "team@alpha".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                // A confirmed capacity above the default 128000 required bound keeps the
+                // action model as the compression role.
+                context_size: Some(200_000),
+                max_tokens: None,
+            }),
+            ..Default::default()
+        });
+        executor.sync_runtime_models_from_agent_config();
+        assert_eq!(executor.compressor.provider_id, 0);
+        assert_eq!(executor.compressor.model, "team@alpha");
+        let empty_window: Vec<WorkflowMessage> = Vec::new();
+        let tracked = executor
+            .track_goal_at_compression_boundary(&empty_window)
+            .await
+            .expect("a proxy-routed compression model must be accepted");
+        assert!(
+            tracked.is_none(),
+            "a window without user directives must not invent a goal"
+        );
+
+        // Only a missing model role is unresolved.
+        executor.compressor.model = String::new();
+        assert!(executor
+            .track_goal_at_compression_boundary(&empty_window)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
