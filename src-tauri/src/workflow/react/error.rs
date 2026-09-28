@@ -40,6 +40,13 @@ pub enum WorkflowEngineError {
     #[error("Security violation: {0}")]
     Security(String),
 
+    /// A compression precondition failed, so the workflow cannot continue.
+    /// Goal tracking runs before the handoff is written, and a handoff without a
+    /// tracked goal would silently drift, so this is a direct termination rather
+    /// than a recoverable step error.
+    #[error("Compression failed: {0}")]
+    CompressionFailed(String),
+
     #[error("Gateway error: {0}")]
     Gateway(String),
 
@@ -143,6 +150,13 @@ impl WorkflowEngineError {
                     }
                 }
             }
+            Self::CompressionFailed(details) => WorkflowTerminalError {
+                content: format!(
+                    "Compression failed: {details}\n<SYSTEM_REMINDER>Compression is a precondition for continuing this task: without a valid handoff the context would drift. This is a fatal error, not a retryable tool-argument problem. Inform the user that the workflow stopped because context compression could not be prepared, and do not attempt to continue the task.</SYSTEM_REMINDER>"
+                ),
+                error_type: "compression_failed",
+                metadata: json!({ "error_type": "compression_failed" }),
+            },
             _ => WorkflowTerminalError {
                 content: format!(
                     "Critical Error: {}\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>",
@@ -208,6 +222,24 @@ mod tests {
         assert_eq!(terminal.metadata["retry_exhausted"], true);
         assert_eq!(terminal.metadata["retry_attempt"], 10);
         assert_eq!(terminal.metadata["retry_max_attempts"], 10);
+    }
+
+    #[test]
+    fn compression_failures_terminate_with_an_explicit_precondition_message() {
+        let terminal = WorkflowEngineError::CompressionFailed(
+            "Goal tracking failed after 5 attempts".to_string(),
+        )
+        .terminal_error();
+
+        assert_eq!(terminal.error_type, "compression_failed");
+        assert_eq!(terminal.metadata["error_type"], "compression_failed");
+        assert!(terminal
+            .content
+            .contains("Goal tracking failed after 5 attempts"));
+        assert!(terminal.content.contains("fatal error, not a retryable"));
+        assert!(!terminal
+            .content
+            .contains("correct your parameters and retry"));
     }
 
     #[test]

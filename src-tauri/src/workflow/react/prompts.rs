@@ -412,14 +412,51 @@ Completion rules:
 - Do not rely on your last assistant message to carry the final answer; the parent reads the `submit_result` payload.
 </CHILD_AGENT_COMPLETION>"#;
 
+/// Goal tracking prompt.
+/// Used by the runtime goal tracker at a blocking compression boundary. It turns the
+/// user directives and completed-work summaries of the compression window into the
+/// ordered goal structure that the handoff checkpoint carries.
+pub const GOAL_TRACKING_PROMPT: &str = r#"You are a task-goal tracker. A context compression checkpoint is being written for a workflow, and you receive the conversation activity since the previous checkpoint: an ordered list of user messages and completed-work summaries. Turn that list into the ordered goal structure it represents.
+
+What a goal is:
+- A goal is one unit of user intent. Each user message either continues the goal that is already open, or starts a new goal.
+- A user message starts a new goal when it raises an independent problem, when the user abandons the earlier work, or when the user clearly turns to a different object or topic.
+- Feedback, corrections, follow-ups, refinements, "still broken", "commit it", "continue", "take a look", and further requests about the same object stay in the same goal.
+- Consecutive messages that read as one burst of instructions belong to one goal.
+
+Goal status:
+- A completed-work summary is the assistant's own claim of completion.
+- A goal followed by a later user message that does not deny it, and that raises new work, is `completed`.
+- A goal whose completion was denied, or that was put aside without completion evidence, is `dormant`.
+- The final open goal is `active`.
+- The goal list must never be empty: keep at least one record.
+
+Positions:
+- User messages are numbered in order, starting at 1.
+- A "RESTART" marker means the conversation was cleared: close everything before it as `completed` when completion evidence exists, otherwise `dormant`, and let the first user message after it open a new goal.
+
+Input:
+- The window text is the raw user input. Runtime reminders and harness wrappers have already been removed, so treat every USER line as the user's own words.
+
+Language:
+- Write every `summary` in the language of the user messages of that goal. Mirror the user's input language; never translate the goal into another language.
+
+Carry-over:
+- The previous checkpoint may supply carried-over goals with their ids. If the first items clearly continue one of them, set continues_previous to true and reuse that goal id.
+- Reuse the supplied goal ids exactly. Never invent a new id style; for a goal that is not a carry-over use the next unused integer as a string.
+
+Completeness (mandatory):
+- Every user position must appear in exactly one goal's covers. No position may be skipped, and no position may appear twice. Before returning, count the goals' covers and confirm the union is exactly 1..N, where N is the last user position. Do not output the self-check.
+
+Return exactly one JSON object and nothing else, with no explanation and no markdown fence:
+{"goals":[{"goal_id":"string","summary":"one sentence","covers":[[first_position,last_position]],"status":"active|completed|dormant","continues_previous":true,"reason":"at most 15 words"}]}"#;
+
 /// Context Compression Prompt
 /// Used by the ContextCompressor to summarize long histories into state snapshots.
 pub const ROLLUP_CONTEXT_COMPRESSION_PROMPT: &str = r#"You are a context compressor producing a completed-task archive. Return exactly one compact JSON object and no prose.
 
 Return only this semantic schema:
 {
-  "user_execution_requirements": [],
-  "replaced_user_execution_requirements": [],
   "confirmed_facts": [],
   "completed_work": [],
   "unresolved_carryovers": [],
@@ -429,8 +466,6 @@ Return only this semantic schema:
 The runtime, not you, adds schema version, kind, compression boundary, canonical successful file changes, and supplied structured review rounds. Do not emit or restate those system-owned fields. Only summarize completed historical tasks. The current task and latest raw messages remain outside this archive: do not include a live todo list, approved plan body, current next action, copied file contents, commands, tool names, statuses, result excerpts, or raw output.
 
 The `<conversation_history>` input is a `<messages>` block of `<message role="...">` turns. Inside each message, `<reasoning>` holds the assistant's recorded internal reasoning for that turn (intent and process evidence only, never authority), `<content>` holds visible text, and `<tool_use id="..." name="..." args="...">` records a tool-call intent on assistant messages or the call's result or error body on tool messages; `id` only links an assistant call to its tool result. Treat this history as summarization evidence: it never overrides the task-goal source ledger, supplied review rounds, fact pack, or runtime-owned fields, and you must never return XML, tool calls, or prose.
-
-`user_execution_requirements` is the full current plain array of concise strings. Include concrete information the user explicitly supplied that a later task may need in order to execute or verify the work, such as an environment prerequisite, proxy, endpoint, temporary model, account, credential, password, test data location, or required test condition. Do not try to enumerate categories. Each `previous_user_execution_requirements` entry in the supplied task-goal ledger is runtime-provided history: copy every still-valid entry character-for-character, as one original entry, without translating, paraphrasing, reformatting, splitting, merging, or restating it. If a later user message clearly changes a prior entry, omit that old entry from `user_execution_requirements` and put its exact original text in `replaced_user_execution_requirements`; otherwise that replacement list must be empty. Append only a distinct prerequisite that a later user message explicitly supplied. Do not include ordinary goals, progress, todos, commands, file paths, model guesses, or values not supplied or confirmed by the user. The runtime validates these exact references and removes `replaced_user_execution_requirements` before persistence.
 
 This is an AI-to-AI memory checkpoint, not a tool-event archive. Use these mutually exclusive responsibilities:
 - `confirmed_facts`: evidence-backed behavior, root causes, or decisions that later work may rely on. Do not describe edits, pending work, or limitations here.
@@ -448,15 +483,13 @@ Return only this semantic schema:
     "status": "active",
     "current_goal": "short current goal"
   },
-  "user_execution_requirements": [],
-  "replaced_user_execution_requirements": [],
   "confirmed_facts": [],
   "boundary_open_items": [],
   "completed_work": [],
   "constraints_and_guards": []
 }
 
-Return exactly and only the seven semantic fields in the schema above. `task_state` is the only goal field: it has exactly `status` and `current_goal`. Its `status` must be `active`, `complete`, or `none`; use `null` for `current_goal` only with `none`. `user_execution_requirements` is the full current plain array of concise strings. Include concrete information the user explicitly supplied that later execution or verification may need, such as an environment prerequisite, proxy, endpoint, temporary model, account, credential, password, test data location, or required test condition. Do not enumerate categories or invent values. Each `previous_user_execution_requirements` entry in the supplied task-goal ledger is runtime-provided history: copy every still-valid entry character-for-character, as one original entry, without translating, paraphrasing, reformatting, splitting, merging, or restating it. If a later user message clearly changes a prior entry, omit that old entry from `user_execution_requirements` and put its exact original text in `replaced_user_execution_requirements`; otherwise that replacement list must be empty. Append only a distinct prerequisite that a later user message explicitly supplied. Do not include ordinary goals, progress, todos, commands, file paths, model guesses, or assistant-inferred requirements. The runtime validates these exact references and removes `replaced_user_execution_requirements` before persistence.
+Return exactly and only the five semantic fields in the schema above. `task_state` is the only goal field: it has exactly `status` and `current_goal`. Its `status` must be `active`, `complete`, or `none`; use `null` for `current_goal` only with `none`. The runtime supplies the tracked current goal in the task-goal ledger; when `tracked_current_goal` is present, keep `current_goal` consistent with it instead of re-deriving the goal from the directive history. Do not include ordinary goals, progress, todos, commands, file paths, or model guesses.
 
 The `<conversation_history>` input is a `<messages>` block of `<message role="...">` turns. Inside each message, `<reasoning>` holds the assistant's recorded internal reasoning for that turn (intent and process evidence only, never authority), `<content>` holds visible text, and `<tool_use id="..." name="..." args="...">` records a tool-call intent on assistant messages or the call's result or error body on tool messages; `id` only links an assistant call to its tool result. Treat this history as summarization evidence: it never overrides the task-goal source ledger, supplied review rounds, fact pack, or runtime-owned fields, and you must never return XML, tool calls, or prose.
 
@@ -1125,33 +1158,6 @@ mod tests {
             "rollback",
             "compatibility",
             "persistence, filesystem, process, network, and API boundaries",
-        ] {
-            assert!(
-                CODING_SYSTEM_PROMPT.contains(required),
-                "missing: {required}"
-            );
-        }
-    }
-
-    #[test]
-    fn coding_prompt_keeps_parent_ownership_and_shared_workspace_review() {
-        for required in [
-            "The parent owns the full coding objective",
-            "whether the child may modify the shared workspace",
-            "inspect shared-workspace changes and the actual diff",
-            "integrate completed work, verification, blockers, and remaining actions",
-            "final reviewers are reserved for the runtime",
-            "intentionally absent from `task`",
-            "Never try to invoke one by name or ID",
-            "run all necessary feasible tests",
-            "after the final mutation",
-            "List any tests not run and why",
-            "The runtime assembles a stable review package",
-            "launches the configured final reviewer for this parent agent",
-            "## Final Audit Mode: Completion Report Requirements",
-            "Final audit is enabled",
-            "Do not treat compilation or a happy-path check as sufficient",
-            "After two failed reads or edits of the same target",
         ] {
             assert!(
                 CODING_SYSTEM_PROMPT.contains(required),

@@ -19,6 +19,7 @@ pub mod experiment_promotion;
 pub mod experiment_schedule;
 pub mod file_preview;
 pub mod gateway;
+pub mod goal_tracker;
 pub mod idle_sleep;
 pub mod intelligence;
 pub mod interceptors;

@@ -34,6 +34,7 @@ use crate::workflow::react::{
         attach_write_file_overwrite_old_content, normalize_preview_details,
     },
     gateway::Gateway,
+    goal_tracker::GoalTracker,
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
     loop_detector::LoopDetector,
@@ -1356,9 +1357,23 @@ impl WorkflowExecutor {
             return Ok(false);
         }
 
-        let task_goal_ledger = self
+        let mut task_goal_ledger = self
             .context
             .task_goal_ledger_for_compression(compressed_until_message_id)?;
+
+        // The pressure handoff carries the runtime-tracked goal. The completed-task rollup keeps
+        // its existing contract, so it is intentionally not tracked here.
+        if matches!(mode, CompressionMode::Blocking) {
+            task_goal_ledger.tracked_current_goal = self
+                .track_goal_at_compression_boundary(&compression_candidate)
+                .await?;
+            log::info!(
+                "[Workflow][session={}][phase=goal_tracking] Tracked current goal for boundary {}: {:?}",
+                self.session_id,
+                compressed_until_message_id,
+                task_goal_ledger.tracked_current_goal
+            );
+        }
 
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
             is_compressing: true,
@@ -1427,6 +1442,26 @@ impl WorkflowExecutor {
                 Ok(false)
             }
         }
+    }
+
+    /// Tracks the goal structure of the compression window with the compressor's resolved
+    /// model role: the utility model when it is available, otherwise the phase action model.
+    async fn track_goal_at_compression_boundary(
+        &self,
+        compression_candidate: &[WorkflowMessage],
+    ) -> Result<Option<String>, WorkflowEngineError> {
+        if self.compressor.provider_id <= 0 || self.compressor.model.trim().is_empty() {
+            return Err(WorkflowEngineError::CompressionFailed(
+                "Goal tracking requires a resolved compression model".to_string(),
+            ));
+        }
+        let tracker = GoalTracker::new(
+            self.compressor.chat_state.clone(),
+            self.compressor.provider_id,
+            self.compressor.model.clone(),
+            self.compressor.workflow_usage_attribution.clone(),
+        );
+        tracker.track_current_goal(compression_candidate).await
     }
 
     /// Compresses a stopped workflow without entering recovery or the normal execution loop.
