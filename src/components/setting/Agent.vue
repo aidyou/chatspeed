@@ -211,7 +211,7 @@
                   <template v-if="modelModes[role.key] === 'provider'">
                     <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
                       @change="onModelIdChange(role.key)" style="flex: 1">
-                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                      <el-option v-for="provider in sortedModelProviders" :key="provider.id"
                         :label="provider.name" :value="provider.id" />
                     </el-select>
                     <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
@@ -224,7 +224,7 @@
                   <template v-else>
                     <el-select v-model="proxyGroups[role.key]" size="small" filterable
                       @change="onProxyGroupChange(role.key)" style="flex: 1">
-                      <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
+                      <el-option v-for="group in sortedProxyGroups" :key="group.name" :label="group.name"
                         :value="group.name" />
                     </el-select>
                     <el-select v-model="proxyAliases[role.key]" size="small" filterable
@@ -769,6 +769,23 @@ const modelRoles = computed(() => {
   }
   return allModelRoles
 })
+
+// Model configuration reads alphabetically: provider, proxy group, and alias lists
+// come from stores whose order is not the editor's presentation order, so the
+// editor sorts copies and never reorders the store arrays.
+const compareOptionLabels = (left, right) => String(left).localeCompare(String(right))
+
+const sortedModelProviders = computed(() =>
+  [...modelStore.getAvailableProviders].sort((left, right) =>
+    compareOptionLabels(left.name, right.name)
+  )
+)
+
+const sortedProxyGroups = computed(() =>
+  [...proxyGroupStore.list].sort((left, right) =>
+    compareOptionLabels(left.name, right.name)
+  )
+)
 
 const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
@@ -1515,7 +1532,10 @@ const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
 const getModelList = key => {
   const id = agentForm.value[key + 'Model']?.id
   const provider = id ? modelStore.getModelProviderById(id) : null
-  return provider?.models || []
+  // Sorted copy: the option shows `name || id`, and the store array keeps its own order.
+  return [...(provider?.models || [])].sort((left, right) =>
+    compareOptionLabels(left.name || left.id, right.name || right.id)
+  )
 }
 
 const onModelIdChange = key => {
@@ -1574,7 +1594,7 @@ const supportsThinking = key => {
 const getProxyAliases = groupName => {
   if (!groupName) return []
   const groupData = settingStore.settings.chatCompletionProxy[groupName]
-  return groupData ? Object.keys(groupData) : []
+  return groupData ? Object.keys(groupData).sort(compareOptionLabels) : []
 }
 
 const onProxyGroupChange = key => {
