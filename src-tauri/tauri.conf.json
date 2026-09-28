@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cs-$target && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cs && cp src-tauri/target/release/cs src-tauri/target/release/cs-$target # chatspeed_headless is excluded from the desktop bundle for now; restore these steps with the commented [[bin]] in Cargo.toml: touch src-tauri/target/release/chatspeed_headless-$target && cargo build --release --manifest-path src-tauri/Cargo.toml --bin chatspeed_headless && cp src-tauri/target/release/chatspeed_headless src-tauri/target/release/chatspeed_headless-$target",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cs-$target && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cs && cp src-tauri/target/release/cs src-tauri/target/release/cs-$target",
     "frontendDist": "../dist"
   },
   "app": {
