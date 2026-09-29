@@ -3621,8 +3621,7 @@ defineExpose({
 }
 
 .tool-group__error-count {
-  background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
-  color: var(--el-color-danger);
+  background: var(--cs-bg-color-deep);
 }
 
 .tool-group__summary-text {
