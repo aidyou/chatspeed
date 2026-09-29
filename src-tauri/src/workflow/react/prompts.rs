@@ -606,7 +606,7 @@ The report must include:
 - Method or style constraints: if the task required a specific style, framework, tone, methodology, or decision criterion, state how you applied it.
 - Remaining notes: mention limitations, skipped checks, follow-up risks, assumptions, disputed points, or data gaps. If there are none, state that explicitly.
 
-Reasoning/thinking text does not count as the report. Put this report in `complete_workflow.summary` by default. If a valid report is already visible in the same assistant response, `summary` is optional. If the runtime explicitly says it captured a pending report draft, omit both visible report text and `summary` instead of repeating the report."#;
+Reasoning/thinking text does not count as the report. Put this report in `complete_workflow.summary` by default. If a valid report is already visible in the same assistant response, `summary` is optional. If the runtime explicitly says it captured a pending report draft, omit both visible report text and the `summary` argument instead of repeating the report."#;
 
 /// Specialized prompt for the Planning Mode.
 /// To be used by the PlanningExecutor for exploration and strategy.

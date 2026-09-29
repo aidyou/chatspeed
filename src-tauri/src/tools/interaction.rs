@@ -437,7 +437,7 @@ impl ToolDefinition for FinishTask {
         - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
         - A completion report is required. Put the full report in `summary` unless a valid report is already present in this assistant response or the runtime explicitly says it captured a pending report.\n\
         - `summary` is optional only when the runtime can use that current or pending report. Otherwise it must be a non-empty, complete report.\n\
-        - If the runtime says it captured a pending completion report, omit `summary` and visible report text to commit that exact draft without repeating it.\n\
+        - If the runtime says it captured a pending completion report, omit both visible report text and the `summary` argument to commit that exact draft without repeating it.\n\
         - Equivalent report sources are deduplicated, but conflicting reports are rejected.\n\
         - A completion report must explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
         - Reasoning/thinking text does not count as a completion report.\n\
@@ -700,6 +700,9 @@ mod tests {
         }
         assert_eq!(declaration.input_schema["additionalProperties"], true);
         assert!(declaration.input_schema.get("required").is_none());
+        assert!(declaration
+            .description
+            .contains("omit both visible report text and the `summary` argument"));
 
         for params in [
             json!({}),

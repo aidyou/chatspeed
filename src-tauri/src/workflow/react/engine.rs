@@ -5492,7 +5492,7 @@ impl WorkflowExecutor {
                             )
                         } else if !self.pending_completion_reports.is_empty() {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Emit no visible text and call `complete_workflow({{}})` exactly once with no `summary`.</SYSTEM_REMINDER>",
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({{}})` exactly once.</SYSTEM_REMINDER>",
                                 self.consecutive_no_tool_calls
                             )
                         } else {
@@ -5506,7 +5506,7 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the final result, do not repeat it as visible text; call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else if !self.pending_completion_reports.is_empty() {
-                            "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Emit no visible text and call `complete_workflow({})` exactly once with no `summary`.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({})` exactly once.</SYSTEM_REMINDER>".to_string()
                         } else {
                             format!(
                                 "<SYSTEM_REMINDER>No completion report is pending. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
@@ -5517,7 +5517,7 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the final result, do not send another visible result; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else if !self.pending_completion_reports.is_empty() {
-                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call `complete_workflow({})` now with no visible text or `summary`. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({})` now. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
                         } else {
                             format!(
                                 "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
