@@ -1366,7 +1366,16 @@ impl WorkflowExecutor {
         if matches!(mode, CompressionMode::Blocking) {
             task_goal_ledger.tracked_current_goal = self
                 .track_goal_at_compression_boundary(&compression_candidate)
-                .await?;
+                .await
+                .map_err(|error| {
+                    log::info!(
+                        "[Workflow][session={}][phase=goal_tracking] Goal tracking failed before blocking compression: display_error={}; debug_error={:?}",
+                        self.session_id,
+                        error,
+                        error
+                    );
+                    error
+                })?;
             log::info!(
                 "[Workflow][session={}][phase=goal_tracking] Tracked current goal for boundary {}: {:?}",
                 self.session_id,
@@ -1432,11 +1441,12 @@ impl WorkflowExecutor {
                 Ok(true)
             }
             Err(err) => {
-                log::warn!(
-                    "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): {}",
+                log::info!(
+                    "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): display_error={}; debug_error={:?}",
                     self.session_id,
                     compressed_until_message_id,
                     reason,
+                    err,
                     err
                 );
                 Ok(false)
