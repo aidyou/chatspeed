@@ -194,6 +194,9 @@ function generateTitle(toolName: string, args?: Record<string, any>): string {
     },
     grep: a => {
       const path = formatDisplayPath(a.path || '')
+      if (!a.pattern && !a.query) {
+        return path ? `Grep ${a.glob || '*'} in ${path}` : `Grep ${a.glob || '*'}`
+      }
       return path ? `Grep "${a.pattern || a.query || ''}" in ${path}` : `Grep "${a.pattern || a.query || ''}"`
     },
     bash: a => `Run ${normalizeShellCommandForDisplay(a.command || '')}`,

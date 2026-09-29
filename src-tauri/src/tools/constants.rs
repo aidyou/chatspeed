@@ -139,7 +139,6 @@ mod tests {
             TOOL_WRITE_FILE,
             TOOL_EDIT_FILE,
             TOOL_LIST_DIR,
-            TOOL_GLOB,
             TOOL_GREP,
             TOOL_GIT_DIFF,
             TOOL_GIT_INSPECT,

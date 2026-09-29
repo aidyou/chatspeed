@@ -597,6 +597,7 @@ impl ObservationReinforcer {
                 let pattern = args["pattern"]
                     .as_str()
                     .or(args["query"].as_str())
+                    .or(args["glob"].as_str())
                     .unwrap_or("");
                 let path = args["path"].as_str().unwrap_or("");
                 if !path.is_empty() {
@@ -765,7 +766,14 @@ impl ObservationReinforcer {
             }
             TOOL_GREP => {
                 let lines = content.lines().count();
-                format!("Found {} matches", lines)
+                if args["pattern"]
+                    .as_str()
+                    .is_some_and(|pattern| !pattern.trim().is_empty())
+                {
+                    format!("Found {} matches", lines)
+                } else {
+                    format!("Found {} entries", lines)
+                }
             }
             TOOL_WEB_SEARCH => {
                 if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(content) {
@@ -825,6 +833,22 @@ mod tests {
     fn remove_persisted_output(content: &str) {
         let path = persisted_path(content);
         fs::remove_file(resolve_ai_temp_path(Path::new(&path))).unwrap();
+    }
+
+    #[test]
+    fn grep_summary_distinguishes_content_and_path_search() {
+        assert_eq!(
+            ObservationReinforcer::generate_summary(
+                TOOL_GREP,
+                "a.rs:1:match",
+                &json!({"pattern": "match"})
+            ),
+            "Found 1 matches"
+        );
+        assert_eq!(
+            ObservationReinforcer::generate_summary(TOOL_GREP, "a.rs", &json!({"glob": "*.rs"})),
+            "Found 1 entries"
+        );
     }
 
     #[test]

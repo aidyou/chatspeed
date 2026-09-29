@@ -787,7 +787,7 @@ const sortedProxyGroups = computed(() =>
   )
 )
 
-const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
+const READ_ONLY_TOOLS = ['read_file', 'grep', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
 // Shell execution is enabled by the security-policy switch, never by picking a tool.
 const HIDDEN_AGENT_TOOL_IDS = ['bash']

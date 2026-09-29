@@ -118,7 +118,7 @@ Examples of likely boundaries:
 
 Rules:
 - Prefer one batched search covering 2-4 concrete hypotheses over serial one-by-one searching.
-- Prefer running `glob` and `grep` in parallel when both file discovery and content search are needed for the same search round.
+- Prefer running path-only and content `grep` calls in parallel when both file discovery and content search are needed for the same search round.
 - Prefer reading multiple independent, high-signal file regions in parallel when they are all needed to evaluate the same hypothesis or execution path.
 - Prefer compound `grep` patterns over many single-term searches.
 - Search naming variants across boundaries, e.g. `workflow_start|workflowStart|workflow_run|workflowRun`.
@@ -128,7 +128,7 @@ Rules:
 
 Example:
 - If the user says "turning off thinking still shows reasoning after model switching", split the first round into multiple search targets instead of searching one phrase at a time:
-  - run `glob` and `grep` in parallel
+  - run path-only and content `grep` calls in parallel
   - UI/config terms: `thinking|reasoning|model selector|disable thinking`
   - state/config propagation terms: `thinking.type|reasoning_enabled|model config|runtime config`
   - execution/runtime terms: `reasoning|reasoning_chunk|show reasoning|emit reasoning`

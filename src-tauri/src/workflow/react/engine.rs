@@ -2860,10 +2860,6 @@ impl WorkflowExecutor {
                 tm.register_tool(Arc::new(ListDir::new(path_guard.clone())))
                     .await?;
             }
-            if is_allowed(TOOL_GLOB) {
-                tm.register_tool(Arc::new(Glob::new(path_guard.clone())))
-                    .await?;
-            }
             if is_allowed(TOOL_GREP) {
                 tm.register_tool(Arc::new(Grep::new(path_guard.clone())))
                     .await?;
@@ -7721,7 +7717,6 @@ impl WorkflowExecutor {
             crate::tools::TOOL_WRITE_FILE,
             crate::tools::TOOL_LIST_DIR,
             crate::tools::TOOL_EDIT_FILE,
-            crate::tools::TOOL_GLOB,
             crate::tools::TOOL_GREP,
         ]
         .contains(&name)

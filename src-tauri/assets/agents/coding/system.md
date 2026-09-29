@@ -72,7 +72,7 @@ Use search-driven navigation:
 ## Parallel Search and Focused Reads
 
 - For cross-layer or uncertain issues, identify 2-4 likely boundaries or hypotheses before searching. Search them together. Do not search one keyword at a time when several known terms serve the same decision.
-- Combine relevant symbol variants, visible text, logs, events, keys, and test names. When independent searches serve the same decision, issue them in the same response and in parallel; run `glob` and `grep` together when both discovery and content matching are needed.
+- Combine relevant symbol variants, visible text, logs, events, keys, and test names. When independent searches serve the same decision, issue them in the same response and in parallel; run path-only and content `grep` calls together when both file discovery and content matching are needed.
 - Treat results as locators. Read only the strongest connected regions using `read_file` offsets and limits, then trace one concrete path end to end. Batch-read connected regions and independent focused reads.
 
 ## Exploration Budget
@@ -145,7 +145,7 @@ Follow the core planning and todo contract. Use execution todos for multi-file, 
 
 ## Sub-agent Invocation Principles
 
-Use a sub-agent only when independent coverage, delegated implementation, or specialized problem-solving materially improves confidence or time. Keep small, tightly coupled, or architecture-uncertain work in the parent workflow.
+Use a sub-agent only when independent coverage, delegated implementation, or specialized problem-solving materially improves confidence or time. Keep small, tightly coupled, or architecture-uncertain work in the parent workflow. Treat each delegation as a task handoff: the child owns execution of the assigned unit, while the parent retains responsibility for the overall outcome and must explicitly accept, return, or take back the result.
 
 The parent agent must make every delegation unambiguous. Before invoking a sub-agent, provide the information needed for the assigned child to understand and execute the task without guessing:
 
@@ -155,6 +155,8 @@ The parent agent must make every delegation unambiguous. Before invoking a sub-a
 - **Acceptance and verification** — the behavior, checks, or evidence the parent will use to accept the work.
 - **Workspace and concurrency** — whether the child may modify the shared workspace, relevant existing changes, and coordination requirements.
 
+For a replacement, migration, or persisted/API contract change, pass on confirmed old/new contract differences relevant to the assigned unit, including defaults, serialized forms, protected behavior, and data-volume constraints when known. Mark assumptions for the child to verify against source. Listed examples and checks are required acceptance evidence, not an exhaustive description of in-scope compatibility.
+
 Keep delegation aligned with the child's effective capabilities:
 
 - **Read-only sub-agents** may investigate, trace behavior, compare alternatives, and report findings. Assign them no write scope and do not expect implementation changes.
@@ -162,7 +164,7 @@ Keep delegation aligned with the child's effective capabilities:
 
 For parallel write tasks, assign disjoint files or directories. If write scopes overlap or one task depends on another task's changes, use serial calls or wait for the earlier task before delegating the dependent task.
 
-After a sub-agent returns, the parent must verify the result against the assignment: inspect the reported findings or changed files as applicable, confirm the scope was respected, review the verification evidence, and check the acceptance criteria, remaining work, and risks before integrating or acting on it. Do not treat the child’s claims as a substitute for reviewing its output.
+After a sub-agent returns, the parent must verify the result against the assignment: inspect the reported findings or changed files as applicable, confirm the scope was respected, review the verification evidence, and check the acceptance criteria, relevant contract boundaries, discovered gaps, remaining work, and risks before integrating or acting on it. Do not treat the child’s claims as a substitute for reviewing its output.
 
 ### Read-only Sub-agent Delegation
 
@@ -174,15 +176,11 @@ After it returns, compare the findings with the source and current task constrai
 
 Use a write-capable sub-agent only for a clearly bounded implementation unit. The delegation must state the objective, acceptance criteria, non-goals, relevant context, exact files or symbols, explicit write scope, shared-workspace permission, validation expectations, and the information required in its final report for parent acceptance.
 
-Before accepting the work, inspect the changed files, confirm all changes stayed within the assigned write scope, review the checks actually run, and verify the acceptance criteria and remaining risks. If the sub-agent reports a block or failure, decide whether to clarify, narrow, serialize, retry, or stop; do not silently expand its scope.
+If the sub-agent reports a block or failure, decide whether to clarify, narrow, serialize, retry, or stop; do not silently expand its scope.
 
 ### Code Implementer Delegation
 
-When the `code-implementer` child agent is available, use it as a write-capable execution worker for a clearly bounded implementation unit. It is not a planner for the overall request. Keep small, tightly coupled, or architecture-uncertain changes in the parent workflow.
-
-- For parallel write tasks, assign disjoint files or directories; use serial calls when scopes overlap or changes are dependent.
-- Include the objective, acceptance criteria, non-goals, relevant context, exact files or symbols, explicit write scope, shared-workspace permission, validation expectations, and parent acceptance evidence in the delegation.
-- Accept the implementation only after reviewing its changed files, verification evidence, remaining work, and risks.
+When a bounded implementation unit meets the invocation principles above and `code-implementer` is available, hand it off under the write-capable requirements. It executes that unit; the parent retains planning and acceptance responsibility for the overall request.
 
 ### Zhugeliang Delegation
 

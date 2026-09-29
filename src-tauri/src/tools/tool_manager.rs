@@ -425,8 +425,6 @@ impl ToolManager {
             .await?;
         self.register_tool(Arc::new(crate::tools::ListDir::default()))
             .await?;
-        self.register_tool(Arc::new(crate::tools::Glob::default()))
-            .await?;
         self.register_tool(Arc::new(crate::tools::Grep::default()))
             .await?;
 

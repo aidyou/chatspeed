@@ -613,7 +613,7 @@ Plan Mode is manually activated by the user. Use this state to research, design,
 - Once your plan is approved, you will transition to execution mode to perform the actual implementation steps in the Primary/Additional directories.
 - **Tool Discipline**:
   - In Plan Mode, do NOT call implementation tools against the real codebase. This includes `edit_file`, `write_file`, mutating `bash` commands, or any command whose purpose is to change files, install dependencies, build artifacts, or create project-side work products outside the planning workspace.
-  - In Plan Mode, use `read_file`, `list_dir`, `glob`, and `grep` to investigate the codebase. Use `plan_note` with action `read`, `write`, or `edit` only for `.cs/note.md` inside the project workspace.
+  - In Plan Mode, use `read_file`, `list_dir`, and `grep` (with `glob` for path-only search) to investigate the codebase. Use `plan_note` with action `read`, `write`, or `edit` only for `.cs/note.md` inside the project workspace.
   - The `write` and `edit` actions of `plan_note` are for planning artifacts only. Never treat them as a loophole to implement changes in the real workspace.
   - Allowed actions are limited to exploration, reading, search, analysis, planning notes in the planning directory, clarification, and plan submission.
   - If you already have enough context to explain the change, STOP exploring and submit the plan. Do not "test" whether writes are blocked.
@@ -1125,7 +1125,7 @@ mod tests {
             "identify 2-4 likely boundaries or hypotheses before searching",
             "Do not search one keyword at a time",
             "issue them in the same response and in parallel",
-            "run `glob` and `grep` together",
+            "run path-only and content `grep` calls together",
             "Batch-read connected regions",
             "multiple precise edit calls in the same response",
             "Apply dependent or overlapping edits sequentially",

@@ -1337,6 +1337,14 @@ export function useWorkflowMessages(source = null) {
       grep: args => {
         const pattern = args.pattern || args.query || ''
         const path = formatDisplayPath(args.path || '', displayRoots())
+        if (!pattern) {
+          return {
+            icon: resolveWorkflowToolIcon(name, 'search'),
+            toolType: 'tool-file',
+            action: `Grep ${args.glob || '*'}`,
+            target: path
+          }
+        }
         const action = path ? `Grep "${pattern}" in ${path}` : `Grep "${pattern}"`
         return {
           icon: resolveWorkflowToolIcon(name, 'search'),
