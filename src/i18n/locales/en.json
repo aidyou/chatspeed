@@ -975,7 +975,9 @@
         "api": {
           "apiUrl": "API Address",
           "compat": "Compat",
-          "example": "On this machine, you can access the API via {baseUrl} For example, you can access the Openai-compatible API via {baseUrl}/v1/chat/completions",
+          "copyFailed": "Failed to copy address: {error}",
+          "copySuccess": "Address copied to clipboard",
+          "example": "On this machine, you can access the API via {baseUrl} For example, you can access the Openai-compatible API via {fullUrl}",
           "group": "Group",
           "note": "Note",
           "protocol": "Protocol",

@@ -975,7 +975,9 @@
         "api": {
           "apiUrl": "API 位址",
           "compat": "相容格式",
-          "example": "在本機您可以透過 {baseUrl} 來存取介面，例如存取通用的 Openai 相容格式的介面可以透過 {baseUrl}/v1/chat/completions 來存取",
+          "copyFailed": "複製位址失敗：{error}",
+          "copySuccess": "位址已複製到剪貼簿",
+          "example": "在本機您可以透過 {baseUrl} 來存取介面，例如存取通用的 Openai 相容格式的介面可以透過 {fullUrl} 來存取",
           "group": "分組",
           "note": "備註",
           "protocol": "通訊協定",

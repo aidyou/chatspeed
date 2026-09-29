@@ -975,7 +975,9 @@
         "api": {
           "apiUrl": "API地址",
           "compat": "兼容格式",
-          "example": "在本机，您可通过 {baseUrl} 访问接口。例如，调用 OpenAI兼容格式 的通用接口，只需访问 {baseUrl}/v1/chat/completions",
+          "copyFailed": "复制地址失败：{error}",
+          "copySuccess": "地址已复制到剪贴板",
+          "example": "在本机，您可通过 {baseUrl} 访问接口。例如，调用 OpenAI兼容格式 的通用接口，只需访问 {fullUrl}",
           "group": "分组",
           "note": "备注",
           "protocol": "协议",

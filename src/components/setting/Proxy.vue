@@ -286,8 +286,19 @@
                 :label="$t('settings.proxy.settings.api.note')"
                 width="300" />
             </el-table>
-            <el-text>
-              {{ $t('settings.proxy.settings.api.example', { baseUrl: baseUrl }) }}
+            <el-text class="api-example">
+              <i18n-t keypath="settings.proxy.settings.api.example">
+                <template #baseUrl>
+                  <code class="copy-url" @click="copyApiUrlToClipboard(baseUrl)">
+                    {{ baseUrl }}
+                  </code>
+                </template>
+                <template #fullUrl>
+                  <code class="copy-url" @click="copyApiUrlToClipboard(fullChatCompletionsUrl)">
+                    {{ fullChatCompletionsUrl }}
+                  </code>
+                </template>
+              </i18n-t>
             </el-text>
           </div>
         </div>
@@ -529,9 +540,12 @@ const searchQuery = ref('')
 
 const baseUrl = computed(() => {
   return (
-    env.value.chatCompletionProxy || 'http://127.0.0.1:' + settings.value.chatCompletionProxyPort
+    (env.value.chatCompletionProxy?env.value.chatCompletionProxy+'/v1':'') || 'http://127.0.0.1:' + settings.value.chatCompletionProxyPort + '/v1'
   )
 })
+
+// Full OpenAI-compatible endpoint shown and copied from the API access hint
+const fullChatCompletionsUrl = computed(() => `${baseUrl.value}/chat/completions`)
 
 const chatCompletionProxy = computed(() => {
   const proxy = settingStore.settings.chatCompletionProxy || {}
@@ -1037,20 +1051,20 @@ const copyModelToClipboard = async model => {
     }
   }
 }
-const copyBaseUrlToClipboard = async () => {
+const copyApiUrlToClipboard = async url => {
   try {
-    await navigator.clipboard.writeText(baseUrl.value || '')
-    showMessage(t('settings.proxy.baseUrlCopySuccess'), 'success')
+    await navigator.clipboard.writeText(url || '')
+    showMessage(t('settings.proxy.settings.api.copySuccess'), 'success')
   } catch (err) {
     if (err instanceof FrontendAppError) {
-      console.error(`Failed to copy base URL: ${err.toFormattedString()}`, err.originalError)
+      console.error(`Failed to copy URL: ${err.toFormattedString()}`, err.originalError)
       showMessage(
-        t('settings.proxy.baseUrlCopyFailed', { error: err.toFormattedString() }),
+        t('settings.proxy.settings.api.copyFailed', { error: err.toFormattedString() }),
         'error'
       )
     } else {
-      console.error('Failed to copy key: ', err)
-      showMessage(t('settings.proxy.baseUrlCopyFailed', { error: err.message }), 'error')
+      console.error('Failed to copy URL: ', err)
+      showMessage(t('settings.proxy.settings.api.copyFailed', { error: err.message }), 'error')
     }
   }
 }
@@ -1525,6 +1539,28 @@ const genTableData = () => {
   .api-table {
     width: 100%;
     margin-bottom: var(--cs-space);
+  }
+
+  .api-example {
+    line-height: 2.2;
+  }
+
+  // Read-only field look keeps the address copyable without looking like an external link
+  .copy-url {
+    padding: 2px 6px;
+    font-family: var(--cs-font-family-mono);
+    font-size: var(--cs-font-size-sm);
+    color: var(--cs-code-text-color);
+    background-color: var(--cs-code-bg-color);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-sm);
+    cursor: pointer;
+    user-select: text;
+
+    &:hover {
+      border-color: var(--cs-color-primary);
+      background-color: var(--cs-hover-bg-color);
+    }
   }
 }
 
