@@ -1146,6 +1146,8 @@ pub async fn run() -> crate::error::Result<()> {
             let main_store_clone = main_store.clone();
             let chat_state_clone = chat_state.clone();
             let update_manager_clone = update_manager.clone();
+            let environment_ready =
+                tauri::async_runtime::spawn_blocking(environment::init_environment);
 
             {
                 let handle_for_startup = handle.clone();
@@ -1156,7 +1158,6 @@ pub async fn run() -> crate::error::Result<()> {
                     {
                         log::error!("Failed to synchronize built-in agents: {}", error);
                     }
-                    environment::init_environment();
                     if let Err(error) =
                         scraper::ensure_default_configs_exist(&handle_for_startup)
                     {
@@ -1189,6 +1190,9 @@ pub async fn run() -> crate::error::Result<()> {
                 let tm_for_mcp = chat_state_clone.tool_manager.clone();
                 let main_store_for_mcp = main_store_clone.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Err(error) = environment_ready.await {
+                        log::warn!("Environment setup task failed before MCP startup: {}", error);
+                    }
                     let _ = tm_for_mcp.register_available_mcp_tools(main_store_for_mcp).await;
                 });
 
