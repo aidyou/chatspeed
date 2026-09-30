@@ -656,8 +656,18 @@ impl WorkflowExecutor {
             return HashMap::new();
         }
 
+        let has_bash = Self::available_tools_allowlist(agent_config.available_tools.as_deref())
+            .map_or(true, |tools| tools.contains(crate::tools::TOOL_BASH));
+        // Deliberate trade-off: help requires the CLI through bash; enabling skills
+        // must not silently grant shell access to agents configured without bash.
+        let discovered_skills = discovered_skills.iter()
+            .filter(|(name, skill)| has_bash || (!name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)
+                && !skill.name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)))
+            .map(|(name, skill)| (name.clone(), skill.clone()))
+            .collect::<HashMap<_, _>>();
+
         let Some(selected_skills_json) = agent_config.selected_skills.as_deref() else {
-            return discovered_skills.clone();
+            return discovered_skills;
         };
 
         let mut selected_skills = match serde_json::from_str::<Vec<String>>(selected_skills_json) {
@@ -9505,6 +9515,28 @@ mod recovery_tests {
         let db_path = dir.path().join("engine_recovery_test.db");
         let store = MainStore::new(db_path).expect("failed to create MainStore");
         (dir, Arc::new(store))
+    }
+
+    #[test]
+    fn builtin_cs_help_requires_bash_without_disabling_other_skills() {
+        let mut agent = test_agent("help-policy");
+        agent.skill_enabled = Some(true);
+        let skills = ["help", "commit"].into_iter().map(|name| {
+            (name.to_string(), SkillManifest {
+                name: name.into(), version: "1".into(), source: "builtin".into(),
+                description: String::new(), tools: vec![], instructions: String::new(),
+                skill_dir: None, references: vec![],
+            })
+        }).collect();
+        for selected in [None, Some("[\"help\",\"commit\"]".to_string())] {
+            agent.selected_skills = selected;
+            agent.available_tools = Some("[]".into());
+            let filtered = WorkflowExecutor::filter_skills_for_agent(&skills, &agent);
+            assert!(!filtered.contains_key("help"));
+            assert!(filtered.contains_key("commit"));
+            agent.available_tools = Some("[\"bash\"]".into());
+            assert!(WorkflowExecutor::filter_skills_for_agent(&skills, &agent).contains_key("help"));
+        }
     }
 
     fn test_agent(id: &str) -> Agent {

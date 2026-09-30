@@ -20,6 +20,10 @@ pub struct ShellSandboxMountContext {
 }
 
 impl ShellExecutionResolver {
+    pub(crate) fn builtin_cs_plan(tool_call_id: &str, command: &str) -> ShellExecutionPlan {
+        explicit_host_plan(tool_call_id, command, "builtin_cs")
+    }
+
     pub fn complete_sandbox_mounts(
         mut plan: ShellExecutionPlan,
         context: &ShellSandboxMountContext,
@@ -128,6 +132,9 @@ impl ShellExecutionResolver {
         primary_root: Option<&Path>,
         analysis: &ShellCommandAnalysis,
     ) -> ShellExecutionPlan {
+        if crate::tools::builtin_cs_args(command).is_some() {
+            return explicit_host_plan(tool_call_id, command, "builtin_cs");
+        }
         let Some(config) = sandbox_config else {
             return host_plan(
                 tool_call_id,
@@ -646,6 +653,22 @@ mod tests {
         SandboxNetworkPolicy, SandboxProfileConfig, SandboxResourceLimits, WorkspaceAccess,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn builtin_cs_routes_to_host_in_every_execution_mode() {
+        let unavailable = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec![]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        for mode in [ShellExecutionMode::Auto, ShellExecutionMode::SandboxOnly, ShellExecutionMode::HostOnly] {
+            for command in ["cs skill list", "cs mcp install --descriptor-json '{}'"] {
+                let plan = ShellExecutionResolver::resolve("test", command, Some(&config(mode.clone())), &unavailable, None);
+                assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
+                assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+                assert_eq!(plan.profile.as_deref(), Some("builtin_cs"));
+            }
+        }
+    }
 
     fn ready_status(runtime: SandboxRuntime, images: Vec<&str>) -> SandboxRuntimeStatus {
         runtime_status(runtime, SandboxAvailabilityState::Ready, images, Vec::new())

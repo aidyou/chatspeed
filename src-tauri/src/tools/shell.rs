@@ -39,6 +39,89 @@ use tokio::process::{Child, Command};
 use tokio::time::Instant;
 use tokio::time::{timeout, Duration};
 
+/// Returns the arguments only for a literal, standalone invocation of the bundled `cs` CLI.
+///
+/// This is intentionally narrower than a general shell parser: the special routing and
+/// approval behavior must never apply to pipelines, redirects, substitutions, globbing,
+/// environment-prefixed commands, or a command that merely happens to be named `cs`.
+pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
+    let mut single = false;
+    let mut double = false;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if (ch.is_control() && ch != '\t')
+            || ('\u{2000}'..='\u{200F}').contains(&ch)
+            || ('\u{202A}'..='\u{202F}').contains(&ch)
+            || ch == '\u{FEFF}'
+        {
+            return None;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && !single {
+            escaped = true;
+            continue;
+        }
+        if ch == '\'' && !double {
+            single = !single;
+        } else if ch == '"' && !single {
+            double = !double;
+        } else if !single && (matches!(ch, '$' | '`') || (!double && matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | ']' | '{' | '}' | '~'))) {
+            return None;
+        }
+    }
+    let mut args = shlex::split(command)?;
+    if args.first().map(String::as_str) != Some("cs") {
+        return None;
+    }
+    args.remove(0);
+    Some(args)
+}
+
+pub(crate) fn builtin_cs_is_read_only(command: &str) -> bool {
+    let Some(args) = builtin_cs_args(command) else { return false; };
+    matches!(args.first().map(String::as_str), Some("help"))
+        || matches!((args.first().map(String::as_str), args.get(1).map(String::as_str)),
+            (Some("skill"), Some("targets" | "list" | "check"))
+            | (Some("mcp"), Some("list" | "status" | "tools"))
+            | (Some("doctor"), None | Some("capabilities")))
+}
+
+fn host_process_command(command: &str) -> Result<Command, ToolError> {
+    if let Some(args) = builtin_cs_args(command) {
+        let executable = std::env::current_exe()
+            .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+        let directory = executable.parent().ok_or_else(|| {
+            ToolError::ExecutionFailed("Application executable has no parent directory".into())
+        })?;
+        let cli = directory.join(if cfg!(windows) { "cs.exe" } else { "cs" });
+        if !cli.is_file() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Bundled CLI not found: {}", cli.display()
+            )));
+        }
+        // Never use PATH or a shell for the trusted CLI, including quoted JSON arguments.
+        let mut process = Command::new(cli);
+        process.args(args);
+        configure_no_window(&mut process);
+        return Ok(process);
+    }
+    let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command);
+    let mut process = if cfg!(windows) {
+        let mut process = Command::new("cmd");
+        process.args(["/C", &host_command]);
+        process
+    } else {
+        let mut process = Command::new("sh");
+        process.args(["-c", &host_command]);
+        process
+    };
+    configure_no_window(&mut process);
+    Ok(process)
+}
+
 const SANDBOX_RUNTIME_STATUS_CACHE_TTL: StdDuration = StdDuration::from_secs(3);
 
 type SandboxRuntimeStatusCache =
@@ -206,6 +289,9 @@ impl ShellPolicyEngine {
     }
 
     pub fn execution_audit_decision(&self, command_str: &str) -> ShellDecision {
+        if builtin_cs_args(command_str).is_some() {
+            return ShellDecision::Allow;
+        }
         self.audit_execution_forms(command_str, 0)
     }
 
@@ -548,6 +634,21 @@ impl ShellPolicyEngine {
     }
 
     pub fn check(&self, command_str: &str, restrict_to_planning: bool) -> ShellDecision {
+        if builtin_cs_args(command_str).is_some() {
+            // Only the explicit read-only capability commands bypass shell approval.
+            // Host routing is not mutation authorization: install/uninstall, MCP lifecycle
+            // changes, reconcile, and unknown commands retain user Allow/Review/Deny rules.
+            // Without a matching rule they require review; the workflow approval layer
+            // decides whether Full mode or another configured policy can approve them.
+            if builtin_cs_is_read_only(command_str) {
+                return ShellDecision::Allow;
+            }
+            if restrict_to_planning {
+                return ShellDecision::Review("CLI mutation requires review in planning mode".into());
+            }
+            return self.match_custom_rule(command_str).unwrap_or_else(||
+                ShellDecision::Review("CLI command requires review (not in allowed list)".into()));
+        }
         // 1. Initial Sanity Check: Block dangerous invisible characters
         for c in command_str.chars() {
             if (c.is_control() && c != '\n' && c != '\r' && c != '\t')
@@ -1530,17 +1631,7 @@ impl ToolDefinition for ShellExecute {
         // but AC-9 requires backend execution to preserve original shell semantics.
 
         // Fallback to standard execution
-        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
-        let mut command = if cfg!(target_os = "windows") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", &host_command]);
-            configure_no_window(&mut command);
-            command
-        } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", &host_command]);
-            command
-        };
+        let mut command = host_process_command(command_str)?;
         if let Some(dir) = &working_dir {
             command.current_dir(dir);
         }
@@ -2576,6 +2667,9 @@ impl ShellExecute {
         tool_call_id: &str,
         command_str: &str,
     ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
+        if builtin_cs_args(command_str).is_some() {
+            return Ok(crate::tools::ShellExecutionResolver::builtin_cs_plan(tool_call_id, command_str));
+        }
         let runtime_status = self.cached_runtime_status().await?;
         let primary_root = self.default_working_dir();
         let mount_context = self.sandbox_mount_context();
@@ -2861,36 +2955,15 @@ impl ShellExecute {
         // `parse_safe_compound_command` remains available for policy/output analysis,
         // but AC-9 requires backend execution to preserve original shell semantics.
 
-        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
-        let mut child = if cfg!(target_os = "windows") {
-            let mut command = Command::new("cmd");
-            command
-                .args(["/C", &host_command])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            configure_no_window(&mut command);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command
-                .spawn()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
-        } else {
-            let mut command = Command::new("sh");
-            command
-                .args(["-c", &host_command])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            configure_process_group(&mut command);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command
-                .spawn()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
-        };
+        let mut command = host_process_command(command_str)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        if let Some(dir) = &working_dir {
+            command.current_dir(dir);
+        }
+        #[cfg(not(target_os = "windows"))]
+        configure_process_group(&mut command);
+        let mut child = command.spawn()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?;
         let mut process_guard = StageProcessGuard::new(&child);
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
@@ -3196,6 +3269,31 @@ mod tests {
     use tempfile::tempdir;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn builtin_cs_only_accepts_literal_standalone_commands() {
+        assert_eq!(builtin_cs_args("cs skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"),
+            Some(vec!["skill".into(), "install".into(), "--source-json".into(), "{\"url\":\"https://example.com/a?b=1\"}".into()]));
+        for command in ["./cs skill list", "cs list && echo ok", "cs list > file", "cs list\necho ok", "cs \"$(echo list)\"", "cs `echo list`", "cs *", "env cs skill list", "cs 'unterminated"] {
+            assert!(builtin_cs_args(command).is_none(), "{command}");
+        }
+    }
+
+    #[test]
+    fn builtin_cs_mutations_preserve_user_approval_rules() {
+        let (_root, _, guard) = setup_test_context();
+        let policy = ShellPolicyEngine::new(guard.clone(), vec![]);
+        assert_eq!(policy.check("cs skill list", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cs mcp status demo", false), ShellDecision::Allow);
+        for command in ["cs skill install --source-json '{}'", "cs skill uninstall demo", "cs mcp install --descriptor-json '{}'", "cs mcp enable demo", "cs doctor reconcile", "cs workflow run --prompt test"] {
+            assert!(matches!(policy.check(command, false), ShellDecision::Review(_)), "{command}");
+        }
+        let policy = ShellPolicyEngine::new(guard, vec![ShellPolicyRule {
+            pattern: "^cs mcp enable demo$".into(), decision: ShellDecision::Allow, description: None,
+        }]);
+        assert_eq!(policy.check("cs mcp enable demo", false), ShellDecision::Allow);
+    }
+
 
     #[test]
     fn explicit_policy_reviews_cannot_be_decision_approved() {
