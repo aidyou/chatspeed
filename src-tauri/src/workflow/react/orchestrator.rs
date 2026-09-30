@@ -895,6 +895,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .available_tools
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            task_tracking_enabled: Some(agent_config.task_tracking_enabled),
             final_audit: agent_config.final_audit,
             final_review_mode: Some(
                 if agent_config.final_audit.unwrap_or(false) {

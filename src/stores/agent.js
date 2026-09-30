@@ -134,6 +134,9 @@ const _transformFromBackend = (backendAgent) => {
     // These are JSON strings, need to parse
     availableTools: ordinaryAvailableTools,
     autoApprove: ordinaryAutoApprove,
+    taskTrackingEnabled: backendAgent.task_tracking_enabled !== undefined
+      ? Boolean(backendAgent.task_tracking_enabled)
+      : true,
 
     // Models are already objects
     planModel: models.plan,
@@ -220,6 +223,7 @@ const _transformToBackend = (frontendAgent) => {
     image_recognition_prompt: frontendAgent.imageRecognitionPrompt?.trim() || '',
     // JSON strings
     available_tools: JSON.stringify(availableTools),
+    task_tracking_enabled: frontendAgent.taskTrackingEnabled !== false,
     auto_approve: JSON.stringify(autoApprove),
     shell_policy: JSON.stringify(frontendAgent.shellPolicy || []),
     sandbox_execution_mode: frontendAgent.sandboxExecutionMode || 'host_only',

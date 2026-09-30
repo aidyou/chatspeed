@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: code-explorer
-builtin_version: 5
+builtin_version: 6
 name: Code Explorer
 description: A read-only code analysis agent for scanning the codebase, understanding architecture, tracing execution paths, and collecting implementation context. It cannot edit files, write files, change Git state, commit, or perform implementation.
 role: child
@@ -31,6 +31,7 @@ config:
     - web_fetch
     - web_search
   final_audit: false
+  task_tracking_enabled: false
   skill_enabled: false
   selected_skills: []
   phase: standard

@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: code-implementer
-builtin_version: 2
+builtin_version: 3
 name: Code Implementer
 description: A write-capable child agent for implementing and validating a clearly scoped coding task. It can edit the shared workspace, run project commands, maintain its own todo list, and return a structured handoff to the parent coding agent.
 role: child
@@ -41,6 +41,7 @@ config:
     - web_search
     - write_file
   final_audit: false
+  task_tracking_enabled: true
   skill_enabled: false
   selected_skills: []
   phase: standard

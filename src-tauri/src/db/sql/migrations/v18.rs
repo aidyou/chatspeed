@@ -1,9 +1,17 @@
 use super::automation_schema::ensure_automation_concurrency_schema;
+use super::capability_schema::ensure_capability_journal;
 use super::common::{column_exists, MigrationDefinition};
 use super::tool_compatibility::ensure_v22_data;
-use super::capability_schema::ensure_capability_journal;
 use crate::db::StoreError;
 use rusqlite::{Connection, Transaction};
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, StoreError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )?)
+}
 
 /// Name of the statement that seeds the preset ChatHub entries.
 ///
@@ -153,20 +161,42 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 /// Re-applies the idempotent schema statements on every startup without ever
 /// running the preset seed again.
 fn ensure_chat_hub_table(conn: &Connection) -> Result<(), StoreError> {
+    let agents_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agents')",
+        [],
+        |row| row.get(0),
+    )?;
+
     for (name, sql) in MIGRATION_SQL {
         if *name == SEED_STATEMENT_NAME {
             continue;
         }
-        if *name == "agents_report_required_sections"
-            && column_exists(conn, "agents", "report_required_sections")?
-        {
-            continue;
+        if *name == "agents_report_required_sections" {
+            if !agents_exists || column_exists(conn, "agents", "report_required_sections")? {
+                continue;
+            }
         }
         conn.execute(sql, [])?;
     }
     ensure_capability_journal(conn)?;
-    ensure_automation_concurrency_schema(conn)?;
-    ensure_v22_data(conn)?;
+    if table_exists(conn, "agents")?
+        && table_exists(conn, "workflow_automations")?
+        && table_exists(conn, "workflow_automation_runs")?
+    {
+        ensure_automation_concurrency_schema(conn)?;
+    }
+    if table_exists(conn, "agents")?
+        && table_exists(conn, "workflows")?
+        && table_exists(conn, "workflow_automations")?
+    {
+        ensure_v22_data(conn)?;
+    }
+    if agents_exists && !column_exists(conn, "agents", "task_tracking_enabled")? {
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN task_tracking_enabled BOOLEAN NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -192,6 +222,8 @@ mod tests {
     }
 
     fn apply_migration(conn: &Connection) {
+        conn.execute("CREATE TABLE agents (id TEXT PRIMARY KEY)", [])
+            .expect("failed to create agents fixture");
         for (_, sql) in MIGRATION_SQL {
             conn.execute(sql, [])
                 .expect("failed to apply migration sql");
@@ -267,5 +299,33 @@ mod tests {
         ensure_chat_hub_table(&conn).expect("ensure should be idempotent");
 
         assert_eq!(count(&conn), 0, "deleted entries must never be restored");
+    }
+
+    #[test]
+    fn ensure_adds_task_tracking_column_with_enabled_default() {
+        let conn = Connection::open_in_memory().expect("failed to open database");
+        conn.execute("CREATE TABLE agents (id TEXT PRIMARY KEY)", [])
+            .expect("failed to create agents fixture");
+
+        ensure_chat_hub_table(&conn).expect("ensure should add task tracking column");
+        let (column_count, default_value): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(dflt_value) FROM pragma_table_info('agents') WHERE name = 'task_tracking_enabled'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed to inspect task tracking column");
+        assert_eq!(column_count, 1);
+        assert_eq!(default_value.as_deref(), Some("1"));
+
+        ensure_chat_hub_table(&conn).expect("ensure should be idempotent");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name = 'task_tracking_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to recheck task tracking column");
+        assert_eq!(count, 1);
     }
 }

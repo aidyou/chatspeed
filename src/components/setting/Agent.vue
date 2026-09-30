@@ -315,6 +315,11 @@
               <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
             </el-select>
           </el-form-item>
+          <el-form-item :label="$t('settings.agent.taskTracking')"
+            prop="taskTrackingEnabled" :label-width="150">
+            <el-switch v-model="agentForm.taskTrackingEnabled" />
+            <div class="form-tip">{{ $t('settings.agent.taskTrackingHint') }}</div>
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools" :label-width="150">
             <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
               multiple filterable collapse-tags :max-collapse-tags="2" collapse-tags-tooltip>
@@ -853,6 +858,7 @@ const defaultFormData = {
   planningPrompt: '',
   imageRecognitionPrompt: '',
   availableTools: [],
+  taskTrackingEnabled: true,
   allowShell: false,
   sandboxExecutionMode: 'host_only',
   sandboxSchemeId: null,

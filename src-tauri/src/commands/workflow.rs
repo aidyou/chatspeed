@@ -1168,6 +1168,7 @@ fn build_agent_config_from_agent(
     config.approval_level = agent.approval_level.clone();
 
     config.available_tools = available_tools;
+    config.task_tracking_enabled = Some(agent.task_tracking_enabled);
 
     if let Some(skills_str) = &agent.selected_skills {
         config.selected_skills = serde_json::from_str(skills_str).ok();
@@ -1382,6 +1383,9 @@ fn merge_inherited_workflow_config(
         (None, _) => None,
     };
     merged.available_tools = available_tools.clone();
+    merged.task_tracking_enabled = inherited_config
+        .task_tracking_enabled
+        .or(merged.task_tracking_enabled);
     let is_tool_allowed = |tool: &str| {
         available_tools.as_ref().map_or(true, |tools| {
             tools.iter().any(|configured| configured == tool)

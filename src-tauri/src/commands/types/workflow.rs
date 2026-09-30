@@ -15,6 +15,7 @@ pub struct AgentPayload {
     pub planning_prompt: Option<String>,
     pub image_recognition_prompt: Option<String>,
     pub available_tools: Option<String>,
+    pub task_tracking_enabled: Option<bool>,
     pub auto_approve: Option<String>,
     pub models: Option<crate::db::agent::AgentModels>,
     pub shell_policy: Option<String>,
@@ -59,6 +60,7 @@ impl From<AgentPayload> for Agent {
             payload.max_contexts,
         );
         agent.personality = payload.personality;
+        agent.task_tracking_enabled = payload.task_tracking_enabled.unwrap_or(true);
         agent.mcp_tool_exposure = payload.mcp_tool_exposure;
         agent.sandbox_execution_mode = payload
             .sandbox_execution_mode

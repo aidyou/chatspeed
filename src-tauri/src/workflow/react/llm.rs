@@ -34,7 +34,7 @@ use crate::workflow::react::prompts::{
     resolve_agent_personality, AUTO_MODE_BASH_TOOL_GUIDANCE, CHILD_AGENT_COMPLETION_PROMPT,
     CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT,
     DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, FINAL_AUDIT_COMPLETION_REPORT_PROMPT,
-    PLANNING_MODE_PROMPT,
+    MINIMAL_CORE_SYSTEM_PROMPT, PLANNING_MODE_PROMPT,
 };
 
 #[cfg(target_os = "windows")]
@@ -1225,6 +1225,8 @@ impl LlmProcessor {
         // 1. Core System Prompt
         if self.agent_config.role.as_deref() == Some("child") {
             stable_system_parts.push(CHILD_AGENT_CORE_SYSTEM_PROMPT.to_string());
+        } else if !self.agent_config.task_tracking_enabled && self.child_agents.is_empty() {
+            stable_system_parts.push(MINIMAL_CORE_SYSTEM_PROMPT.to_string());
         } else {
             stable_system_parts.push(CORE_SYSTEM_PROMPT.to_string());
         }
@@ -2053,6 +2055,7 @@ mod tests {
             planning_prompt: None,
             image_recognition_prompt: None,
             available_tools: None,
+            task_tracking_enabled: true,
             auto_approve: None,
             models: None,
             shell_policy: None,
@@ -2248,6 +2251,23 @@ mod tests {
 
         assert!(!system.contains("<AGENT_PERSONALITY>"));
         assert!(!system.contains("Use a calm, concise working style."));
+    }
+
+    #[test]
+    fn minimal_agent_uses_reduced_core_without_tracking_or_delegation_guidance() {
+        let mut processor = test_llm_processor();
+        processor.agent_config.task_tracking_enabled = false;
+
+        let final_history = processor.inject_prompts(
+            vec![json!({ "role": "user", "content": "Implement the fix" })],
+            &ExecutionPolicy::standard(),
+        );
+        let system = final_history[0]["content"].as_str().unwrap_or_default();
+
+        assert!(system.contains("direct tool-driven coding agent"));
+        assert!(system.contains("call `complete_workflow` exactly once"));
+        assert!(!system.contains("todo_create"));
+        assert!(!system.contains("CHILD_AGENT_DIRECTORY"));
     }
 
     fn message(

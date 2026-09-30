@@ -72,6 +72,8 @@ struct BuiltinAgentConfig {
     auto_approve: Option<Vec<String>>,
     #[serde(default)]
     available_tools: Option<Vec<String>>,
+    #[serde(default = "default_task_tracking_enabled")]
+    task_tracking_enabled: bool,
     #[serde(default)]
     final_audit: Option<bool>,
     #[serde(default)]
@@ -86,6 +88,10 @@ struct BuiltinAgentConfig {
     report_required_sections: Option<Vec<String>>,
     #[serde(default)]
     max_contexts: Option<i32>,
+}
+
+fn default_task_tracking_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -325,6 +331,7 @@ fn definition_to_agent(
         planning_prompt: definition.planning_prompt.clone(),
         image_recognition_prompt: definition.image_recognition_prompt.clone(),
         available_tools: serialize_json(&manifest.config.available_tools),
+        task_tracking_enabled: manifest.config.task_tracking_enabled,
         auto_approve: serialize_json(&manifest.config.auto_approve),
         models: manifest.config.models.clone(),
         shell_policy: serialize_json(&resolve_shell_policy_config(
@@ -391,6 +398,7 @@ fn sync_single_builtin_agent(
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.available_tools = available_tools;
+            updated.task_tracking_enabled = desired.task_tracking_enabled;
             updated.auto_approve = desired.auto_approve;
             updated.report_required_sections = desired.report_required_sections;
             updated.is_system = Some(true);

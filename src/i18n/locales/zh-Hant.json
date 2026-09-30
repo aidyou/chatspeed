@@ -210,6 +210,8 @@
       "authorizedPathsTip": "智能體將只能讀寫這些目錄（及其子目錄）下的檔案。如果不配置，部分檔案操作工具可能無法使用。",
       "autoApprove": "自動批准工具",
       "availableTools": "可用工具",
+      "taskTracking": "任務追蹤工具",
+      "taskTrackingHint": "啟用後註冊 todo_create、todo_list 和 todo_update，用於持久化追蹤執行進度。",
       "basicInfo": "基本資訊",
       "copy": "複製智能體",
       "delete": "刪除智能體",

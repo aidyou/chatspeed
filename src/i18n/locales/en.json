@@ -210,6 +210,8 @@
       "authorizedPathsTip": "The agent will only be able to read and write files in these directories (and their subdirectories).",
       "autoApprove": "Auto Approve Tools",
       "availableTools": "Available Tools",
+      "taskTracking": "Task Tracking Tools",
+      "taskTrackingHint": "Expose todo_create, todo_list, and todo_update for persistent execution tracking.",
       "basicInfo": "Basic Info",
       "copy": "Copy Agent",
       "delete": "Delete Agent",

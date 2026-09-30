@@ -162,6 +162,9 @@ pub struct AgentConfig {
     pub auto_approve_plan: Option<bool>,
     pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
+    /// Whether the workflow should expose the persistent todo task-tracking tools.
+    #[serde(default)]
+    pub task_tracking_enabled: Option<bool>,
     pub final_audit: Option<bool>,
     pub final_review_mode: Option<String>,
     pub skill_enabled: Option<bool>,
@@ -286,6 +289,8 @@ pub struct Agent {
     pub image_recognition_prompt: Option<String>,
     /// JSON array of available tool IDs
     pub available_tools: Option<String>,
+    /// Whether the workflow should expose the persistent todo task-tracking tools.
+    pub task_tracking_enabled: bool,
     /// JSON array of tools that can be executed without user confirmation
     pub auto_approve: Option<String>,
     /// Unified models configuration (JSON string)
@@ -368,6 +373,7 @@ impl Agent {
             planning_prompt,
             image_recognition_prompt,
             available_tools,
+            task_tracking_enabled: true,
             auto_approve,
             models,
             shell_policy,
@@ -485,6 +491,9 @@ impl Agent {
             }
 
             // Merge available_tools (Vec<String> -> JSON string)
+            if let Some(enabled) = config.task_tracking_enabled {
+                self.task_tracking_enabled = enabled;
+            }
             if let Some(tools) = config.available_tools {
                 self.available_tools = serde_json::to_string(&tools).ok();
             }
@@ -516,6 +525,7 @@ impl From<&Row<'_>> for Agent {
             planning_prompt: row.get("planning_prompt").ok(),
             image_recognition_prompt: row.get("image_recognition_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
+            task_tracking_enabled: row.get("task_tracking_enabled").unwrap_or(true),
             auto_approve: row.get("auto_approve").ok(),
             models: row
                 .get::<_, String>("models")
@@ -571,14 +581,14 @@ impl MainStore {
             )?;
             let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
-                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, report_required_sections, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, task_tracking_enabled, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, report_required_sections, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
                 params![
                     agent.id, agent.name, agent.description, agent.personality,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
                     agent.parent_agent_id, agent.sub_agent_role, agent.system_prompt,
                     agent.planning_prompt, agent.image_recognition_prompt, agent.available_tools,
-                    agent.auto_approve, models, agent.shell_policy,
+                    agent.task_tracking_enabled, agent.auto_approve, models, agent.shell_policy,
                     agent.sandbox_execution_mode.as_str(), agent.sandbox_scheme_id,
                     agent.allowed_paths, agent.final_audit, agent.approval_level,
                     agent.report_required_sections, agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
@@ -629,13 +639,13 @@ impl MainStore {
                 "UPDATE agents SET
                     name = ?1, description = ?2, personality = ?3, role = ?4, parent_agent_id = ?5,
                     sub_agent_role = ?6, system_prompt = ?7, planning_prompt = ?8,
-                    image_recognition_prompt = ?9, available_tools = ?10, auto_approve = ?11,
-                    models = ?12, shell_policy = ?13, sandbox_execution_mode = ?14,
-                    sandbox_scheme_id = ?15, allowed_paths = ?16,
-                    final_audit = ?17, approval_level = ?18, report_required_sections = ?19,
-                    skill_enabled = ?20, selected_skills = ?21, mcp_tool_exposure = ?22, phase = ?23,
-                    is_system = ?24, disabled = ?25, version = ?26, sort_index = ?27,
-                    max_contexts = ?28, updated_at = CURRENT_TIMESTAMP WHERE id = ?29",
+                    image_recognition_prompt = ?9, available_tools = ?10, task_tracking_enabled = ?11, auto_approve = ?12,
+                    models = ?13, shell_policy = ?14, sandbox_execution_mode = ?15,
+                    sandbox_scheme_id = ?16, allowed_paths = ?17,
+                    final_audit = ?18, approval_level = ?19, report_required_sections = ?20,
+                    skill_enabled = ?21, selected_skills = ?22, mcp_tool_exposure = ?23, phase = ?24,
+                    is_system = ?25, disabled = ?26, version = ?27, sort_index = ?28,
+                    max_contexts = ?29, updated_at = CURRENT_TIMESTAMP WHERE id = ?30",
                 params![
                     effective_name,
                     agent.description,
@@ -647,6 +657,7 @@ impl MainStore {
                     agent.planning_prompt,
                     agent.image_recognition_prompt,
                     agent.available_tools,
+                    agent.task_tracking_enabled,
                     agent.auto_approve,
                     models,
                     agent.shell_policy,
@@ -894,6 +905,7 @@ mod tests {
             planning_prompt: None,
             image_recognition_prompt: None,
             available_tools: Some("[]".to_string()),
+            task_tracking_enabled: true,
             auto_approve: Some("[]".to_string()),
             models: None,
             shell_policy: Some("[]".to_string()),

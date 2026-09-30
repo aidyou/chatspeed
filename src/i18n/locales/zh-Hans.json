@@ -210,6 +210,8 @@
       "authorizedPathsTip": "智能体将只能读写这些目录（及其子目录）下的文件。如果不配置，部分文件操作工具可能无法使用。",
       "autoApprove": "自动批准工具",
       "availableTools": "可用工具",
+      "taskTracking": "任务跟踪工具",
+      "taskTrackingHint": "启用后注册 todo_create、todo_list 和 todo_update，用于持久化跟踪执行进度。",
       "basicInfo": "基本信息",
       "copy": "复制智能体",
       "delete": "删除智能体",

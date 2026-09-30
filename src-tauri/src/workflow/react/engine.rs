@@ -987,6 +987,7 @@ impl WorkflowExecutor {
                 .available_tools
                 .as_deref()
                 .and_then(|tools| serde_json::from_str(tools).ok()),
+            task_tracking_enabled: Some(self.agent_config.task_tracking_enabled),
             final_audit: self.agent_config.final_audit,
             final_review_mode: Some(
                 if self.agent_config.final_audit.unwrap_or(false) {
@@ -2740,32 +2741,34 @@ impl WorkflowExecutor {
                     .await?;
             }
 
-            // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
-            // if the current executor is NOT itself a sub-agent.
-            if self.subagent_type.is_none() && is_allowed(TOOL_SUB_AGENT_RUN) {
-                let child_agents = self
-                    .context
+            // CRITICAL: Prevent infinite recursion by only allowing multi-agent tools for a
+            // primary executor that has at least one configured child agent.
+            let child_agents = if self.subagent_type.is_none() {
+                self.context
                     .main_store
                     .get_delegatable_child_agents(&self.agent_config.id)
                     .ok()
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let has_child_agents = !child_agents.is_empty();
 
-                if !child_agents.is_empty() {
-                    tm.register_tool(Arc::new(
-                        crate::workflow::react::orchestrator::TaskTool::new(
-                            self.sub_agent_factory.clone(),
-                            self.context.main_store.clone(),
-                            self.gateway.clone(),
-                            self.tsid_generator.clone(),
-                        )
-                        .with_parent_session(self.session_id.clone())
-                        .with_child_agents(child_agents),
-                    ))
-                    .await?;
-                }
+            if has_child_agents && is_allowed(TOOL_SUB_AGENT_RUN) {
+                tm.register_tool(Arc::new(
+                    crate::workflow::react::orchestrator::TaskTool::new(
+                        self.sub_agent_factory.clone(),
+                        self.context.main_store.clone(),
+                        self.gateway.clone(),
+                        self.tsid_generator.clone(),
+                    )
+                    .with_parent_session(self.session_id.clone())
+                    .with_child_agents(child_agents),
+                ))
+                .await?;
             }
 
-            if is_allowed(TOOL_SUB_AGENT_OUTPUT) {
+            if has_child_agents && is_allowed(TOOL_SUB_AGENT_OUTPUT) {
                 tm.register_tool(Arc::new(
                     crate::workflow::react::orchestrator::TaskOutputTool::new(
                         self.session_id.clone(),
@@ -2793,10 +2796,11 @@ impl WorkflowExecutor {
         }
 
         // 6. Todo Manager Tools (Session Persistent)
-        if self
-            .policy
-            .allowed_categories
-            .contains(&ToolCategory::System)
+        if self.agent_config.task_tracking_enabled
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::System)
         {
             if is_allowed(TOOL_TODO_CREATE) {
                 tm.register_tool(Arc::new(TodoCreateTool {
@@ -8036,6 +8040,7 @@ impl WorkflowExecutor {
         &mut self,
         config: &crate::db::agent::AgentConfig,
     ) {
+        self.agent_config.task_tracking_enabled = config.task_tracking_enabled.unwrap_or(true);
         self.agent_config.available_tools = config
             .available_tools
             .as_ref()
