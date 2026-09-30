@@ -1,4 +1,4 @@
-use super::common::{column_exists, MigrationDefinition};
+use super::common::column_exists;
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -48,7 +48,7 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 /// an earlier consolidated-CLI build may already record a version higher than
 /// this one; `run_migrations` then skips the SQL step, and without this hook the
 /// columns and index would be missing while the facade is running.
-fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<(), StoreError> {
+pub(crate) fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<(), StoreError> {
     if !column_exists(conn, "agents", "report_required_sections")? {
         conn.execute(
             "ALTER TABLE agents ADD COLUMN report_required_sections TEXT",
@@ -91,19 +91,11 @@ fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<(), StoreEr
     // version is already at or past this migration (mirrors v20 robustness).
     for (name, sql) in MIGRATION_SQL {
         conn.execute(sql, [])
-            .map_err(|e| StoreError::Query(format!("v21 ensure {name} failed: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("automation schema ensure {name} failed: {e}")))?;
     }
 
     Ok(())
 }
-
-pub const MIGRATION: MigrationDefinition = MigrationDefinition {
-    version: 21,
-    description: "v21 migration: Add automation revision, scheduled dispatch dedupe and mutation receipts",
-    sql: MIGRATION_SQL,
-    ensure: Some(ensure_automation_concurrency_schema),
-    apply: None,
-};
 
 #[cfg(test)]
 mod tests {

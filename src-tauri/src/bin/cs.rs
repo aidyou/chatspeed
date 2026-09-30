@@ -2,9 +2,7 @@
 //!
 //! A pure HTTP/SSE client of the local loopback control plane. It never opens
 //! the database, never starts a workflow runtime or executor and never runs an
-//! input loop. Phase 2F campaign commands additionally link the shared,
-//! dependency-free `chatspeed_lib::campaign` contract (strict parsers and
-//! canonical hashes only) so validation cannot drift from the backend's.
+//! input loop.
 
 // Shared i18n catalogs are embedded into this binary at crate root so human
 // output can be localized without linking any workflow runtime behavior.
@@ -12,14 +10,8 @@ rust_i18n::i18n!("i18n", fallback = "en");
 
 #[path = "cs/args.rs"]
 pub mod args;
-#[path = "cs/artifact.rs"]
-pub mod artifact;
 #[path = "cs/automation.rs"]
 mod automation;
-#[path = "cs/benchmark.rs"]
-mod benchmark;
-#[path = "cs/campaign.rs"]
-mod campaign;
 #[path = "cs/capability.rs"]
 mod capability;
 #[path = "cs/client.rs"]
@@ -28,31 +20,18 @@ mod client;
 mod discovery;
 #[path = "cs/error.rs"]
 mod error;
-#[path = "cs/evaluate.rs"]
-mod evaluate;
-#[path = "cs/experiment.rs"]
-mod experiment;
 #[path = "cs/help.rs"]
 mod help;
 #[path = "cs/mcp.rs"]
 mod mcp;
 #[path = "cs/output.rs"]
 mod output;
-#[path = "cs/promotion.rs"]
-mod promotion;
-#[path = "cs/schedule.rs"]
-mod schedule;
 #[path = "cs/skill.rs"]
 mod skill;
 #[path = "cs/sse.rs"]
 mod sse;
-#[path = "cs/verifier.rs"]
-mod verifier;
 
-use args::{
-    AgentCommand, BenchmarkCommand, CampaignCommand, Cli, Command, DoctorCommand, ExperimentCommand,
-    OutputFormat, PromotionCommand, WorkflowCommand,
-};
+use args::{AgentCommand, Cli, Command, DoctorCommand, OutputFormat, WorkflowCommand};
 use clap::Parser as _;
 use client::ControlPlaneClient;
 use discovery::ControlPlaneDiscovery;
@@ -101,48 +80,8 @@ async fn main_entry() {
 }
 
 async fn run(cli: &Cli) -> Result<(), CliError> {
-    // Offline experiment commands run before discovery loading so they work
-    // without a running main process, discovery file, database or network.
     if let Command::Help = &cli.command {
         return help::run(cli);
-    }
-
-    if let Command::Experiment { command } = &cli.command {
-        match command {
-            ExperimentCommand::Inspect { artifact_dir } => {
-                return experiment::inspect(cli, artifact_dir)
-            }
-            ExperimentCommand::Replay { artifact_dir } => {
-                return experiment::replay(cli, artifact_dir)
-            }
-            ExperimentCommand::Evaluate {
-                artifact_dir,
-                evaluation_dir,
-            } => return evaluate::evaluate(cli, artifact_dir, evaluation_dir),
-            ExperimentCommand::Capture { .. } | ExperimentCommand::Run { .. } => {}
-            // Benchmark verify is offline; benchmark run needs the client.
-            ExperimentCommand::Benchmark {
-                command:
-                    BenchmarkCommand::Verify {
-                        suite,
-                        task,
-                        artifact_dir,
-                        verdict_dir,
-                    },
-            } => return verifier::verify(cli, suite, task, artifact_dir, verdict_dir),
-            ExperimentCommand::Benchmark { .. } => {}
-            // Campaign inspect is offline; create/run/close need the client.
-            ExperimentCommand::Campaign {
-                command: CampaignCommand::Inspect { out },
-            } => return campaign::inspect(cli, out),
-            ExperimentCommand::Campaign { .. } => {}
-            // Promotion inspect is offline; submit/status/reconcile/audit need
-            // the client.
-            ExperimentCommand::Promotion {
-                command: PromotionCommand::Inspect { out },
-            } => return promotion::inspect(cli, out),
-            ExperimentCommand::Promotion { .. } => {}
-        }
     }
 
     let discovery = discovery::load_discovery(cli.discovery_file.as_deref())?;
@@ -165,105 +104,6 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Automation { command } => automation::run(cli, &client, command).await,
         Command::Agent { command } => run_agent_command(cli, &client, command).await,
         Command::Workflow { command } => run_workflow_command(cli, &client, command).await,
-        Command::Experiment { command } => match command {
-            ExperimentCommand::Capture {
-                session_id,
-                artifact_dir,
-            } => experiment::capture(cli, &client, session_id, artifact_dir).await,
-            ExperimentCommand::Run {
-                agent,
-                spec,
-                prompt,
-                prompt_file,
-                follow,
-                artifact_dir,
-            } => {
-                let prompt = args::resolve_prompt(prompt, prompt_file).map_err(CliError::usage)?;
-                experiment::run(
-                    cli,
-                    &client,
-                    agent,
-                    spec,
-                    prompt,
-                    *follow,
-                    artifact_dir.as_deref(),
-                )
-                .await
-            }
-            // Inspect/replay/evaluate are handled above before discovery loading.
-            ExperimentCommand::Inspect { .. }
-            | ExperimentCommand::Replay { .. }
-            | ExperimentCommand::Evaluate { .. } => Ok(()),
-            ExperimentCommand::Benchmark { command } => match command {
-                BenchmarkCommand::Run {
-                    suite,
-                    task,
-                    agent,
-                    model,
-                    artifact_dir,
-                } => {
-                    benchmark::run(
-                        cli,
-                        &client,
-                        suite,
-                        task,
-                        agent,
-                        model.as_deref(),
-                        artifact_dir.as_deref(),
-                    )
-                    .await
-                }
-                // Verify is handled above before discovery loading.
-                BenchmarkCommand::Verify { .. } => Ok(()),
-            },
-            ExperimentCommand::Campaign { command } => match command {
-                CampaignCommand::Inspect { .. } => Ok(()),
-                CampaignCommand::Create { plan, out } => {
-                    campaign::create(cli, &client, plan, out).await
-                }
-                CampaignCommand::Run { out, candidate } => {
-                    campaign::run(cli, &client, out, candidate).await
-                }
-                CampaignCommand::Close { out, reason } => {
-                    campaign::close(cli, &client, out, reason.as_deref().unwrap_or("")).await
-                }
-                CampaignCommand::Schedule {
-                    plan,
-                    profile,
-                    bundle_ref,
-                } => schedule::schedule(cli, &client, plan, profile, bundle_ref.clone()).await,
-                CampaignCommand::Jobs { campaign_id } => {
-                    schedule::jobs(cli, &client, campaign_id).await
-                }
-                CampaignCommand::Job { job_id } => schedule::job(cli, &client, job_id).await,
-                CampaignCommand::Cancel {
-                    campaign_id,
-                    reason,
-                } => {
-                    schedule::cancel(cli, &client, campaign_id, reason.as_deref().unwrap_or(""))
-                        .await
-                }
-                CampaignCommand::Reconcile { campaign_id } => {
-                    schedule::reconcile(cli, &client, campaign_id).await
-                }
-            },
-            ExperimentCommand::Promotion { command } => match command {
-                // Inspect is handled above before discovery loading.
-                PromotionCommand::Inspect { .. } => Ok(()),
-                PromotionCommand::Run { evidence, out } => {
-                    promotion::run(cli, &client, evidence, out).await
-                }
-                PromotionCommand::Status { promotion_id } => {
-                    promotion::status(cli, &client, promotion_id).await
-                }
-                PromotionCommand::Reconcile { promotion_id } => {
-                    promotion::reconcile(cli, &client, promotion_id).await
-                }
-                PromotionCommand::Audit { promotion_id, out } => {
-                    promotion::audit(cli, &client, promotion_id, out).await
-                }
-            },
-        },
     }
 }
 

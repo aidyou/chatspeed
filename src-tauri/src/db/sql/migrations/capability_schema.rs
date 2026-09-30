@@ -1,4 +1,3 @@
-use super::common::MigrationDefinition;
 use crate::db::StoreError;
 use rusqlite::Connection;
 
@@ -106,28 +105,11 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
     ),
 ];
 
-pub const MIGRATION: MigrationDefinition = MigrationDefinition {
-    version: 20,
-    description: "v20 migration: Add Phase 3 capability operation, effect and Skill ownership journal",
-    sql: MIGRATION_SQL,
-    ensure: Some(ensure_capability_journal),
-    apply: None,
-};
-
-/// Re-applies the capability journal schema on every startup.
-///
-/// Earlier CLI experiment migrations were consolidated into an existing step, so
-/// a database created by that build can already record a version *higher* than
-/// this one. `run_migrations` then skips this step entirely, and without this
-/// hook the journal tables would be missing while the capability service is
-/// running — every mutation would fail on a perfectly healthy database.
-///
-/// Every statement is `IF NOT EXISTS`, so re-applying the whole list is a no-op
-/// once the schema exists; nothing is seeded and nothing is rewritten.
-fn ensure_capability_journal(conn: &Connection) -> Result<(), StoreError> {
+/// Re-applies the idempotent capability journal schema on every startup.
+pub(crate) fn ensure_capability_journal(conn: &Connection) -> Result<(), StoreError> {
     for (name, sql) in MIGRATION_SQL {
         conn.execute(sql, [])
-            .map_err(|e| StoreError::Query(format!("v20 ensure {name} failed: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("capability journal ensure {name} failed: {e}")))?;
     }
     Ok(())
 }

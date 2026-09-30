@@ -18,18 +18,13 @@
 
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::commands::workflow::{
-    campaign_cancel_core, campaign_close_core, campaign_create_core, campaign_get_core,
-    campaign_job_core, campaign_jobs_core, campaign_reconcile_core, campaign_run_core,
-    campaign_run_core_with_owner, campaign_schedule_core, create_workflow_core,
-    get_workflow_events_core, get_workflow_snapshot_core, list_workflows_core,
-    promotion_audit_core, promotion_get_core, promotion_reconcile_core, promotion_submit_core,
-    run_experiment_core, workflow_signal_core, workflow_start_core, workflow_stop_core,
+    create_workflow_core, get_workflow_events_core, get_workflow_snapshot_core, list_workflows_core,
+    workflow_signal_core, workflow_start_core, workflow_stop_core,
 };
 use crate::db::{Agent, MainStore, Workflow};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::client::hub::WorkflowRuntimeHub;
 use crate::workflow::react::events::WorkflowEventRecord;
-use crate::workflow::react::experiment_owner::capabilities::OwnedCapabilities;
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::SubAgentFactory;
 
@@ -163,14 +158,6 @@ pub struct WorkflowApplicationService {
     /// here keeps exactly one instance alive for the desktop owner, so the
     /// in-process single-flight locks and the durable journal cannot diverge.
     pub(crate) capability: Arc<crate::capability::CapabilityApplicationService>,
-    /// Run-scoped verified capability leases, keyed by session id.
-    ///
-    /// A lease's resolved secret values must never be persisted (INV-6), so it
-    /// travels in memory only: the durable scheduler registers it for the run it
-    /// just dispatched, the run's executor injects it into that session's tool
-    /// registry, and the terminal/failure path unregisters it again.
-    pub(crate) prepared_leases:
-        std::sync::Mutex<std::collections::HashMap<String, OwnedCapabilities>>,
 }
 
 impl WorkflowApplicationService {
@@ -209,41 +196,12 @@ impl WorkflowApplicationService {
             workflow_manager,
             app_data_dir,
             capability,
-            prepared_leases: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     /// The unique capability service, shared with the Tauri command layer.
     pub fn capability(&self) -> &Arc<crate::capability::CapabilityApplicationService> {
         &self.capability
-    }
-
-    /// Registers the verified capability lease of one dispatched run.
-    ///
-    /// Registering an already-registered session replaces the lease, so a
-    /// re-dispatch of the same job cannot accumulate capabilities.
-    pub(crate) fn register_prepared_lease(&self, session_id: &str, lease: OwnedCapabilities) {
-        if let Ok(mut leases) = self.prepared_leases.lock() {
-            leases.insert(session_id.to_string(), lease);
-        }
-    }
-
-    /// The verified capability lease of one session, when the durable scheduler
-    /// registered one for the run it dispatched.
-    pub(crate) fn prepared_lease(&self, session_id: &str) -> Option<OwnedCapabilities> {
-        self.prepared_leases
-            .lock()
-            .ok()
-            .and_then(|leases| leases.get(session_id).cloned())
-    }
-
-    /// Drops the session's capability lease. Idempotent: a session without a
-    /// lease is left untouched.
-    pub(crate) fn release_prepared_lease(&self, session_id: &str) -> Option<OwnedCapabilities> {
-        self.prepared_leases
-            .lock()
-            .ok()
-            .and_then(|mut leases| leases.remove(session_id))
     }
 
     /// Lists all agents from the same `MainStore` authority the UI uses.
@@ -322,195 +280,5 @@ impl WorkflowApplicationService {
         query: WorkflowEventsQuery,
     ) -> Result<Vec<WorkflowEventRecord>, ApplicationError> {
         get_workflow_events_core(self, query).await
-    }
-
-    /// Runs one budgeted, single-attempt experiment workflow. This is the
-    /// single backend-owned facade for Phase 2C: it validates the strict spec,
-    /// atomically creates the workflow plus its four-level budget scope chain,
-    /// and reuses the existing start kernel. The CLI and HTTP control plane
-    /// both delegate here; neither opens the database nor runs a second
-    /// executor (INV-1).
-    pub async fn experiment_run(
-        &self,
-        request: crate::workflow::react::experiment::ExperimentRunRequest,
-    ) -> Result<crate::workflow::react::experiment::ExperimentRunResult, ApplicationError> {
-        run_experiment_core(self, request).await
-    }
-
-    /// Creates the shared Phase 2F campaign budget scope for one frozen plan.
-    /// The campaign id is derived by the backend from the plan hash; the caller
-    /// never supplies a scope id (INV-2).
-    pub async fn campaign_create(
-        &self,
-        plan: crate::workflow::react::campaign::CampaignPlanV1,
-    ) -> Result<crate::workflow::react::campaign::CampaignCreateResult, ApplicationError> {
-        campaign_create_core(self, plan)
-    }
-
-    /// Reads one campaign projection (frozen scope plus its candidate scopes).
-    pub async fn campaign_get(
-        &self,
-        campaign_id: &str,
-    ) -> Result<crate::workflow::react::campaign::CampaignProjection, ApplicationError> {
-        campaign_get_core(self, campaign_id)
-    }
-
-    /// Creates one run under an existing shared campaign scope, reusing the
-    /// same run kernel and admission path as the 2C experiment facade.
-    pub async fn campaign_run(
-        &self,
-        campaign_id: &str,
-        request: crate::workflow::react::campaign::CampaignRunRequestV1,
-    ) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
-        campaign_run_core(self, campaign_id, request).await
-    }
-
-    /// The durable scheduler's entry point into the same run kernel.
-    ///
-    /// The only difference from [`Self::campaign_run`] is that the created run is
-    /// pinned to the owner-confirmed execution context the scheduler prepared, so
-    /// the run cannot resolve its shell execution environment through the
-    /// host-capable path (AC-3/INV-4).
-    pub(crate) async fn campaign_run_owned(
-        &self,
-        campaign_id: &str,
-        request: crate::workflow::react::campaign::CampaignRunRequestV1,
-        owner: crate::commands::workflow::OwnerExecutionContext,
-    ) -> Result<crate::workflow::react::campaign::CampaignRunResult, ApplicationError> {
-        campaign_run_core_with_owner(self, campaign_id, request, Some(owner)).await
-    }
-
-    /// Closes a campaign scope so no further run or reservation is admitted.
-    pub async fn campaign_close(
-        &self,
-        campaign_id: &str,
-        reason: &str,
-    ) -> Result<crate::workflow::react::campaign::CampaignCloseResult, ApplicationError> {
-        campaign_close_core(self, campaign_id, reason)
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 2G+2H durable campaign schedule surface
-    // -----------------------------------------------------------------------
-    //
-    // Additive to the immediate 2F campaign surface above: the existing
-    // create/run/get/close contract is untouched, and these methods add the
-    // durable queue that survives a restart (AC-2/AC-6). Only a marked
-    // experiment domain accepts them, and every resource (execution profile,
-    // bundle refs, fixture refs) is resolved server-side.
-
-    /// Persists one validated durable schedule request and its ordered jobs.
-    pub fn campaign_schedule(
-        &self,
-        request: crate::workflow::react::experiment_schedule::types::CampaignScheduleRequestV1,
-        idempotency_key: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_schedule::types::CampaignScheduleAcceptedV1,
-        ApplicationError,
-    > {
-        campaign_schedule_core(self, request, idempotency_key)
-    }
-
-    /// The durable job list of one campaign, ordered by candidate order.
-    pub fn campaign_jobs(
-        &self,
-        campaign_id: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_schedule::types::CampaignJobListV1,
-        ApplicationError,
-    > {
-        campaign_jobs_core(self, campaign_id)
-    }
-
-    /// One durable job by its backend-minted id.
-    pub fn campaign_job(
-        &self,
-        job_id: &str,
-    ) -> Result<crate::workflow::react::experiment_schedule::types::CampaignJobV1, ApplicationError>
-    {
-        campaign_job_core(self, job_id)
-    }
-
-    /// Cancels a campaign's pre-dispatch work; dispatched work is reported, not
-    /// cancelled.
-    pub async fn campaign_cancel(
-        &self,
-        campaign_id: &str,
-        reason: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_schedule::types::CampaignCancelV1,
-        ApplicationError,
-    > {
-        campaign_cancel_core(self, campaign_id, reason).await
-    }
-
-    /// Evidence-only reconciliation: classify every non-terminal job from the
-    /// durable state plus the workflow authority, parking the ones whose effect
-    /// cannot be proven absent. It never requeues and never runs the kernel.
-    pub fn campaign_reconcile(
-        &self,
-        campaign_id: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_schedule::types::CampaignReconcileV1,
-        ApplicationError,
-    > {
-        campaign_reconcile_core(self, campaign_id)
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 2I promotion surface
-    // -----------------------------------------------------------------------
-    //
-    // Additive to the durable schedule surface: a promotion is submitted, read,
-    // reconciled and audited through this facade, and every server-side resource
-    // (target registry, execution profile, base repository, domain directories)
-    // is resolved by the backend. The caller supplies opaque references only
-    // (AC-8/INV-2/INV-4).
-
-    /// Persists one validated promotion submission. The promotion id, the request
-    /// hash and the evidence hash are all re-derived server-side.
-    pub fn promotion_submit(
-        &self,
-        request: crate::workflow::react::experiment_promotion::types::PromotionRequestV1,
-        idempotency_key: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
-        ApplicationError,
-    > {
-        promotion_submit_core(self, request, idempotency_key)
-    }
-
-    /// One promotion by its backend-minted id.
-    pub fn promotion_get(
-        &self,
-        promotion_id: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_promotion::types::PromotionProjectionV1,
-        ApplicationError,
-    > {
-        promotion_get_core(self, promotion_id)
-    }
-
-    /// Evidence-only reconciliation: what the durable intents and recorded state
-    /// imply, plus the ordered journal. It performs no effect.
-    pub fn promotion_reconcile(
-        &self,
-        promotion_id: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_promotion::types::PromotionReconcileV1,
-        ApplicationError,
-    > {
-        promotion_reconcile_core(self, promotion_id)
-    }
-
-    /// The offline-verifiable audit bundle of one promotion.
-    pub fn promotion_audit(
-        &self,
-        promotion_id: &str,
-    ) -> Result<
-        crate::workflow::react::experiment_promotion::types::PromotionAuditV1,
-        ApplicationError,
-    > {
-        promotion_audit_core(self, promotion_id)
     }
 }

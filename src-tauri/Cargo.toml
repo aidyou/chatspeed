@@ -34,27 +34,9 @@ doctest    = false
 name = "chatspeed"
 path = "src/main.rs"
 
-# Keep the headless entry point opt-in. Tauri scans `src/bin` independently of
-# Cargo's `autobins` setting, so this explicit feature-gated target prevents the
-# desktop bundle from discovering it while preserving a separate build path.
-[features]
-headless-binary = []
-
-[[bin]]
-name = "chatspeed_headless"
-path = "src/bin/chatspeed_headless.rs"
-required-features = ["headless-binary"]
-
 # `cs` is maintained as the independent workspace package at `cli`.
 # Keeping it out of this desktop package prevents Tauri/runtime dependencies
 # from becoming part of the CLI dependency graph.
-
-# Headless runtime binary, currently excluded from the desktop compile and bundle.
-# The entry point (`src/bin/chatspeed_headless.rs`) and the runtime modules under
-# `src/headless` are kept for later use. Because the package sets `autobins = false`,
-# this target can be built explicitly with `--features headless-binary`.
-# The desktop configuration intentionally does not enable this feature or bundle
-# the resulting binary.
 
 [build-dependencies]
 tauri-build = { version = "2.7.0", features = [] }

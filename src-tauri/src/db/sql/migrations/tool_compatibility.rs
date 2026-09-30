@@ -1,4 +1,3 @@
-use super::common::MigrationDefinition;
 use crate::db::StoreError;
 use rusqlite::{params, Connection, Transaction};
 use serde_json::Value;
@@ -7,8 +6,6 @@ use std::collections::HashSet;
 const LEGACY_GLOB_TOOL: &str = "glob";
 const GREP_TOOL: &str = "grep";
 const MIGRATION_BATCH_SIZE: i64 = 500;
-
-pub const MIGRATION_SQL: &[(&str, &str)] = &[];
 
 /// Rewrites a JSON array of tool ids in place: the legacy `glob` id becomes
 /// `grep`, and duplicate ids are dropped while preserving first-seen order.
@@ -158,7 +155,7 @@ fn ensure_agent_config_columns(conn: &Connection, table: &str) -> Result<(), Sto
 /// The ensure pass runs on every startup for versions in range, so it only
 /// checks tool settings and workflow config columns. Transcript and event
 /// scans live in `apply`, which runs once when a database crosses version 22.
-fn ensure_v22_data(conn: &Connection) -> Result<(), StoreError> {
+pub(crate) fn ensure_v22_data(conn: &Connection) -> Result<(), StoreError> {
     ensure_agent_tool_columns(conn)?;
     ensure_agent_config_columns(conn, "workflows")?;
     ensure_agent_config_columns(conn, "workflow_automations")?;
@@ -392,21 +389,13 @@ fn migrate_workflow_snapshots(tx: &Transaction<'_>) -> Result<(), StoreError> {
 /// One-time pass for a database crossing version 22: it walks the large
 /// `workflow_events` / `workflow_messages` / `workflow_context_messages` /
 /// `workflow_snapshots` tables once and never runs on a normal startup.
-fn apply_v22_data(tx: &Transaction<'_>) -> Result<(), StoreError> {
+pub(crate) fn apply_v22_data(tx: &Transaction<'_>) -> Result<(), StoreError> {
     migrate_workflow_events(tx)?;
     migrate_metadata_column(tx, "workflow_messages")?;
     migrate_metadata_column(tx, "workflow_context_messages")?;
     migrate_workflow_snapshots(tx)?;
     Ok(())
 }
-
-pub const MIGRATION: MigrationDefinition = MigrationDefinition {
-    version: 22,
-    description: "v22 migration: merge the glob tool into grep for persisted tool references",
-    sql: MIGRATION_SQL,
-    ensure: Some(ensure_v22_data),
-    apply: Some(apply_v22_data),
-};
 
 #[cfg(test)]
 mod tests {

@@ -7,7 +7,7 @@
 //! - 3: ChatSpeed not running / discovery missing or stale / connection failure
 //! - 4: authentication failure
 //! - 5: incompatible control-plane protocol version
-//! - 9: experiment budget admission rejection
+//! - 9: budget admission rejection
 
 use std::fmt;
 
@@ -27,7 +27,7 @@ pub enum CliError {
         code: String,
         message: String,
     },
-    /// An experiment was rejected by budget admission (exit 9).
+    /// A run was rejected by budget admission (exit 9).
     Budget(String),
     /// Local I/O or rendering failure (exit 1).
     Io(String),
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn budget_message_is_protocol_safe() {
-        let error = CliError::budget("experiment budget admission rejected (budget_exceeded)");
+        let error = CliError::budget("budget admission rejected (budget_exceeded)");
         assert!(error.to_string().contains("budget_exceeded"));
     }
 }

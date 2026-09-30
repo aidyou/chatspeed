@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v2, v20,
-    v21, v22, v3, v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2,
+    v3, v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -24,10 +24,6 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v16::MIGRATION,
     v17::MIGRATION,
     v18::MIGRATION,
-    v19::MIGRATION,
-    v20::MIGRATION,
-    v21::MIGRATION,
-    v22::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -278,16 +274,6 @@ mod tests {
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
         assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
-        assert!(has_column(
-            &conn,
-            "experiment_campaign_schedules",
-            "profile_hash"
-        ));
-        assert!(has_column(
-            &conn,
-            "experiment_campaign_jobs",
-            "profile_hash"
-        ));
         assert!(table_exists(&conn, "capability_operations"));
         assert!(table_exists(&conn, "capability_operation_effects"));
         assert!(table_exists(&conn, "skill_installations"));
@@ -414,8 +400,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
         build_at_version(&mut conn, 17);
         assert_eq!(get_db_version(&conn).expect("version"), 17);
-        assert!(!table_exists(&conn, "experiment_campaign_jobs"));
-        assert!(!table_exists(&conn, "experiment_domain"));
+        assert!(!table_exists(&conn, "capability_operations"));
 
         conn.execute(
             "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
@@ -440,66 +425,36 @@ mod tests {
             })
             .expect("existing row survives");
         assert_eq!(name, "kept");
-        for table in [
-            "experiment_domain",
-            "experiment_domain_lease",
-            "experiment_campaign_schedules",
-            "experiment_campaign_jobs",
-            "experiment_job_journal",
-            "experiment_job_bundles",
-            "experiment_job_artifacts",
-            "experiment_promotions",
-            "experiment_promotion_journal",
-            "experiment_promotion_canary_results",
-        ] {
-            assert!(
-                table_exists(&conn, table),
-                "missing consolidated v18 table {table}"
-            );
-        }
-        assert!(has_column(
-            &conn,
-            "experiment_campaign_schedules",
-            "profile_hash"
-        ));
-        assert!(has_column(
-            &conn,
-            "experiment_campaign_jobs",
-            "profile_hash"
-        ));
-        let markers: i64 = conn
-            .query_row("SELECT COUNT(1) FROM experiment_domain", [], |row| {
-                row.get(0)
-            })
-            .expect("count markers");
-        assert_eq!(markers, 0, "an upgraded database is never auto-marked");
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
     }
 
-    /// The v20 capability journal is additive: a v19 database gains the new
-    /// tables without losing or rewriting existing rows.
+    /// The v18 schema includes the capability journal for older databases.
+    /// Existing rows survive an incremental upgrade.
     #[test]
-    fn v19_database_upgrades_to_v20_without_touching_existing_rows() {
+    fn pre_v18_database_upgrades_without_touching_existing_rows() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
-        build_at_version(&mut conn, 19);
-        assert_eq!(get_db_version(&conn).expect("version"), 19);
+        build_at_version(&mut conn, 17);
+        assert_eq!(get_db_version(&conn).expect("version"), 17);
         assert!(!table_exists(&conn, "capability_operations"));
 
         conn.execute(
             "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
-             VALUES ('agent-v20', 'kept', 'prompt', '0', '0')",
+             VALUES ('agent-v19', 'kept', 'prompt', '0', '0')",
             [],
         )
         .expect("seed an existing row");
 
-        run_migrations(&mut conn).expect("v19 -> v20 should succeed");
+        run_migrations(&mut conn).expect("v17 -> v18 should succeed");
 
         assert_eq!(
             get_db_version(&conn).expect("version"),
             latest_migration_version(),
-            "v19 upgrades to the current head"
+            "v18 upgrades to the current head"
         );
         let name: String = conn
-            .query_row("SELECT name FROM agents WHERE id = 'agent-v20'", [], |row| {
+            .query_row("SELECT name FROM agents WHERE id = 'agent-v19'", [], |row| {
                 row.get(0)
             })
             .expect("existing row survives");
@@ -515,16 +470,16 @@ mod tests {
     /// A database that records a version *ahead* of the newest migration still
     /// gains the capability journal.
     ///
-    /// The CLI experiment migrations were consolidated, so a database created by
-    /// an older build can already record a higher number than anything this tree
-    /// knows about. `run_migrations` then skips every step, so an additive
+    /// The database can already record a version *ahead* of the newest
+    /// migration this tree knows about, for example when it was created by an
+    /// older build. `run_migrations` then skips every step, so an additive
     /// migration that only ships `sql` would silently never run and the
     /// capability service would fail on an otherwise healthy database. The
     /// idempotent `ensure` hook is what makes that case work.
     #[test]
     fn a_database_recorded_ahead_of_the_latest_version_still_gets_the_capability_journal() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
-        build_at_version(&mut conn, 19);
+        build_at_version(&mut conn, 17);
         let ahead = latest_migration_version() + 1;
         conn.execute("INSERT INTO db_version (version) VALUES (?1)", [ahead])
             .expect("record a consolidated ahead version");

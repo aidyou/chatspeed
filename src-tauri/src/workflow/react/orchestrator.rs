@@ -920,11 +920,6 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .report_required_sections
                 .as_deref()
                 .and_then(|sections| serde_json::from_str(sections).ok()),
-            // prompt surface: a candidate may only change the top-level
-            // Agent behavior, never the child agent prompt directory.
-            experiment_agent_prompt_ref: None,
-            experiment_agent_prompt_hash: None,
-            experiment_prompt_catalog_digest: None,
         };
 
         let runtime = {
@@ -1014,9 +1009,6 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     self.chat_state.tool_manager.clone(),
                     auto_compress_enabled,
                     policy,
-                    // A delegated sub-agent never carries the parent run's
-                    // run-scoped capability bundle.
-                    None,
                 ),
             ))
         } else {
@@ -1043,9 +1035,6 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                     self.chat_state.tool_manager.clone(),
                     auto_compress_enabled,
                     policy,
-                    // A delegated sub-agent never carries the parent run's
-                    // run-scoped capability bundle.
-                    None,
                 ),
             ))
         };

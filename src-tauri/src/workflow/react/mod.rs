@@ -1,6 +1,5 @@
 pub mod agents_md;
 pub mod application;
-pub mod campaign;
 pub mod child_tasks;
 #[cfg(test)]
 pub mod child_tasks_tests;
@@ -13,10 +12,6 @@ pub mod dispatcher;
 pub mod engine;
 pub mod error;
 pub mod events;
-pub mod experiment;
-pub mod experiment_owner;
-pub mod experiment_promotion;
-pub mod experiment_schedule;
 pub mod file_preview;
 pub mod gateway;
 pub mod goal_tracker;

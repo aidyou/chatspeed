@@ -138,7 +138,7 @@ impl ControlPlaneClient {
                 // exits 9 so callers can branch without parsing prose.
                 if is_budget_code(&code) {
                     Err(CliError::budget(format!(
-                        "experiment budget admission rejected ({}): {}",
+                        "budget admission rejected ({}): {}",
                         code, message
                     )))
                 } else {

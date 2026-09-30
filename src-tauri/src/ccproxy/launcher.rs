@@ -30,22 +30,11 @@ const MAX_ATTEMPTS: u32 = 5;
 
 /// A running loopback chat-completion proxy.
 pub struct CcproxyServer {
-    addr: SocketAddr,
     shutdown: broadcast::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl CcproxyServer {
-    /// The address the proxy is actually listening on.
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    /// The loopback base URL published to the in-process AI client.
-    pub fn base_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.addr.port())
-    }
-
     /// Stops the listener and waits for it to close.
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(());
@@ -103,7 +92,6 @@ pub async fn start(
                     }
                 });
                 return Ok(CcproxyServer {
-                    addr,
                     shutdown,
                     task,
                 });

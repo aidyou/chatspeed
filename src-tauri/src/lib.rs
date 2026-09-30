@@ -1,76 +1,10 @@
 mod ai;
-/// The typed budget/admission domain is a crate-level contract: the
-/// persistence layer, ccproxy admission gate, workflow tool gate and the
-/// future experiment service (2C/2F) all consume it.
-pub mod budget;
 /// The Phase 3 capability-management contract: one transport-neutral
 /// application service owns every Agent Skill and MCP mutation, backed by the
 /// shared desktop `MainStore` journal. It never opens its own database
 /// connection and never owns a runtime, so it stays inside the single desktop
 /// owner (INV-1) while the Tauri, HTTP and CLI adapters all delegate to it.
 pub mod capability;
-/// The Phase 2F campaign/candidate contract, re-exported narrowly so the `cs`
-/// CLI binary can reuse exactly one strict parser, one canonical-hash
-/// implementation and one checked-in prompt catalog instead of duplicating
-/// them (a duplicated validator would silently drift from the backend's).
-///
-/// The exposed items are pure contract types and pure functions: they never
-/// reach the database, the workflow runtime, an executor or the control plane.
-/// The CLI therefore still never opens SQLite or starts a runtime (INV-1);
-/// only build-time linkage grows.
-pub mod campaign {
-    pub use crate::workflow::react::campaign::*;
-}
-/// The Phase 2G+2H durable-schedule and benchmark-fixture contract, re-exported
-/// narrowly for the same reason as [`campaign`]: the `cs` CLI and the backend
-/// scheduler must share exactly one strict fixture resolver and one job-state
-/// machine, or a durable request could be accepted by one and rejected by the
-/// other.
-///
-/// Only pure contract items are exposed. The CLI still never opens SQLite,
-/// starts a scheduler, creates an owner or runs an executor (INV-1); the
-/// re-export is compile-time linkage of pure functions and value types only.
-pub mod experiment_schedule {
-    pub use crate::workflow::react::experiment_schedule::fixture;
-    pub use crate::workflow::react::experiment_schedule::scheduler;
-    pub use crate::workflow::react::experiment_schedule::types;
-}
-/// The Phase 2G isolated execution-owner contract, re-exported narrowly for the
-/// same reason as [`campaign`]: the `chatspeed-headless` binary, the scheduler
-/// (U-8) and the Harbor adapter must all drive exactly one owner contract, one
-/// patch/publication implementation and one bundle saga.
-///
-/// Only the owner contract is exposed. The owners never open the database and
-/// never run a workflow; they own a workspace, a container or a task sandbox.
-pub mod experiment_owner {
-    pub use crate::workflow::react::experiment_owner::bundle;
-    pub use crate::workflow::react::experiment_owner::capabilities;
-    pub use crate::workflow::react::experiment_owner::docker;
-    pub use crate::workflow::react::experiment_owner::harbor_task;
-    pub use crate::workflow::react::experiment_owner::patch;
-    /// The Phase 2I promotion checkpoint owner: the only component that mutates
-    /// a persistent Git ref. It is a separate contract from the run-scoped
-    /// [`ExecutionOwner`] precisely so the ordinary scheduler can never obtain
-    /// branch-mutation capability.
-    pub use crate::workflow::react::experiment_owner::promotion;
-    pub use crate::workflow::react::experiment_owner::worktree;
-}
-/// The Phase 2I promotion contract, re-exported narrowly for the same reason as
-/// [`campaign`]: the `cs` CLI must build exactly the same strict evidence
-/// projection, the same canonical evidence hash and the same promotion id the
-/// backend will re-derive, or a submission could be accepted by one and
-/// rejected by the other.
-///
-/// Only pure contract items are exposed: the promotion documents, the FSM, the
-/// target/policy validators and the gate evaluation. The CLI still never opens
-/// SQLite, starts a scheduler, resolves a Git repository or runs a container
-/// (INV-2); the re-export is compile-time linkage of pure functions and value
-/// types only.
-pub mod experiment_promotion {
-    pub use crate::workflow::react::experiment_promotion::binding;
-    pub use crate::workflow::react::experiment_promotion::policy;
-    pub use crate::workflow::react::experiment_promotion::types;
-}
 mod builtin_agents;
 mod ccproxy;
 pub mod chat_hub;
@@ -81,10 +15,6 @@ mod environment;
 pub mod error;
 #[cfg(target_os = "linux")]
 mod frame_edges;
-/// The Phase 2H headless runtime: experiment-domain layout/guard and the
-/// durable schedule store facade. Public so the `chatspeed-headless` binary and
-/// integration tests can drive the same authority the desktop app uses.
-pub mod headless;
 mod http;
 mod libs;
 mod logger;
@@ -823,21 +753,6 @@ pub async fn run() -> crate::error::Result<()> {
             // and frontend code may call commands that require MainStore state before setup completes.
             // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
             app.manage(main_store.clone());
-
-            // Best-effort budget ledger recovery at startup: reservations
-            // whose lease expired while still reserved are conservatively
-            // frozen as unknown; recovery never releases or replays (INV-5).
-            {
-                let store_for_recovery = main_store.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(error) =
-                        crate::budget::recovery::recover_expired_reservations(&store_for_recovery)
-                            .await
-                    {
-                        log::warn!("[Budget][recovery] startup recovery failed: {}", error);
-                    }
-                });
-            }
 
             // Load the Models.dev catalog off the startup critical path: it is only used by
             // the model settings UI, so parsing the multi-MB snapshot must not block setup.

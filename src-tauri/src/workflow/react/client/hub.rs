@@ -73,8 +73,10 @@ impl WorkflowEventTransport for TauriGateway {
 /// observation path for a headless process, so a payload is never written to a
 /// transcript, a log line or a file (INV-6). Delivery therefore always
 /// succeeds, and there is never per-session transport state to drop.
+#[cfg(test)]
 pub struct NoWindowTransport;
 
+#[cfg(test)]
 #[async_trait]
 impl WorkflowEventTransport for NoWindowTransport {
     async fn send(

@@ -77,10 +77,6 @@ impl AutomationError {
         Self::new(code::CONFIRMATION_REQUIRED, message)
     }
 
-    pub fn needs_reconcile(message: impl Into<String>) -> Self {
-        Self::new(code::NEEDS_RECONCILE, message)
-    }
-
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(code::INTERNAL, message)
     }
