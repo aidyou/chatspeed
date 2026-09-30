@@ -1273,8 +1273,24 @@ mod tests {
     async fn supported_gemini_model_serializes_normalized_thinking_level() {
         let client = reqwest::Client::new();
         let mut headers = reqwest::header::HeaderMap::new();
+        let model = "gemini-3.1-flash-lite-image";
+        let provider_url =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent";
+        // Thinking levels are normalized against the catalog transport of the provider, so the
+        // request context has to carry the resolved adapter just like the proxy pipeline does.
+        let (thinking_adapter, _) = crate::ccproxy::helper::resolve_catalog_adapter(
+            model,
+            "https://generativelanguage.googleapis.com",
+            &crate::ccproxy::ChatProtocol::Gemini,
+            None,
+        );
+        assert_eq!(
+            thinking_adapter,
+            Some(crate::ai::model_catalog::ThinkingAdapter::Gemini)
+        );
+
         let mut unified_request = UnifiedRequest {
-            model: "gemini-3.1-flash-lite-image".to_string(),
+            model: model.to_string(),
             messages: vec![UnifiedMessage {
                 role: UnifiedRole::User,
                 content: vec![UnifiedContentBlock::Text {
@@ -1295,9 +1311,9 @@ mod tests {
                 &client,
                 &mut unified_request,
                 "test-key",
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent",
-                "gemini-3.1-flash-lite-image",
-                &crate::ccproxy::adapter::backend::BackendRequestContext::default(),
+                provider_url,
+                model,
+                &crate::ccproxy::adapter::backend::BackendRequestContext { thinking_adapter },
                 false,
                 &mut headers,
             )

@@ -123,7 +123,70 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
-console.log('workflow UI contract tests passed')
+test('workflow terminal model errors use structured localized alert titles', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling',[\s\S]*?llm_retry_exhausted: 'workflow\.errorTypes\.llmRetryExhausted'[\s\S]*?\}/
+  )
+  assert.match(messageList, /const rawType = String\(message\?\.metadata\?\.error_type \|\| message\?\.errorType \|\| ''\)/)
+  const errorContentStart = messageList.indexOf('const getErrorAlertContent = message =>')
+  const errorContentEnd = messageList.indexOf(
+    'const getExplorationBatchSummary = message =>',
+    errorContentStart
+  )
+  const errorContentSource = messageList.slice(errorContentStart, errorContentEnd)
+  assert.match(
+    errorContentSource,
+    /normalizeWorkflowErrorAlertContent\(message\?\.message\)[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
+  )
+  assert.doesNotMatch(errorContentSource, /props\.getParsedMessage\(message\)/)
+  assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.equal(typeof locale.workflow.errorTypes.llmAuthentication, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmBilling, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmRetryExhausted, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.retryAttemptsExhausted, 'string')
+    assert.ok(locale.workflow.errorTypes.llmAuthentication.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmRetryExhausted.length > 0)
+    assert.ok(locale.workflow.errorTypes.retryAttemptsExhausted.length > 0)
+  }
+})
+
+test('workflow uses a persistent navigation rail beside the collapsible task list', async () => {
+  const [workflowView, sidebar] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSidebar.vue', 'utf8')
+  ])
+
+  assert.match(workflowView, /<nav v-if="!sidebarCollapsed" class="workflow-side-rail"[^>]*workflow\.sidebarNavigation/)
+  assert.match(workflowView, /<el-tooltip :content="\$t\('workflow\.taskTab'\)"[^>]*>\s*<button\s+class="workflow-side-rail__item"/)
+  assert.match(workflowView, /@click="openWorkflowSidebarTab\('history'\)"/)
+  assert.match(workflowView, /@click="openWorkflowSidebarTab\('automation'\)"/)
+  assert.match(workflowView, /<WorkflowSidebar\s+:workflows="filteredWorkflows"[\s\S]*?:navigation-tab="workflowSidebarNavigationTab"/)
+  assert.match(workflowView, /v-model:navigation-tab="workflowSidebarNavigationTab"/)
+  assert.match(sidebar, /<el-tab-pane\s+v-if="isHistoryTabVisible"[\s\S]*:label="\$t\('workflow\.taskTab'\)"[\s\S]*name="history">/)
+  assert.match(sidebar, /<el-tab-pane\s+v-if="isAutomationTabVisible"[\s\S]*:label="\$t\('workflow\.automation\.title'\)"[\s\S]*name="automation">/)
+  assert.match(sidebar, /const compactSidebarTab = computed\(\(\) =>[\s\S]*props\.navigationTab/)
+  assert.match(sidebar, /const isHistoryTabVisible = computed\(\(\) => props\.navigationTab === 'history'/)
+  assert.match(sidebar, /const isAutomationTabVisible = computed\(\(\) => props\.navigationTab === 'automation'/)
+  assert.doesNotMatch(workflowView, /<WorkflowSidebar\s+v-if="!sidebarCollapsed"/)
+  // Collapsed rail keeps the original compact structure: tab buttons, workflow list and terminal entry.
+  assert.match(sidebar, /class="compact-sidebar-tabs"[\s\S]*class="compact-sidebar-tab"[\s\S]*selectCompactSidebarTab\('history'\)[\s\S]*selectCompactSidebarTab\('automation'\)/)
+  assert.match(sidebar, /emit\('update:navigationTab', tab\)/)
+  assert.match(sidebar, /class="workflow-terminal-entry compact-terminal-entry"[\s\S]*@click="\$emit\('open-terminal'\)"/)
+  assert.match(workflowView, /@open-terminal="terminal\.open"/)
+  assert.doesNotMatch(workflowView, /workflow-sidebar-collapsed-terminal/)
+  assert.match(sidebar, /@reorder-paths="\$emit\('reorder-paths-from-tree', \$event\)"/)
+})
 
 test('authorized root drag sorting stays on the existing structured allowed-path update path', async () => {
   const [fileTree, sidebar, workflowView, workflowPaths, workflowStore, workflowCommand, pathGuard, engine] =
@@ -340,14 +403,16 @@ test('MCP tool calls show their arguments and format only valid JSON results', a
 })
 
 test('ask-user responses stay hidden from the transcript and render on their source tool card', async () => {
-  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine, workflowStore] =
+  const [workflowView, workflowCore, workflowMessages, messageList, workflowEngine, workflowStore, sessionPane, sessionMessages] =
     await Promise.all([
       readFile('src/views/Workflow.vue', 'utf8'),
       readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
       readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
       readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
       readFile('src-tauri/src/workflow/react/engine.rs', 'utf8'),
-      readFile('src/stores/workflow.js', 'utf8')
+      readFile('src/stores/workflow.js', 'utf8'),
+      readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
+      readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8')
     ])
 
   assert.match(
@@ -359,6 +424,26 @@ test('ask-user responses stay hidden from the transcript and render on their sou
     workflowCore,
     /if \(options\.metadata\) \{\s*signalPayload\.metadata = options\.metadata/,
     'hidden-message metadata must continue through the user-message signal sent to the runtime'
+  )
+  assert.match(
+    sessionPane,
+    /const submitAskUserResponse = response => \{[\s\S]*?sessionId: props\.sessionId,[\s\S]*?waitReason: resolvedWaitReason\.value,[\s\S]*?hasLiveSession: childWorkflow\.hasLiveSession === true/
+  )
+  assert.match(
+    workflowView,
+    /@submit-ask-user="submitAskUserResponse"[\s\S]*?const submitAskUserResponse = async response => \{[\s\S]*?response\?\.target/
+  )
+  assert.match(
+    workflowCore,
+    /const showSubAgentAskUserNotification = \(sessionId, payload = \{\}\) =>[\s\S]*?parentSessionId !== sessionId[\s\S]*?kind: 'ask_user'[\s\S]*?targetSessionId: subAgentId/
+  )
+  assert.match(
+    workflowCore,
+    /payload\.wait_reason === WORKFLOW_WAIT_REASONS\.USER_INPUT[\s\S]*?showSubAgentAskUserNotification\(sessionId, payload\)/
+  )
+  assert.match(
+    sessionMessages,
+    /hasLiveSession: snapshot\.hasLiveSession === true/
   )
   const awaitingUserMetadataWrites = workflowEngine.match(
     /WorkflowSignal::UserMessage \{\s*content, metadata, \.\.\s*\}[\s\S]*?canonicalize_ask_user_response_metadata\(metadata\)[\s\S]*?add_message_and_notify_internal\([\s\S]*?metadata,\s*\)/g
@@ -533,6 +618,33 @@ test('auto-compression starts disabled until explicitly enabled', async () => {
   assert.match(workflowCore, /autoCompressEnabled\.value = config\.autoCompress \?\? false/)
 })
 
+test('final audit is consumed only after successful workflow completion', async () => {
+  const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+  const activeStateHandlerStart = workflowCore.indexOf("if (payload.type === 'state')")
+  const activeStateHandlerEnd = workflowCore.indexOf("} else if (payload.type === 'chunk')", activeStateHandlerStart)
+  const activeStateHandler = workflowCore.slice(activeStateHandlerStart, activeStateHandlerEnd)
+
+  assert.match(
+    workflowCore,
+    /const consumeFinalAuditMode = async \(sessionId\) =>[\s\S]*?update_workflow_final_audit[\s\S]*?finalAudit: false/
+  )
+  assert.match(
+    activeStateHandler,
+    /if \(\(payload\.state \|\| ''\)\.toLowerCase\(\) === WORKFLOW_STATUSES\.COMPLETED\) \{[\s\S]*?consumeFinalAuditMode\(sessionId\)/,
+    'the active workflow must consume final audit only after completed'
+  )
+  assert.equal(
+    (activeStateHandler.match(/consumeFinalAuditMode\(sessionId\)/g) || []).length,
+    1,
+    'the active workflow must have one final-audit consumption path'
+  )
+  assert.match(
+    activeStateHandler,
+    /if \(\(payload\.state \|\| ''\)\.toLowerCase\(\) === WORKFLOW_STATUSES\.COMPLETED\) \{[\s\S]*?consumeFinalAuditMode\(sessionId\)/,
+    'failed, cancelled, and error terminal states must keep final audit enabled'
+  )
+})
+
 test('execution style popover uses a DOM reference and preserves Agent-scoped choices', async () => {
   const [inputArea, workflowView, workflowCore] = await Promise.all([
     readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
@@ -590,6 +702,16 @@ test('workflow composer keeps Tab as four spaces outside suggestion selection', 
   )
 })
 
+test('sending a workflow message forces the message list back to the latest content', async () => {
+  const workflowView = await readFile('src/views/Workflow.vue', 'utf8')
+
+  assert.match(
+    workflowView,
+    /inputComposable\.onSendMessage\.value = async \(\) => \{[\s\S]*?scrollMessageListToBottom\(true\)[\s\S]*?await coreOnSendMessage/,
+    'an explicit user send must leave history-reading mode before message rendering starts'
+  )
+})
+
 test('applied compression clears the indicator and updates context usage', async () => {
   const workflowCore = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
 
@@ -610,9 +732,44 @@ test('message resize observer is hoisted for immediate watchers', async () => {
   )
   assert.match(
     messageList,
-    /watch\(\n  \[visibleMessages, collapsedMessages\][\s\S]*?syncMessageContentResizeObserver\(\)/,
-    'the immediate message watcher must call the hoisted resize observer helper'
+    /const messageTailLayoutState = computed\(\(\) => \[[\s\S]*?props\.isCompressing[\s\S]*?props\.compressionMessage[\s\S]*?props\.queuedMessages[\s\S]*?\]\)/,
+    'tail status blocks must participate in message layout tracking'
   )
+  assert.match(
+    messageList,
+    /watch\(\n  \[visibleMessages, collapsedMessages, messageTailLayoutState\][\s\S]*?scrollController\.beforeContentChange\(\)[\s\S]*?nextTick\(\(\) => \{[\s\S]*?syncMessageContentResizeObserver\(\)[\s\S]*?scrollController\.requestContentChange\(\)/,
+    'message, queue, and compression changes must share the centralized layout reconciliation path'
+  )
+})
+
+test('compression indicator counts elapsed seconds while it is running', async () => {
+  const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.match(
+    messageList,
+    /<span class="compression-text">\{\{ compressionStatusText \}\}<\/span>/,
+    'the compression indicator must render the timed status text'
+  )
+  assert.match(
+    messageList,
+    /watch\(\n  \(\) => props\.isCompressing,[\s\S]*?stopCompressionTimer\(\)[\s\S]*?setInterval\(\(\) => \{\n      compressionNow\.value = Date\.now\(\)\n    \}, 1000\)/,
+    'the elapsed counter must restart with the backend compression status and tick once per second'
+  )
+  assert.match(
+    messageList,
+    /onBeforeUnmount\(stopCompressionTimer\)/,
+    'the elapsed counter must stop when the message list unmounts'
+  )
+
+  for (const locale of [enLocale, zhHansLocale, zhHantLocale]) {
+    assert.match(locale.workflow.compressionElapsed, /\{text\}/)
+    assert.match(locale.workflow.compressionElapsed, /\{seconds\}/)
+  }
 })
 
 test('off-bottom readers preserve a message window anchor while new messages render', async () => {
@@ -667,6 +824,18 @@ test('switching workflows clears an unobserved compression indicator from the pr
     /if \(previousWorkflowId && previousWorkflowId !== id\) \{\s*setCompressionStatus\(previousWorkflowId, false, ''\)[\s\S]*?currentSessionId\.value = id/,
     'switching away must discard compression UI state whose completion event is no longer observed'
   )
+})
+
+test('workflow completion tool is presented as a finished state', async () => {
+  const [enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
+    readFile('src/i18n/locales/en.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    readFile('src/i18n/locales/zh-Hant.json', 'utf8').then(JSON.parse)
+  ])
+
+  assert.equal(enLocale.workflow.finishTask, 'Task finished')
+  assert.equal(zhHansLocale.workflow.finishTask, '任务完成')
+  assert.equal(zhHantLocale.workflow.finishTask, '任務完成')
 })
 
 test('context snapshots render the v2 handoff contract without losing legacy snapshot support', async () => {
@@ -753,7 +922,7 @@ test('message history loading renders an Element Plus skeleton from the store lo
 
   assert.match(messageList, /v-if="props\.isLoading" class="message-skeleton"/)
   assert.match(messageList, /<el-skeleton animated>/)
-  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages"/)
+  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
   assert.match(
     workflowStore,
     /const requestRevision = \+\+messageLoadRevision;\s*isLoadingMessages\.value = true;/
@@ -763,6 +932,20 @@ test('message history loading renders an Element Plus skeleton from the store lo
     /messages\.value = appendMissingPendingToolMessages\([\s\S]*?isLoadingMessages\.value = false;/
   )
   assert.match(styles, /\.message-skeleton/)
+})
+
+test('workflow startup uses the primary message skeleton without covering the window', async () => {
+  const [workflowView, workflowSessionPane] = await Promise.all([
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8')
+  ])
+
+  assert.match(workflowView, /const isInitializing = ref\(true\)/)
+  assert.match(workflowView, /agent-role="primary"\s+:is-initializing="isInitializing"/)
+  assert.match(workflowView, /isInitializing\.value = false/)
+  assert.doesNotMatch(workflowView, /workflow-startup-overlay/)
+  assert.match(workflowSessionPane, /isInitializing: \{ type: Boolean, default: false \}/)
+  assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
 })
 
 test('tool duration badges use structured backend metadata and preserve the requested exclusions', async () => {
@@ -791,6 +974,17 @@ test('persisted awaiting-user status restores answer controls when an older snap
   assert.match(
     workflowStore,
     /const persistedWaitReason =[\s\S]*?waitReason\.value =[\s\S]*?persistedWaitReason \|\|[\s\S]*?status === WORKFLOW_STATUSES\.AWAITING_USER[\s\S]*?WORKFLOW_WAIT_REASONS\.USER_INPUT/
+  )
+})
+
+test('workflow markdown links use the default browser opener', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+  const markdownInstances = messageList.match(/<MarkdownSimple\b[^>]*>/g) || []
+
+  assert.ok(markdownInstances.length > 0, 'the workflow message list must render MarkdownSimple content')
+  assert.ok(
+    markdownInstances.every(instance => /\bv-link\b/.test(instance)),
+    'every workflow MarkdownSimple instance must open links through the default browser'
   )
 })
 

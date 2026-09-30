@@ -74,6 +74,8 @@ impl ApiConfig {
 pub struct ApiResponse {
     /// The response content
     pub content: String,
+    /// The unmodified response body for trusted internal consumers
+    pub raw_error_body: Option<String>,
     /// Indicates if this is an error message
     pub is_error: bool,
     /// The HTTP status code if available
@@ -105,6 +107,7 @@ impl ApiResponse {
     pub fn success(content: String) -> Self {
         Self {
             content,
+            raw_error_body: None,
             is_error: false,
             status_code: 200,
             raw_response: None,
@@ -116,6 +119,7 @@ impl ApiResponse {
         let status_code = response.status().as_u16();
         Self {
             content: String::new(),
+            raw_error_body: None,
             is_error: false,
             status_code,
             raw_response: Some(response),
@@ -127,6 +131,7 @@ impl ApiResponse {
         let status_code = error.status_code.unwrap_or(500);
         Self {
             content: json!(error).to_string(),
+            raw_error_body: None,
             is_error: true,
             status_code,
             raw_response: None,

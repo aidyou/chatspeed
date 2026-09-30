@@ -59,6 +59,7 @@ pub enum RuntimeObservationType {
     TurnBlockedPostponed,
     SkillActivated,
     FileContextAttached,
+    TerminalError,
     GenericReminder,
 }
 
@@ -262,6 +263,10 @@ fn default_visibility(
             RuntimeObservationLlmVisibility::PreservePosition,
             RuntimeObservationUiVisibility::Hide,
         ),
+        RuntimeObservationType::TerminalError => (
+            RuntimeObservationLlmVisibility::Hide,
+            RuntimeObservationUiVisibility::Show,
+        ),
         _ => (
             RuntimeObservationLlmVisibility::Defer,
             RuntimeObservationUiVisibility::Hide,
@@ -316,6 +321,22 @@ mod tests {
             metadata["data"]["sub_agent_id"].as_str(),
             Some("subagent_1")
         );
+    }
+
+    #[test]
+    fn terminal_error_is_visible_in_ui_and_hidden_from_llm() {
+        let metadata = runtime_observation_metadata(
+            RuntimeObservationType::TerminalError,
+            json!({
+                "error_type": "llm_retry_exhausted",
+                "retry_attempt": 10,
+                "retry_max_attempts": 10
+            }),
+        );
+
+        assert_eq!(metadata["observation_type"], "terminal_error");
+        assert_eq!(metadata["llm_visibility"], "hide");
+        assert_eq!(metadata["ui_visibility"], "show");
     }
 
     #[test]

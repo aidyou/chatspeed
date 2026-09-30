@@ -27,6 +27,11 @@ impl ShellDescriptor {
             path: path.to_string_lossy().into_owned(),
         })
     }
+
+    /// Resolves symlinks so callers can tell that `/bin/bash` and `/usr/bin/bash` are one shell.
+    fn resolved_path(&self) -> PathBuf {
+        std::fs::canonicalize(&self.path).unwrap_or_else(|_| PathBuf::from(&self.path))
+    }
 }
 
 #[cfg(unix)]
@@ -254,17 +259,31 @@ pub(crate) fn get_available_shells() -> Vec<ShellDescriptor> {
     let mut shells = Vec::new();
     for candidate in candidates {
         if let Some(shell) = ShellDescriptor::from_path(candidate) {
-            if supports_terminal_shell(&shell)
-                && !shells
-                    .iter()
-                    .any(|existing: &ShellDescriptor| existing.path == shell.path)
-            {
+            if supports_terminal_shell(&shell) {
                 shells.push(shell);
             }
         }
     }
 
-    shells
+    dedupe_shells(shells)
+}
+
+/// Keeps the first candidate of every distinct executable.
+///
+/// Candidates are deliberately spelled both as `/bin/<shell>` and `/usr/bin/<shell>`; on merged-usr
+/// systems those are the same executable, and keeping both would list one shell twice.
+fn dedupe_shells(shells: impl IntoIterator<Item = ShellDescriptor>) -> Vec<ShellDescriptor> {
+    let mut resolved: Vec<PathBuf> = Vec::new();
+    let mut unique: Vec<ShellDescriptor> = Vec::new();
+    for shell in shells {
+        let identity = shell.resolved_path();
+        if resolved.contains(&identity) {
+            continue;
+        }
+        resolved.push(identity);
+        unique.push(shell);
+    }
+    unique
 }
 
 fn select_default_shell(
@@ -412,7 +431,9 @@ fn merge_paths(original: &str, new: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_paths, select_default_shell, supports_terminal_shell, ShellDescriptor};
+    use super::{
+        dedupe_shells, merge_paths, select_default_shell, supports_terminal_shell, ShellDescriptor,
+    };
 
     #[cfg(unix)]
     #[test]
@@ -491,6 +512,34 @@ mod tests {
     fn merged_path_prioritizes_login_shell_entries_without_duplicates() {
         let merged = merge_paths("/usr/bin:/bin:/usr/bin", "/custom/bin:/usr/bin");
         assert_eq!(merged, "/custom/bin:/usr/bin:/bin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shells_resolving_to_the_same_executable_are_listed_once() {
+        use std::os::unix::fs::symlink;
+
+        let directory =
+            std::env::temp_dir().join(format!("chatspeed-shell-dedupe-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("temporary directory");
+        let shell_path = directory.join("bash");
+        std::fs::write(&shell_path, "").expect("shell stub");
+        let alias_path = directory.join("bash-alias");
+        symlink(&shell_path, &alias_path).expect("aliased shell stub");
+
+        let shells = dedupe_shells(vec![
+            ShellDescriptor {
+                name: "bash".to_string(),
+                path: shell_path.to_string_lossy().into_owned(),
+            },
+            ShellDescriptor {
+                name: "bash".to_string(),
+                path: alias_path.to_string_lossy().into_owned(),
+            },
+        ]);
+
+        assert_eq!(shells.len(), 1, "one executable must be offered once");
+        std::fs::remove_dir_all(&directory).expect("temporary directory cleanup");
     }
 }
 

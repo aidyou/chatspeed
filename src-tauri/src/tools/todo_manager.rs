@@ -6,7 +6,45 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 const MINIMUM_INITIAL_TODO_COUNT: usize = 3;
+const TODO_DESCRIPTION_PREVIEW_CHARS: usize = 300;
 
+fn format_todo_list_for_llm(list: &[Value]) -> String {
+    if list.is_empty() {
+        return "Todo list is empty.".to_string();
+    }
+
+    list.iter()
+        .map(|item| {
+            let id = item["id"].as_str().unwrap_or("?");
+            let subject = item["subject"].as_str().unwrap_or("Untitled");
+            let status = item["status"].as_str().unwrap_or("?");
+            let description = if matches!(status, "pending" | "in_progress") {
+                item["description"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        format!(
+                            " description={}",
+                            value
+                                .chars()
+                                .take(TODO_DESCRIPTION_PREVIEW_CHARS)
+                                .collect::<String>()
+                                .replace(['\r', '\n'], " ")
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            format!(
+                "- id={} status={} subject={}{}",
+                id, status, subject, description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn format_todo_list_summary(list: &[Value]) -> String {
     if list.is_empty() {
         "You currently don't have a todo list.".to_string()
@@ -45,6 +83,21 @@ fn next_todo_id(list: &[Value]) -> Result<String, ToolError> {
         None => 1,
     };
     Ok(next_id.to_string())
+}
+
+fn validate_todo_description(task: &Value, index: usize) -> Result<(), ToolError> {
+    let has_description = task
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty());
+    if has_description {
+        return Ok(());
+    }
+
+    Err(ToolError::InvalidParams(format!(
+        "task {} description must be a non-empty string",
+        index + 1
+    )))
 }
 
 /// Helper to get and set todo list in DB
@@ -195,6 +248,10 @@ impl ToolDefinition for TodoCreateTool {
             ));
         };
 
+        for (index, task) in tasks_to_create.iter().enumerate() {
+            validate_todo_description(task, index)?;
+        }
+
         let mut list = if mode == "replace" {
             Vec::new()
         } else {
@@ -225,6 +282,10 @@ impl ToolDefinition for TodoCreateTool {
             created_ids.push(new_id);
         }
 
+        let llm_content = format!(
+            "Current todo list with details:\n{}",
+            format_todo_list_for_llm(&list)
+        );
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;
         let created_count = created_ids.len();
         let content = format!(
@@ -239,7 +300,8 @@ impl ToolDefinition for TodoCreateTool {
                 "status": "created",
                 "mode": mode,
                 "created_count": created_count,
-                "created_ids": created_ids
+                "created_ids": created_ids,
+                "llm_content": llm_content
             })),
         ))
     }
@@ -256,16 +318,7 @@ impl ToolDefinition for TodoListTool {
         crate::tools::TOOL_TODO_LIST
     }
     fn description(&self) -> &str {
-        "Use this tool to list all tasks in the current session's todo list.\n\n\
-        ## When to Use This Tool\n\
-        - To see what tasks are available to work on\n\
-        - To check overall progress on the project\n\
-        - After completing a task, to check whether any pending work remains\n\n\
-        ## Output\n\
-        Returns one line per task in this format: `[status] subject (ID: id)`.\n\
-        - **id**: Task identifier (use with todo_get, todo_update)\n\
-        - **subject**: Brief description of the task\n\
-        - **status**: `pending`, `in_progress`, `completed`, `deleted`, `failed`, or `data_missing`"
+        "Lists todo tasks with their current status and active details."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::System
@@ -279,14 +332,42 @@ impl ToolDefinition for TodoListTool {
         MCPToolDeclaration {
             name: self.name().to_string(),
             description: self.description().to_string(),
-            input_schema: json!({ "type": "object", "properties": {} }),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "Optional task ID. Omit to list all tasks; pass an ID to return that task's full details."
+                    }
+                }
+            }),
             output_schema: None,
             disabled: false,
             scope: Some(self.scope()),
         }
     }
-    async fn call(&self, _params: Value) -> NativeToolResult {
+    async fn call(&self, params: Value) -> NativeToolResult {
         let list = get_db_todo_list(&self.main_store, &self.session_id).await?;
+        if let Some(todo_id) = params.get("todo_id").and_then(Value::as_str) {
+            let item = list
+                .iter()
+                .find(|item| item["id"].as_str() == Some(todo_id))
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(format!(
+                        "Todo {} not found. {}",
+                        todo_id,
+                        format_todo_list_summary(&list)
+                    ))
+                })?;
+            let details = serde_json::to_string_pretty(item).map_err(|error| {
+                ToolError::ExecutionFailed(format!(
+                    "Failed to serialize todo {}: {}",
+                    todo_id, error
+                ))
+            })?;
+            return Ok(ToolCallResult::success(Some(details), Some(item.clone())));
+        }
+
         if list.is_empty() {
             return Ok(ToolCallResult::success(
                 Some("Todo list is empty.".into()),
@@ -308,14 +389,20 @@ impl ToolDefinition for TodoListTool {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let llm_output = format!(
+            "Current todo list with details:\n{}",
+            format_todo_list_for_llm(&list)
+        );
         let count = list.len();
-        Ok(ToolCallResult::success(
-            Some(output),
-            Some(json!({
+        Ok(ToolCallResult {
+            content: Some(output),
+            structured_content: Some(json!({
                 "items": list,
-                "count": count
+                "count": count,
+                "llm_content": llm_output
             })),
-        ))
+            is_error: Some(false),
+        })
     }
 }
 
@@ -426,69 +513,6 @@ impl ToolDefinition for TodoUpdateTool {
     }
 }
 
-pub struct TodoGetTool {
-    pub session_id: String,
-    pub main_store: Arc<MainStore>,
-}
-
-#[async_trait]
-impl ToolDefinition for TodoGetTool {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_TODO_GET
-    }
-    fn description(&self) -> &str {
-        "Use this tool to retrieve a task by its ID from the todo list.\n\n\
-        ## When to Use This Tool\n\
-        - When you need the full description and context before starting work on a task\n\
-        - After selecting a task from todo_list, to get complete requirements\n\n\
-        ## Output\n\
-        Returns the full todo item as pretty-printed JSON."
-    }
-    fn category(&self) -> ToolCategory {
-        ToolCategory::System
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": { "todo_id": { "type": "string" } },
-                "required": ["todo_id"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let todo_id = params["todo_id"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("todo_id required".into()))?;
-        let list = get_db_todo_list(&self.main_store, &self.session_id).await?;
-        let item = list
-            .iter()
-            .find(|i| i["id"].as_str().map_or(false, |id| id == todo_id))
-            .ok_or_else(|| {
-                ToolError::ExecutionFailed(format!(
-                    "Todo {} not found. {}",
-                    todo_id,
-                    format_todo_list_summary(&list)
-                ))
-            })?;
-        Ok(ToolCallResult::success(
-            Some(serde_json::to_string_pretty(item).unwrap()),
-            Some(item.clone()),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +525,35 @@ mod tests {
         assert!(reminder.contains("at least 3"));
         assert!(reminder.contains("continue directly"));
         assert!(reminder.contains("does not bypass"));
+    }
+
+    #[test]
+    fn format_todo_list_for_llm_preserves_active_descriptions_only() {
+        let list = vec![
+            json!({
+                "id": "1",
+                "subject": "Short task",
+                "status": "pending",
+                "description": "Keep the complete requirement"
+            }),
+            json!({
+                "id": "2",
+                "subject": "Active task",
+                "status": "in_progress",
+                "description": "Verify the implementation"
+            }),
+            json!({
+                "id": "3",
+                "subject": "Finished task",
+                "status": "completed",
+                "description": "Do not repeat completed detail"
+            }),
+        ];
+
+        let rendered = format_todo_list_for_llm(&list);
+        assert!(rendered.contains("description=Keep the complete requirement"));
+        assert!(rendered.contains("description=Verify the implementation"));
+        assert!(!rendered.contains("Do not repeat completed detail"));
     }
 
     async fn create_initial_todos(create_tool: &TodoCreateTool) {
@@ -561,6 +614,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_todo_create_rejects_missing_or_blank_descriptions() {
+        let (_temp_dir, store, session_id) = setup_test_db().await;
+        let create_tool = TodoCreateTool {
+            session_id,
+            main_store: store,
+        };
+
+        for tasks in [
+            json!([
+                { "subject": "Task 1" },
+                { "subject": "Task 2", "description": "Second" },
+                { "subject": "Task 3", "description": "Third" }
+            ]),
+            json!([
+                { "subject": "Task 1", "description": "   \n\t" },
+                { "subject": "Task 2", "description": "Second" },
+                { "subject": "Task 3", "description": "Third" }
+            ]),
+        ] {
+            let error = create_tool
+                .call(json!({ "mode": "replace", "tasks": tasks }))
+                .await
+                .expect_err("todo descriptions must be non-empty");
+            assert!(matches!(error, ToolError::InvalidParams(_)));
+            assert!(error
+                .to_string()
+                .contains("task 1 description must be a non-empty string"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_todo_create_single_task_requires_description() {
+        let (_temp_dir, store, session_id) = setup_test_db().await;
+        let create_tool = TodoCreateTool {
+            session_id,
+            main_store: store,
+        };
+
+        let error = create_tool
+            .call(json!({
+                "mode": "append",
+                "subject": "Follow-up task"
+            }))
+            .await
+            .expect_err("single todo tasks must include a description");
+
+        assert!(matches!(error, ToolError::InvalidParams(_)));
+        assert!(error
+            .to_string()
+            .contains("task 1 description must be a non-empty string"));
+    }
+
+    #[tokio::test]
     async fn test_todo_workflow() {
         let (_temp_dir, store, session_id) = setup_test_db().await;
 
@@ -578,6 +684,17 @@ mod tests {
         };
         let res = list_tool.call(json!({})).await.unwrap();
         assert!(res.content.unwrap().contains("[pending] Task 1 (ID: 1)"));
+
+        // The UI-facing text remains compact while the structured LLM projection keeps details.
+        let list_result = list_tool.call(json!({})).await.unwrap();
+        let llm_content = list_result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("llm_content"))
+            .and_then(Value::as_str)
+            .expect("todo list should provide an LLM detail projection");
+        assert!(llm_content.contains("description=First"));
+        assert!(!list_result.content.unwrap().contains("description=First"));
 
         // 3. Test Update
         let update_tool = TodoUpdateTool {
@@ -603,12 +720,8 @@ mod tests {
             .unwrap()
             .contains("[in_progress] Task 1 (ID: 1)"));
 
-        // 4. Test Get
-        let get_tool = TodoGetTool {
-            session_id: session_id.clone(),
-            main_store: store.clone(),
-        };
-        let res = get_tool.call(json!({ "todo_id": "1" })).await.unwrap();
+        // Details are returned through todo_list(todo_id).
+        let res = list_tool.call(json!({ "todo_id": "1" })).await.unwrap();
         let val: Value = serde_json::from_str(&res.content.unwrap()).unwrap();
         assert_eq!(val["subject"], "Task 1");
         assert_eq!(val["status"], "in_progress");
@@ -817,11 +930,11 @@ mod tests {
         };
         create_initial_todos(&create_tool).await;
 
-        let get_tool = TodoGetTool {
+        let list_tool = TodoListTool {
             session_id,
             main_store: store,
         };
-        let error = get_tool
+        let error = list_tool
             .call(json!({ "todo_id": "999" }))
             .await
             .expect_err("missing todo should return error");

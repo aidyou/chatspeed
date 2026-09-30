@@ -32,6 +32,7 @@ const defaultSettings = {
   terminalDefaultShell: 'system',
   terminalOutputLineLimit: 2000,
   terminalColorScheme: 'auto',
+  terminalSkin: 'default',
   terminalToggleShortcut: 'CommandOrControl+J',
   terminalClearShortcut: 'CommandOrControl+K',
   // chat settings
@@ -109,6 +110,7 @@ const defaultSettings = {
   websearchModel: { id: '', model: '' },
   // vision model settings
   visionModel: { id: '', model: '' },
+  decisionConfig: { enabled: false, providerId: null, model: '' },
   searchEngine: '',
   scraperConcurrencyCount: 5
 }

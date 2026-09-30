@@ -34,7 +34,7 @@ use crate::workflow::react::prompts::{
     resolve_agent_personality, AUTO_MODE_BASH_TOOL_GUIDANCE, CHILD_AGENT_COMPLETION_PROMPT,
     CHILD_AGENT_CORE_SYSTEM_PROMPT, CHILD_AGENT_DIRECTORY_PROMPT, CORE_SYSTEM_PROMPT,
     DRAFTING_PROMPT, EXECUTION_MODE_PROMPT, FINAL_AUDIT_COMPLETION_REPORT_PROMPT,
-    PLANNING_MODE_PROMPT,
+    MINIMAL_CORE_SYSTEM_PROMPT, PLANNING_MODE_PROMPT,
 };
 
 #[cfg(target_os = "windows")]
@@ -55,7 +55,7 @@ pub struct LlmProcessor {
     pub active_model_name: String,
     pub reasoning: bool,
     pub mcp_tool_summaries: Vec<MCPToolDeclaration>,
-    pub mcp_tool_loader_available: bool,
+    pub mcp_tool_expander_available: bool,
     pub workflow_task_run_id: String,
     pub root_session_id: String,
     pub root_task_run_id: String,
@@ -72,6 +72,20 @@ impl LlmProcessor {
 
     fn should_schedule_retry(failure_count: u32, max_failures: u32) -> bool {
         failure_count < max_failures
+    }
+
+    fn should_retry_ai_error(error: &AiError) -> bool {
+        match error {
+            AiError::ApiRequestFailed { status_code, .. }
+            | AiError::RawApiRequestFailed { status_code, .. } => {
+                // Authentication, billing, authorization, and missing-resource failures require
+                // user action. Retrying them would only consume time and repeat the same charge
+                // failure, while some providers still use HTTP 400 for transient runtime errors.
+                !matches!(*status_code, 401 | 402 | 403 | 404)
+            }
+            // Stream errors and network timeouts remain eligible for bounded retries.
+            _ => true,
+        }
     }
 
     fn should_require_tool_call(
@@ -171,7 +185,13 @@ impl LlmProcessor {
                     final_metadata = chunk.metadata.clone();
                 }
                 MessageType::Error => {
-                    return Err(WorkflowEngineError::General(chunk.chunk.clone()));
+                    // The chat Result carries the authoritative typed error. Do not downgrade
+                    // the same upstream error into a second General(String) error here.
+                    log::warn!(
+                        "[Workflow][session={}][phase=llm][event=non_authoritative_error_chunk] {}",
+                        session_id,
+                        chunk.chunk
+                    );
                 }
                 _ => {}
             }
@@ -503,7 +523,7 @@ impl LlmProcessor {
             active_model_name,
             reasoning,
             mcp_tool_summaries,
-            mcp_tool_loader_available: false,
+            mcp_tool_expander_available: false,
             workflow_task_run_id,
             root_session_id,
             root_task_run_id,
@@ -757,7 +777,12 @@ impl LlmProcessor {
 
                             continue;
                         }
-                        return Err(e);
+                        return Err(WorkflowEngineError::LlmRetryExhausted {
+                            source: None,
+                            details: e.to_string(),
+                            attempt: retry_count,
+                            max_attempts: max_retries,
+                        });
                     }
 
                     let _ = gateway
@@ -786,21 +811,18 @@ impl LlmProcessor {
                         ));
                     }
 
-                    let should_retry = match &e {
-                        AiError::ApiRequestFailed { status_code, .. } => {
-                            // Do NOT retry on auth/not-found errors.
-                            // Some providers return transient upstream/runtime issues as HTTP 400,
-                            // so 400 must still get bounded retries instead of crashing the workflow.
-                            !matches!(*status_code, 401 | 403 | 404)
-                        }
-                        // Retry on stream errors, network timeouts, etc.
-                        _ => true,
-                    };
+                    let should_retry = Self::should_retry_ai_error(&e);
 
                     if should_retry {
                         retry_count += 1;
                         if !Self::should_schedule_retry(retry_count, max_retries) {
-                            return Err(WorkflowEngineError::Ai(e));
+                            let details = e.to_string();
+                            return Err(WorkflowEngineError::LlmRetryExhausted {
+                                source: Some(e),
+                                details,
+                                attempt: retry_count,
+                                max_attempts: max_retries,
+                            });
                         }
 
                         let wait_secs = 2u32.pow(retry_count - 1);
@@ -1203,6 +1225,8 @@ impl LlmProcessor {
         // 1. Core System Prompt
         if self.agent_config.role.as_deref() == Some("child") {
             stable_system_parts.push(CHILD_AGENT_CORE_SYSTEM_PROMPT.to_string());
+        } else if !self.agent_config.task_tracking_enabled && self.child_agents.is_empty() {
+            stable_system_parts.push(MINIMAL_CORE_SYSTEM_PROMPT.to_string());
         } else {
             stable_system_parts.push(CORE_SYSTEM_PROMPT.to_string());
         }
@@ -1360,7 +1384,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
         let skills_enabled = self.agent_config.skill_enabled.unwrap_or(true);
 
         // MCP tools (before skills)
-        if self.mcp_tool_loader_available && !self.mcp_tool_summaries.is_empty() {
+        if self.mcp_tool_expander_available && !self.mcp_tool_summaries.is_empty() {
             reminders.push_str("## AVAILABLE MCP TOOLS:\n");
             let mut tools: Vec<_> = self.mcp_tool_summaries.iter().collect();
             tools.sort_by(|left, right| Self::stable_name_cmp(&left.name, &right.name));
@@ -1371,7 +1395,7 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
                     tool.description.replace("\n", " ")
                 ));
             }
-            reminders.push_str("<SYSTEM_REMINDER>Folded MCP tools are discoverable capabilities, similar to skills: only their names and descriptions are shown here, so they are not callable until loaded. When you need one, call `mcp_tool_load` exactly once with its listed public name, then treat the returned full definition as authoritative and call that MCP tool directly as your very next tool action using the returned public name and input schema. Loading the definition is not execution and does not satisfy the request; do not stop or call another unrelated tool after loading. Do not load the same tool again while the same unchanged definition is still visible in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again before calling the tool. MCP tools already present in the API tool list include their full definitions and must be called directly without `mcp_tool_load`; if that definition is no longer present in a later context, or has been updated and needs reloading, load it again.</SYSTEM_REMINDER>\n\n");
+            reminders.push_str("<SYSTEM_REMINDER>Folded MCP tools are discoverable capabilities, similar to skills: only their names and descriptions are shown here, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name, then call `mcp_tool_execute` as your very next tool action with that same `tool_name` and an `arguments` object matching the returned authoritative definition. Loading the definition is not execution and does not satisfy the request; do not stop or call another unrelated tool after loading. Do not load the same tool again while the same unchanged definition is still visible in the current context. If the definition has been updated, a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again before execution. MCP tools already present in the API tool list include their full definitions and must be called directly without `mcp_tool_expand` or `mcp_tool_execute`.</SYSTEM_REMINDER>\n\n");
         }
 
         // Skills
@@ -1787,6 +1811,42 @@ mod tests {
         assert!(!LlmProcessor::should_schedule_retry(10, 10));
     }
 
+    #[test]
+    fn authentication_and_billing_errors_are_not_retried() {
+        for status_code in [401, 402, 403, 404] {
+            let error = crate::ai::error::AiError::RawApiRequestFailed {
+                status_code,
+                provider: "provider".to_string(),
+                details: "upstream error".to_string(),
+            };
+            assert!(
+                !LlmProcessor::should_retry_ai_error(&error),
+                "HTTP {status_code} must terminate without retry"
+            );
+        }
+    }
+
+    #[test]
+    fn transient_ai_errors_keep_existing_retry_behavior() {
+        for status_code in [400, 408, 429, 500, 503] {
+            let error = crate::ai::error::AiError::RawApiRequestFailed {
+                status_code,
+                provider: "provider".to_string(),
+                details: "upstream error".to_string(),
+            };
+            assert!(
+                LlmProcessor::should_retry_ai_error(&error),
+                "HTTP {status_code} must remain retryable"
+            );
+        }
+        assert!(LlmProcessor::should_retry_ai_error(
+            &crate::ai::error::AiError::StreamProcessingFailed {
+                provider: "provider".to_string(),
+                details: "connection reset".to_string(),
+            }
+        ));
+    }
+
     struct NoopGateway;
 
     #[async_trait]
@@ -1855,6 +1915,34 @@ mod tests {
         ) -> Result<(), WorkflowEngineError> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn stream_collector_does_not_downgrade_error_chunks() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let raw_error = r#"{"error":{"message":"quota exhausted"}}"#;
+        tx.send(ChatResponse::new_with_arc(
+            "raw-error-test".to_string(),
+            raw_error.to_string(),
+            MessageType::Error,
+            None,
+            Some(crate::ai::traits::chat::FinishReason::Error),
+        ))
+        .expect("error chunk should enter lossless ingress");
+        drop(tx);
+
+        let result = LlmProcessor::collect_stream_chunks(
+            "raw-error-test".to_string(),
+            rx,
+            Arc::new(NoopGateway),
+            false,
+            HashSet::new(),
+        )
+        .await
+        .expect("non-authoritative error chunk must not fail collection");
+
+        assert_eq!(result.0, "");
+        assert_eq!(result.3, None);
     }
 
     #[tokio::test]
@@ -1967,6 +2055,7 @@ mod tests {
             planning_prompt: None,
             image_recognition_prompt: None,
             available_tools: None,
+            task_tracking_enabled: true,
             auto_approve: None,
             models: None,
             shell_policy: None,
@@ -1987,6 +2076,7 @@ mod tests {
             max_contexts: None,
             created_at: None,
             updated_at: None,
+            report_required_sections: None,
         }
     }
 
@@ -2005,7 +2095,7 @@ mod tests {
             active_model_name: "test-model".to_string(),
             reasoning: true,
             mcp_tool_summaries: Vec::new(),
-            mcp_tool_loader_available: false,
+            mcp_tool_expander_available: false,
             workflow_task_run_id: "test-session:task:1".to_string(),
             root_session_id: "test-session".to_string(),
             root_task_run_id: "test-session:task:1".to_string(),
@@ -2163,6 +2253,23 @@ mod tests {
         assert!(!system.contains("Use a calm, concise working style."));
     }
 
+    #[test]
+    fn minimal_agent_uses_reduced_core_without_tracking_or_delegation_guidance() {
+        let mut processor = test_llm_processor();
+        processor.agent_config.task_tracking_enabled = false;
+
+        let final_history = processor.inject_prompts(
+            vec![json!({ "role": "user", "content": "Implement the fix" })],
+            &ExecutionPolicy::standard(),
+        );
+        let system = final_history[0]["content"].as_str().unwrap_or_default();
+
+        assert!(system.contains("direct tool-driven coding agent"));
+        assert!(system.contains("call `complete_workflow` exactly once"));
+        assert!(!system.contains("todo_create"));
+        assert!(!system.contains("CHILD_AGENT_DIRECTORY"));
+    }
+
     fn message(
         role: &str,
         content: &str,
@@ -2219,7 +2326,7 @@ mod tests {
     #[test]
     fn build_extend_tools_prompt_sorts_mcp_and_skills_stably() {
         let mut processor = test_llm_processor();
-        processor.mcp_tool_loader_available = true;
+        processor.mcp_tool_expander_available = true;
         processor.mcp_tool_summaries = vec![
             MCPToolDeclaration {
                 name: "zeta_tool".into(),

@@ -58,6 +58,7 @@ RUN sed -i \
         python3 \
         python3-pip \
         sed \
+        sqlite3 \
         tar \
         unzip \
         xz-utils \

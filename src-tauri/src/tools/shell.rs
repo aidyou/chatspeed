@@ -29,7 +29,8 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::time::{Duration as StdDuration, Instant as StdInstant};
 #[cfg(test)]
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -37,6 +38,199 @@ use tokio::process::{Child, Command};
 #[cfg(test)]
 use tokio::time::Instant;
 use tokio::time::{timeout, Duration};
+
+pub(crate) fn builtin_cscli_command_args(command: &str) -> Option<Vec<Vec<String>>> {
+    let segments = split_shell_command_segments(command);
+    if segments.is_empty() {
+        return None;
+    }
+    segments
+        .into_iter()
+        .map(|segment| builtin_cs_args(&segment))
+        .collect()
+}
+
+pub(crate) fn contains_builtin_cscli_command(command: &str) -> bool {
+    split_shell_command_segments(command).iter().any(|segment| {
+        shell_tokens(segment)
+            .and_then(|tokens| tokens.get(leading_command_index(&tokens)).cloned())
+            .as_deref()
+            == Some("cscli")
+    })
+}
+
+fn bundled_cscli_path() -> Result<std::path::PathBuf, ToolError> {
+    let executable = std::env::current_exe()
+        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+    let directory = executable.parent().ok_or_else(|| {
+        ToolError::ExecutionFailed("Application executable has no parent directory".into())
+    })?;
+    let cli = directory.join(if cfg!(windows) { "cscli.exe" } else { "cscli" });
+    if !cli.is_file() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Bundled CLI not found: {}", cli.display()
+        )));
+    }
+    Ok(cli)
+}
+
+fn shell_quote(value: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn shell_token_start(command: &str, target_index: usize) -> Option<usize> {
+    let mut token_index = 0;
+    let mut token_start = None;
+    let mut single = false;
+    let mut double = false;
+    let mut escaped = false;
+    for (index, ch) in command.char_indices() {
+        if escaped {
+            escaped = false;
+            token_start.get_or_insert(index.saturating_sub(1));
+            continue;
+        }
+        if ch == '\\' && !single {
+            escaped = true;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if ch == '\'' && !double {
+            single = !single;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if ch == '"' && !single {
+            double = !double;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if !single && !double && ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                if token_index == target_index {
+                    return Some(start);
+                }
+                token_index += 1;
+            }
+            continue;
+        }
+        token_start.get_or_insert(index);
+    }
+    if token_start.is_some() && token_index == target_index {
+        return token_start;
+    }
+    None
+}
+
+fn rewrite_builtin_cscli_commands(command: &str, cli: &std::path::Path) -> Option<String> {
+    let cli = shell_quote(&cli.to_string_lossy());
+    let mut rewritten = String::with_capacity(command.len());
+    let mut search_start = 0;
+    let mut found = false;
+    for segment in split_shell_command_segments(command) {
+        let segment_start = command[search_start..].find(&segment)? + search_start;
+        rewritten.push_str(&command[search_start..segment_start]);
+        let tokens = shell_tokens(&segment)?;
+        let command_index = leading_command_index(&tokens);
+        if tokens.get(command_index).map(String::as_str) == Some("cscli") {
+            let token_start = shell_token_start(&segment, command_index)?;
+            rewritten.push_str(&segment[..token_start]);
+            rewritten.push_str(&cli);
+            rewritten.push_str(&segment[token_start + "cscli".len()..]);
+            found = true;
+        } else {
+            rewritten.push_str(&segment);
+        }
+        search_start = segment_start + segment.len();
+    }
+    rewritten.push_str(&command[search_start..]);
+    found.then_some(rewritten)
+}
+
+/// Returns the arguments only for a literal, standalone invocation of the bundled `cscli` CLI.
+///
+/// A trailing `2>&1` is redundant because the tool already captures both streams.
+/// Other shell operators must never acquire trusted CLI routing or approval behavior.
+pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
+    let mut command = command;
+    let mut single = false;
+    let mut double = false;
+    let mut escaped = false;
+    for (index, ch) in command.char_indices() {
+        if (ch.is_control() && ch != '\t')
+            || ('\u{2000}'..='\u{200F}').contains(&ch)
+            || ('\u{202A}'..='\u{202F}').contains(&ch)
+            || ch == '\u{FEFF}'
+        {
+            return None;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && !single {
+            escaped = true;
+            continue;
+        }
+        if !single && !double && ch == '2'
+            && command[..index].ends_with([' ', '\t'])
+            && command[index..].trim_end_matches([' ', '\t']) == "2>&1"
+        {
+            command = &command[..index];
+            break;
+        }
+        if ch == '\'' && !double {
+            single = !single;
+        } else if ch == '"' && !single {
+            double = !double;
+        } else if !single && (matches!(ch, '$' | '`') || (!double && matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | ']' | '{' | '}' | '~'))) {
+            return None;
+        }
+    }
+    let mut args = shlex::split(command)?;
+    if args.first().map(String::as_str) != Some("cscli") {
+        return None;
+    }
+    args.remove(0);
+    Some(args)
+}
+
+fn host_process_command(command: &str) -> Result<Command, ToolError> {
+    if let Some(args) = builtin_cs_args(command) {
+        let cli = bundled_cscli_path()?;
+        let mut process = Command::new(cli);
+        process.args(args);
+        configure_no_window(&mut process);
+        return Ok(process);
+    }
+    let host_command = if contains_builtin_cscli_command(command) {
+        let cli = bundled_cscli_path()?;
+        rewrite_builtin_cscli_commands(command, &cli)
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to parse cscli command segments".into()))?
+    } else {
+        crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command)
+    };
+    let mut process = if cfg!(windows) {
+        let mut process = Command::new("cmd");
+        process.args(["/C", &host_command]);
+        process
+    } else {
+        let mut process = Command::new("sh");
+        process.args(["-c", &host_command]);
+        process
+    };
+    configure_no_window(&mut process);
+    Ok(process)
+}
+
+const SANDBOX_RUNTIME_STATUS_CACHE_TTL: StdDuration = StdDuration::from_secs(3);
+
+type SandboxRuntimeStatusCache =
+    StdMutex<Option<(StdInstant, crate::tools::SandboxRuntimeStatusSummary)>>;
 
 /// Decision levels for shell auditing
 #[derive(Debug, PartialEq, Clone)]
@@ -145,8 +339,6 @@ impl ShellPolicyEngine {
                 | "chsh"
                 | "newgrp"
                 | "sg"
-                | "ssh"
-                | "scp"
                 | "useradd"
                 | "adduser"
                 | "userdel"
@@ -202,6 +394,9 @@ impl ShellPolicyEngine {
     }
 
     pub fn execution_audit_decision(&self, command_str: &str) -> ShellDecision {
+        if contains_builtin_cscli_command(command_str) {
+            return ShellDecision::Allow;
+        }
         self.audit_execution_forms(command_str, 0)
     }
 
@@ -544,6 +739,22 @@ impl ShellPolicyEngine {
     }
 
     pub fn check(&self, command_str: &str, restrict_to_planning: bool) -> ShellDecision {
+        if let Some(commands) = builtin_cscli_command_args(command_str) {
+            if commands.iter().all(|args| {
+                matches!(args.first().map(String::as_str), Some("help"))
+                    || matches!((args.first().map(String::as_str), args.get(1).map(String::as_str)),
+                        (Some("skill"), Some("targets" | "list" | "check"))
+                        | (Some("mcp"), Some("list" | "status" | "tools"))
+                        | (Some("doctor"), None | Some("capabilities")))
+            }) {
+                return ShellDecision::Allow;
+            }
+            if restrict_to_planning {
+                return ShellDecision::Review("CLI mutation requires review in planning mode".into());
+            }
+            return self.match_custom_rule(command_str).unwrap_or_else(||
+                ShellDecision::Review("CLI command requires review (not in allowed list)".into()));
+        }
         // 1. Initial Sanity Check: Block dangerous invisible characters
         for c in command_str.chars() {
             if (c.is_control() && c != '\n' && c != '\r' && c != '\t')
@@ -719,6 +930,19 @@ impl ShellPolicyEngine {
             }
 
             if redirection_ops.contains(&token_str) {
+                // FD redirections (`2>&1`, `1>&2`, `>&-`) are tokenized as
+                // `2 > & 1`; they only reconnect file descriptors without touching
+                // the file system, so the file-boundary review does not apply.
+                let is_fd_redirection = tokens.get(i + 1).is_some_and(|next| next == "&")
+                    && tokens.get(i + 2).is_some_and(|fd_target| {
+                        !fd_target.is_empty()
+                            && (fd_target.chars().all(|c| c.is_ascii_digit())
+                                || fd_target == "-"
+                                || Self::is_null_device(fd_target))
+                    });
+                if is_fd_redirection {
+                    continue;
+                }
                 if let Some(next_token) = tokens.get(i + 1) {
                     if !next_token.starts_with('-') && !Self::is_null_device(next_token) {
                         match self.validate_path_token(
@@ -849,11 +1073,114 @@ impl ShellPolicyEngine {
         }
     }
 
+    /// A token shaped like `[user@]host:path`, `[IPv6]:path` or `rsync://host/path`
+    /// is a remote transfer target for scp/rsync, not a local path.
+    fn is_remote_transfer_target(token: &str) -> bool {
+        if token.starts_with("rsync://") {
+            return true;
+        }
+        // Windows drive-letter paths (e.g. `C:\x`, `C:/x`) are local paths.
+        let bytes = token.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'/' || bytes[2] == b'\\')
+        {
+            return false;
+        }
+        let Some(colon) = token.find(':') else {
+            return false;
+        };
+        let host_part = &token[..colon];
+        if host_part.starts_with('[') {
+            // Bracketed IPv6 literal, e.g. `[::1]:/path`.
+            return host_part.ends_with(']') && host_part.len() > 2;
+        }
+        if host_part.is_empty() || host_part.contains('/') {
+            return false;
+        }
+        let host = host_part
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(host_part);
+        !host.contains(':') && !host.is_empty()
+    }
+
+    /// Operand scan for file-transfer commands (scp/rsync/rcp): remote targets
+    /// such as `user@host:path` are not local paths and skip PathGuard checks,
+    /// while local path operands keep the normal validation.
+    fn transfer_command_non_path_argument(
+        arguments: &[String],
+        arg_index: usize,
+        value_options: &[&str],
+    ) -> bool {
+        let mut index = 0;
+        while index <= arg_index && index < arguments.len() {
+            let argument = arguments[index].as_str();
+            if argument == "--" {
+                return index < arg_index && Self::is_remote_transfer_target(&arguments[arg_index]);
+            }
+            if argument == "-" || !argument.starts_with('-') {
+                if index == arg_index {
+                    return Self::is_remote_transfer_target(argument);
+                }
+                index += 1;
+                continue;
+            }
+            // Options that consume the next argument (e.g. `scp -i key`, `rsync -e ssh`).
+            index += if value_options.contains(&argument) {
+                2
+            } else {
+                1
+            };
+        }
+        false
+    }
+
     fn is_non_path_argument(command: &str, arguments: &[String], arg_index: usize) -> bool {
         match command {
             "awk" => Self::awk_non_path_argument(arguments, arg_index),
             "sed" => Self::sed_non_path_argument(arguments, arg_index),
             "grep" | "egrep" | "fgrep" | "rg" => Self::grep_non_path_argument(arguments, arg_index),
+            "scp" | "rsync" | "rcp" => Self::transfer_command_non_path_argument(
+                arguments,
+                arg_index,
+                &[
+                    // scp value options
+                    "-P",
+                    "-S",
+                    "-i",
+                    "-F",
+                    "-J",
+                    "-l",
+                    "-c",
+                    "-o",
+                    "-D",
+                    "-I",
+                    // rsync/rcp value options
+                    "-e",
+                    "--rsh",
+                    "--password-file",
+                    "--include-from",
+                    "--exclude-from",
+                    "--files-from",
+                    "--log-file",
+                    "--sockopts",
+                    "--rsync-path",
+                    "--temp-dir",
+                    "--partial-dir",
+                    "--backup-dir",
+                    "--compare-dest",
+                    "--copy-dest",
+                    "--link-dest",
+                    "--bwlimit",
+                    "--timeout",
+                    "--port",
+                    "--min-size",
+                    "--max-size",
+                    "--chmod",
+                ],
+            ),
             _ => false,
         }
     }
@@ -991,6 +1318,17 @@ impl ShellPolicyEngine {
             "find" => operand_index == 0,
             _ => false,
         }
+    }
+
+    /// Whether an explicit policy rule requires review or denial for any command segment.
+    pub fn has_explicit_review_or_deny(&self, command_str: &str, restrict_to_planning: bool) -> bool {
+        let Ok(segments) = self.extract_policy_match_segments(command_str, restrict_to_planning) else {
+            return true;
+        };
+        if segments.len() == 1 && matches!(self.match_custom_rule(command_str), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))) {
+            return true;
+        }
+        segments.iter().any(|segment| matches!(self.match_custom_rule(segment), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))))
     }
 
     fn evaluate_custom_rules(
@@ -1238,6 +1576,7 @@ pub struct ShellExecute {
     gateway: Option<Arc<dyn Gateway>>,
     session_id: Option<String>,
     approved_execution_plans: Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
+    sandbox_runtime_status_cache: Arc<SandboxRuntimeStatusCache>,
 }
 
 impl ShellExecute {
@@ -1255,6 +1594,7 @@ impl ShellExecute {
             gateway: None,
             session_id: None,
             approved_execution_plans: Arc::new(dashmap::DashMap::new()),
+            sandbox_runtime_status_cache: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -1360,7 +1700,7 @@ impl ToolDefinition for ShellExecute {
             .get(crate::constants::INTERNAL_PARAM_TOOL_CALL_ID)
             .and_then(|v| v.as_str())
             .unwrap_or("bash");
-        let execution_plan = self.execution_plan_for_params(tool_id, command_str)?;
+        let execution_plan = self.execution_plan_for_params(tool_id, command_str).await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
                 Self::execution_plan_denied_message(&execution_plan),
@@ -1397,17 +1737,7 @@ impl ToolDefinition for ShellExecute {
         // but AC-9 requires backend execution to preserve original shell semantics.
 
         // Fallback to standard execution
-        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
-        let mut command = if cfg!(target_os = "windows") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", &host_command]);
-            configure_no_window(&mut command);
-            command
-        } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", &host_command]);
-            command
-        };
+        let mut command = host_process_command(command_str)?;
         if let Some(dir) = &working_dir {
             command.current_dir(dir);
         }
@@ -2380,7 +2710,7 @@ impl ShellExecute {
         }
     }
 
-    fn execution_plan_for_params(
+    async fn execution_plan_for_params(
         &self,
         tool_call_id: &str,
         command_str: &str,
@@ -2391,7 +2721,9 @@ impl ShellExecute {
                     "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
                 ));
             }
-            let current = self.resolve_execution_plan(tool_call_id, command_str);
+            let current = self
+                .resolve_execution_plan(tool_call_id, command_str)
+                .await?;
             if plan != current {
                 return Err(ToolError::ExecutionFailed(
                     "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
@@ -2399,35 +2731,65 @@ impl ShellExecute {
             }
             return Ok(plan);
         }
-        Ok(self.resolve_execution_plan(tool_call_id, command_str))
+        self.resolve_execution_plan(tool_call_id, command_str).await
     }
 
-    fn resolve_execution_plan(
+    async fn cached_runtime_status(
+        &self,
+    ) -> Result<crate::tools::SandboxRuntimeStatusSummary, ToolError> {
+        if let Ok(cache) = self.sandbox_runtime_status_cache.lock() {
+            if let Some((checked_at, status)) = cache.as_ref() {
+                if checked_at.elapsed() < SANDBOX_RUNTIME_STATUS_CACHE_TTL {
+                    return Ok(status.clone());
+                }
+            }
+        }
+
+        let required_images = self
+            .sandbox_config
+            .as_ref()
+            .map(crate::tools::AgentSandboxConfig::required_images)
+            .unwrap_or_default();
+        let status = tokio::task::spawn_blocking(move || {
+            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
+                required_images,
+                ..crate::tools::SandboxDetectorOptions::default()
+            })
+            .detect()
+        })
+        .await
+        .map_err(|error| {
+            ToolError::ExecutionFailed(format!("Sandbox runtime detection failed: {error}"))
+        })?;
+
+        if let Ok(mut cache) = self.sandbox_runtime_status_cache.lock() {
+            *cache = Some((StdInstant::now(), status.clone()));
+        }
+        Ok(status)
+    }
+
+    async fn resolve_execution_plan(
         &self,
         tool_call_id: &str,
         command_str: &str,
-    ) -> crate::tools::ShellExecutionPlan {
-        let runtime_status =
-            crate::tools::SandboxRuntimeDetector::new(crate::tools::SandboxDetectorOptions {
-                required_images: self
-                    .sandbox_config
-                    .as_ref()
-                    .map(crate::tools::AgentSandboxConfig::required_images)
-                    .unwrap_or_default(),
-                ..crate::tools::SandboxDetectorOptions::default()
-            })
-            .detect();
+    ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
+        if contains_builtin_cscli_command(command_str) {
+            return Ok(crate::tools::ShellExecutionResolver::builtin_cs_plan(tool_call_id, command_str));
+        }
+        let runtime_status = self.cached_runtime_status().await?;
         let primary_root = self.default_working_dir();
         let mount_context = self.sandbox_mount_context();
-        crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
-            crate::tools::ShellExecutionResolver::resolve(
-                tool_call_id,
-                command_str,
-                self.sandbox_config.as_ref(),
-                &runtime_status,
-                primary_root.as_deref(),
+        Ok(
+            crate::tools::ShellExecutionResolver::complete_sandbox_mounts(
+                crate::tools::ShellExecutionResolver::resolve(
+                    tool_call_id,
+                    command_str,
+                    self.sandbox_config.as_ref(),
+                    &runtime_status,
+                    primary_root.as_deref(),
+                ),
+                &mount_context,
             ),
-            &mount_context,
         )
     }
 
@@ -2666,7 +3028,9 @@ impl ShellExecute {
                 )
             });
         let working_dir = self.default_working_dir();
-        let execution_plan = self.execution_plan_for_params(&tool_id, command_str)?;
+        let execution_plan = self
+            .execution_plan_for_params(&tool_id, command_str)
+            .await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
                 Self::execution_plan_denied_message(&execution_plan),
@@ -2697,36 +3061,15 @@ impl ShellExecute {
         // `parse_safe_compound_command` remains available for policy/output analysis,
         // but AC-9 requires backend execution to preserve original shell semantics.
 
-        let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command_str);
-        let mut child = if cfg!(target_os = "windows") {
-            let mut command = Command::new("cmd");
-            command
-                .args(["/C", &host_command])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            configure_no_window(&mut command);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command
-                .spawn()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
-        } else {
-            let mut command = Command::new("sh");
-            command
-                .args(["-c", &host_command])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            configure_process_group(&mut command);
-            if let Some(dir) = &working_dir {
-                command.current_dir(dir);
-            }
-            command
-                .spawn()
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?
-        };
+        let mut command = host_process_command(command_str)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        if let Some(dir) = &working_dir {
+            command.current_dir(dir);
+        }
+        #[cfg(not(target_os = "windows"))]
+        configure_process_group(&mut command);
+        let mut child = command.spawn()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?;
         let mut process_guard = StageProcessGuard::new(&child);
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
@@ -3034,6 +3377,66 @@ mod tests {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
+    fn rewrites_every_standalone_cscli_command_after_shell_parsing() {
+        let cli = Path::new("/Applications/Chatspeed.app/Contents/MacOS/cscli");
+        assert_eq!(
+            rewrite_builtin_cscli_commands(
+                "cscli mcp status context7 && echo 'cscli' | cscli mcp tools context7 2>&1",
+                cli,
+            ),
+            Some("'/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp status context7 && echo 'cscli' | '/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp tools context7 2>&1".into())
+        );
+        assert_eq!(
+            rewrite_builtin_cscli_commands("FOO=cscli cscli mcp list && echo cscli", cli),
+            Some("FOO=cscli '/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp list && echo cscli".into())
+        );
+
+    }
+    #[test]
+    fn builtin_cs_only_accepts_literal_standalone_commands() {
+        assert_eq!(builtin_cs_args("cscli skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"),
+            Some(vec!["skill".into(), "install".into(), "--source-json".into(), "{\"url\":\"https://example.com/a?b=1\"}".into()]));
+        for command in ["cscli skill list 2>&1", "cscli skill list\t2>&1  "] {
+            assert_eq!(builtin_cs_args(command), Some(vec!["skill".into(), "list".into()]));
+        }
+        assert_eq!(builtin_cs_args("cscli mcp status '2>&1' 2>&1"),
+            Some(vec!["mcp".into(), "status".into(), "2>&1".into()]));
+        for command in ["cs skill list", "./cscli skill list", "cscli list && echo ok", "cscli list > file", "cscli list\necho ok", "cscli \"$(echo list)\"", "cscli `echo list`", "cscli *", "env cscli skill list", "cscli 'unterminated", "cscli list 2>&1 && echo ok", "cscli list 2>&1 > file", "cscli list 2>&1\n", "cscli list 2>&1 2>&1", "cscli list2>&1", "cscli list 1>&2", "cscli list 2>file"] {
+            assert!(builtin_cs_args(command).is_none(), "{command}");
+        }
+    }
+
+    #[test]
+    fn builtin_cs_mutations_preserve_user_approval_rules() {
+        let (_root, _, guard) = setup_test_context();
+        let policy = ShellPolicyEngine::new(guard.clone(), vec![]);
+        assert_eq!(policy.check("cscli skill list", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cscli mcp status demo", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cscli skill list 2>&1", false), ShellDecision::Allow);
+        for command in ["cscli mcp install --descriptor-json '{}'", "cscli mcp install --descriptor-json '{}' 2>&1"] {
+            assert!(matches!(policy.check(command, false), ShellDecision::Review(_)), "{command}");
+        }
+        let policy = ShellPolicyEngine::new(guard, vec![ShellPolicyRule {
+            pattern: "^cscli mcp enable demo$".into(), decision: ShellDecision::Allow, description: None,
+        }]);
+        assert_eq!(policy.check("cscli mcp enable demo", false), ShellDecision::Allow);
+    }
+
+
+    #[test]
+    fn explicit_policy_reviews_cannot_be_decision_approved() {
+        let (_root, _, guard) = setup_test_context();
+        let policy = ShellPolicyEngine::new(guard, vec![
+            ShellPolicyRule { pattern: "^git status$".into(), decision: ShellDecision::Review("explicit review".into()), description: None },
+            ShellPolicyRule { pattern: "^rm ".into(), decision: ShellDecision::Deny("blocked".into()), description: None },
+        ]);
+        assert!(policy.has_explicit_review_or_deny("git status", false));
+        assert!(policy.has_explicit_review_or_deny("rm -rf something", false));
+        assert!(policy.has_explicit_review_or_deny("git status; echo ok", false));
+        assert!(!policy.has_explicit_review_or_deny("echo ok", false));
+    }
+
+    #[test]
     fn shell_decisions_round_trip_as_policy_strings() {
         let rules = vec![
             ShellPolicyRule {
@@ -3214,6 +3617,23 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_engine_allows_fd_redirection_without_file_boundary_review() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+
+        // FD redirections only reconnect file descriptors, so no file-boundary review.
+        for command in ["ls -la 2>&1", "git status 2>&1 | head -5", "echo hi 1>&2"] {
+            assert_eq!(engine.check(command, false), ShellDecision::Allow);
+        }
+
+        // File redirections still require review.
+        assert!(matches!(
+            engine.check("git status > out.txt", false),
+            ShellDecision::Review(_)
+        ));
+    }
+
+    #[test]
     fn test_policy_engine_blocked_binaries() {
         let (_root, _, guard) = setup_test_context();
         let engine = ShellPolicyEngine::new(guard, vec![]);
@@ -3231,6 +3651,45 @@ mod tests {
         }
         assert!(matches!(
             engine.check("rm -rf test", false),
+            ShellDecision::Review(_)
+        ));
+    }
+
+    #[test]
+    fn test_policy_engine_allows_remote_shell_and_transfers() {
+        let (_root, _, guard) = setup_test_context();
+        let engine = ShellPolicyEngine::new(guard, vec![]);
+        for command in [
+            "ssh user@host",
+            "ssh -p 2222 user@host",
+            "scp local.txt user@host:/remote/path",
+            "scp -i key.pem local.txt host:dest/",
+            "scp user@host:/remote/file.txt ./local.txt",
+            "scp -r . host:/opt/app",
+            "scp local.txt outside.txt",
+            "rsync -av ./local/ user@host:/remote/",
+            "rsync -e ssh local.txt host:dest/",
+            "rsync -av rsync://host/module/ ./downloads/",
+            "rsync host::module/ ./downloads/",
+            "rcp ./local.txt host:dest/",
+        ] {
+            assert!(
+                !matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected remote transfer to be allowed for {command}"
+            );
+        }
+
+        for command in ["scp local.txt /outside/path", "rsync -av ./ /outside/path"] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "expected local out-of-root path to be denied for {command}"
+            );
+        }
+
+        // ssh inside a dynamic awk system() call is no longer a hard denial;
+        // it still requires review as dynamic execution.
+        assert!(matches!(
+            engine.check("awk 'BEGIN { system(\"ssh user@host\") }'", false),
             ShellDecision::Review(_)
         ));
     }

@@ -72,6 +72,8 @@ struct BuiltinAgentConfig {
     auto_approve: Option<Vec<String>>,
     #[serde(default)]
     available_tools: Option<Vec<String>>,
+    #[serde(default = "default_task_tracking_enabled")]
+    task_tracking_enabled: bool,
     #[serde(default)]
     final_audit: Option<bool>,
     #[serde(default)]
@@ -83,7 +85,13 @@ struct BuiltinAgentConfig {
     #[serde(default)]
     models: Option<AgentModels>,
     #[serde(default)]
+    report_required_sections: Option<Vec<String>>,
+    #[serde(default)]
     max_contexts: Option<i32>,
+}
+
+fn default_task_tracking_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -323,6 +331,7 @@ fn definition_to_agent(
         planning_prompt: definition.planning_prompt.clone(),
         image_recognition_prompt: definition.image_recognition_prompt.clone(),
         available_tools: serialize_json(&manifest.config.available_tools),
+        task_tracking_enabled: manifest.config.task_tracking_enabled,
         auto_approve: serialize_json(&manifest.config.auto_approve),
         models: manifest.config.models.clone(),
         shell_policy: serialize_json(&resolve_shell_policy_config(
@@ -344,6 +353,7 @@ fn definition_to_agent(
         version: Some(manifest.builtin_version),
         sort_index: None,
         max_contexts: manifest.config.max_contexts,
+        report_required_sections: serialize_json(&manifest.config.report_required_sections),
         created_at: None,
         updated_at: None,
     })
@@ -388,7 +398,9 @@ fn sync_single_builtin_agent(
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.available_tools = available_tools;
+            updated.task_tracking_enabled = desired.task_tracking_enabled;
             updated.auto_approve = desired.auto_approve;
+            updated.report_required_sections = desired.report_required_sections;
             updated.is_system = Some(true);
             updated.version = Some(definition.manifest.builtin_version);
             store.update_agent(&updated).map_err(|e| e.to_string())?;
@@ -424,6 +436,8 @@ mod tests {
             vision: None,
             utility: None,
             lite: None,
+            decision_enabled: false,
+            decision: None,
         };
         let mut existing = Agent::new(
             builtin_agent_db_id("test-child"),
@@ -587,6 +601,8 @@ mod tests {
                         vision: None,
                         utility: None,
                         lite: None,
+                        decision_enabled: false,
+                        decision: None,
                     }),
                     ..Default::default()
                 },
@@ -638,9 +654,6 @@ pub fn sync_builtin_agents_if_needed(main_store: Arc<MainStore>) -> Result<(), S
         sync_single_builtin_agent(&store, definition, default_shell_policy.as_ref())?;
     }
 
-    log::info!(
-        "Builtin agents synchronized from {:?}",
-        builtin_agents_root
-    );
+    log::info!("Builtin agents synchronized from {:?}", builtin_agents_root);
     Ok(())
 }

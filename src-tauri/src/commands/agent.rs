@@ -79,6 +79,8 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
         .any(|tool| tool == crate::tools::TOOL_BASH);
     let role = agent.role.as_deref();
 
+    // Children inherit approval from their parent and never configure a shell sandbox or
+    // shell auto-approval, so those stay at their safe defaults for them.
     if !has_bash || role == Some("child") {
         agent.auto_approve =
             filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
@@ -110,11 +112,9 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     agent.planning_prompt = None;
     agent.image_recognition_prompt = None;
     agent.personality = None;
-    agent.available_tools =
-        filter_tool_list_json(agent.available_tools.clone(), crate::tools::TOOL_BASH);
-    agent.auto_approve = filter_tool_list_json(agent.auto_approve.clone(), crate::tools::TOOL_BASH);
     agent.allowed_paths = Some("[]".to_string());
-    agent.shell_policy = Some("[]".to_string());
+    // Shell rules stay per-agent: a child that enables shell owns its own command rules,
+    // and the workflow later merges the parent's allow rules into them.
     agent.sandbox_execution_mode = ShellExecutionMode::HostOnly;
     agent.sandbox_scheme_id = None;
     agent.skill_enabled = Some(false);
@@ -125,6 +125,8 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
         models.vision = None;
         models.utility = None;
         models.lite = None;
+        models.decision_enabled = false;
+        models.decision = None;
     }
     Ok(())
 }
@@ -464,12 +466,42 @@ mod tests {
         child.sandbox_execution_mode = ShellExecutionMode::SandboxOnly;
         child.sandbox_scheme_id = Some("scheme-1".to_string());
 
+        child.models = Some(crate::db::agent::AgentModels {
+            decision_enabled: true,
+            decision: Some(crate::db::agent::ModelConfig {
+                id: 42,
+                model: "jev-latest".into(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
+                max_tokens: None,
+            }),
+            ..Default::default()
+        });
         sanitize_agent_for_persistence(&mut child).expect("sanitize child agent");
         assert_eq!(child.sandbox_execution_mode, ShellExecutionMode::HostOnly);
         assert!(child.sandbox_scheme_id.is_none());
-        assert_eq!(child.available_tools.as_deref(), Some("[]"));
+        // Shell is an opt-in child capability, so the selected tool survives sanitizing
+        // while automatic shell approval stays off.
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(child.available_tools.as_deref().unwrap())
+                .expect("available tools json"),
+            vec![crate::tools::TOOL_BASH]
+        );
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(child.auto_approve.as_deref().unwrap())
+                .expect("auto approve json"),
+            Vec::<String>::new()
+        );
         assert_eq!(child.allowed_paths.as_deref(), Some("[]"));
-        assert_eq!(child.shell_policy.as_deref(), Some("[]"));
+        // A child keeps the shell rules it configured; only its paths and sandbox stay forced.
+        assert_eq!(
+            child.shell_policy.as_deref(),
+            Some(r#"[{"pattern":"^git status$","decision":"allow"}]"#)
+        );
+        assert!(!child.models.as_ref().unwrap().decision_enabled);
+        assert!(child.models.as_ref().unwrap().decision.is_none());
     }
 
     #[test]

@@ -1,5 +1,8 @@
+pub(crate) mod capability_schema;
 pub mod common;
+pub(crate) mod automation_schema;
 pub mod manager;
+pub(crate) mod tool_compatibility;
 pub mod v1;
 pub mod v10;
 pub mod v11;
@@ -9,6 +12,7 @@ pub mod v14;
 pub mod v15;
 pub mod v16;
 pub mod v17;
+pub mod v18;
 pub mod v2;
 pub mod v3;
 pub mod v4;

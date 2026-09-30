@@ -119,7 +119,8 @@ pub async fn handle_direct_forward(
             ChatProtocol::OpenAI
             | ChatProtocol::Ollama
             | ChatProtocol::Claude
-            | ChatProtocol::HuggingFace => {
+            | ChatProtocol::HuggingFace
+            | ChatProtocol::Decision => {
                 obj.insert(
                     "model".to_string(),
                     Value::String(proxy_model.model.trim().to_string()),
@@ -170,6 +171,38 @@ pub async fn handle_direct_forward(
                 "Request failed before receiving a response: {}",
                 error
             ));
+            crate::ccproxy::helper::stat_guard::record_error_stat(
+                main_store_arc.as_ref(),
+                CcproxyStat {
+                    id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: model_name.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: provider_name.clone(),
+                    protocol: chat_protocol_for_stat.to_string(),
+                    tool_compat_mode: 0,
+                    status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    error_message: Some(error.to_string()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    audio_input_tokens: 0,
+                    audio_output_tokens: 0,
+                    estimated_cost: None,
+                    pricing_status: Some("unpriced".to_string()),
+                    pricing_snapshot: None,
+                    request_at: None,
+                }
+                .with_workflow_attribution(&client_headers),
+            );
             return Err(error);
         }
     };
@@ -210,6 +243,39 @@ pub async fn handle_direct_forward(
             &full_url,
             status_code,
             error_msg
+        );
+
+        crate::ccproxy::helper::stat_guard::record_error_stat(
+            main_store_arc.as_ref(),
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: model_name.clone(),
+                provider_id: Some(proxy_model.provider_id),
+                provider: provider_name.clone(),
+                protocol: chat_protocol_for_stat.to_string(),
+                tool_compat_mode: 0,
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(error_msg.clone()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
         );
 
         return Ok(response);
@@ -535,6 +601,8 @@ fn enhance_direct_request_body(
                         }
                     }
                 }
+                // Decision requests carry state and questions, so there is no chat prompt to inject.
+                ChatProtocol::Decision => {}
             }
         }
     }
@@ -1210,6 +1278,8 @@ fn chunk_parser_and_log(
                             recorder.output_tokens = Some(eval_count);
                         }
                     }
+                    // System One answers are not streamed, so there is no stream chunk to record.
+                    ChatProtocol::Decision => {}
                 }
             }
         }
@@ -1283,6 +1353,10 @@ fn direct_response_has_output(value: &Value, protocol: &ChatProtocol) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|tool_calls| !tool_calls.is_empty())
         }),
+        ChatProtocol::Decision => value
+            .get("answers")
+            .and_then(Value::as_object)
+            .is_some_and(|answers| !answers.is_empty()),
     }
 }
 
@@ -1344,6 +1418,10 @@ fn estimate_direct_response_output_tokens(value: &Value, protocol: &ChatProtocol
         ChatProtocol::Ollama => value
             .get("message")
             .map(|message| estimate_tokens(&message.to_string()))
+            .unwrap_or(0.0),
+        ChatProtocol::Decision => value
+            .get("answers")
+            .map(|answers| estimate_tokens(&answers.to_string()))
             .unwrap_or(0.0),
     }
 }
@@ -1466,6 +1544,18 @@ fn extract_usage_from_value(
                 .unwrap_or(0);
             let output = value
                 .get("eval_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            (input, output, 0, 0, 0, 0, 0)
+        }
+        ChatProtocol::Decision => {
+            let usage = value.get("usage");
+            let input = usage
+                .and_then(|u| u.get("input_tokens"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let output = usage
+                .and_then(|u| u.get("output_tokens"))
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
             (input, output, 0, 0, 0, 0, 0)

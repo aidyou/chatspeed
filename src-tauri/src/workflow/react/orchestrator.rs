@@ -366,10 +366,13 @@ fn build_terminal_sub_agent_result(
             } else {
                 "failed"
             };
+            let terminal = error.terminal_error();
             json!({
                 "status": status,
                 "task_id": task_id,
                 "error": error.to_string(),
+                "error_type": terminal.error_type,
+                "error_metadata": terminal.metadata,
                 "tool_calls_count": tool_calls_count
             })
         }
@@ -545,18 +548,18 @@ fn append_sub_agent_event(
 fn filter_sub_agent_tool_ids(tools_json: Option<&str>) -> Option<String> {
     let mut tools = tools_json.and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())?;
     tools.retain(|tool| {
-        // System/internal tools that sub-agents should not access
-        tool != crate::tools::TOOL_BASH
-            && tool != crate::tools::TOOL_SUB_AGENT_RUN
-            && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
-            && tool != crate::tools::TOOL_SUB_AGENT_STOP
-            // Plan-related tools are for planning mode (writing records), not for sub-agents
-            && tool != crate::tools::TOOL_PLAN_READ_NOTE
-            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
-            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
-            // ask_user requires user interaction, sub-agents cannot use it
-            && tool != crate::tools::TOOL_ASK_USER
+        // Nested delegation is not supported. Bash remains controlled by the child
+        // agent's own tool configuration and inherited security snapshot.
+        tool != crate::tools::TOOL_SUB_AGENT_RUN && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
     });
+    serde_json::to_string(&tools).ok()
+}
+
+/// Shell approval is expressed through `shell_policy`, so `bash` must never become an ordinary
+/// auto-approved sub-agent tool.
+fn strip_bash_auto_approve(tools_json: Option<&str>) -> Option<String> {
+    let mut tools = tools_json.and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())?;
+    tools.retain(|tool| tool != crate::tools::TOOL_BASH);
     serde_json::to_string(&tools).ok()
 }
 
@@ -568,11 +571,7 @@ fn filter_sub_agent_mcp_config(
         tool != crate::tools::TOOL_BASH
             && tool != crate::tools::TOOL_SUB_AGENT_RUN
             && tool != crate::tools::TOOL_SUB_AGENT_OUTPUT
-            && tool != crate::tools::TOOL_SUB_AGENT_STOP
-            && tool != crate::tools::TOOL_PLAN_READ_NOTE
-            && tool != crate::tools::TOOL_PLAN_EDIT_NOTE
-            && tool != crate::tools::TOOL_PLAN_WRITE_NOTE
-            && tool != crate::tools::TOOL_ASK_USER
+            && tool != crate::tools::TOOL_PLAN_NOTE
     });
     config.normalize();
     Some(config)
@@ -796,6 +795,8 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.available_tools =
             filter_sub_agent_tool_ids(agent_config.available_tools.as_deref());
         agent_config.auto_approve = filter_sub_agent_tool_ids(agent_config.auto_approve.as_deref());
+        // Shell approval belongs to shell_policy, never to the ordinary auto-approve set.
+        agent_config.auto_approve = strip_bash_auto_approve(agent_config.auto_approve.as_deref());
         let mcp_config = agent_config
             .mcp_tool_exposure
             .as_deref()
@@ -804,17 +805,19 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.mcp_tool_exposure =
             filtered_mcp_config.and_then(|config| serde_json::to_string(&config).ok());
 
-        let inherited_allowed_paths = if let Some(parent_session_id) = parent_session_id {
+        // The parent session stays the workspace authority for every child. Authorized
+        // roots gate reads as well as writes, so a read-only child needs them too.
+        let inherited_parent_config = parent_session_id.and_then(|parent_session_id| {
             let store = self.main_store.as_ref();
             store
                 .get_workflow_snapshot(parent_session_id)
                 .ok()
                 .and_then(|snapshot| snapshot.workflow.agent_config)
                 .and_then(|config_json| AgentConfig::from_json(&config_json))
-                .and_then(|config| config.allowed_paths)
-        } else {
-            None
-        };
+        });
+        let inherited_allowed_paths = inherited_parent_config
+            .as_ref()
+            .and_then(|config| config.allowed_paths.clone());
 
         if let Some(paths) = inherited_allowed_paths.clone() {
             agent_config.allowed_paths = serde_json::to_string(&paths).ok();
@@ -833,18 +836,55 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             .map(PathBuf::from)
             .collect::<Vec<_>>();
 
+        let configured_approval_level = agent_config.approval_level.clone();
+        let effective_approval_level = if configured_approval_level.as_deref() == Some("inherit")
+            && agent_config.role.as_deref() == Some("child")
+        {
+            inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.approval_level.as_deref())
+                .unwrap_or("default")
+        } else {
+            configured_approval_level.as_deref().unwrap_or("default")
+        };
+        agent_config.approval_level = Some(effective_approval_level.to_string());
+
         let workflow_config = AgentConfig {
             personality: agent_config.personality.clone(),
             allowed_paths: workflow_allowed_paths,
-            shell_policy: agent_config
-                .shell_policy
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok()),
-            sandbox_config: None,
-            sandbox_execution_mode: Some(crate::tools::ShellExecutionMode::HostOnly),
-            sandbox_scheme_id: None,
-            sandbox_override: None,
-            approval_level: agent_config.approval_level.clone(),
+            // The child's own rules stay authoritative; the parent only contributes
+            // non-conflicting Allow rules, so the workflow shell policy stays cumulative.
+            shell_policy: crate::commands::workflow::merge_shell_allow_rules(
+                agent_config
+                    .shell_policy
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok()),
+                inherited_parent_config
+                    .as_ref()
+                    .and_then(|config| config.shell_policy.clone()),
+            ),
+            sandbox_config: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_config.clone())
+                .or_else(|| {
+                    agent_config
+                        .sandbox_config
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                }),
+            sandbox_execution_mode: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_execution_mode.clone())
+                .or_else(|| Some(agent_config.sandbox_execution_mode.clone())),
+            sandbox_scheme_id: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_scheme_id.clone())
+                .or_else(|| agent_config.sandbox_scheme_id.clone()),
+            sandbox_override: inherited_parent_config
+                .as_ref()
+                .and_then(|config| config.sandbox_override)
+                .or(Some(true)),
+            approval_level: Some(effective_approval_level.to_string()),
             auto_approve: agent_config
                 .auto_approve
                 .as_deref()
@@ -855,6 +895,7 @@ impl SubAgentFactory for DefaultSubAgentFactory {
                 .available_tools
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            task_tracking_enabled: Some(agent_config.task_tracking_enabled),
             final_audit: agent_config.final_audit,
             final_review_mode: Some(
                 if agent_config.final_audit.unwrap_or(false) {
@@ -876,6 +917,10 @@ impl SubAgentFactory for DefaultSubAgentFactory {
             phase: None,
             models: agent_config.models.clone(),
             max_contexts: agent_config.max_contexts,
+            report_required_sections: agent_config
+                .report_required_sections
+                .as_deref()
+                .and_then(|sections| serde_json::from_str(sections).ok()),
         };
 
         let runtime = {
@@ -2119,75 +2164,6 @@ impl ToolDefinition for TaskOutputTool {
     }
 }
 
-/// Tool to stop a background agent (Full Spec Clone)
-pub struct TaskStopTool {
-    session_id: String,
-}
-
-impl TaskStopTool {
-    pub fn new(session_id: String) -> Self {
-        Self { session_id }
-    }
-}
-
-#[async_trait]
-impl ToolDefinition for TaskStopTool {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_SUB_AGENT_STOP
-    }
-
-    fn description(&self) -> &str {
-        "- Stops a currently running sub-agent owned by this workflow by its task_id\n\
-        - Works for active sub-agents that are still registered in this workflow, including background runs and any still-running child sessions\n\
-        - Takes a task_id parameter identifying the sub-agent to stop\n\
-        - Returns success only when the stop signal was issued to an active sub-agent\n\
-        - Use this tool when the sub-agent is no longer needed, is stuck, or is taking too long. Do not use it for already completed tasks."
-    }
-
-    fn category(&self) -> ToolCategory {
-        ToolCategory::System
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "task_id": { "type": "string", "description": "The ID of the background sub-agent to stop" }
-                },
-                "required": ["task_id"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let task_id = params["task_id"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("task_id required".into()))?;
-        validate_task_access(&self.session_id, task_id)?;
-        if stop_background_task(task_id, None).await {
-            Ok(ToolCallResult::success(
-                Some(format!("Sub-agent {} has been terminated.", task_id)),
-                None,
-            ))
-        } else {
-            Err(ToolError::ExecutionFailed(format!(
-                "Sub-agent {} not found",
-                task_id
-            )))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2541,6 +2517,75 @@ mod tests {
             assert!(summary.is_partial);
             assert_eq!(summary.terminal_status, expected_status);
         }
+    }
+
+    #[test]
+    fn sub_agent_billing_failure_is_structured_without_failing_parent() {
+        let (_dir, store) = test_store();
+        let agent = crate::db::Agent::new(
+            "billing-agent".to_string(),
+            "Billing Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "Billing test prompt".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+            None,
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("failed to add agent");
+        store
+            .create_workflow("billing-parent", "parent", &agent.id, None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "billing-child",
+                "child",
+                &agent.id,
+                None,
+                Some("billing-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let result = build_terminal_sub_agent_result(
+            store.as_ref(),
+            "billing-child",
+            WorkflowState::Error,
+            &Err(WorkflowEngineError::Ai(
+                crate::ai::error::AiError::RawApiRequestFailed {
+                    status_code: 402,
+                    provider: "provider".to_string(),
+                    details: "insufficient balance".to_string(),
+                },
+            )),
+            &[],
+        )
+        .expect("terminal child result must be built");
+
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["error_type"], "llm_billing");
+        assert_eq!(result["error_metadata"]["upstream_status_code"], 402);
+        assert_eq!(result["error_metadata"]["provider"], "provider");
+        assert_eq!(
+            store
+                .get_workflow("billing-parent")
+                .expect("failed to read parent workflow")
+                .expect("parent workflow should exist")
+                .status,
+            "pending"
+        );
     }
 
     #[test]
@@ -3373,7 +3418,13 @@ mod tests {
                     .expect("auto approve json"),
             ), // auto_approve
             None, // models
-            None, // shell_policy
+            Some(
+                serde_json::json!([
+                    { "pattern": "^git status$", "decision": "deny" },
+                    { "pattern": "^cargo build$", "decision": "review" }
+                ])
+                .to_string(),
+            ), // shell_policy
             None, // allowed_paths
             Some(false), // final_audit
             None, // approval_level
@@ -3389,6 +3440,26 @@ mod tests {
         let task = "Inspect the workflow module and report the key risks.";
         let parent_config = AgentConfig {
             allowed_paths: Some(vec![workspace.to_string_lossy().to_string()]),
+            shell_policy: Some(vec![
+                // Same pattern as the child rule: the child's Deny stays authoritative.
+                crate::tools::ShellPolicyRule {
+                    pattern: "^git status$".to_string(),
+                    decision: crate::tools::ShellDecision::Allow,
+                    description: None,
+                },
+                // Inherited non-Allow rules are never appended.
+                crate::tools::ShellPolicyRule {
+                    pattern: "^rm -rf".to_string(),
+                    decision: crate::tools::ShellDecision::Review("dangerous".to_string()),
+                    description: None,
+                },
+                // Non-conflicting Allow rule stays cumulative.
+                crate::tools::ShellPolicyRule {
+                    pattern: "^cargo test$".to_string(),
+                    decision: crate::tools::ShellDecision::Allow,
+                    description: None,
+                },
+            ]),
             ..AgentConfig::default()
         };
 
@@ -3452,13 +3523,103 @@ mod tests {
             config.allowed_paths,
             Some(vec![workspace.to_string_lossy().to_string()])
         );
+        // Nested delegation is filtered out; the shell tool stays, because the child owns it.
         assert_eq!(
             config.available_tools,
-            Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+            Some(vec![
+                crate::tools::TOOL_READ_FILE.to_string(),
+                crate::tools::TOOL_BASH.to_string()
+            ])
         );
         assert_eq!(
             config.auto_approve,
             Some(vec![crate::tools::TOOL_READ_FILE.to_string()])
+        );
+
+        // The child's own shell rules stay authoritative; the parent contributes only its
+        // non-conflicting Allow rules, so the workflow shell policy stays cumulative.
+        let shell_rules = config
+            .shell_policy
+            .as_ref()
+            .expect("child shell policy should be inherited");
+        assert_eq!(shell_rules.len(), 3);
+        assert_eq!(shell_rules[0].pattern, "^git status$");
+        assert!(matches!(
+            shell_rules[0].decision,
+            crate::tools::ShellDecision::Deny(_)
+        ));
+        assert_eq!(shell_rules[1].pattern, "^cargo build$");
+        assert!(matches!(
+            shell_rules[1].decision,
+            crate::tools::ShellDecision::Review(_)
+        ));
+        assert_eq!(shell_rules[2].pattern, "^cargo test$");
+        assert!(matches!(
+            shell_rules[2].decision,
+            crate::tools::ShellDecision::Allow
+        ));
+
+        // A read-only child inherits the same workspace, because authorized roots gate
+        // reads as well as writes.
+        let read_only_child = crate::db::Agent::new(
+            "child-read-only".to_string(),
+            "Code Review".to_string(),
+            None,
+            Some("child".to_string()),
+            Some(parent_agent.id.clone()),
+            "Child prompt".to_string(),
+            None, // planning_prompt
+            None, // image_recognition_prompt
+            Some(serde_json::to_string(&vec![crate::tools::TOOL_READ_FILE]).expect("tools json")), // available_tools
+            Some(
+                serde_json::to_string(&vec![crate::tools::TOOL_READ_FILE])
+                    .expect("auto approve json"),
+            ), // auto_approve
+            None,        // models
+            None,        // shell_policy
+            None,        // allowed_paths
+            Some(false), // final_audit
+            None,        // approval_level
+            Some(false), // skill_enabled
+            None,        // selected_skills
+            None,        // phase
+            Some(false), // is_system
+            Some(false), // disabled
+            None,        // max_contexts
+        );
+
+        {
+            let store_guard = store.as_ref();
+            store_guard
+                .add_agent(&read_only_child)
+                .expect("failed to add read-only child agent");
+        }
+
+        factory
+            .create_executor(
+                &read_only_child.id,
+                "subagent_child_read_only_test",
+                task,
+                &read_only_child.name,
+                Some(parent_session_id),
+            )
+            .await
+            .expect("failed to create read-only child executor");
+
+        let read_only_config = {
+            let store_guard = store.as_ref();
+            store_guard
+                .get_workflow_snapshot("subagent_child_read_only_test")
+                .expect("failed to read read-only child snapshot")
+                .workflow
+                .agent_config
+                .as_deref()
+                .and_then(AgentConfig::from_json)
+                .expect("read-only child workflow config should parse")
+        };
+        assert_eq!(
+            read_only_config.allowed_paths,
+            Some(vec![workspace.to_string_lossy().to_string()])
         );
     }
 

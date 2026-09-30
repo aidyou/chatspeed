@@ -10,9 +10,9 @@ use crate::{ai::interaction::chat_completion::ChatState, tools::MCP_TOOL_NAME_SP
 use rmcp::model::IntoContents;
 use rmcp::{
     model::{
-        CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
-        InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
+        InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
+        ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
     },
     service::{NotificationContext, Peer, RequestContext, RoleServer},
     ServerHandler,
@@ -159,8 +159,8 @@ impl McpProxyHandler {
 }
 
 impl ServerHandler for McpProxyHandler {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -198,7 +198,7 @@ impl ServerHandler for McpProxyHandler {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::model::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::model::ErrorData> {
         // Ensure tool map is loaded
         self.ensure_tool_map_loaded().await?;
 
@@ -208,7 +208,9 @@ impl ServerHandler for McpProxyHandler {
             Some(tool) => tool.clone(),
             None => {
                 let error = json!({"error":t!("mcp.proxy.tool_not_found", tool_name = request.name).to_string()});
-                return Ok(CallToolResult::structured_error(error));
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(error),
+                ));
             }
         };
         drop(tool_map_guard); // Explicitly release lock
@@ -272,12 +274,14 @@ impl ServerHandler for McpProxyHandler {
                 } else {
                     CallToolResult::success(content)
                 };
-                Ok(call_result)
+                Ok(CallToolResponse::Complete(call_result))
             }
             Err(e) => {
                 let error = json!({"error":t!("mcp.proxy.tool_execution_error", error = e.to_string())
                 .to_string()});
-                Ok(CallToolResult::structured_error(error))
+                Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(error),
+                ))
             }
         }
     }

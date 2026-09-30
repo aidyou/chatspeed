@@ -12,7 +12,41 @@ use crate::{
 use http::HeaderMap;
 use std::sync::Arc;
 
-/// Authenticates the request based on the Authorization Bearer token or x-api-key.
+pub(crate) fn is_trusted_internal_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-cs-internal-request")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "true")
+        && headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(|token| token.trim() == INTERNAL_CCPROXY_API_KEY.read().as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_internal_request_requires_internal_key() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+
+        assert!(!is_trusted_internal_request(&headers));
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        assert!(is_trusted_internal_request(&headers));
+    }
+}
+
 /// Reads `chat_completion_proxy_keys` from `MainStore`.
 pub async fn authenticate_request(
     headers: HeaderMap,
@@ -29,16 +63,9 @@ pub async fn authenticate_request(
     // Check for internal request header
     if let Some(internal_header) = headers.get("X-CS-Internal-Request") {
         if internal_header == "true" {
-            if let Some(auth_header) = headers.get("authorization") {
-                if let Ok(auth_str) = auth_header.to_str() {
-                    if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                        let internal_key = INTERNAL_CCPROXY_API_KEY.read().clone();
-                        if token.trim() == internal_key {
-                            log::debug!("Internal request authenticated successfully.");
-                            return Ok(());
-                        }
-                    }
-                }
+            if is_trusted_internal_request(&headers) {
+                log::debug!("Internal request authenticated successfully.");
+                return Ok(());
             }
             log::warn!("Internal request authentication failed.");
             return Err(CCProxyError::InvalidToken);

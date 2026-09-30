@@ -1,0 +1,4 @@
+chat:
+  api_key_is_require_for_list_models: 获取模型列表需要提供 API 密钥
+cs:
+  no_records: 无记录

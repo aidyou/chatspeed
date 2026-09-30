@@ -49,6 +49,16 @@
   }
 }
 
+@keyframes compact-sidebar-list-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .rotating {
   animation: cs-rotate 2s linear infinite;
   display: inline-block;

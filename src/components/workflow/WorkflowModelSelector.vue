@@ -69,11 +69,11 @@
 
           <div v-if="supportsThinking(activeTab)" class="params-row compact-params" style="margin-top: 8px; display: flex; gap: 10px;">
             <div class="param-item" style="flex: 1;">
-              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.reasoning') }}</span>
+              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.reasoningCompact') }}</span>
               <el-switch v-model="currentModel.thinkingEnabled" size="small" />
             </div>
             <div class="param-item" v-if="currentModel.thinkingEnabled" style="flex: 1;">
-              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.thinkingLevel') }}</span>
+              <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.thinkingLevelCompact') }}</span>
               <el-select v-model="currentModel.thinkingLevel" size="small" style="width: 100%">
                 <el-option
                   v-for="option in workflowThinkingLevelOptions"
@@ -329,6 +329,8 @@ const handleClose = (done) => {
 
 const handleSave = () => {
   const result = JSON.parse(JSON.stringify(agentModels))
+  const existingModels = props.initialModels?.models || props.initialModels ||
+    (workflowStore.currentWorkflow?.agentConfig?.models || null)
   for (const key of ['plan', 'act', 'utility', 'lite', 'vision']) {
     result[key].thinking = result[key].thinkingEnabled
       ? {

@@ -502,6 +502,49 @@ export function useWorkflowCore({
         }
     }
 
+    const consumeFinalAuditMode = async (sessionId) => {
+        if (!sessionId) return
+
+        const isCurrentSession = currentWorkflowId.value === sessionId
+        const workflow = workflows.value.find((item) => item.id === sessionId)
+        const workflowConfig =
+            typeof workflow?.agentConfig === 'string'
+                ? (() => {
+                      try {
+                          return JSON.parse(workflow.agentConfig)
+                      } catch {
+                          return {}
+                      }
+                  })()
+                : workflow?.agentConfig || {}
+        const isEnabled = isCurrentSession
+            ? finalAuditMode.value === 'on' || workflowConfig.finalAudit === true
+            : workflowConfig.finalAudit === true
+        if (!isEnabled) return
+
+        try {
+            await invokeWrapper('update_workflow_final_audit', {
+                sessionId,
+                finalAudit: false
+            })
+
+            if (isCurrentSession && currentWorkflowId.value === sessionId) {
+                isSyncingWorkflowConfig.value = true
+                try {
+                    finalAuditMode.value = 'off'
+                } finally {
+                    isSyncingWorkflowConfig.value = false
+                }
+            }
+            applyWorkflowConfigToLocalStore(
+                { finalAudit: false, finalReviewMode: 'off' },
+                sessionId
+            )
+        } catch (error) {
+            console.warn('[Workflow] Failed to consume final audit mode:', error)
+        }
+    }
+
     const updateWorkflowPersonality = async (personality) => {
         const sessionId = currentWorkflowId.value
         if (!sessionId) return
@@ -897,6 +940,27 @@ export function useWorkflowCore({
         }
     }
 
+    const showSubAgentAskUserNotification = (sessionId, payload = {}) => {
+        const parentSessionId = String(payload?.parent_session_id || '').trim()
+        const subAgentId = String(payload?.sub_agent_id || '').trim()
+        if (!parentSessionId || parentSessionId !== sessionId || !subAgentId) return
+
+        const reminderKey = `${subAgentId}:awaiting_user`
+        const hadReminder = !!pendingApprovalEntries.value[reminderKey]
+        upsertPendingApprovalEntry(parentSessionId, {
+            id: 'awaiting_user',
+            kind: 'ask_user',
+            action: t('workflow.awaitingUser'),
+            targetSessionId: subAgentId,
+            navigationSessionId: parentSessionId,
+            subAgentId
+        })
+
+        if (!hadReminder) {
+            playApprovalNotificationSound()
+        }
+    }
+
     const handleSubAgentApprovalRequested = payload => {
         const parentSessionId = String(payload?.parent_session_id || '').trim()
         const subAgentId = String(payload?.sub_agent_id || '').trim()
@@ -968,16 +1032,27 @@ export function useWorkflowCore({
                         return
                     }
 
-                    if (payload.type === 'sub_agent_approval_resolved') {
-                        handleSubAgentApprovalResolved(payload)
-                        return
-                    }
-
                     if (payload.type === 'sub_agent_progress') {
+                        if (payload.wait_reason === WORKFLOW_WAIT_REASONS.USER_INPUT) {
+                            showSubAgentAskUserNotification(sessionId, payload)
+                        } else if (
+                            ['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(
+                                String(payload.status || payload.workflow_state || '').toLowerCase()
+                            ) ||
+                            payload.wait_reason !== WORKFLOW_WAIT_REASONS.USER_INPUT
+                        ) {
+                            clearPendingApprovalEntry(sessionId, 'awaiting_user', payload.sub_agent_id)
+                        }
+
                         const status = String(payload.status || payload.workflow_state || '').toLowerCase()
                         if (['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(status)) {
                             clearPendingApprovalEntriesBySubAgent(payload.sub_agent_id)
                         }
+                        return
+                    }
+
+                    if (payload.type === 'sub_agent_approval_resolved') {
+                        handleSubAgentApprovalResolved(payload)
                         return
                     }
 
@@ -1037,6 +1112,9 @@ export function useWorkflowCore({
                         })
                         // Play completion sound when background workflow successfully completes
                         if (statusLower === WORKFLOW_STATUSES.COMPLETED) {
+                            consumeFinalAuditMode(sessionId).catch((error) => {
+                                console.warn('[Workflow] Failed to consume completed final audit mode:', error)
+                            })
                             playCompletionSound()
                         }
                         const cleanup = backgroundStateListeners.get(sessionId)
@@ -1153,6 +1231,9 @@ export function useWorkflowCore({
                         })
                         // Play completion sound when workflow successfully completes
                         if ((payload.state || '').toLowerCase() === WORKFLOW_STATUSES.COMPLETED) {
+                            consumeFinalAuditMode(sessionId).catch((error) => {
+                                console.warn('[Workflow] Failed to consume completed final audit mode:', error)
+                            })
                             playCompletionSound()
                         }
                     }
@@ -1352,9 +1433,12 @@ export function useWorkflowCore({
                 } else if (payload.type === 'sub_agent_progress') {
                     const status = String(payload.status || payload.workflow_state || '').toLowerCase()
                     const isTerminal = ['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(status)
-                    if (!isTerminal) {
-                        markSessionLiveFromNonTerminalEvent()
-                    } else {
+                    if (payload.wait_reason === WORKFLOW_WAIT_REASONS.USER_INPUT) {
+                        showSubAgentAskUserNotification(sessionId, payload)
+                    } else if (isTerminal || payload.wait_reason !== WORKFLOW_WAIT_REASONS.USER_INPUT) {
+                        clearPendingApprovalEntry(sessionId, 'awaiting_user', payload.sub_agent_id)
+                    }
+                    if (isTerminal) {
                         clearPendingApprovalEntriesBySubAgent(payload.sub_agent_id)
                     }
                     workflowStore.upsertSubAgentProgress(payload)
@@ -1451,14 +1535,11 @@ export function useWorkflowCore({
                 })
             }
 
-            if (
-                previousStatus === WORKFLOW_STATUSES.AWAITING_USER ||
-                previousWaitReason === WORKFLOW_WAIT_REASONS.USER_INPUT
-            ) {
-                showBackgroundAskUserNotification(previousWorkflowId)
-            } else {
-                clearPendingApprovalEntries(previousWorkflowId, 'ask_user')
-            }
+                if (previousStatus === WORKFLOW_STATUSES.AWAITING_USER || previousWaitReason === WORKFLOW_WAIT_REASONS.USER_INPUT) {
+                    showBackgroundAskUserNotification(previousWorkflowId)
+                } else {
+                    clearPendingApprovalEntries(previousWorkflowId, 'ask_user')
+                }
         }
 
         // Phase 9: Update session ID for event isolation

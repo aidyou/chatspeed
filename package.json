@@ -9,10 +9,10 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test:theme": "node --test src/composables/primaryColorTheme.test.js",
-    "test:workflow": "node --test src/components/workflow/approvalVisibility.test.js src/composables/workflow/codeEditorContract.test.js src/composables/workflow/messageProjectionRules.test.js src/composables/workflow/modelConfigSelection.test.js src/composables/workflow/planApproval.test.js src/composables/workflow/terminalContract.test.js src/composables/workflow/toolClassification.test.js src/composables/workflow/workflowConstitution.test.js src/composables/workflow/workflowInputDraftCache.test.js src/composables/workflow/workflowSessionHydration.test.js src/composables/workflow/workflowUiContract.test.js src/composables/workflow/useWorkflowMessageScroll.test.js src/stores/workflowApprovalRecovery.test.js src/constants/executionStyle.test.js"
+    "test:capability": "node --test src/libs/capability.test.js src/components/setting/AgentSkills.contract.test.js src/components/setting/Mcp.contract.test.js",
+    "test:workflow": "node --test src/components/workflow/approvalVisibility.test.js src/components/workflow/chatHubUiContract.test.js src/composables/workflow/codeEditorContract.test.js src/composables/workflow/messageProjectionRules.test.js src/composables/workflow/modelConfigSelection.test.js src/composables/workflow/planApproval.test.js src/composables/workflow/terminalClear.test.js src/composables/workflow/terminalContract.test.js src/composables/workflow/terminalWwwLink.test.js src/composables/workflow/toolClassification.test.js src/composables/workflow/workflowConstitution.test.js src/composables/workflow/workflowInputDraftCache.test.js src/composables/workflow/workflowSessionHydration.test.js src/composables/workflow/workflowUiContract.test.js src/composables/workflow/useWorkflowMessageScroll.test.js src/libs/chatHubView.test.js src/stores/workflowApprovalRecovery.test.js src/constants/executionStyle.test.js src/constants/terminalThemes.test.js"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.26",
     "@antv/g2plot": "2.4.34",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.4",
@@ -36,23 +36,21 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.7",
     "@element-plus/icons-vue": "^2.3.2",
-    "@tauri-apps/api": "^2.11.0",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-fs": "^2.5.1",
-    "@tauri-apps/plugin-opener": "^2.5.4",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-shell": "^2.3.5",
+    "@tauri-apps/api": "^2.12.0",
+    "@tauri-apps/plugin-autostart": "^2.6.0",
+    "@tauri-apps/plugin-dialog": "^2.8.0",
+    "@tauri-apps/plugin-fs": "^2.6.0",
+    "@tauri-apps/plugin-opener": "^2.6.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-shell": "^2.4.0",
     "@vue/shared": "^3.5.22",
     "@vueuse/core": "^12.0.0",
     "@vueuse/shared": "^12.0.0",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "ai": "^6.0.78",
     "codemirror": "^6.0.2",
     "diff": "^8.0.3",
     "element-plus": "^2.8.10",
     "exceljs": "^4.4.0",
+    "ghostty-web": "0.4.0",
     "he": "^1.2.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.25",
@@ -72,7 +70,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.0",
+    "@tauri-apps/cli": "^2.12.0",
     "@vitejs/plugin-vue": "^6.0.6",
     "sass-embedded": "^1.93.2",
     "typescript": "^5.9.3",
@@ -104,6 +102,9 @@
       "undici": "7.29.0",
       "uuid": "11.1.1",
       "yaml": "2.8.3"
+    },
+    "patchedDependencies": {
+      "ghostty-web@0.4.0": "src/patches/ghostty-web@0.4.0.patch"
     }
   }
 }

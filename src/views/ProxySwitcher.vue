@@ -1,6 +1,7 @@
 <template>
   <div
     class="proxy-switcher-window"
+    :class="windowStore.os"
     @mousedown.stop
     tabindex="0"
     @keydown="handleKeyDown"
@@ -76,6 +77,16 @@
                 </div>
 
                 <div class="value" @click.stop>
+                  <el-tooltip
+                    :content="$t('proxySwitcher.copyProxyId')"
+                    placement="top"
+                    :hide-after="0"
+                    :enterable="false">
+                    <span class="icon-btn action-btn" @click="copyProxyIdToClipboard(proxy.alias)">
+                      <cs name="copy" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+
                   <el-tooltip
                     :content="$t('settings.proxy.stats.dailyCostTitle')"
                     placement="top"
@@ -389,9 +400,11 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
+import { useWindowStore } from '@/stores/window'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage, isEmpty } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
+import { writeClipboard } from '@/libs/clipboard'
 import {
   buildPricingMaps,
   estimateCostFromPricing,
@@ -408,6 +421,7 @@ const router = useRouter()
 const proxyGroupStore = useProxyGroupStore()
 const settingStore = useSettingStore()
 const modelStore = useModelStore()
+const windowStore = useWindowStore()
 const appWindow = getCurrentWebviewWindow()
 const PROXY_SWITCHER_TARGET_TAB_KEY = 'proxy_switcher_target_tab'
 
@@ -988,6 +1002,16 @@ const formatError = error => {
   return error?.message || String(error)
 }
 
+const copyProxyIdToClipboard = async alias => {
+  try {
+    await writeClipboard(alias)
+    showMessage(t('proxySwitcher.proxyIdCopySuccess'), 'success')
+  } catch (error) {
+    console.error('Failed to copy proxy server id:', error)
+    showMessage(t('proxySwitcher.proxyIdCopyFailed', { error: formatError(error) }), 'error')
+  }
+}
+
 const handleActivateGroup = async name => {
   if (proxyGroupStore.activeGroup === name) return
   try {
@@ -1269,6 +1293,16 @@ onMounted(async () => {
   box-shadow: var(--cs-shadow-lg);
   user-select: none;
   outline: none;
+
+  // Linux and Windows draw a square window frame, so this rounded border would
+  // show up as a rounded outline inside that frame. Their window edge is already
+  // painted by `.app-container`, so the frame is dropped here instead.
+  &.linux,
+  &.windows {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 .header {
@@ -1451,7 +1485,7 @@ onMounted(async () => {
   .value {
     display: flex;
     align-items: center;
-    gap: var(--cs-space-xs);
+    gap: var(--cs-space-xxs);
     margin-left: var(--cs-space-sm);
   }
 }

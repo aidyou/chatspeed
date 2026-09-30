@@ -69,12 +69,12 @@ pub trait ToolDefinition: Send + Sync {
 
 /// A wrapper that adapts an MCP tool to the ToolDefinition trait.
 /// This allows MCP tools to be registered and called just like native tools.
-pub struct McpToolWrapper {
-    pub server_name: String,
-    pub tool_decl: MCPToolDeclaration,
-    pub client: Arc<dyn McpClient>,
-    pub canonical_name: String,
-    pub public_name: String,
+pub(crate) struct McpToolWrapper {
+    pub(crate) server_name: String,
+    pub(crate) tool_decl: MCPToolDeclaration,
+    pub(crate) client: Arc<dyn McpClient>,
+    pub(crate) canonical_name: String,
+    pub(crate) public_name: String,
 }
 
 #[derive(Default)]
@@ -134,17 +134,17 @@ fn reserved_mcp_aliases() -> HashSet<String> {
         crate::tools::TOOL_WEB_FETCH,
         crate::tools::TOOL_SUB_AGENT_RUN,
         crate::tools::TOOL_SUB_AGENT_OUTPUT,
-        crate::tools::TOOL_SUB_AGENT_STOP,
         crate::tools::TOOL_TODO_CREATE,
         crate::tools::TOOL_TODO_LIST,
         crate::tools::TOOL_TODO_UPDATE,
-        crate::tools::TOOL_TODO_GET,
         crate::tools::TOOL_SKILL,
         crate::tools::TOOL_ASK_USER,
         crate::tools::TOOL_COMPLETE_WORKFLOW,
         crate::tools::TOOL_SUBMIT_RESULT,
         crate::tools::TOOL_SUBMIT_PLAN,
-        crate::tools::TOOL_MCP_TOOL_LOAD,
+        crate::tools::TOOL_MCP_TOOL_EXPAND,
+        crate::tools::TOOL_MCP_TOOL_EXECUTE,
+        crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY,
         crate::tools::TOOL_READ_HISTORY_MESSAGE,
     ]
     .into_iter()
@@ -271,9 +271,6 @@ pub struct ToolManager {
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
     /// A channel for notifying consumers that the externally visible MCP tool list changed.
     mcp_tool_change_event_sender: broadcast::Sender<()>,
-    /// A set to track MCP server IDs with ongoing operations (start, stop, restart, refresh).
-    /// This is used to prevent race conditions from rapid UI clicks.
-    pub ops_in_progress: tokio::sync::Mutex<HashSet<i64>>,
 }
 
 impl ToolManager {
@@ -288,7 +285,6 @@ impl ToolManager {
             mcp_alias_registry: RwLock::new(McpAliasRegistry::default()),
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
-            ops_in_progress: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -399,6 +395,25 @@ impl ToolManager {
         self.register_tool(Arc::new(crate::tools::WebFetch::new(app_handle.clone())))
             .await?;
 
+        self.register_core_tools(main_store.clone()).await
+    }
+
+    /// Registers every tool that needs no Tauri/window state.
+    ///
+    /// This is the AppHandle-free core of the tool surface: the file-system and
+    /// search tools. The desktop app calls it after the Tauri-bound web tools; a
+    /// headless process calls it directly, so it never has to fabricate a window
+    /// handle (INV-1/INV-4). Web tools are deliberately *not* part of this set: a
+    /// headless instance must refuse a web-tool requirement up front rather
+    /// than silently run without it.
+    ///
+    /// The system/workflow/interaction tools (shell execute, todo, skills,
+    /// task orchestration) remain unregistered for both runtimes, exactly as
+    /// before this split; enabling them is a separate change.
+    pub async fn register_core_tools(
+        self: Arc<Self>,
+        _main_store: Arc<MainStore>,
+    ) -> Result<(), ToolError> {
         // =================================================
         // FileSystem & Search tools
         // =================================================
@@ -409,8 +424,6 @@ impl ToolManager {
         self.register_tool(Arc::new(crate::tools::EditFile::default()))
             .await?;
         self.register_tool(Arc::new(crate::tools::ListDir::default()))
-            .await?;
-        self.register_tool(Arc::new(crate::tools::Glob::default()))
             .await?;
         self.register_tool(Arc::new(crate::tools::Grep::default()))
             .await?;
@@ -448,16 +461,11 @@ impl ToolManager {
         //     main_store: main_store.clone(),
         // }))
         // .await?;
-        // self.register_tool(Arc::new(crate::tools::TodoGetTool {
-        //     session_id: "".into(),
-        //     main_store: main_store.clone(),
-        // }))
-        // .await?;
 
         // let app_data_dir = app_handle.path().app_data_dir().unwrap_or_default();
         // let scanner = crate::workflow::react::skills::SkillScanner::new(app_data_dir);
         // let skills = scanner.scan().unwrap_or_default();
-        // self.register_tool(Arc::new(crate::tools::SkillExecute::new(skills)))
+        // self.register_tool(Arc::new(crate::workflow::react::skills::SkillExecute::new(skills)))
         //     .await?;
 
         // let factory = app_handle
@@ -472,8 +480,6 @@ impl ToolManager {
         //     crate::workflow::react::orchestrator::TaskOutputTool,
         // ))
         // .await?;
-        // self.register_tool(Arc::new(crate::workflow::react::orchestrator::TaskStopTool))
-        //     .await?;
 
         // // Interaction tools
         // self.register_tool(Arc::new(crate::tools::AskUser)).await?;
@@ -551,7 +557,68 @@ impl ToolManager {
         Ok(())
     }
 
+    /// Copies an MCP wrapper from another manager without rebuilding it from this manager's MCP
+    /// server cache. Session-local workflow managers use this for model-visible autoExpand tools.
+    pub(crate) async fn register_mcp_tool_wrapper(
+        &self,
+        tool: Arc<dyn ToolDefinition>,
+    ) -> Result<(), ToolError> {
+        if tool.category() != ToolCategory::Mcp {
+            return Err(ToolError::InvalidParams(
+                "register_mcp_tool_wrapper requires an MCP tool".to_string(),
+            ));
+        }
+        self.register_tool(tool).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn register_test_mcp_tool(
+        &self,
+        server_name: &str,
+        public_name: &str,
+        input_schema: Value,
+    ) -> Result<String, ToolError> {
+        let canonical_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, public_name);
+        self.register_mcp_tool_wrapper(Arc::new(McpToolWrapper {
+            server_name: server_name.to_string(),
+            tool_decl: MCPToolDeclaration {
+                name: public_name.to_string(),
+                description: format!("Test MCP tool {}", public_name),
+                input_schema,
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                StdioClient::new(McpServerConfig {
+                    name: server_name.to_string(),
+                    protocol_type: McpProtocolType::Stdio,
+                    command: Some("ls".to_string()),
+                    args: Some(vec!["-la".to_string()]),
+                    ..Default::default()
+                })
+                .map_err(|error| ToolError::Initialization(error.to_string()))?,
+            ),
+            canonical_name: canonical_name.clone(),
+            public_name: public_name.to_string(),
+        }))
+        .await?;
+        Ok(canonical_name)
+    }
+
     pub async fn resolve_tool_name(&self, name: &str) -> String {
+        let name = if name == crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY
+            && self
+                .tools
+                .read()
+                .await
+                .contains_key(crate::tools::TOOL_MCP_TOOL_EXPAND)
+        {
+            crate::tools::TOOL_MCP_TOOL_EXPAND
+        } else {
+            name
+        };
+
         if self.tools.read().await.contains_key(name) {
             return name.to_string();
         }
@@ -614,14 +681,41 @@ impl ToolManager {
     /// # Returns
     /// * `ToolResult` - The result of the function execution.
     pub async fn native_tool_call(&self, name: &str, params: Value) -> NativeToolResult {
-        let tool = self.get_tool(name).await?;
+        self.tool_call_with_dispatch(name, params, None).await.0
+    }
+
+    /// Call a tool and report whether the physical owner
+    /// (`ToolDefinition::call`) was actually entered.
+    ///
+    /// `dispatched == false` means the failure happened before owner entry
+    /// (registry lookup miss, disabled MCP tool) — a proven no-effect
+    /// outcome. When `owner_entered` is supplied, it is set to `true`
+    /// exactly at the owner boundary so callers can classify cancellations
+    /// that race with dispatch.
+    pub async fn tool_call_with_dispatch(
+        &self,
+        name: &str,
+        params: Value,
+        owner_entered: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> (NativeToolResult, bool) {
+        use std::sync::atomic::Ordering;
+        let tool = match self.get_tool(name).await {
+            Ok(tool) => tool,
+            Err(error) => return (Err(error), false),
+        };
         if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
-            return Err(ToolError::Security(format!(
-                "MCP tool '{}' is disabled",
-                name
-            )));
+            return (
+                Err(ToolError::Security(format!(
+                    "MCP tool '{}' is disabled",
+                    name
+                ))),
+                false,
+            );
         }
-        match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
+        if let Some(flag) = &owner_entered {
+            flag.store(true, Ordering::SeqCst);
+        }
+        let result = match AssertUnwindSafe(tool.call(params)).catch_unwind().await {
             Ok(result) => result,
             Err(payload) => {
                 let panic_message = if let Some(message) = payload.downcast_ref::<&str>() {
@@ -637,7 +731,8 @@ impl ToolManager {
                     name, panic_message
                 )))
             }
-        }
+        };
+        (result, true)
     }
 
     /// Call a native tool or mcp tool by its name.
@@ -795,8 +890,7 @@ impl ToolManager {
     ) -> Result<(), ToolError> {
         #[cfg(debug_assertions)]
         {
-            log::debug!("Register MCP server {} ... ", &mcp_server_config.name,);
-            log::debug!("MCP server config: {:?}", &mcp_server_config);
+            log::debug!("Register MCP server {} ... ", &mcp_server_config.name);
         }
 
         // Clone for logging in case of early error
@@ -872,9 +966,16 @@ impl ToolManager {
             .map_err(|e_mcp_start| ToolError::Initialization(e_mcp_start.to_string()))?;
         log::info!("MCP client {} started successfully.", &name);
 
-        // 3. Spawn a task to wait for status, list tools, and register
+        // 3. Publish the connected client before its tool list is read.
+        // Registration used to wait for the listing, which left the runtime unable to
+        // report a server that was up and still listing. The read projection reports a
+        // server the runtime does not know as a proven stop, so a healthy cold start
+        // showed as "enabled but not running" with zero tools for the whole listing.
+        self.publish_connected_mcp_client(client_arc.clone()).await;
+
+        // 4. Spawn a task to wait for status, list tools, and fill the tool cache.
         // This allows the main registration flow to return quickly, while the tool discovery
-        // and registration happens in the background.
+        // happens in the background.
         let tool_manager_arc = self.clone(); // Clone the Arc<Self> for the spawned task
         let client_arc_for_task = client_arc.clone(); // Clone the client Arc for the spawned task
         let server_name_for_task = name.clone(); // Clone name for logging in task
@@ -905,8 +1006,8 @@ impl ToolManager {
                             })
                             .collect();
 
-                        // 4. Register the MCP server and tools in internal state
-                        // We register the server and its tools (with disabled flags) regardless of
+                        // 5. Fill the tool cache for the already published server
+                        // We register the tools (with disabled flags) regardless of
                         // whether all tools are disabled, so the frontend can see them.
                         if let Err(e) = tool_manager_arc
                             .register_mcp_server_inner(
@@ -945,22 +1046,37 @@ impl ToolManager {
                     }
                 }
             } else {
+                // The client stays published, so the runtime keeps reporting its own
+                // status; only the tool listing is skipped.
                 log::warn!(
-                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing and registration.",
+                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing.",
                     server_name_for_task,
                     status
                 );
             }
         }); // Task spawned
 
-        // 5. Return immediately, the rest happens in the spawned task
+        // 6. Return immediately, the rest happens in the spawned task
         Ok(())
     }
 
+    /// Makes a started client visible to the runtime before its tool list is read.
+    ///
+    /// `register_mcp_server_inner` publishes a server together with its tools, which
+    /// is too late for the read projection: a server the runtime does not list is
+    /// reported as a proven stop, so the seconds a cold child needs to list its tools
+    /// were reported as an "enabled but not running" server with zero tools. Publishing
+    /// the connected client keeps its real status observable throughout.
+    async fn publish_connected_mcp_client(&self, client: Arc<dyn McpClient>) {
+        let name = client.name().await;
+        let mut servers_guard = self.mcp_servers.write().await;
+        servers_guard.insert(name, client);
+    }
+
     /// Registers a new MCP server and its tools with the manager's internal state.
-    /// This method should be called *after* the client has been created and started,
-    /// and its tools have been fetched. It primarily handles updating the internal HashMaps.
-    /// This is called from within the spawned task in `register_mcp_server`.
+    /// The server itself is already published by `publish_connected_mcp_client`; this
+    /// method fills in the tool list fetched from it, and it is called from within the
+    /// spawned task in `register_mcp_server`.
     ///
     /// # Arguments
     /// * `client` - The Arc to the started McpClient instance.
@@ -1167,7 +1283,7 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<Arc<dyn McpClient>, ToolError>` - The result of the server retrieval.
-    pub async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
+    pub(crate) async fn get_mcp_server(&self, name: &str) -> Result<Arc<dyn McpClient>, ToolError> {
         let servers_guard: tokio::sync::RwLockReadGuard<
             '_,
             HashMap<String, Arc<dyn McpClient + 'static>>,
@@ -1454,25 +1570,48 @@ mod tests {
             .await
             .is_none());
 
-        let loader = crate::tools::McpToolLoad {
+        let loader = crate::tools::McpToolExpand {
             tool_manager: manager.clone(),
             allowed_tools: Some(HashSet::from(["beta__MCP__search".to_string()])),
         };
         let loaded = loader
             .call(json!({ "tool_name": "search" }))
             .await
-            .expect("public MCP alias must resolve through mcp_tool_load");
+            .expect("public MCP alias must resolve through mcp_tool_expand");
         let declaration = loaded
             .structured_content
-            .expect("mcp_tool_load must return a declaration");
+            .expect("mcp_tool_expand must return a declaration");
         assert_eq!(declaration["name"], "search");
         assert!(loaded
             .content
             .as_deref()
             .is_some_and(|content| content.contains("Full MCP tool definition:")));
         assert!(loaded.content.as_deref().is_some_and(|content| {
-            content.contains("Call 'search' directly in your next tool action")
+            content.contains("Call `mcp_tool_execute` in your next tool action")
         }));
+    }
+
+    #[tokio::test]
+    async fn legacy_mcp_expander_name_resolves_to_new_name() {
+        let manager = Arc::new(ToolManager::new());
+        manager
+            .register_tool(Arc::new(crate::tools::McpToolExpand {
+                tool_manager: manager.clone(),
+                allowed_tools: None,
+            }))
+            .await
+            .expect("MCP expander should register");
+
+        assert!(
+            manager
+                .has_tool(crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY)
+                .await
+        );
+        let tool = manager
+            .get_tool(crate::tools::TOOL_MCP_TOOL_LOAD_LEGACY)
+            .await
+            .expect("legacy MCP expander name should resolve");
+        assert_eq!(tool.name(), crate::tools::TOOL_MCP_TOOL_EXPAND);
     }
 
     #[tokio::test]
@@ -1523,6 +1662,103 @@ mod tests {
         assert!(names.contains("wf_only"));
         assert!(names.contains("chat_only"));
         assert!(names.contains("both"));
+    }
+
+    #[tokio::test]
+    async fn native_registration_after_a_copied_mcp_wrapper_removes_the_wrapper() {
+        let manager = ToolManager::new();
+        let wrapper = Arc::new(McpToolWrapper {
+            server_name: "test_server".into(),
+            tool_decl: MCPToolDeclaration {
+                name: "copied_tool".into(),
+                description: "Copied MCP tool".into(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: "test_server".into(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .expect("test client"),
+            ),
+            canonical_name: "test_server__MCP__copied_tool".into(),
+            public_name: "copied_tool".into(),
+        });
+
+        manager
+            .register_mcp_tool_wrapper(wrapper)
+            .await
+            .expect("copied wrapper must register");
+        assert!(manager.has_tool("copied_tool").await);
+
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "native_after_mcp".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("native tool must register");
+
+        assert!(manager.has_tool("native_after_mcp").await);
+        assert!(
+            !manager.has_tool("copied_tool").await,
+            "native registration rebuilds from the local MCP cache and removes copied wrappers"
+        );
+    }
+
+    #[tokio::test]
+    async fn copied_mcp_wrapper_registered_last_remains_model_visible() {
+        let manager = ToolManager::new();
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "native_before_mcp".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("native tool must register");
+        let wrapper = Arc::new(McpToolWrapper {
+            server_name: "test_server".into(),
+            tool_decl: MCPToolDeclaration {
+                name: "visible_tool".into(),
+                description: "Visible MCP tool".into(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            },
+            client: Arc::new(
+                crate::mcp::client::StdioClient::new(crate::mcp::client::McpServerConfig {
+                    name: "test_server".into(),
+                    protocol_type: crate::mcp::client::McpProtocolType::Stdio,
+                    command: Some("ls".into()),
+                    args: Some(vec!["-la".into()]),
+                    ..Default::default()
+                })
+                .expect("test client"),
+            ),
+            canonical_name: "test_server__MCP__visible_tool".into(),
+            public_name: "visible_tool".into(),
+        });
+        manager
+            .register_mcp_tool_wrapper(wrapper)
+            .await
+            .expect("copied wrapper must register last");
+
+        let names = manager
+            .get_tool_calling_spec(Some(ToolScope::Workflow), None)
+            .await
+            .expect("tool declarations")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+        assert!(names.contains("native_before_mcp"));
+        assert!(names.contains("visible_tool"));
     }
 
     #[tokio::test]
@@ -1578,6 +1814,68 @@ mod tests {
         manager.notify_mcp_tools_changed();
 
         receiver.recv().await.expect("tool change event");
+    }
+
+    #[tokio::test]
+    async fn a_published_client_is_observable_before_its_tool_list_arrives() {
+        let manager = Arc::new(ToolManager::new());
+        let client: Arc<dyn McpClient> = Arc::new(
+            StdioClient::new(McpServerConfig {
+                name: "weather".into(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("ls".into()),
+                args: Some(vec!["-la".into()]),
+                ..Default::default()
+            })
+            .expect("test MCP client"),
+        );
+
+        // Registration publishes the client before the tool listing, so the runtime
+        // answers with the client's own status while the cache is still empty. Staying
+        // absent until the listing finished is what made a cold start read as a proven
+        // "stopped" server ("enabled but not running") with zero tools.
+        manager.publish_connected_mcp_client(client.clone()).await;
+
+        let statuses = manager.get_mcp_serves_status().await.expect("status read");
+        let published = statuses
+            .get("weather")
+            .expect("a published server must be observable");
+        assert_eq!(published, &client.status().await);
+        assert!(
+            manager.get_mcp_server_tools("weather").await.is_err(),
+            "the tool cache is filled by the listing, not by the publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_call_with_dispatch_reports_owner_entry_fact() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let manager = ToolManager::new();
+        manager
+            .register_tool(Arc::new(MockTool {
+                name: "ok_tool".into(),
+                scope: ToolScope::Both,
+            }))
+            .await
+            .expect("mock tool should register");
+
+        // Registry lookup miss: failure happens before owner entry.
+        let (result, dispatched) = manager
+            .tool_call_with_dispatch("missing_tool", json!({}), None)
+            .await;
+        assert!(matches!(result, Err(ToolError::FunctionNotFound(_))));
+        assert!(!dispatched);
+
+        // Owner entered even when the tool itself fails; the flag is set
+        // exactly at the owner boundary.
+        let flag = Arc::new(AtomicBool::new(false));
+        let (result, dispatched) = manager
+            .tool_call_with_dispatch("ok_tool", json!({}), Some(Arc::clone(&flag)))
+            .await;
+        assert!(result.is_ok());
+        assert!(dispatched);
+        assert!(flag.load(Ordering::SeqCst));
     }
 }
 

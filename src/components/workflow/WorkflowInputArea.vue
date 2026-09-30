@@ -200,7 +200,8 @@
               ref="quickActionsDropdownRef"
               trigger="click"
               :hide-on-click="false"
-              @command="handleQuickActionCommand">
+              @command="handleQuickActionCommand"
+              @visible-change="onQuickActionsVisibleChange">
               <label
                 class="icon-btn upperLayer quick-actions-badge"
                 :class="{ 'has-active-options': activeRuntimeOptionCount > 0 }">
@@ -210,7 +211,7 @@
                 </span>
               </label>
               <template #dropdown>
-                <el-dropdown-menu class="workflow-quick-actions-dropdown">
+                <el-dropdown-menu class="workflow-quick-actions-dropdown" :style="quickActionsMenuStyle">
                   <el-dropdown-item v-if="canAttachImages" command="attachment">
                     <cs name="attachment" size="14px" class="dropdown-icon" />
                     <span class="dropdown-content">
@@ -274,12 +275,19 @@
                       </div>
                       <div v-if="workflowMcpTools.length > 0" class="mcp-config-panel__content checkbox-list">
                         <div v-for="tool in workflowMcpTools" :key="tool.id" class="mcp-config-panel__row">
-                          <span class="checkbox-label-wrap">
-                            <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
-                            <span v-if="getMcpToolServerName(tool)" class="tool-server">
-                              {{ getMcpToolServerName(tool) }}
+                          <el-tooltip
+                            placement="top"
+                            :content="getMcpToolTooltip(tool)"
+                            :show-after="200"
+                            :enterable="false"
+                            popper-class="mcp-tool-tooltip">
+                            <span class="checkbox-label-wrap">
+                              <code class="tool-name">{{ getMcpToolDisplayName(tool) }}</code>
+                              <span v-if="getMcpToolServerName(tool)" class="tool-server">
+                                {{ getMcpToolServerName(tool) }}
+                              </span>
                             </span>
-                          </span>
+                          </el-tooltip>
                           <el-switch
                             size="small"
                             :model-value="tool.available"
@@ -343,10 +351,10 @@
                           </div>
                           <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
                         </el-tab-pane>
-                        <el-tab-pane :label="`${$t('workflow.toolConfig')} (${autoApprovedTools.length})`" name="autoApprove">
+                        <el-tab-pane :label="`${$t('workflow.autoApproveTab')} (${autoApprovedTools.length})`" name="autoApprove">
                           <div v-if="availableApprovalTools.length > 0" class="section-content checkbox-list">
                             <label v-for="tool in availableApprovalTools" :key="tool.id" class="checkbox-item tool-checkbox-item">
-                              <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool.id, checked)">
+                              <el-checkbox :model-value="autoApprovedTools.includes(tool.id)" @change="checked => toggleAutoApprovedTool(tool, checked)">
                                 <span class="checkbox-label-wrap">
                                   <code class="tool-name">{{ tool.id }}</code>
                                   <span v-if="tool.name && tool.name !== tool.id" class="tool-desc">{{ tool.name }}</span>
@@ -356,7 +364,7 @@
                           </div>
                           <div v-else class="section-empty-text">{{ $t('common.noData') }}</div>
                         </el-tab-pane>
-                        <el-tab-pane :label="`${$t('workflow.allowedShellCommands')} (${shellPolicyRules.length})`" name="shell">
+                        <el-tab-pane :label="`${$t('workflow.shellRulesTab')} (${shellPolicyRules.length})`" name="shell">
                           <div class="panel-section">
                             <div class="section-toolbar shell-policy-search">
                               <el-input
@@ -594,6 +602,9 @@
                           size="14px"
                           class="dropdown-check" />
                       </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelDefaultDescription') }}
+                      </span>
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item command="approvalSmart" :class="{ active: approvalLevel === 'smart' }">
@@ -606,6 +617,9 @@
                           name="check"
                           size="14px"
                           class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelSmartDescription') }}
                       </span>
                     </span>
                   </el-dropdown-item>
@@ -622,6 +636,9 @@
                           name="check"
                           size="14px"
                           class="dropdown-check" />
+                      </span>
+                      <span class="dropdown-note">
+                        {{ $t('settings.agent.approvalLevelFullDescription') }}
                       </span>
                     </span>
                   </el-dropdown-item>
@@ -678,6 +695,18 @@
                     <span class="sandbox-option-copy">
                       <span>{{ scheme.name }}</span>
                     </span>
+                    <el-tooltip
+                      v-if="sandboxSchemeId === scheme.id"
+                      :content="$t('settings.agent.sandboxRefreshConfig')"
+                      :hide-after="0"
+                      :enterable="false"
+                      placement="top">
+                      <span
+                        class="sandbox-refresh"
+                        @click.stop="refreshSandboxConfig">
+                        <cs name="refresh" size="14px" />
+                      </span>
+                    </el-tooltip>
                     <cs
                       v-if="sandboxSchemeId === scheme.id"
                       name="check"
@@ -791,6 +820,7 @@ import {
   getModelConfigForOption,
   resolveActiveModelConfig
 } from '@/composables/workflow/modelConfigSelection'
+import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import AgentSelector from './AgentSelector.vue'
 import StatusNotifier from './StatusNotifier.vue'
 
@@ -1173,8 +1203,35 @@ const getMcpToolServerName = tool => {
   return separatorIndex > 0 ? id.slice(0, separatorIndex) : ''
 }
 
+// Full "server · tool" label revealed when the row text is truncated by ellipsis.
+const getMcpToolTooltip = tool => {
+  const name = getMcpToolDisplayName(tool)
+  const server = getMcpToolServerName(tool)
+  return server ? `${server} · ${name}` : name
+}
+
+const toolRegistryById = computed(
+  () => new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+)
+// MCP tools may also be persisted under their public alias instead of the canonical
+// `__MCP__` id, so aliases of registered MCP tools must be rejected as well.
+const mcpToolAliasNames = computed(
+  () =>
+    new Set(
+      agentStore.availableTools.filter(tool => tool.category === 'MCP').map(tool => tool.name)
+    )
+)
+
+// The tool configuration popover only manages native tools: MCP availability and
+// approval are owned by the dedicated MCP panel.
+const isMcpToolId = toolId => {
+  const id = String(toolId ?? '')
+  const category = toolRegistryById.value.get(id)?.category
+  return isWorkflowMcpTool(id, category) || mcpToolAliasNames.value.has(id)
+}
+
 const agentAvailableTools = computed(() => {
-  const toolDetails = new Map(agentStore.availableTools.map(tool => [tool.id, tool]))
+  const toolDetails = toolRegistryById.value
   const configuredNativeTools = Array.isArray(props.selectedAgent?.availableTools)
     ? props.selectedAgent.availableTools
     : Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)
@@ -1182,7 +1239,7 @@ const agentAvailableTools = computed(() => {
       : []
 
   return configuredNativeTools
-    .filter(id => !String(id).includes('__MCP__'))
+    .filter(id => !isMcpToolId(id))
     .map(id => ({ id, name: toolDetails.get(id)?.name || id }))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
@@ -1216,14 +1273,14 @@ const workflowAvailableToolIds = computed(() => {
     agentAvailableTools.value.map(tool => tool.id)
   )
   if (Array.isArray(props.currentWorkflow?.agentConfig?.availableTools)) {
-    const ordinary = props.currentWorkflow.agentConfig.availableTools
-      .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
+    const ordinary = props.currentWorkflow.agentConfig.availableTools.filter(id =>
+      nativeCapabilityIds.has(id)
+    )
     const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
     return [...new Set([...ordinary, ...mcp])]
   }
   const ordinary = Array.isArray(props.selectedAgent?.availableTools)
-    ? props.selectedAgent.availableTools
-        .filter(id => !String(id).includes('__MCP__') && nativeCapabilityIds.has(id))
+    ? props.selectedAgent.availableTools.filter(id => nativeCapabilityIds.has(id))
     : []
   const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
   return [...new Set([...ordinary, ...mcp])]
@@ -1231,7 +1288,7 @@ const workflowAvailableToolIds = computed(() => {
 const autoApprovedTools = computed(() => {
   const availableSet = new Set(workflowAvailableToolIds.value)
   return workflowStore.autoApprovedTools
-    .filter(tool => availableSet.has(tool))
+    .filter(tool => availableSet.has(tool) && !isMcpToolId(tool))
     .sort((a, b) => a.localeCompare(b))
 })
 const shellPolicyRules = computed(() => {
@@ -1279,15 +1336,11 @@ watch(
   }
 )
 const availableApprovalTools = computed(() => {
-  const allowedSet = new Set(
-    workflowAvailableToolIds.value.filter(
-      toolId => toolId && toolId !== 'bash' && toolId !== 'mcp_tool_load'
-    )
-  )
+  const allowedSet = new Set(workflowAvailableToolIds.value)
 
   return agentAvailableTools.value
-    .filter(tool => allowedSet.has(tool.id))
-    .filter(tool => tool.id !== 'bash' && tool.id !== 'mcp_tool_load')
+    // Shell approval is expressed by shell policy rules, never by tool auto-approval.
+    .filter(tool => tool.id !== 'bash' && allowedSet.has(tool.id))
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 const canAddShellPolicyItem = computed(() =>
@@ -1416,6 +1469,11 @@ const selectSandboxScheme = async schemeId => {
   await persistSandboxConfig(sandboxMode.value, schemeId)
 }
 
+const refreshSandboxConfig = async () => {
+  if (isUpdatingSandboxConfig.value) return
+  await persistSandboxConfig(sandboxMode.value, sandboxSchemeId.value)
+}
+
 watch(sandboxPopoverVisible, async isVisible => {
   if (!isVisible || sandboxSchemeStore.loading) return
   try {
@@ -1480,16 +1538,21 @@ const toggleWorkflowMcpConfig = async (toolId, key, checked) => {
   }
 }
 
-const toggleAutoApprovedTool = async (toolName, checked) => {
+const toggleAutoApprovedTool = async (tool, checked) => {
   if (!props.currentWorkflowId) return
+  const toolName = typeof tool === 'string' ? tool : tool.id
 
   const currentAutoApprove = Array.isArray(props.currentWorkflow?.agentConfig?.autoApprove)
     ? props.currentWorkflow.agentConfig.autoApprove
     : [...workflowStore.autoApprovedTools]
 
-  const nextAutoApprove = checked
-    ? [...new Set([...currentAutoApprove, toolName])]
-    : currentAutoApprove.filter(tool => tool !== toolName)
+  // Rewriting the native auto-approval list also drops MCP residue, whose approval
+  // state belongs to the MCP configuration.
+  const nextAutoApprove = (
+    checked
+      ? [...new Set([...currentAutoApprove, toolName])]
+      : currentAutoApprove.filter(tool => tool !== toolName)
+  ).filter(id => !isMcpToolId(id))
 
   try {
     await persistAgentConfig({ autoApprove: nextAutoApprove })
@@ -1613,6 +1676,40 @@ const inputRef = ref(null)
 const quickActionsDropdownRef = ref(null)
 const createWorkflowDialogVisible = ref(false)
 const createWorkflowInheritCurrent = ref(true)
+
+/** Space kept between the quick actions list and the control it opens from. */
+const QUICK_ACTIONS_MENU_GAP = 16
+
+/**
+ * Room the quick actions list may use, measured when it opens.
+ *
+ * The list is longer than the room between the titlebar and the control it opens from, and the
+ * dropdown opens upward, so the list is capped to that room and scrolls instead of growing past
+ * the window. The titlebar is left out because the window paints it above the list.
+ */
+const quickActionsMenuStyle = ref({})
+
+const onQuickActionsVisibleChange = visible => {
+  if (!visible) {
+    quickActionsMenuStyle.value = {}
+    return
+  }
+
+  const trigger = quickActionsDropdownRef.value?.$el
+  if (!trigger?.getBoundingClientRect) {
+    return
+  }
+
+  const titlebar = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--cs-titlebar-height')
+  )
+  const room = Math.round(
+    trigger.getBoundingClientRect().top -
+      (Number.isFinite(titlebar) ? titlebar : 0) -
+      QUICK_ACTIONS_MENU_GAP
+  )
+  quickActionsMenuStyle.value = room > 0 ? { maxHeight: `${room}px` } : {}
+}
 
 const inputMessage = defineModel('inputMessage', { type: String, default: '' })
 const isInputExpanded = ref(false)
@@ -2232,7 +2329,7 @@ defineExpose({
   top: 0;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  grid-template-columns: minmax(0, 1fr) 80px repeat(2, 88px);
   align-items: center;
   gap: var(--cs-space-xs);
   padding: var(--cs-space-xs) 0;
@@ -2259,7 +2356,7 @@ defineExpose({
 
 .mcp-config-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, 88px);
+  grid-template-columns: minmax(0, 1fr) 80px repeat(2, 88px);
   align-items: center;
   gap: var(--cs-space-xs);
   min-height: 42px;
@@ -2346,13 +2443,23 @@ defineExpose({
   line-height: 1.4;
 }
 
+.workflow-quick-actions-dropdown {
+  /*
+   * The list is longer than the room under the control it opens from, so it scrolls. This cap
+   * keeps it inside the window when that room could not be measured; the measured room is
+   * handed in as an inline style.
+   */
+  max-height: calc(100vh - var(--cs-titlebar-height));
+  overflow-y: auto;
+}
+
 .workflow-quick-actions-dropdown :deep(.el-dropdown-menu__item) {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
   gap: var(--cs-space-xs);
   margin: 1px 0;
-  padding: var(--cs-space-xs) var(--cs-space-sm);
+  padding: 8px var(--cs-space-sm);
   border-radius: var(--cs-border-radius);
   line-height: 1.35;
   transition:

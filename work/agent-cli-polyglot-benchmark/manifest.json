@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "dataset_id": "exercism-polyglot",
+  "dataset_version": 1,
+  "split": "python_smoke",
+  "source": {
+    "kind": "local_snapshot",
+    "ref": "local-snapshot:3dfe5f25603f104748b4205739c9d3d5676a470777c261255a501b45cec3a9cc",
+    "source_path_is_runtime_input": false,
+    "upstream": {
+      "name": "Aider polyglot benchmark / Exercism language tracks",
+      "attribution_url": "https://github.com/Aider-AI/aider/tree/main/benchmark",
+      "exercise_source_url": "https://github.com/exercism/python"
+    }
+  },
+  "snapshot": {
+    "archive_digest": "sha256:3dfe5f25603f104748b4205739c9d3d5676a470777c261255a501b45cec3a9cc",
+    "archive_algorithm": "tar_sorted_mtime_epoch_owner_0_group_0_numeric_sha256",
+    "file_count": 2357,
+    "attribution_file": {
+      "path": "README.md",
+      "sha256": "9a06b876910a1566e5152658213d70e62922642513c7dfeb04bed868d510856e"
+    }
+  },
+  "task": {
+    "task_id": "python/exercises/practice/bowling",
+    "relative_path": "python/exercises/practice/bowling",
+    "tree_digest": "sha256:69c60c9ae3a9c8d880486f2f6044fc410ec937a35497a2412941088f61e41d0c",
+    "tree_algorithm": "tar_sorted_mtime_epoch_owner_0_group_0_numeric_sha256",
+    "file_count": 8,
+    "files": [
+      {
+        "path": ".docs/instructions.append.md",
+        "role": "metadata",
+        "sha256": "51b23a84cccf816778935b8dce09c0f88fc0deda3bdc896152a2c65ec9d341fc"
+      },
+      {
+        "path": ".docs/instructions.md",
+        "role": "metadata",
+        "sha256": "38a7d249928abfaac3e24d47222283a9bc3a6c5c599d9cea1d43bbe55eb8de1c"
+      },
+      {
+        "path": ".meta/config.json",
+        "role": "metadata",
+        "sha256": "ff4e4a727258398458fc48e7382abc9fe7d403a3932f2a0fbe9c85e113eb07dd"
+      },
+      {
+        "path": ".meta/example.py",
+        "role": "metadata",
+        "sha256": "7f634589daeb5c2974d3600d8eaf60a8fa157c0ceb37fe7341e47ea0b2e9ca8f"
+      },
+      {
+        "path": ".meta/template.j2",
+        "role": "metadata",
+        "sha256": "8d2ca07fc5fcdbf753b0c2e201e661bf6e2d6ce09093a23ace4cad7e8ed0eaf9"
+      },
+      {
+        "path": ".meta/tests.toml",
+        "role": "metadata",
+        "sha256": "a22167d04839444ae2baf18fc1f8e6c6c2ca217f6dad453639fd65c2dc7c2552"
+      },
+      {
+        "path": "bowling.py",
+        "role": "starter",
+        "sha256": "a356c0682b6c0c04e9e30a7da603b2014c227426b43bbe37f34cd99913d368b6"
+      },
+      {
+        "path": "bowling_test.py",
+        "role": "public_tests",
+        "sha256": "6b9a80b6835828f575ce0aba66876850f75c59f764014ac509fe1df7e3a9ee20"
+      }
+    ]
+  },
+  "license": {
+    "status": "confirmed",
+    "evidence": [
+      {
+        "kind": "repository_attribution",
+        "path": "README.md",
+        "sha256": "9a06b876910a1566e5152658213d70e62922642513c7dfeb04bed868d510856e",
+        "claim": "README attributes exercise content to Exercism and links the language tracks"
+      },
+      {
+        "kind": "upstream_track_root_license",
+        "source_url": "https://github.com/exercism/python/blob/main/LICENSE",
+        "upstream_repo": "exercism/python",
+        "upstream_ref": "9e74e0c36700cf0fbe1393f277095bac325db930",
+        "license_spdx": "MIT",
+        "license_sha256": "e52f804e74f0fbd34e8927962319df346166b8194094309a0aee318693df44df",
+        "retrieval": "GitHub contents API at the pinned upstream commit; bytes cross-checked against the cdn.jsdelivr.net/gh mirror of exercism/python@main",
+        "claim": "The Exercism Python track root LICENSE is the MIT License (Copyright (c) 2021 Exercism) and governs the track including its practice exercises; the Bowling directory ships no task-local overriding license"
+      },
+      {
+        "kind": "task_local_license_absence_checked",
+        "task_tree_digest": "sha256:69c60c9ae3a9c8d880486f2f6044fc410ec937a35497a2412941088f61e41d0c",
+        "claim": "The frozen eight-file Bowling task package contains no LICENSE, COPYING, or NOTICE file, so no task-local license overrides the track root MIT license"
+      },
+      {
+        "kind": "aider_source_attribution",
+        "attribution_url": "https://github.com/Aider-AI/aider/tree/main/benchmark",
+        "claim": "The local snapshot is the Aider polyglot benchmark exercise collection, whose README attributes all exercises to the Exercism language tracks and requires use under the corresponding Exercism open-source licenses"
+      },
+      {
+        "kind": "local_snapshot_digest_recomputed",
+        "algorithm": "tar_sorted_mtime_epoch_owner_0_group_0_numeric_sha256",
+        "command": "tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -cf - -C <snapshot-root> . | sha256sum",
+        "recomputed_digest": "sha256:3dfe5f25603f104748b4205739c9d3d5676a470777c261255a501b45cec3a9cc",
+        "claim": "The frozen snapshot and Bowling tree digests were recomputed from the exact local snapshot bytes and match the staged values; all eight task file digests and the README attribution digest were re-hashed and match"
+      }
+    ],
+    "missing": [],
+    "publication": "internal_only_with_attribution_no_public_task_package_no_official_scores"
+  },
+  "pollution": {
+    "test_class": "public_tests",
+    "contamination_risk": "known",
+    "private_holdout": false,
+    "promotion_eligible": false,
+    "official_aider_score": false
+  },
+  "runner": {
+    "id": "harbor-python-unittest",
+    "version": "1",
+    "command": ["python", "-m", "unittest", "discover", "-s", "/tests", "-p", "bowling_test.py"],
+    "language": "python",
+    "runtime": "pinned Harbor task environment",
+    "network": "none",
+    "cwd": "/workspace",
+    "candidate_root": "/workspace",
+    "readonly_test_root": "/tests",
+    "artifact_root": "/logs/artifacts",
+    "dependency_policy": "standard_library_only_no_runtime_install",
+    "resource_profile": {
+      "wall_time_ms": 300000,
+      "cpu_time_ms": 300000,
+      "memory_bytes": 536870912,
+      "processes": 8,
+      "output_bytes": 1048576,
+      "disk_bytes": 104857600
+    }
+  },
+  "verifier": {
+    "id": "exercism-polyglot-bowling-verifier",
+    "version": "1",
+    "independent": true,
+    "accepts_agent_transcript": false,
+    "accepts_self_reported_score": false,
+    "required_evidence": [
+      "dataset_digest",
+      "task_digest",
+      "runner_identity",
+      "verifier_identity",
+      "exit_status",
+      "test_count",
+      "failure_facts",
+      "declared_artifact_hashes",
+      "run_id",
+      "session_id",
+      "chain_head"
+    ]
+  },
+  "artifact_policy": {
+    "declared_only": true,
+    "allowed_paths": [
+      "runner_result.json",
+      "runner_stdout.txt",
+      "runner_stderr.txt",
+      "task_manifest.json",
+      "evaluation.json",
+      "verdict.json"
+    ],
+    "secrets_and_source": "reject",
+    "raw_task_and_tests": "not_public_artifacts"
+  },
+  "contract_status": "frozen_manifest_executable",
+  "durable_projection": [
+    "dataset_id",
+    "dataset_version",
+    "split",
+    "task_id",
+    "snapshot_digest",
+    "task_digest",
+    "instruction_hash"
+  ]
+}

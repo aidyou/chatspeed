@@ -11,10 +11,7 @@ use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::{
     BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
 };
-use crate::workflow::react::types::{
-    TaskGoalLedger, TaskGoalState, TaskGoalStatus, MAX_USER_EXECUTION_REQUIREMENTS,
-    MAX_USER_EXECUTION_REQUIREMENTS_CHARS, MAX_USER_EXECUTION_REQUIREMENT_CHARS,
-};
+use crate::workflow::react::types::{TaskGoalLedger, TaskGoalState, TaskGoalStatus};
 
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -278,15 +275,12 @@ impl ContextCompressor {
                     // before validation so a weak compressor cannot waste a retry by listing a
                     // read-only or retained-tail path; semantic shape remains validated below.
                     let normalized_summary = Self::normalize_summary_result(&result);
-                    let normalized = match Self::inject_runtime_handoff_fields_with_requirements(
+                    let normalized = match Self::inject_runtime_handoff_fields(
                         &normalized_summary,
                         review_rounds,
                         canonical_file_changes,
                         mode,
                         compressed_until_message_id,
-                        task_goal_ledger
-                            .map(|ledger| ledger.user_execution_requirements.as_slice())
-                            .unwrap_or(&[]),
                     ) {
                         Ok(normalized) => normalized,
                         Err(validation_error) => {
@@ -295,7 +289,7 @@ impl ContextCompressor {
                                 retry_instruction =
                                     Self::build_retry_instruction(&validation_error, mode);
                                 log::info!(
-                                    "ContextCompressor: compression attempt {}/{} returned invalid user execution requirements, retrying in {}s. validation_error={}. normalized_preview={}",
+                                    "ContextCompressor: compression attempt {}/{} returned invalid handoff fields, retrying in {}s. validation_error={}. normalized_preview={}",
                                     attempt,
                                     max_attempts,
                                     wait_secs,
@@ -307,7 +301,7 @@ impl ContextCompressor {
                             }
 
                             return Err(WorkflowEngineError::General(format!(
-                                "Compression returned invalid user execution requirements after {} attempts: {}",
+                                "Compression returned invalid handoff fields after {} attempts: {}",
                                 max_attempts, validation_error
                             )));
                         }
@@ -536,7 +530,8 @@ impl ContextCompressor {
 
     fn should_retry_compression_error(error: &AiError) -> bool {
         match error {
-            AiError::ApiRequestFailed { status_code, .. } => {
+            AiError::ApiRequestFailed { status_code, .. }
+            | AiError::RawApiRequestFailed { status_code, .. } => {
                 *status_code == 408 || *status_code == 429 || *status_code >= 500
             }
             AiError::InitFailed(_)
@@ -1249,31 +1244,12 @@ impl ContextCompressor {
         serde_json::to_string(&handoff).unwrap_or_else(|_| result.to_string())
     }
 
-    #[cfg(test)]
     fn inject_runtime_handoff_fields(
         result: &str,
         review_rounds: &str,
         canonical_file_changes: &[String],
         mode: CompressionMode,
         compressed_until_message_id: i64,
-    ) -> Result<String, String> {
-        Self::inject_runtime_handoff_fields_with_requirements(
-            result,
-            review_rounds,
-            canonical_file_changes,
-            mode,
-            compressed_until_message_id,
-            &[],
-        )
-    }
-
-    fn inject_runtime_handoff_fields_with_requirements(
-        result: &str,
-        review_rounds: &str,
-        canonical_file_changes: &[String],
-        mode: CompressionMode,
-        compressed_until_message_id: i64,
-        inherited_user_execution_requirements: &[String],
     ) -> Result<String, String> {
         let Ok(mut handoff) = serde_json::from_str::<Value>(result) else {
             return Ok(result.to_string());
@@ -1302,16 +1278,10 @@ impl ContextCompressor {
         );
         object.insert("file_changes".to_string(), json!(canonical_paths));
         object.insert("review_rounds".to_string(), canonical_review_rounds);
-        let requirements = Self::normalize_user_execution_requirements(
-            object.get("user_execution_requirements"),
-            inherited_user_execution_requirements,
-            object.get("replaced_user_execution_requirements"),
-        )?;
+        // The goal and its provenance are runtime-owned. Drop legacy requirement fields so a
+        // compressor reply can never re-introduce a model-authored requirement list.
+        object.remove("user_execution_requirements");
         object.remove("replaced_user_execution_requirements");
-        object.insert(
-            "user_execution_requirements".to_string(),
-            json!(requirements),
-        );
         if matches!(mode, CompressionMode::Blocking) {
             object.insert(
                 "as_of_boundary".to_string(),
@@ -1380,11 +1350,10 @@ impl ContextCompressor {
             "latest_source_message_id": source_message_ids.last(),
             "latest_directive": latest_directive,
             "source_previews": source_previews,
-            "previous_user_execution_requirements": ledger.user_execution_requirements,
+            "tracked_current_goal": ledger.tracked_current_goal,
             "previous_task_state": ledger.previous_state.as_ref().map(|state| json!({
                 "status": state.status,
                 "current_goal": state.current_goal,
-                "user_execution_requirements": state.user_execution_requirements,
             })),
             "required_status": if ledger.requires_active_goal { "active" } else { "complete_or_none" },
             "completion_evidence_message_id": ledger.completion_evidence_message_id,
@@ -1420,19 +1389,17 @@ impl ContextCompressor {
         let task_goal_state = TaskGoalState {
             version: 1,
             status: model_task_state.status,
-            current_goal: model_task_state
-                .current_goal
+            // The tracked goal produced by the runtime goal tracker supersedes the model's own
+            // wording, so the persisted goal stays stable across compression boundaries.
+            current_goal: ledger
+                .tracked_current_goal
+                .clone()
+                .or(model_task_state.current_goal)
                 .map(|goal| goal.trim().to_string())
                 .filter(|goal| !goal.is_empty()),
             source_message_ids: ledger.source_message_ids.clone(),
             latest_directive: ledger.source_previews.last().cloned(),
             completion_evidence_message_id: ledger.completion_evidence_message_id,
-            user_execution_requirements: Self::normalize_user_execution_requirements(
-                object.get("user_execution_requirements"),
-                &[],
-                None,
-            )
-            .map_err(WorkflowEngineError::General)?,
         };
         let summary = serde_json::to_string_pretty(&parsed).map_err(|error| {
             WorkflowEngineError::General(format!(
@@ -1647,10 +1614,7 @@ impl ContextCompressor {
         }
         if let Some(unexpected_field) = object.keys().find(|field| {
             !required_fields.contains(&field.as_str())
-                && !matches!(
-                    field.as_str(),
-                    "schema_version" | "kind" | "user_execution_requirements"
-                )
+                && !matches!(field.as_str(), "schema_version" | "kind")
         }) {
             return Err(format!(
                 "{unexpected_field} is not part of the v2 {kind} handoff contract"
@@ -1707,12 +1671,6 @@ impl ContextCompressor {
                         "constraints_and_guards",
                     ],
                 )?;
-                Self::validate_user_execution_requirements(
-                    object,
-                    task_goal_ledger
-                        .map(|ledger| ledger.user_execution_requirements.as_slice())
-                        .unwrap_or(&[]),
-                )?;
                 Self::validate_semantic_entry_limits(
                     object,
                     &[
@@ -1732,12 +1690,6 @@ impl ContextCompressor {
                         "unresolved_carryovers",
                         "constraints_and_guards",
                     ],
-                )?;
-                Self::validate_user_execution_requirements(
-                    object,
-                    task_goal_ledger
-                        .map(|ledger| ledger.user_execution_requirements.as_slice())
-                        .unwrap_or(&[]),
                 )?;
                 Self::validate_semantic_entry_limits(
                     object,
@@ -2122,141 +2074,18 @@ impl ContextCompressor {
         Ok(())
     }
 
-    fn normalize_user_execution_requirements(
-        value: Option<&Value>,
-        inherited: &[String],
-        replacements_value: Option<&Value>,
-    ) -> Result<Vec<String>, String> {
-        let replacements = replacements_value
-            .map(|value| {
-                let entries = value.as_array().ok_or_else(|| {
-                    "replaced_user_execution_requirements must be an array".to_string()
-                })?;
-                let mut replacements = Vec::new();
-                for entry in entries {
-                    let entry = entry
-                        .as_str()
-                        .ok_or_else(|| {
-                            "replaced_user_execution_requirements must contain only strings"
-                                .to_string()
-                        })?
-                        .trim();
-                    if entry.is_empty() {
-                        continue;
-                    }
-                    if !inherited.iter().any(|previous| previous == entry) {
-                        return Err(
-                            "replaced_user_execution_requirements entries must exactly match a prior user_execution_requirements entry"
-                                .to_string(),
-                        );
-                    }
-                    if !replacements.iter().any(|previous: &String| previous == entry) {
-                        replacements.push(entry.to_string());
-                    }
-                }
-                Ok(replacements)
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let Some(value) = value else {
-            if !replacements.is_empty() {
-                return Err(
-                    "user_execution_requirements is required when replacing prior requirements"
-                        .to_string(),
-                );
-            }
-            return Ok(inherited.to_vec());
-        };
-        let entries = value
-            .as_array()
-            .ok_or_else(|| "user_execution_requirements must be an array".to_string())?;
-        if entries.is_empty() && !inherited.is_empty() && replacements.is_empty() {
-            return Ok(inherited.to_vec());
-        }
-
-        let mut normalized = Vec::new();
-        for entry in entries {
-            let entry = entry
-                .as_str()
-                .ok_or_else(|| "user_execution_requirements must contain only strings".to_string())?
-                .trim();
-            if entry.is_empty() {
-                continue;
-            }
-            if entry.chars().count() > MAX_USER_EXECUTION_REQUIREMENT_CHARS {
-                return Err(format!(
-                    "user_execution_requirements entries must contain at most {} characters",
-                    MAX_USER_EXECUTION_REQUIREMENT_CHARS
-                ));
-            }
-            if !normalized.iter().any(|existing: &String| existing == entry) {
-                normalized.push(entry.to_string());
-            }
-        }
-        for previous in inherited {
-            if replacements
-                .iter()
-                .any(|replacement| replacement == previous)
-            {
-                if normalized.iter().any(|entry| entry == previous) {
-                    return Err(
-                        "user_execution_requirements must omit entries declared in replaced_user_execution_requirements"
-                            .to_string(),
-                    );
-                }
-                continue;
-            }
-            if !normalized.iter().any(|entry| entry == previous) {
-                return Err(
-                    "user_execution_requirements must retain every unchanged prior entry character-for-character, or declare the exact prior entry in replaced_user_execution_requirements"
-                        .to_string(),
-                );
-            }
-        }
-        if normalized.len() > MAX_USER_EXECUTION_REQUIREMENTS {
-            return Err(format!(
-                "user_execution_requirements must contain at most {} entries",
-                MAX_USER_EXECUTION_REQUIREMENTS
-            ));
-        }
-        if normalized
-            .iter()
-            .map(|entry| entry.chars().count())
-            .sum::<usize>()
-            > MAX_USER_EXECUTION_REQUIREMENTS_CHARS
-        {
-            return Err(format!(
-                "user_execution_requirements must contain at most {} characters",
-                MAX_USER_EXECUTION_REQUIREMENTS_CHARS
-            ));
-        }
-        Ok(normalized)
-    }
-
-    fn validate_user_execution_requirements(
-        object: &serde_json::Map<String, Value>,
-        inherited: &[String],
-    ) -> Result<(), String> {
-        Self::normalize_user_execution_requirements(
-            object.get("user_execution_requirements"),
-            inherited,
-            None,
-        )
-        .map(|_| ())
-    }
-
     fn build_retry_instruction(validation_error: &str, mode: CompressionMode) -> String {
         let schema = match mode {
             CompressionMode::Blocking => {
-                "task_state, user_execution_requirements, replaced_user_execution_requirements, confirmed_facts, boundary_open_items, completed_work, constraints_and_guards"
+                "task_state, confirmed_facts, boundary_open_items, completed_work, constraints_and_guards"
             }
             CompressionMode::Rollup => {
-                "user_execution_requirements, replaced_user_execution_requirements, confirmed_facts, completed_work, unresolved_carryovers, constraints_and_guards"
+                "confirmed_facts, completed_work, unresolved_carryovers, constraints_and_guards"
             }
         };
         let item_shapes = match mode {
-            CompressionMode::Blocking => "task_state must contain only {status: active|complete|none, current_goal: string|null}; user_execution_requirements must be the full current plain string array; replaced_user_execution_requirements must be a plain string array containing only exact prior entries explicitly replaced by later user input; confirmed_facts, completed_work, and constraints_and_guards must be compact string arrays; boundary_open_items must contain only {kind, summary}. Limits: user_execution_requirements=16 entries/8000 characters, current_goal=800 characters, confirmed_facts=4, boundary_open_items=3, completed_work=2, constraints_and_guards=3.",
-            CompressionMode::Rollup => "user_execution_requirements must be the full current plain string array; replaced_user_execution_requirements must be a plain string array containing only exact prior entries explicitly replaced by later user input; confirmed_facts, completed_work, unresolved_carryovers, and constraints_and_guards must be compact string arrays. Limits: user_execution_requirements=16 entries/8000 characters, confirmed_facts=4, unresolved_carryovers=3, completed_work=2, constraints_and_guards=3.",
+            CompressionMode::Blocking => "task_state must contain only {status: active|complete|none, current_goal: string|null}; confirmed_facts, completed_work, and constraints_and_guards must be compact string arrays; boundary_open_items must contain only {kind, summary}. Limits: current_goal=800 characters, confirmed_facts=4, boundary_open_items=3, completed_work=2, constraints_and_guards=3.",
+            CompressionMode::Rollup => "confirmed_facts, completed_work, unresolved_carryovers, and constraints_and_guards must be compact string arrays. Limits: confirmed_facts=4, unresolved_carryovers=3, completed_work=2, constraints_and_guards=3.",
         };
         format!(
             "\n\n<SYSTEM_REMINDER>Your previous compression reply was invalid. Reason: {}. Return exactly one semantic JSON object and nothing else. Required semantic fields: {}. Required item shapes: {} The runtime adds schema_version, kind, boundary, canonical file_changes, review_rounds, source IDs, and completion evidence; do not emit those system-owned fields. Every listed array key must be present, but any semantic array may be []; never invent a verification, change, constraint, open item, review, source, or completion evidence to fill one. Do not emit legacy state_snapshot, prev_tasks, next_action, approved_plan, or overall_goal. Do NOT return XML, reasoning-only text, markdown fences, or explanations.</SYSTEM_REMINDER>",
@@ -2297,9 +2126,9 @@ mod tests {
                 content: "Implement the confirmed fixes".to_string(),
             }],
             previous_state: None,
-            user_execution_requirements: Vec::new(),
             requires_active_goal: true,
             completion_evidence_message_id: None,
+            tracked_current_goal: None,
         }
     }
 
@@ -2368,126 +2197,27 @@ mod tests {
     }
 
     #[test]
-    fn runtime_injects_full_user_execution_requirements() {
+    fn legacy_requirement_fields_are_dropped_from_the_handoff() {
         let semantic = json!({
-            "user_execution_requirements": [
-                "temporary model endpoint",
-                "test credential",
-                "new proxy address"
-            ],
-            "confirmed_facts": [],
-            "completed_work": [],
-            "unresolved_carryovers": [],
-            "constraints_and_guards": []
-        })
-        .to_string();
-        let injected = ContextCompressor::inject_runtime_handoff_fields_with_requirements(
-            &semantic,
-            "None",
-            &[],
-            CompressionMode::Rollup,
-            42,
-            &[
-                "temporary model endpoint".to_string(),
-                "test credential".to_string(),
-            ],
-        )
-        .expect("full requirements should be accepted");
-        let value: Value = serde_json::from_str(&injected).expect("injected rollup");
-        assert_eq!(
-            value["user_execution_requirements"],
-            json!([
-                "temporary model endpoint",
-                "test credential",
-                "new proxy address"
-            ])
-        );
-    }
-
-    #[test]
-    fn runtime_rejects_reformatted_prior_user_execution_requirements() {
-        let semantic = json!({
-            "user_execution_requirements": ["proxy: http://localhost:1080"],
-            "confirmed_facts": [],
-            "completed_work": [],
-            "unresolved_carryovers": [],
-            "constraints_and_guards": []
-        })
-        .to_string();
-        let error = ContextCompressor::inject_runtime_handoff_fields_with_requirements(
-            &semantic,
-            "None",
-            &[],
-            CompressionMode::Rollup,
-            42,
-            &["proxy：http://localhost:1080".to_string()],
-        )
-        .expect_err("reformatted inherited requirement must retry instead of accumulating");
-        assert!(error.contains("character-for-character"));
-    }
-
-    #[test]
-    fn runtime_applies_explicit_user_execution_requirement_replacement() {
-        let semantic = json!({
-            "user_execution_requirements": ["proxy：http://localhost:2080"],
-            "replaced_user_execution_requirements": ["proxy：http://localhost:1080"],
-            "confirmed_facts": [],
-            "completed_work": [],
-            "unresolved_carryovers": [],
-            "constraints_and_guards": []
-        })
-        .to_string();
-        let injected = ContextCompressor::inject_runtime_handoff_fields_with_requirements(
-            &semantic,
-            "None",
-            &[],
-            CompressionMode::Rollup,
-            42,
-            &["proxy：http://localhost:1080".to_string()],
-        )
-        .expect("explicit replacement should be accepted");
-        let value: Value = serde_json::from_str(&injected).expect("injected rollup");
-        assert_eq!(
-            value["user_execution_requirements"],
-            json!(["proxy：http://localhost:2080"])
-        );
-        assert!(value.get("replaced_user_execution_requirements").is_none());
-    }
-
-    #[test]
-    fn user_execution_requirements_are_validated_as_bounded_strings() {
-        let mut handoff = json!({
-            "schema_version": 2,
-            "kind": "completed_task_rollup",
             "user_execution_requirements": ["temporary model endpoint", 42],
+            "replaced_user_execution_requirements": ["test credential"],
             "confirmed_facts": [],
-            "unresolved_carryovers": [],
             "completed_work": [],
-            "file_changes": [],
-            "constraints_and_guards": [],
-            "review_rounds": []
-        });
-        let error = ContextCompressor::validate_compression_result(
-            &handoff.to_string(),
+            "unresolved_carryovers": [],
+            "constraints_and_guards": []
+        })
+        .to_string();
+        let injected = ContextCompressor::inject_runtime_handoff_fields(
+            &semantic,
             "None",
-            "None",
-            "{\"file_changes\":[]}",
+            &[],
             CompressionMode::Rollup,
             42,
         )
-        .expect_err("non-string requirements must be rejected");
-        assert!(error.contains("only strings"));
-
-        handoff["user_execution_requirements"] = json!([]);
-        assert!(ContextCompressor::validate_compression_result(
-            &handoff.to_string(),
-            "None",
-            "None",
-            "{\"file_changes\":[]}",
-            CompressionMode::Rollup,
-            42,
-        )
-        .is_ok());
+        .expect("legacy requirement fields must not fail the handoff");
+        let value: Value = serde_json::from_str(&injected).expect("injected rollup");
+        assert!(value.get("user_execution_requirements").is_none());
+        assert!(value.get("replaced_user_execution_requirements").is_none());
     }
 
     #[test]
@@ -2640,6 +2370,47 @@ mod tests {
     }
 
     #[test]
+    fn tracked_current_goal_supersedes_the_model_written_goal() {
+        let handoff = json!({
+            "schema_version": 2,
+            "kind": "pressure_handoff",
+            "as_of_boundary": {"compressed_until_message_id": 42},
+            "task_state": {"status": "active", "current_goal": "model wording"},
+            "confirmed_facts": [],
+            "boundary_open_items": [],
+            "completed_work": [],
+            "file_changes": [],
+            "constraints_and_guards": [],
+            "review_rounds": []
+        })
+        .to_string();
+        let mut ledger = active_task_goal_ledger();
+        ledger.tracked_current_goal = Some("runtime tracked goal".to_string());
+        let (_summary, state) =
+            ContextCompressor::extract_runtime_task_goal_state(&handoff, &ledger)
+                .expect("runtime should split validated task goal from logical summary");
+        assert_eq!(
+            state
+                .expect("task state should be persisted")
+                .current_goal
+                .as_deref(),
+            Some("runtime tracked goal")
+        );
+
+        ledger.tracked_current_goal = None;
+        let (_summary, state) =
+            ContextCompressor::extract_runtime_task_goal_state(&handoff, &ledger)
+                .expect("runtime should split validated task goal from logical summary");
+        assert_eq!(
+            state
+                .expect("task state should be persisted")
+                .current_goal
+                .as_deref(),
+            Some("model wording")
+        );
+    }
+
+    #[test]
     fn completion_evidence_permits_complete_then_none_task_goal_state() {
         let mut ledger = active_task_goal_ledger();
         ledger.requires_active_goal = false;
@@ -2718,11 +2489,8 @@ mod tests {
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"boundary_open_items\": []"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"completed_work\": []"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
-            .contains("Return exactly and only the seven semantic fields"));
+            .contains("Return exactly and only the five semantic fields"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("\"task_state\":"));
-        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("character-for-character"));
-        assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
-            .contains("without translating, paraphrasing, reformatting, splitting, merging"));
         assert!(!BLOCKING_CONTEXT_COMPRESSION_PROMPT.contains("user_directives"));
         assert!(BLOCKING_CONTEXT_COMPRESSION_PROMPT
             .contains("later directives are refinements by default"));
@@ -2751,7 +2519,6 @@ mod tests {
         assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
             .contains("The runtime, not you, adds schema version, kind"));
         assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT.contains("Return only this semantic schema"));
-        assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT.contains("character-for-character"));
         assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT
             .contains("completed_work`: compact strings for completed outcomes"));
         assert!(ROLLUP_CONTEXT_COMPRESSION_PROMPT

@@ -1,13 +1,16 @@
 <template>
-  <el-aside :width="sidebarWidth" :class="{ collapsed: sidebarCollapsed, dragging: isDragging }" class="sidebar"
+  <el-aside
+    :width="sidebarWidth"
+    :class="{ collapsed: sidebarCollapsed, dragging: isDragging }"
+    class="sidebar"
     :style="sidebarStyle">
     <div v-if="sidebarCollapsed" class="sidebar-compact">
       <div class="compact-sidebar-tabs">
-        <el-tooltip :content="$t('workflow.historyTab')" placement="right" :hide-after="0" :enterable="false">
+        <el-tooltip :content="$t('workflow.taskTab')" placement="right" :hide-after="0" :enterable="false">
           <div
             class="compact-sidebar-tab"
             :class="{ active: compactSidebarTab === 'history' }"
-            @click="activeSidebarTab = 'history'">
+            @click="selectCompactSidebarTab('history')">
             <cs name="skill-plan3" size="var(--cs-font-size-lg)" />
           </div>
         </el-tooltip>
@@ -15,7 +18,7 @@
           <div
             class="compact-sidebar-tab"
             :class="{ active: compactSidebarTab === 'automation' }"
-            @click="activeSidebarTab = 'automation'">
+            @click="selectCompactSidebarTab('automation')">
             <cs name="clock" size="var(--cs-font-size-lg)" />
           </div>
         </el-tooltip>
@@ -153,16 +156,36 @@
         </template>
       </div>
 
-      <div class="workflow-terminal-entry compact-terminal-entry" :class="{ blinking: terminalMinimized }" @click="$emit('open-terminal')">
-        <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
-          <cs name="bash" size="var(--cs-font-size-lg)" />
-        </el-tooltip>
+      <div class="compact-bottom-entries">
+        <ChatHubEntry
+          class="compact-chat-hub-entry"
+          :hubs="chatHubs"
+          :active-hub-id="activeChatHubId"
+          @select="$emit('select-chat-hub', $event)"
+          @toggle="$emit('toggle-chat-hub')"
+          @close="$emit('close-chat-hub')" />
+
+        <!-- The docked ChatHub page stays in place, so the terminal entry only opens the
+             terminal panel. -->
+        <div class="compact-terminal-entry-group">
+          <div
+            class="workflow-terminal-entry compact-terminal-entry"
+            :class="{ blinking: terminalMinimized }"
+            @click="$emit('open-terminal')">
+            <el-tooltip :content="$t('workflow.terminal.title')" placement="right" :hide-after="0" :enterable="false">
+              <cs name="bash" size="var(--cs-font-size-lg)" />
+            </el-tooltip>
+          </div>
+        </div>
       </div>
     </div>
 
     <div v-else class="sidebar-tabs-container">
       <el-tabs v-model="activeSidebarTab" class="sidebar-tabs">
-        <el-tab-pane :label="$t('workflow.historyTab')" name="history">
+        <el-tab-pane
+          v-if="isHistoryTabVisible"
+          :label="$t('workflow.taskTab')"
+          name="history">
           <div class="sidebar-header">
             <el-input v-model="searchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
               <template #prefix>
@@ -241,7 +264,10 @@
             </div>
           </div>
         </el-tab-pane>
-        <el-tab-pane :label="$t('workflow.automation.title')" name="automation">
+        <el-tab-pane
+          v-if="isAutomationTabVisible"
+          :label="$t('workflow.automation.title')"
+          name="automation">
           <div class="sidebar-header">
             <el-input v-model="automationSearchQuery" :placeholder="$t('chat.searchChat')" :clearable="true" round>
               <template #prefix>
@@ -317,10 +343,6 @@
             @open-file="$emit('open-editor-file', $event)" />
         </el-tab-pane>
       </el-tabs>
-      <button class="workflow-terminal-entry expanded-terminal-entry" :class="{ blinking: terminalMinimized }" type="button" @click="$emit('open-terminal')">
-        <cs name="bash" />
-        <span>{{ $t('workflow.terminal.title') }}</span>
-      </button>
     </div>
   </el-aside>
 </template>
@@ -329,6 +351,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
+import ChatHubEntry from './ChatHubEntry.vue'
 
 const { t } = useI18n()
 
@@ -384,6 +407,18 @@ const props = defineProps({
   activeTab: {
     type: String,
     default: 'history'
+  },
+  navigationTab: {
+    type: String,
+    default: 'history'
+  },
+  chatHubs: {
+    type: Array,
+    default: () => []
+  },
+  activeChatHubId: {
+    type: Number,
+    default: 0
   }
 })
 
@@ -402,7 +437,11 @@ const emit = defineEmits([
   'reorder-paths-from-tree',
   'insert-path-reference',
   'open-editor-file',
-  'open-terminal'
+  'open-terminal',
+  'select-chat-hub',
+  'toggle-chat-hub',
+  'close-chat-hub',
+  'update:navigationTab'
 ])
 
 const activeSidebarTab = computed({
@@ -410,8 +449,15 @@ const activeSidebarTab = computed({
   set: value => emit('update:activeTab', value)
 })
 const compactSidebarTab = computed(() =>
-  activeSidebarTab.value === 'automation' ? 'automation' : 'history'
+  props.navigationTab === 'automation' ? 'automation' : 'history'
 )
+const selectCompactSidebarTab = tab => {
+  if (tab !== 'history' && tab !== 'automation') return
+  hideCompactWorkflowTooltip()
+  emit('update:navigationTab', tab)
+}
+const isHistoryTabVisible = computed(() => props.navigationTab === 'history')
+const isAutomationTabVisible = computed(() => props.navigationTab === 'automation')
 const searchQuery = ref('')
 const automationSearchQuery = ref('')
 const visibleCompactWorkflowTooltipId = ref(null)

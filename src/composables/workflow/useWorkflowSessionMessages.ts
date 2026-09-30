@@ -214,6 +214,7 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
           workflow.value = {
             ...(snapshot.workflow || {}),
             id: targetSessionId,
+            hasLiveSession: snapshot.hasLiveSession === true,
             executionContext: context
           }
           const hydratedMessages = appendMissingPendingToolMessages({

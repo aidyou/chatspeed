@@ -4,6 +4,7 @@ import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
 
 import { sendSyncState } from '@/libs/sync.js';
+import { useCapabilityStore } from '@/stores/capability.js';
 
 /**
  * @typedef {Object} McpServerConfigEnv
@@ -70,6 +71,24 @@ export const useMcpStore = defineStore('mcp', () => {
   };
 
   /**
+   * Re-reads the capability projection, which owns the runtime facts a row shows.
+   *
+   * The projection is a separate read from the legacy list: only it knows what the
+   * runtime actually observed (drift and the reported tool count). It therefore has
+   * to be re-read whenever the runtime or the desired record can have changed,
+   * otherwise the facts keep showing the state captured when the window loaded. A
+   * projection failure stays contained: the legacy list keeps working with
+   * whatever it already has (AC-12).
+   */
+  const refreshCapabilityFacts = async () => {
+    try {
+      await useCapabilityStore().loadMcpServers();
+    } catch (projectionError) {
+      console.warn('MCP capability projection unavailable:', projectionError);
+    }
+  };
+
+  /**
    * Fetches all MCP servers from the backend and updates the local state.
    */
   const fetchMcpServers = async () => {
@@ -77,6 +96,10 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const fetchedServers = await invokeWrapper('list_mcp_servers');
+      // The legacy list is the editable record; the capability projection is what
+      // the runtime actually observed. Refreshing both here means the badges can
+      // never lag behind a mutation the list already reflects (AC-12).
+      await refreshCapabilityFacts();
       servers.value = fetchedServers.map(server => {
         // Ensure server.config exists and disabled_tools is an array
         const config = server.config || {}; // Defensive, though McpServer type implies config exists
@@ -116,6 +139,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'add', data: newServer });
       sendSyncState('mcp', label, { event: 'add', data: newServer });
+      refreshCapabilityFacts();
       return newServer;
     } catch (err) {
       await _handleError(err);
@@ -148,6 +172,7 @@ export const useMcpStore = defineStore('mcp', () => {
       if (payload.disabled) {
         delete serverTools.value[payload.id];
       }
+      refreshCapabilityFacts();
       return updatedServer;
     } catch (err) {
       await _handleError(err);
@@ -186,6 +211,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'delete', data: { id } });
       sendSyncState('mcp', label, { event: 'delete', data: { id } });
+      refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -205,6 +231,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: false } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: false } });
+      refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -224,6 +251,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: true } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: true } });
+      refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -236,6 +264,7 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invokeWrapper('restart_mcp_server', { id });
+      refreshCapabilityFacts();
 
       // Restart might change status, but we don't get the new status back synchronously here.
       // Rely on status updates pushed from backend or a periodic refresh if needed.
@@ -251,6 +280,7 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invokeWrapper('refresh_mcp_server', { id });
+      refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -385,6 +415,9 @@ export const useMcpStore = defineStore('mcp', () => {
       // Create a new object to ensure reactivity update is picked up by Vue
       servers.value.splice(index, 1, { ...server, status: status });
       console.debug(`MCP Store: Updated status for server "${serverName}" to`, status);
+      // The runtime facts come from a separate read, so a status change has to
+      // re-read them or the row keeps the state captured when the window loaded.
+      refreshCapabilityFacts();
 
       // When a server becomes running (e.g., after a restart or refresh),
       // it's the perfect time to fetch its latest tool list.
@@ -436,6 +469,7 @@ export const useMcpStore = defineStore('mcp', () => {
           };
           servers.value.push(newServerData);
           console.debug('MCP Store: Added server via sync', data.id);
+          refreshCapabilityFacts();
         }
         break;
       }
@@ -464,6 +498,7 @@ export const useMcpStore = defineStore('mcp', () => {
 
             servers.value.splice(index, 1, updatedServer); // Replace item to trigger reactivity
             console.debug('MCP Store: Updated server via sync', data.id);
+            refreshCapabilityFacts();
           }
         }
         break;
@@ -476,6 +511,7 @@ export const useMcpStore = defineStore('mcp', () => {
           delete serverTools.value[data.id];
           delete serverUiStates.value[data.id];
           console.debug('MCP Store: Deleted server via sync', data.id);
+          refreshCapabilityFacts();
         }
         break;
       }
@@ -512,6 +548,7 @@ export const useMcpStore = defineStore('mcp', () => {
     loading,
     error,
     fetchMcpServers,
+    refreshCapabilityFacts,
     addMcpServer,
     updateMcpServer,
     saveMcpServer,

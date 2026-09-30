@@ -894,27 +894,24 @@ impl ToolDefinition for EditFile {
     }
 }
 
-pub struct PlanReadNote {
+pub struct PlanNote {
     planning_root: PathBuf,
 }
 
-impl PlanReadNote {
+impl PlanNote {
     pub fn new(planning_root: PathBuf) -> Self {
         Self { planning_root }
     }
 }
 
 #[async_trait]
-impl ToolDefinition for PlanReadNote {
+impl ToolDefinition for PlanNote {
     fn name(&self) -> &str {
-        crate::tools::TOOL_PLAN_READ_NOTE
+        crate::tools::TOOL_PLAN_NOTE
     }
 
     fn description(&self) -> &str {
-        "Reads the fixed planning note from `.cs/note.md` in the active workspace during strict manual plan mode.\n\
-        This tool can only access that planning note and cannot read arbitrary workspace files.\n\
-        In workflow LLM context, it also provides the exact returned note content inside a structured `<file_content ...>...</file_content>` block for precise follow-up edits.\n\
-        Use this tool to review your planning draft or research notes before calling `submit_plan`."
+        "Reads or updates the fixed planning note at `.cs/note.md` in strict manual Plan Mode. Use action `read`, `write`, or `edit`. This tool only changes the planning note, never the real workspace."
     }
 
     fn category(&self) -> ToolCategory {
@@ -932,143 +929,20 @@ impl ToolDefinition for PlanReadNote {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "offset": { "type": "integer", "default": 0, "minimum": 0 },
-                    "limit": { "type": "integer", "default": 800, "minimum": 1 }
-                },
-                "additionalProperties": true
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let offset = params["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = params["limit"]
-            .as_u64()
-            .unwrap_or(DEFAULT_READ_FILE_LIMIT as u64) as usize;
-        let path = planning_note_path(&self.planning_root);
-        execute_read_file(&path.to_string_lossy(), offset, limit, None)
-    }
-}
-
-pub struct PlanWriteNote {
-    planning_root: PathBuf,
-}
-
-impl PlanWriteNote {
-    pub fn new(planning_root: PathBuf) -> Self {
-        Self { planning_root }
-    }
-}
-
-#[async_trait]
-impl ToolDefinition for PlanWriteNote {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_PLAN_WRITE_NOTE
-    }
-
-    fn description(&self) -> &str {
-        "Creates or fully replaces the fixed planning note at `.cs/note.md` in strict manual plan mode.\n\
-        This tool is only for planning artifacts, not workspace implementation.\n\
-        Use it to capture structured notes, draft the proposed plan, or persist investigation output."
-    }
-
-    fn category(&self) -> ToolCategory {
-        ToolCategory::FileSystem
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "content": { "type": "string", "description": "Complete file content to store in the planning note" }
-                },
-                "required": ["content"],
-                "additionalProperties": true
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let content = params["content"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
-        let path = planning_note_path(&self.planning_root);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                ToolError::IoError(format!("Failed to prepare planning directory: {}", e))
-            })?;
-        }
-        fs::write(&path, content)
-            .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
-
-        Ok(ToolCallResult::success(
-            Some("Planning note written successfully.".to_string()),
-            Some(json!({
-                "file_path": path.to_string_lossy(),
-                "note_name": PLANNING_NOTE_FILE,
-                "bytes_written": content.len()
-            })),
-        ))
-    }
-}
-
-pub struct PlanEditNote {
-    planning_root: PathBuf,
-}
-
-impl PlanEditNote {
-    pub fn new(planning_root: PathBuf) -> Self {
-        Self { planning_root }
-    }
-}
-
-#[async_trait]
-impl ToolDefinition for PlanEditNote {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_PLAN_EDIT_NOTE
-    }
-
-    fn description(&self) -> &str {
-        "Edits the fixed planning note at `.cs/note.md` using exact string replacement.\n\
-        This tool cannot touch arbitrary workspace files.\n\
-        If you previously used `plan_read_note`, prefer copying `old_string` from inside the structured `<file_content ...>...</file_content>` block in LLM context.\n\
-        Use this after `plan_read_note` when you need a precise update to the planning document."
-    }
-
-    fn category(&self) -> ToolCategory {
-        ToolCategory::FileSystem
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "old_string": { "type": "string", "description": "The exact existing text to replace" },
-                    "new_string": { "type": "string", "description": "The replacement text" },
+                    "action": {
+                        "type": "string",
+                        "enum": ["read", "write", "edit"],
+                        "description": "read the note, replace it with content, or edit an exact string"
+                    },
+                    "offset": { "type": "integer", "minimum": 0, "default": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "default": 800 },
+                    "content": { "type": "string", "description": "Complete note content; required for write" },
+                    "old_string": { "type": "string", "description": "Exact existing text; required for edit" },
+                    "new_string": { "type": "string", "description": "Replacement text; required for edit" },
                     "replace_all": { "type": "boolean", "default": false }
                 },
-                "required": ["old_string", "new_string"],
-                "additionalProperties": true
+                "required": ["action"],
+                "additionalProperties": false
             }),
             output_schema: None,
             disabled: false,
@@ -1077,25 +951,71 @@ impl ToolDefinition for PlanEditNote {
     }
 
     async fn call(&self, params: Value) -> NativeToolResult {
-        let old_string = params["old_string"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "old_string is required".to_string(),
-            ))?;
-        let new_string = params["new_string"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams(
-                "new_string is required".to_string(),
-            ))?;
-        let replace_all = params["replace_all"].as_bool().unwrap_or(false);
+        let action = params
+            .get("action")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ToolError::InvalidParams("action must be read, write, or edit".into())
+            })?;
         let path = planning_note_path(&self.planning_root);
-        execute_edit_file(
-            &path.to_string_lossy(),
-            old_string,
-            new_string,
-            replace_all,
-            None,
-        )
+
+        match action {
+            "read" => {
+                let offset = params["offset"].as_u64().unwrap_or(0) as usize;
+                let limit = params["limit"]
+                    .as_u64()
+                    .unwrap_or(DEFAULT_READ_FILE_LIMIT as u64) as usize;
+                execute_read_file(&path.to_string_lossy(), offset, limit, None)
+            }
+            "write" => {
+                let content = params
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        ToolError::InvalidParams("content is required for write".into())
+                    })?;
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| {
+                        ToolError::IoError(format!("Failed to prepare planning directory: {}", e))
+                    })?;
+                }
+                fs::write(&path, content)
+                    .map_err(|e| ToolError::IoError(format!("Write failed: {}", e)))?;
+                Ok(ToolCallResult::success(
+                    Some("Planning note written successfully.".to_string()),
+                    Some(json!({
+                        "file_path": path.to_string_lossy(),
+                        "note_name": PLANNING_NOTE_FILE,
+                        "bytes_written": content.len()
+                    })),
+                ))
+            }
+            "edit" => {
+                let old_string = params
+                    .get("old_string")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        ToolError::InvalidParams("old_string is required for edit".into())
+                    })?;
+                let new_string = params
+                    .get("new_string")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        ToolError::InvalidParams("new_string is required for edit".into())
+                    })?;
+                let replace_all = params["replace_all"].as_bool().unwrap_or(false);
+                execute_edit_file(
+                    &path.to_string_lossy(),
+                    old_string,
+                    new_string,
+                    replace_all,
+                    None,
+                )
+            }
+            _ => Err(ToolError::InvalidParams(
+                "action must be read, write, or edit".into(),
+            )),
+        }
     }
 }
 

@@ -73,15 +73,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
+import { FitAddon, init, Terminal, UrlRegexProvider } from 'ghostty-web'
+import { writeClipboard } from '@/libs/clipboard'
+import { openUrl } from '@/libs/util'
+import { terminalSkinPalette } from '@/constants/terminalThemes'
+import { terminalBlockTopRow, terminalClearSequence } from '@/composables/workflow/terminalClear'
+import { createWwwLinkProvider } from '@/composables/workflow/terminalWwwLink'
 import type { TerminalTab } from '@/composables/workflow/useTerminal'
 
 const props = defineProps<{ terminal: any; preferences: any }>()
 const { t } = useI18n()
 const terminal = props.terminal
-const preferences = props.preferences
+const ghosttyReady = ref(false)
 const panel = ref<HTMLElement | null>(null)
 const panelHeight = computed(() =>
   Math.min(Math.max(180, terminal.height), Math.max(180, window.innerHeight - 160))
@@ -89,14 +92,18 @@ const panelHeight = computed(() =>
 const hosts = new Map<string, HTMLElement>()
 const instances = new Map<
   string,
-  { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; clearOutputQueue: () => void }
+  { terminal: Terminal; fit: FitAddon; observer: ResizeObserver; disposeSelection: () => void; clearOutputQueue: () => void }
 >()
 const pageDark = ref(document.documentElement.classList.contains('dark'))
 const getCssColor = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 
 const terminalTheme = computed(() => {
-  const scheme = preferences.colorScheme || 'auto'
+  const scheme = props.preferences.colorScheme || 'auto'
   const dark = scheme === 'dark' || (scheme === 'auto' && pageDark.value)
+  // A selected skin replaces the application tokens entirely, including the ANSI palette that the
+  // application tokens never define.
+  const skinPalette = terminalSkinPalette(props.preferences.skin, dark)
+  if (skinPalette) return skinPalette
   return dark
     ? {
         background: getCssColor('--cs-terminal-dark-background'),
@@ -112,6 +119,15 @@ const terminalTheme = computed(() => {
       }
 })
 
+// ghostty-web bakes the output limit and the colour scheme into a terminal when it is created, so a
+// mounted instance keeps the old values until it is rebuilt.
+const configuredScrollback = () =>
+  Math.min(Math.max(100, Number(props.preferences.outputLineLimit || 2000)), 20000)
+let mountedScrollback = configuredScrollback()
+let mountedTheme = terminalTheme.value
+const mountedInstancesAreStale = () =>
+  mountedScrollback !== configuredScrollback() || mountedTheme !== terminalTheme.value
+
 const tabTitle = (tab: TerminalTab) =>
   `${tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd} - ${tab.shellName}`
 const selectTab = (sessionId: string) => {
@@ -119,17 +135,30 @@ const selectTab = (sessionId: string) => {
 }
 const focus = (sessionId: string) => instances.get(sessionId)?.terminal.focus()
 const shortcutMainKey = (shortcut: string | undefined) => shortcut?.split('+').pop()?.toLowerCase()
-const matchesTerminalShortcut = (event: KeyboardEvent, shortcut: string | undefined) => {
+// The workflow window already resolves the platform, so prefer that over sniffing the user agent.
+const isCommandKeyPlatform = () => {
+  const detected = props.preferences.usesCommandKey
+  if (typeof detected === 'boolean') return detected
+  return /Macintosh|Mac OS/.test(`${navigator.platform} ${navigator.userAgent}`)
+}
+const matchesTerminalShortcut = (
+  event: KeyboardEvent,
+  shortcut: string | undefined,
+  commandModifierDown = false
+) => {
   if (!shortcut) return false
   const parts = shortcut.split('+')
-  const requiresCommandOrControl = parts.includes('CommandOrControl')
-  const commandOrControlPressed = preferences.usesCommandKey
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey
+  const requiresCommandOrControl =
+    parts.includes('CommandOrControl') || parts.includes('CommandOrCtrl')
+  const isMacPlatform = isCommandKeyPlatform()
+  const commandOrControlPressed = isMacPlatform
+    ? (event.metaKey || commandModifierDown) && !event.ctrlKey
+    : (event.ctrlKey || commandModifierDown) && !event.metaKey
   if (requiresCommandOrControl !== commandOrControlPressed) return false
   if (parts.includes('Alt') !== event.altKey || parts.includes('Shift') !== event.shiftKey)
     return false
-  return event.key.toLowerCase() === shortcutMainKey(shortcut)
+  const mainKey = shortcutMainKey(shortcut)
+  return event.code === `Key${mainKey?.toUpperCase()}` || event.key.toLowerCase() === mainKey
 }
 
 const setHost = (sessionId: string, element: Element | null) => {
@@ -143,6 +172,7 @@ const disposeTab = (sessionId: string) => {
   terminal.unregisterWriter(sessionId)
   instance.clearOutputQueue()
   instance.observer.disconnect()
+  instance.disposeSelection()
   instance.terminal.dispose()
   instances.delete(sessionId)
 }
@@ -170,46 +200,79 @@ const mountTab = (tab: TerminalTab) => {
   const host = hosts.get(tab.sessionId)
   if (!host) return
 
+  let commandModifierDown = false
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Meta' || event.key === 'Control') {
+      commandModifierDown = true
+      return
+    }
+    // Both terminal shortcuts are consumed on the way down: the workflow window listener runs after
+    // this capture phase and would otherwise repeat the same toggle, leaving the panel unchanged.
+    const clears = matchesTerminalShortcut(event, props.preferences.clearShortcut, commandModifierDown)
+    const toggles = matchesTerminalShortcut(event, props.preferences.toggleShortcut, commandModifierDown)
+    if (!clears && !toggles) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    if (clears) terminal.clear(tab.sessionId)
+    else terminal.visible = !terminal.visible
+  }
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.key === 'Meta' || event.key === 'Control') commandModifierDown = false
+  }
+  host.addEventListener('keydown', onKeyDown, true)
+  host.addEventListener('keyup', onKeyUp, true)
+  mountedScrollback = configuredScrollback()
+  mountedTheme = terminalTheme.value
   const instance = new Terminal({
     cursorBlink: true,
     convertEol: false,
     fontSize: 13,
-    scrollback: Math.min(Math.max(100, Number(preferences.outputLineLimit || 2000)), 20000),
+    scrollback: mountedScrollback,
     overviewRuler: { width: 10 },
     theme: terminalTheme.value
   })
   const fit = new FitAddon()
   instance.loadAddon(fit)
-  instance.parser.registerOscHandler(7, uri => {
-    try {
-      terminal.updateCwd(tab.sessionId, cwdFromOsc7(uri))
-    } catch {
-      // Ignore malformed terminal title reports without affecting PTY rendering.
-    }
-    return true
-  })
   instance.open(host)
-  instance.attachCustomKeyEventHandler(event => {
-    if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
-      return true
-    }
-    if (matchesTerminalShortcut(event, preferences.clearShortcut)) {
-      event.preventDefault()
-      terminal.clear(tab.sessionId)
-      return false
-    }
-    if (matchesTerminalShortcut(event, preferences.toggleShortcut)) {
-      event.preventDefault()
-      terminal.visible = !terminal.visible
-      return false
-    }
-    return true
+  const urlProvider = new UrlRegexProvider(instance)
+  instance.registerLinkProvider({
+    provideLinks(y, callback) {
+      urlProvider.provideLinks(y, links => {
+        callback(
+          links?.map(link => ({
+            ...link,
+            activate: event => {
+              if (event.ctrlKey || event.metaKey) void openUrl(link.text)
+            }
+          }))
+        )
+      })
+    },
+    dispose: () => urlProvider.dispose()
   })
+  // A second provider layers bare www hosts on top of the scheme URLs. ghostty-web merges every
+  // registered provider per row, and the regex excludes scheme-prefixed hosts, so the two never
+  // overlap on the same range. A matched host has no scheme, so resolve it to https before opening.
+  instance.registerLinkProvider(
+    createWwwLinkProvider(instance, (event, host) => {
+      if (event.ctrlKey || event.metaKey) void openUrl(`https://${host}`)
+    })
+  )
   instance.onData(data => {
     // Forward each xterm input chunk to the per-session FIFO bridge so rapid typing reaches the
     // PTY in order without debounce/coalescing dropping intermediate characters.
     void terminal.write(tab.sessionId, data)
   })
+  const copySelection = () => {
+    const selected = instance.getSelection()
+    if (selected) void writeClipboard(selected)
+  }
+  host.addEventListener('mouseup', copySelection)
+  const disposeSelection = () => {
+    host.removeEventListener('mouseup', copySelection)
+    host.removeEventListener('keydown', onKeyDown, true)
+    host.removeEventListener('keyup', onKeyUp, true)
+  }
   const observer = new ResizeObserver(() => syncSize(tab.sessionId))
   observer.observe(host)
   let outputQueue: Uint8Array[] = []
@@ -237,13 +300,26 @@ const mountTab = (tab: TerminalTab) => {
     pendingProgressChunk = null
     flushOutputQueue()
   }
+  const joinOutputQueue = (first: Uint8Array) => {
+    const totalLength = outputQueue.reduce((length, chunk) => length + chunk.length, first.length)
+    const joined = new Uint8Array(totalLength)
+    joined.set(first)
+    let offset = first.length
+    for (const chunk of outputQueue) {
+      joined.set(chunk, offset)
+      offset += chunk.length
+    }
+    return joined
+  }
   const flushOutputQueue = () => {
     if (disposed || writeInFlight) return
-    const output = outputQueue.shift()
-    if (!output) return
+    const first = outputQueue.shift()
+    if (!first) return
+    const output = joinOutputQueue(first)
+    outputQueue = []
     writeInFlight = true
-    // xterm's write callback fires only after parser/render consumption. Serializing PTY chunks
-    // through that callback preserves CR/CSI progress updates even when Tauri emits rapidly.
+    // xterm's write callback fires only after parser/render consumption. Coalescing queued PTY chunks
+    // avoids replaying restored startup output one chunk at a time while preserving byte order.
     instance.write(output, () => {
       writeInFlight = false
       flushOutputQueue()
@@ -278,27 +354,48 @@ const mountTab = (tab: TerminalTab) => {
     clearPendingProgress()
     outputQueue = []
   }
-  instances.set(tab.sessionId, { terminal: instance, fit, observer, clearOutputQueue })
+  const bufferRowIndex = (row: number) => instance.buffer.active.length - instance.rows + row
+  const retainedInputText = (blockTopRow: number, cursorY: number) => {
+    const buffer = instance.buffer.active
+    let text = ''
+    for (let row = blockTopRow; row <= cursorY; row += 1) {
+      text += buffer.getLine(bufferRowIndex(row))?.translateToString(true) || ''
+    }
+    return text
+  }
+  instances.set(tab.sessionId, { terminal: instance, fit, observer, disposeSelection, clearOutputQueue })
   terminal.registerWriter(tab.sessionId, {
     write: enqueueOutput,
     clear: () => {
       clearPendingProgress()
       outputQueue = []
       writeInFlight = false
-      instance.clear()
-      return new Uint8Array()
+      const { cursorX, cursorY } = instance.buffer.active
+      const blockTopRow = terminalBlockTopRow(
+        cursorY,
+        row => instance.buffer.active.getLine(bufferRowIndex(row))?.isWrapped === true
+      )
+      const retained = retainedInputText(blockTopRow, cursorY)
+      instance.write(terminalClearSequence({ rows: instance.rows, cursorX, cursorY, blockTopRow }))
+      // Replayed as the bounded history of a reloaded or remounted session, so the live input line
+      // survives instead of a fabricated prompt.
+      return new TextEncoder().encode(retained)
     }
   })
   syncSize(tab.sessionId)
 }
 
 const reconcile = async () => {
+  if (!ghosttyReady.value) return
   const activeIds = new Set(terminal.tabs.map((tab: TerminalTab) => tab.sessionId))
   for (const sessionId of instances.keys()) {
     if (!activeIds.has(sessionId)) disposeTab(sessionId)
   }
   if (!terminal.visible || !terminal.activeTab) return
   await nextTick()
+  // A preference changed while the panel was hidden has no live instance rebuilt yet, so apply it
+  // here before the tab is mounted.
+  if (mountedInstancesAreStale()) rebuildMountedInstances()
   mountTab(terminal.activeTab)
   syncSize(terminal.activeTab.sessionId)
   focus(terminal.activeTab.sessionId)
@@ -352,18 +449,29 @@ const startResize = (event: MouseEvent) => {
   window.addEventListener('mouseup', stopResize)
 }
 
+// The output limit and the colour scheme cannot be changed on a live ghostty terminal, so a mounted
+// tab is rebuilt in place; remounting replays the retained history to restore its screen.
+const rebuildMountedInstances = () => {
+  const focusedSessionId = [...instances.keys()].find(sessionId =>
+    hosts.get(sessionId)?.contains(document.activeElement)
+  )
+  mountedScrollback = configuredScrollback()
+  mountedTheme = terminalTheme.value
+  for (const sessionId of [...instances.keys()]) {
+    const tab = terminal.tabs.find((item: TerminalTab) => item.sessionId === sessionId)
+    disposeTab(sessionId)
+    if (tab) mountTab(tab)
+  }
+  if (focusedSessionId) focus(focusedSessionId)
+}
+
 let themeObserver: MutationObserver | null = null
 
-watch(terminalTheme, theme => {
-  for (const instance of instances.values()) instance.terminal.options.theme = theme
+// A live ghostty terminal keeps the output limit and the colour palette it was created with, so a
+// changed preference rebuilds the mounted instances; a hidden panel does it on the next reconcile.
+watch([terminalTheme, () => props.preferences.outputLineLimit], () => {
+  if (terminal.visible) rebuildMountedInstances()
 })
-watch(
-  () => preferences.outputLineLimit,
-  limit => {
-    const scrollback = Math.min(Math.max(100, Number(limit || 2000)), 20000)
-    for (const instance of instances.values()) instance.terminal.options.scrollback = scrollback
-  }
-)
 watch(
   () => [
     terminal.visible,
@@ -373,7 +481,15 @@ watch(
   reconcile,
   { immediate: true, flush: 'post' }
 )
-onMounted(() => {
+onMounted(async () => {
+  try {
+    await init()
+    ghosttyReady.value = true
+    await reconcile()
+  } catch (error) {
+    console.error('Failed to initialize ghostty-web:', error)
+    return
+  }
   themeObserver = new MutationObserver(() => {
     pageDark.value = document.documentElement.classList.contains('dark')
   })
@@ -489,25 +605,19 @@ onBeforeUnmount(() => {
 .workflow-terminal__content {
   flex: 1;
   min-height: 0;
-  padding: 0;
+  padding: var(--cs-space-sm);
   overflow: hidden;
   box-sizing: border-box;
+  background: var(--workflow-terminal-background);
+  font-size: 0;
+  caret-color: transparent;
+
+  :deep(br) {
+    display: none;
+  }
 }
 
-.workflow-terminal__content :deep(.xterm) {
-  width: 100%;
-  height: 100%;
-  padding: var(--cs-space-sm);
-  box-sizing: border-box;
-  background: inherit;
-}
-
-.workflow-terminal__content :deep(.xterm-screen) {
-  max-width: 100%;
-  padding-bottom: var(--cs-space-sm);
-}
-
-.workflow-terminal__content :deep(.xterm-viewport) {
-  background-color: var(--workflow-terminal-background);
+.workflow-terminal__content :deep(canvas) {
+  display: block;
 }
 </style>

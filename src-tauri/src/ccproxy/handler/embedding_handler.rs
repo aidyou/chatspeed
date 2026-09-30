@@ -63,6 +63,9 @@ fn get_proxy_alias_from_body(
             "Claude protocol does not support embeddings".to_string(),
         )),
         ChatProtocol::Gemini => Ok(route_model_alias.to_string()),
+        ChatProtocol::Decision => Err(CCProxyError::InvalidProtocolError(
+            "Decision protocol does not support embeddings".to_string(),
+        )),
     }
 }
 
@@ -98,6 +101,9 @@ fn build_unified_request(
         }
         ChatProtocol::Claude => Err(CCProxyError::InvalidProtocolError(
             "Claude protocol does not support embeddings".to_string(),
+        )),
+        ChatProtocol::Decision => Err(CCProxyError::InvalidProtocolError(
+            "Decision protocol does not support embeddings".to_string(),
         )),
     }
 }
@@ -138,6 +144,11 @@ pub async fn handle_embedding(
         ChatProtocol::Gemini => Arc::new(GeminiBackendAdapter),
         ChatProtocol::Ollama => Arc::new(OllamaBackendAdapter),
         ChatProtocol::Claude => Arc::new(ClaudeBackendAdapter),
+        ChatProtocol::Decision => {
+            return Err(CCProxyError::InvalidProtocolError(
+                "Decision protocol does not support embeddings".to_string(),
+            ))
+        }
     };
 
     let client = reqwest::Client::new();
@@ -173,11 +184,47 @@ pub async fn handle_embedding(
     let retry_config = RetryConfig::from_settings(max_retries);
 
     // Send request with retry support for 429 status code
-    let response = send_with_retry(request_builder, &retry_config).await?;
+    let response = match send_with_retry(request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(error);
+        }
+    };
 
     let status_code = response.status();
     if !status_code.is_success() {
         let error_body = response.text().await.unwrap_or_default();
+        let error_message = error_body.clone();
+        if let Err(error) = store_arc.record_ccproxy_stat(CcproxyStat {
+            id: None,
+            workflow_session_id: None,
+            workflow_task_run_id: None,
+            workflow_segment_id: None,
+            root_session_id: None,
+            root_task_run_id: None,
+            request_kind: None,
+            client_model: proxy_alias,
+            backend_model: proxy_model.model.clone(),
+            provider_id: Some(proxy_model.provider_id),
+            provider: proxy_model.provider.clone(),
+            protocol: chat_protocol.to_string(),
+            tool_compat_mode: 0,
+            status_code: status_code.as_u16() as i32,
+            error_message: Some(error_message),
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            audio_input_tokens: 0,
+            audio_output_tokens: 0,
+            estimated_cost: None,
+            pricing_status: Some("unpriced".to_string()),
+            pricing_snapshot: None,
+            request_at: None,
+        }) {
+            log::error!("Failed to enqueue CCProxy embedding error statistic: {error}");
+        }
         return Err(CCProxyError::InternalError(format!(
             "Backend returned error ({}): {}",
             status_code, error_body
@@ -206,9 +253,15 @@ pub async fn handle_embedding(
         ChatProtocol::Claude => Box::new(OutputAdapterEnum::Claude(ClaudeOutputAdapter)),
         ChatProtocol::Gemini => Box::new(OutputAdapterEnum::Gemini(GeminiOutputAdapter)),
         ChatProtocol::Ollama => Box::new(OutputAdapterEnum::Ollama(OllamaOutputAdapter)),
+        ChatProtocol::Decision => {
+            return Err(CCProxyError::InvalidProtocolError(
+                "Decision protocol does not support embeddings".to_string(),
+            ))
+        }
     };
 
     let usage = unified_response.usage.clone();
+
     let (estimated_cost, pricing_status, pricing_snapshot) =
         crate::ccproxy::helper::stat_guard::finalize_pricing(
             usage.input_tokens as i64,

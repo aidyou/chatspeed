@@ -23,7 +23,7 @@
       ref="messageListRef"
       :key="`${agentRole}:${sessionId || 'empty'}`"
       :messages="messageProjection.enhancedMessages.value"
-      :is-loading="isLoadingMessages"
+      :is-loading="isLoadingMessages || (agentRole === 'primary' && isInitializing)"
       :hidden-earlier-message-count="messageProjection.hiddenEarlierMessageCount.value"
       :is-running="isRunning"
       :queued-messages="agentRole === 'primary' ? workflowStore.messageQueue : []"
@@ -35,7 +35,7 @@
       :approval-loading="approval.approvalLoading.value"
       :active-approval-id="approval.activeApprovalId.value"
       :is-batch-approval-submitting="false"
-      :ask-user-submitting="agentRole === 'primary' ? askUserSubmitting : false"
+      :ask-user-submitting="askUserSubmitting"
       :is-message-expanded="messageProjection.isMessageExpanded"
       :is-reasoning-expanded="messageProjection.isReasoningExpanded"
       :remove-system-reminder="messageProjection.removeSystemReminder"
@@ -54,7 +54,7 @@
       @toggle-expand="messageProjection.toggleMessageExpand"
       @toggle-reasoning="messageProjection.toggleReasoningExpand"
       @reveal-earlier-messages="loadEarlierMessagePage"
-      @submit-ask-user="$emit('submit-ask-user', $event)"
+      @submit-ask-user="submitAskUserResponse"
       @approve-tool="approveTool"
       @approve-all-tool="approveAllTool"
       @approve-all-pending="approveAllPending"
@@ -76,6 +76,7 @@ import WorkflowMessageList from './WorkflowMessageList.vue'
 
 const props = defineProps({
   sessionId: { type: String, default: '' },
+  isInitializing: { type: Boolean, default: false },
   agentRole: {
     type: String,
     default: 'primary',
@@ -90,6 +91,26 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'submit-ask-user', 'remove-queued-message', 'open-sub-agent'])
+const submitAskUserResponse = response => {
+  const isChild = props.agentRole === 'child'
+  const childWorkflow = childSession.workflow.value || {}
+  const target = isChild
+    ? {
+        sessionId: props.sessionId,
+        status: childWorkflow.status,
+        waitReason: resolvedWaitReason.value,
+        isRunning: childSession.isRunning.value,
+        isWaiting: Boolean(resolvedWaitReason.value),
+        hasLiveSession: childWorkflow.hasLiveSession === true
+      }
+    : undefined
+
+  emit('submit-ask-user', {
+    ...response,
+    sessionId: props.sessionId,
+    ...(target ? { target } : {})
+  })
+}
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()

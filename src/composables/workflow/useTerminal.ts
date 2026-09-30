@@ -46,6 +46,7 @@ export function useTerminal(
       defaultShell?: string
       outputLineLimit?: number
       colorScheme?: 'auto' | 'light' | 'dark'
+      skin?: string
     }
   } = {}
 ) {
@@ -203,7 +204,9 @@ export function useTerminal(
     restoredPanelState = null
   }
   const create = async (shellPath = requestedShell.value, cwd = currentPaths.value?.[0] || null) => {
-    const session = toTab(await invokeWrapper('terminal_create', { cwd, shellPath: shellPath || null }))
+    const payload = { cwd, shellPath: shellPath || null }
+    console.debug('[terminal] create payload', { currentPaths: currentPaths.value, payload })
+    const session = toTab(await invokeWrapper('terminal_create', payload))
     state.tabs.push(session)
     state.activeSessionId = session.sessionId
     state.visible = true
@@ -294,7 +297,10 @@ export function useTerminal(
     writer: { write: (data: Uint8Array) => void; clear: () => Uint8Array }
   ) => {
     writers.set(sessionId, writer)
-    for (const chunk of outputBuffers.get(sessionId)?.chunks || []) writer.write(chunk)
+    // A rebuilt instance has no pending buffer, so the retained history stands in and restores the
+    // session screen instead of leaving it blank.
+    const replay = outputBuffers.get(sessionId) ?? outputHistory.get(sessionId)
+    for (const chunk of replay?.chunks || []) writer.write(chunk)
     outputBuffers.delete(sessionId)
   }
   const unregisterWriter = (sessionId: string) => writers.delete(sessionId)
@@ -323,15 +329,16 @@ export function useTerminal(
   const clear = (sessionId = state.activeSessionId) => {
     if (!sessionId) return
     const tab = state.tabs.find(item => item.sessionId === sessionId)
-    // Clearing the screen should not make a live shell look dead after a page reload. Keep only
-    // its current prompt as the new bounded history; subsequent PTY output replaces it naturally.
-    const prompt = new TextEncoder().encode(`${tab?.cwd || ''} > `)
-    outputBuffers.set(sessionId, { chunks: [prompt], lines: 0 })
-    outputHistory.set(sessionId, { chunks: [prompt], lines: 0 })
+    // The mounted terminal erases its own screen and reports the text it kept, so a reload or a
+    // remount replays the live input line rather than a fabricated prompt. Sessions without a
+    // mounted terminal fall back to a prompt derived from the working directory.
+    const retained = writers.get(sessionId)?.clear()
+    const history = retained?.length
+      ? retained
+      : new TextEncoder().encode(`${tab?.cwd || ''} > `)
+    outputBuffers.set(sessionId, { chunks: [history], lines: countLines(history) })
+    outputHistory.set(sessionId, { chunks: [history], lines: countLines(history) })
     scheduleOutputPersistence()
-    // xterm keeps the live shell cursor/prompt after clear. Do not write the cached prompt here,
-    // otherwise repeated clear shortcuts visibly stack duplicate prompts in the running terminal.
-    writers.get(sessionId)?.clear()
   }
   const updateCwd = (sessionId: string, cwd: string) => {
     const tab = state.tabs.find(item => item.sessionId === sessionId)

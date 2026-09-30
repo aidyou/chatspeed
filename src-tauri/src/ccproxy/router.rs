@@ -58,6 +58,10 @@
 //! - `POST /api/chat`: Creates a chat completion with an Ollama model.
 //! - `POST /api/embed` or `/api/embeddings`: Creates embedding vectors.
 //!
+//! ### System One Decision Endpoint
+//! - `POST /v1/systemone`: Evaluates one state against typed questions through a decision model.
+//!   Decision requests are never a chat protocol, so no compatibility mode applies to this path.
+//!
 //! ### Integrated Module Endpoints (Non-ccproxy core)
 //! These routes are integrated into this router for unified access but handled by separate modules:
 //! - **MCP (Model Context Protocol)**:
@@ -90,9 +94,9 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ccproxy::errors::CCProxyError;
 use crate::ccproxy::ChatProtocol;
 use crate::ccproxy::{
-    auth::authenticate_request,
-    handle_chat_completion, handle_embedding, handle_list_models, handle_ollama_tags,
-    handle_responses,
+    auth::{authenticate_request, is_trusted_internal_request},
+    handle_chat_completion, handle_decision, handle_embedding, handle_list_models,
+    handle_ollama_tags, handle_responses,
     handler::{handle_gemini_list_models, handle_ollama_show, ollama_extra_handler::ShowRequest},
     helper::CcproxyQuery,
 };
@@ -118,7 +122,11 @@ const SWITCH_MODE_PREFIX: &str = "switch";
 
 // A struct to hold the shared state, which is passed to all route handlers.
 pub struct SharedState {
-    pub app_handle: tauri::AppHandle,
+    /// The application package version reported by `/api/version`. It is an
+    /// explicit value rather than a `tauri::AppHandle`, so the same router can
+    /// be mounted by a windowless (`chatspeed-headless`) process without
+    /// fabricating a desktop handle (INV-1/INV-4).
+    pub package_version: String,
     pub main_store: Arc<MainStore>,
     pub chat_state: Arc<ChatState>,
 }
@@ -385,6 +393,19 @@ async fn ollama_list_tags_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
     handle_ollama_tags(final_group, state.main_store.clone())
+        .await
+        .map(|res| res.into_response())
+}
+
+async fn decision_logic(
+    state: Arc<SharedState>,
+    headers: HeaderMap,
+    body: Bytes,
+    group_name: Option<String>,
+) -> Result<Response, CCProxyError> {
+    let final_group = resolve_group_name(&state, group_name);
+
+    handle_decision(headers, body, final_group, state.main_store.clone())
         .await
         .map(|res| res.into_response())
 }
@@ -798,7 +819,7 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
         .route(
             "/api/version",
             get(|State(state): State<Arc<SharedState>>| async move {
-                let version = state.app_handle.package_info().version.to_string();
+                let version = state.package_version.clone();
                 (StatusCode::OK, axum::Json(json!({ "version": version }))).into_response()
             }),
         )
@@ -814,18 +835,56 @@ fn ollama_api_routes() -> Router<Arc<SharedState>> {
         )
 }
 
+/// Creates routes for the System One decision endpoint.
+///
+/// Decision requests have no compatibility mode, so only direct and grouped access exist.
+fn decision_routes(mode: GroupMode) -> Router<Arc<SharedState>> {
+    match mode {
+        GroupMode::Path => {
+            let decision_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      Path(group_name): Path<String>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    decision_logic(state, headers, body, Some(group_name))
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new().route("/v1/systemone", decision_handler)
+        }
+        GroupMode::None => {
+            let decision_handler = post(
+                move |State(state): State<Arc<SharedState>>,
+                      headers: HeaderMap,
+                      body: Bytes| async move {
+                    decision_logic(state, headers, body, None)
+                        .await
+                        .map_err(|e| e.into_response())
+                },
+            );
+            Router::new().route("/v1/systemone", decision_handler)
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Main Router Definition
 // ----------------------------------------------------------------------------
 
 /// Defines all routes for the ccproxy module.
+///
+/// `package_version` replaces the former `tauri::AppHandle` dependency: it is
+/// the only value the router ever read from the handle (`/api/version`), so the
+/// router is now transport-neutral. Route composition, order, auth middleware,
+/// model resolution and response header filtering are unchanged.
 pub async fn routes(
-    app_handle: tauri::AppHandle,
+    package_version: String,
     main_store_arc: Arc<MainStore>,
     chat_state: Arc<ChatState>,
 ) -> Router {
     let shared_state = Arc::new(SharedState {
-        app_handle,
+        package_version,
         main_store: main_store_arc,
         chat_state,
     });
@@ -882,7 +941,8 @@ pub async fn routes(
     let normal_routes = Router::new()
         .merge(openai_routes(false, GroupMode::None))
         .merge(claude_routes(false, GroupMode::None))
-        .merge(gemini_routes(false, GroupMode::None));
+        .merge(gemini_routes(false, GroupMode::None))
+        .merge(decision_routes(GroupMode::None));
 
     let compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::None))
@@ -892,7 +952,8 @@ pub async fn routes(
     let grouped_normal_routes = Router::new()
         .merge(openai_routes(false, GroupMode::Path))
         .merge(claude_routes(false, GroupMode::Path))
-        .merge(gemini_routes(false, GroupMode::Path));
+        .merge(gemini_routes(false, GroupMode::Path))
+        .merge(decision_routes(GroupMode::Path));
 
     let grouped_compat_routes = Router::new()
         .merge(openai_routes(true, GroupMode::Path))
@@ -988,20 +1049,6 @@ pub async fn routes(
 // ----------------------------------------------------------------------------
 
 /// Middleware for authenticating requests.
-fn is_trusted_internal_request(headers: &HeaderMap) -> bool {
-    headers
-        .get("x-cs-internal-request")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == "true")
-        && headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|token| {
-                token.trim() == crate::constants::INTERNAL_CCPROXY_API_KEY.read().as_str()
-            })
-}
-
 fn strip_untrusted_workflow_attribution_headers(headers: &mut HeaderMap) {
     for header in [
         "x-cs-workflow-session-id",
@@ -1024,8 +1071,8 @@ async fn authenticate_request_middleware(
     is_local: bool,
 ) -> Result<Response, Response> {
     let path = req.uri().path().to_string();
-    let is_trusted_internal_request = is_trusted_internal_request(&headers);
-    if !is_trusted_internal_request {
+    let trusted_internal_request = is_trusted_internal_request(&headers);
+    if !trusted_internal_request {
         strip_untrusted_workflow_attribution_headers(req.headers_mut());
     }
     match authenticate_request(
@@ -1057,6 +1104,8 @@ fn log_registered_routes() {
     log::info!("  - /v1/messages, /v1/claude/embeddings");
     log::info!("[Gemini-Compatible]");
     log::info!("  - /v1beta/models, /v1beta/models/{{model_id}}:{{action}}");
+    log::info!("[System One Decision]");
+    log::info!("  - /v1/systemone");
     log::info!("[Ollama-Specific]");
     log::info!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
     log::info!("[Access Modes]");

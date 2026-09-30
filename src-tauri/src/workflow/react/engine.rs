@@ -17,8 +17,8 @@ use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
-    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_LOAD, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
+    TOOL_COMPLETE_WORKFLOW, TOOL_MCP_TOOL_EXECUTE, TOOL_MCP_TOOL_EXPAND, TOOL_PLAN_NOTE,
+    TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
 use crate::workflow::react::{
@@ -33,6 +33,7 @@ use crate::workflow::react::{
         attach_write_file_overwrite_old_content, normalize_preview_details,
     },
     gateway::Gateway,
+    goal_tracker::GoalTracker,
     intelligence::IntelligenceManager,
     llm::LlmProcessor,
     loop_detector::LoopDetector,
@@ -130,6 +131,12 @@ struct ToolExecutionObservation {
     duration_ms: Option<u64>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ResolvedMcpToolCall {
+    pub(crate) canonical_name: String,
+    pub(crate) arguments: serde_json::Value,
+}
+
 impl ToolExecutionObservation {
     fn new(
         id: String,
@@ -188,9 +195,6 @@ pub struct WorkflowExecutor {
     /// Server-side shell execution plans bound to a canonical approval.
     pub(crate) approved_shell_execution_plans:
         Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
-    /// MCP tools loaded from folded summaries and exposed with their full definitions for this
-    /// runtime. These are session-local expansions and do not change the user's MCP settings.
-    pub(crate) loaded_mcp_tools: HashSet<String>,
     /// One-shot cache of bash commands approved by Smart AI review to prevent
     /// the generic approval path from re-intercepting the same command.
     pub(crate) smart_approved_bash_commands: HashSet<String>,
@@ -375,10 +379,7 @@ impl WorkflowExecutor {
     ) -> Option<serde_json::Value> {
         if !matches!(
             tool_name,
-            crate::tools::TOOL_EDIT_FILE
-                | crate::tools::TOOL_WRITE_FILE
-                | TOOL_PLAN_EDIT_NOTE
-                | TOOL_PLAN_WRITE_NOTE
+            crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE | TOOL_PLAN_NOTE
         ) {
             return None;
         }
@@ -402,10 +403,7 @@ impl WorkflowExecutor {
     ) -> Option<serde_json::Value> {
         if !matches!(
             tool_name,
-            crate::tools::TOOL_EDIT_FILE
-                | crate::tools::TOOL_WRITE_FILE
-                | TOOL_PLAN_EDIT_NOTE
-                | TOOL_PLAN_WRITE_NOTE
+            crate::tools::TOOL_EDIT_FILE | crate::tools::TOOL_WRITE_FILE | TOOL_PLAN_NOTE
         ) {
             return None;
         }
@@ -444,10 +442,7 @@ impl WorkflowExecutor {
     }
 
     fn is_planning_note_tool(name: &str) -> bool {
-        matches!(
-            name,
-            TOOL_PLAN_READ_NOTE | TOOL_PLAN_WRITE_NOTE | TOOL_PLAN_EDIT_NOTE
-        )
+        crate::tools::is_planning_note_tool(name)
     }
 
     fn sanitize_assistant_metadata_for_storage(
@@ -661,8 +656,18 @@ impl WorkflowExecutor {
             return HashMap::new();
         }
 
+        let has_bash = Self::available_tools_allowlist(agent_config.available_tools.as_deref())
+            .map_or(true, |tools| tools.contains(crate::tools::TOOL_BASH));
+        // Deliberate trade-off: help requires the CLI through bash; enabling skills
+        // must not silently grant shell access to agents configured without bash.
+        let discovered_skills = discovered_skills.iter()
+            .filter(|(name, skill)| has_bash || (!name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)
+                && !skill.name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)))
+            .map(|(name, skill)| (name.clone(), skill.clone()))
+            .collect::<HashMap<_, _>>();
+
         let Some(selected_skills_json) = agent_config.selected_skills.as_deref() else {
-            return discovered_skills.clone();
+            return discovered_skills;
         };
 
         let mut selected_skills = match serde_json::from_str::<Vec<String>>(selected_skills_json) {
@@ -706,12 +711,64 @@ impl WorkflowExecutor {
     }
 
     fn mcp_tool_exposure_set(&self) -> HashSet<String> {
-        let mut exposed: HashSet<String> = self
-            .mcp_tool_config()
-            .map(|config| config.auto_expand.into_iter().collect())
-            .unwrap_or_default();
-        exposed.extend(self.loaded_mcp_tools.iter().cloned());
-        exposed
+        Self::mcp_tool_exposure_set_for_config(self.mcp_tool_config())
+    }
+
+    fn mcp_tool_exposure_set_for_config(
+        config: Option<crate::db::McpToolConfig>,
+    ) -> HashSet<String> {
+        let Some(config) = config else {
+            return HashSet::new();
+        };
+
+        let available = config.available.into_iter().collect::<HashSet<_>>();
+        config
+            .auto_expand
+            .into_iter()
+            .filter(|tool| available.contains(tool))
+            .collect()
+    }
+
+    fn mcp_runtime_config_after_active_update(
+        current: Option<crate::db::McpToolConfig>,
+        requested: &crate::db::McpToolConfig,
+    ) -> crate::db::McpToolConfig {
+        let Some(current) = current else {
+            // A missing config means legacy folded access to all discovered MCP tools. Applying an
+            // explicit allowlist can only revoke access here; autoExpand and autoApprove additions
+            // wait for the next canonical task boundary.
+            return crate::db::McpToolConfig {
+                available: requested.available.clone(),
+                auto_approve: Vec::new(),
+                auto_expand: Vec::new(),
+            };
+        };
+
+        let requested_available = requested.available.iter().collect::<HashSet<_>>();
+        let requested_auto_approve = requested.auto_approve.iter().collect::<HashSet<_>>();
+        let mut effective = crate::db::McpToolConfig {
+            available: current
+                .available
+                .into_iter()
+                .filter(|tool| requested_available.contains(tool))
+                .collect(),
+            auto_approve: current
+                .auto_approve
+                .into_iter()
+                .filter(|tool| requested_auto_approve.contains(tool))
+                .collect(),
+            // Visibility changes are deferred unless availability itself was revoked.
+            auto_expand: current.auto_expand,
+        };
+        let effective_available = effective.available.iter().collect::<HashSet<_>>();
+        effective
+            .auto_approve
+            .retain(|tool| effective_available.contains(tool));
+        effective
+            .auto_expand
+            .retain(|tool| effective_available.contains(tool));
+        effective.normalize();
+        effective
     }
 
     fn available_tools_allowlist(raw_tools: Option<&str>) -> Option<HashSet<String>> {
@@ -745,8 +802,98 @@ impl WorkflowExecutor {
         Self::is_mcp_tool_allowed_by_config(configured_tools.as_ref(), tool_name)
     }
 
-    fn should_register_mcp_tool_loader(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
+    fn should_register_mcp_tool_expander(mcp_tool_count: usize, folded_tool_count: usize) -> bool {
         mcp_tool_count > 0 && folded_tool_count > 0
+    }
+
+    pub(crate) async fn resolve_mcp_tool_call(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<Option<ResolvedMcpToolCall>, crate::tools::ToolError> {
+        let (requested_name, target_arguments) =
+            if crate::tools::is_mcp_tool_execute_tool(tool_name) {
+                let requested_name = args
+                    .get("tool_name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        crate::tools::ToolError::InvalidParams(
+                            "mcp_tool_execute.tool_name is required".to_string(),
+                        )
+                    })?;
+                let arguments = args
+                    .get("arguments")
+                    .filter(|arguments| arguments.is_object())
+                    .cloned()
+                    .ok_or_else(|| {
+                        crate::tools::ToolError::InvalidParams(
+                            "mcp_tool_execute.arguments must be an object".to_string(),
+                        )
+                    })?;
+                (requested_name, arguments)
+            } else {
+                (tool_name, args.clone())
+            };
+
+        let (canonical_name, mcp_tool_manager) = if let Some(canonical_name) = self
+            .tool_manager
+            .resolve_mcp_tool_name(requested_name)
+            .await
+        {
+            // A session-scoped MCP server resolves through this executor's manager.
+            (canonical_name, &self.tool_manager)
+        } else if let Some(canonical_name) = self
+            .global_tool_manager
+            .resolve_mcp_tool_name(requested_name)
+            .await
+        {
+            // Preserve all desktop/CLI MCP behavior as the fallback path.
+            (canonical_name, &self.global_tool_manager)
+        } else {
+                if crate::tools::is_mcp_tool_execute_tool(tool_name) {
+                    return Err(crate::tools::ToolError::InvalidParams(format!(
+                        "MCP tool '{}' was not found",
+                        requested_name
+                    )));
+                }
+                return Ok(None);
+            };
+
+        if !self.is_mcp_tool_allowed(&canonical_name) {
+            return Err(crate::tools::ToolError::Security(format!(
+                "MCP tool '{}' is not available in this workflow",
+                requested_name
+            )));
+        }
+
+        mcp_tool_manager
+            .get_mcp_tool_declaration(&canonical_name)
+            .await?;
+        let server_name = canonical_name
+            .split_once(MCP_TOOL_NAME_SPLIT)
+            .map(|(server_name, _)| server_name)
+            .ok_or_else(|| {
+                crate::tools::ToolError::InvalidParams(
+                    "Invalid canonical MCP tool name".to_string(),
+                )
+            })?;
+        let server = mcp_tool_manager.get_mcp_server(server_name).await?;
+        match server.status().await {
+            crate::mcp::client::McpStatus::Connected | crate::mcp::client::McpStatus::Running => {}
+            status => {
+                return Err(crate::tools::ToolError::ExecutionFailed(format!(
+                    "MCP server '{}' is not available (status: {})",
+                    server_name, status
+                )));
+            }
+        }
+
+        Ok(Some(ResolvedMcpToolCall {
+            canonical_name,
+            arguments: target_arguments,
+        }))
     }
 
     fn sync_runtime_skills_from_agent_config(&mut self) {
@@ -850,6 +997,7 @@ impl WorkflowExecutor {
                 .available_tools
                 .as_deref()
                 .and_then(|tools| serde_json::from_str(tools).ok()),
+            task_tracking_enabled: Some(self.agent_config.task_tracking_enabled),
             final_audit: self.agent_config.final_audit,
             final_review_mode: Some(
                 if self.agent_config.final_audit.unwrap_or(false) {
@@ -873,6 +1021,8 @@ impl WorkflowExecutor {
             phase: Some(self.policy.phase.to_string()),
             models: self.agent_config.models.clone(),
             max_contexts: self.agent_config.max_contexts,
+            report_required_sections: preserved_config
+                .and_then(|config| config.report_required_sections.clone()),
         })
         .unwrap_or_else(|_| json!({}));
 
@@ -887,6 +1037,12 @@ impl WorkflowExecutor {
         let selected_model = Self::phase_runtime_model(&self.agent_config, &self.policy.phase);
         let utility_model = Self::utility_runtime_model(&self.agent_config);
         let lite_model = Self::dedicated_lite_model(&self.agent_config);
+        let decision_model = self
+            .agent_config
+            .models
+            .as_ref()
+            .filter(|models| models.decision_enabled)
+            .and_then(|models| models.decision.as_ref());
 
         let model_name = selected_model.map(|m| m.model.clone()).unwrap_or_default();
         let provider_id = selected_model.map(|m| m.id).unwrap_or(0);
@@ -915,6 +1071,10 @@ impl WorkflowExecutor {
 
         self.intelligence_manager.lite_provider_id = lite_model.map(|model| model.id).unwrap_or(0);
         self.intelligence_manager.lite_model_name = lite_model
+            .map(|model| model.model.clone())
+            .unwrap_or_default();
+        self.intelligence_manager.decision_provider_id = decision_model.map(|model| model.id).unwrap_or(0);
+        self.intelligence_manager.decision_model_name = decision_model
             .map(|model| model.model.clone())
             .unwrap_or_default();
         let (compressor_provider_id, compressor_model) =
@@ -950,7 +1110,6 @@ impl WorkflowExecutor {
                 compressed_until_message_id,
             )
             .await?;
-        self.loaded_mcp_tools.clear();
         self.last_compression_step = self.current_step;
         self.last_compression_boundary_id = Some(compressed_until_message_id);
         self.background_compression_boundary_id = None;
@@ -991,9 +1150,32 @@ impl WorkflowExecutor {
             return Ok(false);
         }
 
-        let task_goal_ledger = self
+        let mut task_goal_ledger = self
             .context
             .task_goal_ledger_for_compression(compressed_until_message_id)?;
+
+        // The pressure handoff carries the runtime-tracked goal. The completed-task rollup keeps
+        // its existing contract, so it is intentionally not tracked here.
+        if matches!(mode, CompressionMode::Blocking) {
+            task_goal_ledger.tracked_current_goal = self
+                .track_goal_at_compression_boundary(&compression_candidate)
+                .await
+                .map_err(|error| {
+                    log::info!(
+                        "[Workflow][session={}][phase=goal_tracking] Goal tracking failed before blocking compression: display_error={}; debug_error={:?}",
+                        self.session_id,
+                        error,
+                        error
+                    );
+                    error
+                })?;
+            log::info!(
+                "[Workflow][session={}][phase=goal_tracking] Tracked current goal for boundary {}: {:?}",
+                self.session_id,
+                compressed_until_message_id,
+                task_goal_ledger.tracked_current_goal
+            );
+        }
 
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
             is_compressing: true,
@@ -1052,16 +1234,40 @@ impl WorkflowExecutor {
                 Ok(true)
             }
             Err(err) => {
-                log::warn!(
-                    "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): {}",
+                log::info!(
+                    "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): display_error={}; debug_error={:?}",
                     self.session_id,
                     compressed_until_message_id,
                     reason,
+                    err,
                     err
                 );
                 Ok(false)
             }
         }
+    }
+
+    /// Tracks the goal structure of the compression window with the compressor's resolved
+    /// model role: the utility model when it is available, otherwise the phase action model.
+    async fn track_goal_at_compression_boundary(
+        &self,
+        compression_candidate: &[WorkflowMessage],
+    ) -> Result<Option<String>, WorkflowEngineError> {
+        // A resolved compression identity is the model name. Provider 0 is the supported
+        // proxy-routing mode ("group@alias") that the chat layer resolves downstream, so only a
+        // missing model name proves the compressor has no model role.
+        if self.compressor.model.trim().is_empty() {
+            return Err(WorkflowEngineError::CompressionFailed(
+                "Goal tracking requires a resolved compression model".to_string(),
+            ));
+        }
+        let tracker = GoalTracker::new(
+            self.compressor.chat_state.clone(),
+            self.compressor.provider_id,
+            self.compressor.model.clone(),
+            self.compressor.workflow_usage_attribution.clone(),
+        );
+        tracker.track_current_goal(compression_candidate).await
     }
 
     /// Compresses a stopped workflow without entering recovery or the normal execution loop.
@@ -1271,6 +1477,40 @@ impl WorkflowExecutor {
             (next_failures, next_retry_step),
         );
     }
+    async fn publish_terminal_error(&mut self, error: &WorkflowEngineError) {
+        let terminal = error.terminal_error();
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::TerminalError,
+            terminal.metadata.clone(),
+        );
+        if let (Some(target), Some(fields)) =
+            (metadata.as_object_mut(), terminal.metadata.as_object())
+        {
+            for (key, value) in fields {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+
+        if let Err(publish_error) = self
+            .add_message_and_notify_internal(
+                "assistant".to_string(),
+                terminal.content,
+                None,
+                None,
+                Some(StepType::Observe),
+                true,
+                Some(terminal.error_type.to_string()),
+                Some(metadata),
+            )
+            .await
+        {
+            log::error!(
+                "[Workflow][session={}][phase=terminal_error][event=message_publish_failed] {}",
+                self.session_id,
+                publish_error
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -1301,6 +1541,7 @@ impl ReActExecutor for WorkflowExecutor {
                     self.session_id,
                     error
                 );
+                self.publish_terminal_error(error).await;
                 self.update_state(WorkflowState::Error).await?;
             }
         }
@@ -1311,7 +1552,6 @@ impl ReActExecutor for WorkflowExecutor {
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
         self.pending_completion_reports.clear();
         self.next_llm_runtime_reminder = None;
-        self.loaded_mcp_tools.clear();
         self.context
             .begin_new_task_segment_from_runtime_projection()
             .await?;
@@ -1334,7 +1574,6 @@ impl ReActExecutor for WorkflowExecutor {
         self.approved_shell_execution_plans.clear();
         self.smart_approved_bash_commands.clear();
         self.smart_approved_tool_call_ids.clear();
-        self.loaded_mcp_tools.clear();
         self.loop_detector = LoopDetector::new();
         self.recovery_failed = false;
         self.recovery_error = None;
@@ -1517,7 +1756,6 @@ impl WorkflowExecutor {
         self.pending_approval_queue.clear();
         self.smart_approved_bash_commands.clear();
         self.smart_approved_tool_call_ids.clear();
-        self.loaded_mcp_tools.clear();
         self.loop_detector = LoopDetector::new();
         self.recovery_failed = false;
         self.recovery_error = None;
@@ -1621,9 +1859,7 @@ impl WorkflowExecutor {
             }
         }
         if policy.is_strict_manual_planning() {
-            auto_approve.insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
-            auto_approve.insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
-            auto_approve.insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
+            auto_approve.insert(crate::tools::TOOL_PLAN_NOTE.to_string());
         }
 
         // Extract model configs from AgentModels structure
@@ -1638,6 +1874,13 @@ impl WorkflowExecutor {
         // the dedicated lite model when configured; IntelligenceManager falls
         // back to the utility/active model at call time otherwise.
         let (lite_provider_id, lite_model_name) = Self::dedicated_lite_model(&agent_config)
+            .map(|model| (model.id, model.model.clone()))
+            .unwrap_or((0, String::new()));
+        let (decision_provider_id, decision_model_name) = agent_config
+            .models
+            .as_ref()
+            .filter(|models| models.decision_enabled)
+            .and_then(|models| models.decision.as_ref())
             .map(|model| (model.id, model.model.clone()))
             .unwrap_or((0, String::new()));
 
@@ -1697,6 +1940,8 @@ impl WorkflowExecutor {
                 initial_model_name.clone(),
                 lite_provider_id,
                 lite_model_name,
+                decision_provider_id,
+                decision_model_name,
                 workflow_task_run_id,
                 root_session_id,
                 root_task_run_id,
@@ -1723,7 +1968,6 @@ impl WorkflowExecutor {
             pending_approval_queue: VecDeque::new(),
             approved_shell_execution_plans: Arc::new(dashmap::DashMap::new()),
             smart_approved_bash_commands: HashSet::new(),
-            loaded_mcp_tools: HashSet::new(),
             smart_approved_tool_call_ids: HashSet::new(),
             recovery_failed: false,
             recovery_error: None,
@@ -1764,6 +2008,7 @@ impl WorkflowExecutor {
         );
         // Keep initial execution aligned with later runtime MCP configuration updates.
         executor.rebuild_auto_approve_from_agent_config();
+        executor.sync_runtime_models_from_agent_config();
 
         executor
     }
@@ -2031,7 +2276,6 @@ impl WorkflowExecutor {
         }
         self.sync_runtime_skills_from_agent_config();
         self.rebuild_auto_approve_from_agent_config();
-        self.resolve_mcp_auto_approve_public_names().await;
         self.refresh_workflow_mcp_runtime_capabilities(false)
             .await?;
 
@@ -2273,6 +2517,12 @@ impl WorkflowExecutor {
                     Self::dedicated_lite_model(&self.agent_config)
                         .map(|model| (model.id, model.model.clone()))
                         .unwrap_or((0, String::new()));
+                    let decision_model = self
+                        .agent_config
+                        .models
+                        .as_ref()
+                        .filter(|models| models.decision_enabled)
+                        .and_then(|models| models.decision.as_ref());
                 let im = IntelligenceManager::new(
                     self.session_id.clone(),
                     self.chat_state.clone(),
@@ -2280,6 +2530,8 @@ impl WorkflowExecutor {
                     self.llm_processor.active_model_name.clone(),
                     lite_provider_id,
                     lite_model_name,
+                    decision_model.map(|model| model.id).unwrap_or(0),
+                    decision_model.map(|model| model.model.clone()).unwrap_or_default(),
                     self.llm_processor.workflow_task_run_id.clone(),
                     self.llm_processor.root_session_id.clone(),
                     self.llm_processor.root_task_run_id.clone(),
@@ -2347,12 +2599,7 @@ impl WorkflowExecutor {
 
         // Helper to check if a tool is allowed in Workflow scope
         let is_allowed = |name: &str| {
-            if is_sub_agent
-                && matches!(
-                    name,
-                    TOOL_BASH | TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT | TOOL_SUB_AGENT_STOP
-                )
-            {
+            if is_sub_agent && matches!(name, TOOL_SUB_AGENT_RUN | TOOL_SUB_AGENT_OUTPUT) {
                 return false;
             }
 
@@ -2368,7 +2615,9 @@ impl WorkflowExecutor {
             let config_allowed = configured_tools.as_ref().map_or(true, |tools| {
                 is_core_workflow_builtin_tool(name)
                     || tools.contains(name)
-                    || (name == TOOL_MCP_TOOL_LOAD && configured_mcp_tools.is_some())
+                    || ((crate::tools::is_mcp_tool_expand_tool(name)
+                        || crate::tools::is_mcp_tool_execute_tool(name))
+                        && configured_mcp_tools.is_some())
             });
 
             scope_allowed && config_allowed
@@ -2413,10 +2662,6 @@ impl WorkflowExecutor {
                 tm.register_tool(Arc::new(ListDir::new(path_guard.clone())))
                     .await?;
             }
-            if is_allowed(TOOL_GLOB) {
-                tm.register_tool(Arc::new(Glob::new(path_guard.clone())))
-                    .await?;
-            }
             if is_allowed(TOOL_GREP) {
                 tm.register_tool(Arc::new(Grep::new(path_guard.clone())))
                     .await?;
@@ -2430,20 +2675,8 @@ impl WorkflowExecutor {
                     .await?;
             }
             if self.policy.allows_planning_note_tools() {
-                if is_allowed(crate::tools::TOOL_PLAN_READ_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanReadNote::new(
-                        self.planning_root.clone(),
-                    )))
-                    .await?;
-                }
-                if is_allowed(crate::tools::TOOL_PLAN_WRITE_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanWriteNote::new(
-                        self.planning_root.clone(),
-                    )))
-                    .await?;
-                }
-                if is_allowed(crate::tools::TOOL_PLAN_EDIT_NOTE) {
-                    tm.register_tool(Arc::new(crate::tools::PlanEditNote::new(
+                if is_allowed(TOOL_PLAN_NOTE) {
+                    tm.register_tool(Arc::new(crate::tools::PlanNote::new(
                         self.planning_root.clone(),
                     )))
                     .await?;
@@ -2492,7 +2725,7 @@ impl WorkflowExecutor {
             .allowed_categories
             .contains(&ToolCategory::Interaction)
         {
-            if is_allowed(TOOL_ASK_USER) {
+            if !self.is_child_agent_workflow() && is_allowed(TOOL_ASK_USER) {
                 tm.register_tool(Arc::new(AskUser)).await?;
             }
             if self.policy.is_strict_manual_planning() && is_allowed(TOOL_SUBMIT_PLAN) {
@@ -2518,44 +2751,38 @@ impl WorkflowExecutor {
                     .await?;
             }
 
-            // CRITICAL: Prevent infinite recursion by only allowing the TaskTool (Sub-agent creation)
-            // if the current executor is NOT itself a sub-agent.
-            if self.subagent_type.is_none() && is_allowed(TOOL_SUB_AGENT_RUN) {
-                let child_agents = self
-                    .context
+            // CRITICAL: Prevent infinite recursion by only allowing multi-agent tools for a
+            // primary executor that has at least one configured child agent.
+            let child_agents = if self.subagent_type.is_none() {
+                self.context
                     .main_store
                     .get_delegatable_child_agents(&self.agent_config.id)
                     .ok()
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let has_child_agents = !child_agents.is_empty();
 
-                if !child_agents.is_empty() {
-                    tm.register_tool(Arc::new(
-                        crate::workflow::react::orchestrator::TaskTool::new(
-                            self.sub_agent_factory.clone(),
-                            self.context.main_store.clone(),
-                            self.gateway.clone(),
-                            self.tsid_generator.clone(),
-                        )
-                        .with_parent_session(self.session_id.clone())
-                        .with_child_agents(child_agents),
-                    ))
-                    .await?;
-                }
+            if has_child_agents && is_allowed(TOOL_SUB_AGENT_RUN) {
+                tm.register_tool(Arc::new(
+                    crate::workflow::react::orchestrator::TaskTool::new(
+                        self.sub_agent_factory.clone(),
+                        self.context.main_store.clone(),
+                        self.gateway.clone(),
+                        self.tsid_generator.clone(),
+                    )
+                    .with_parent_session(self.session_id.clone())
+                    .with_child_agents(child_agents),
+                ))
+                .await?;
             }
 
-            if is_allowed(TOOL_SUB_AGENT_OUTPUT) {
+            if has_child_agents && is_allowed(TOOL_SUB_AGENT_OUTPUT) {
                 tm.register_tool(Arc::new(
                     crate::workflow::react::orchestrator::TaskOutputTool::new(
                         self.session_id.clone(),
                         self.context.main_store.clone(),
-                    ),
-                ))
-                .await?;
-            }
-            if is_allowed(TOOL_SUB_AGENT_STOP) {
-                tm.register_tool(Arc::new(
-                    crate::workflow::react::orchestrator::TaskStopTool::new(
-                        self.session_id.clone(),
                     ),
                 ))
                 .await?;
@@ -2579,10 +2806,11 @@ impl WorkflowExecutor {
         }
 
         // 6. Todo Manager Tools (Session Persistent)
-        if self
-            .policy
-            .allowed_categories
-            .contains(&ToolCategory::System)
+        if self.agent_config.task_tracking_enabled
+            && self
+                .policy
+                .allowed_categories
+                .contains(&ToolCategory::System)
         {
             if is_allowed(TOOL_TODO_CREATE) {
                 tm.register_tool(Arc::new(TodoCreateTool {
@@ -2605,17 +2833,10 @@ impl WorkflowExecutor {
                 }))
                 .await?;
             }
-            if is_allowed(TOOL_TODO_GET) {
-                tm.register_tool(Arc::new(TodoGetTool {
-                    session_id: self.session_id.clone(),
-                    main_store: self.context.main_store.clone(),
-                }))
-                .await?;
-            }
         }
 
-        // 7. MCP tools. Configured tools are exposed directly with full schemas; all
-        // remaining MCP tools keep the existing folded discovery path.
+        // 7. MCP tools. User-enabled tools are exposed directly with full schemas. MCP tools
+        // outside the workflow allowlist keep the folded discovery path.
         if self
             .policy
             .allowed_categories
@@ -2637,6 +2858,41 @@ impl WorkflowExecutor {
                     )
                 })
                 .collect::<Vec<_>>();
+            let allowed_mcp_tool_names = allowed_mcp_tools
+                .iter()
+                .map(|tool| tool.canonical_name.clone())
+                .collect::<HashSet<_>>();
+            let folded_mcp_tools = allowed_mcp_tools
+                .iter()
+                .filter(|tool| !exposed_mcp_tools.contains(&tool.canonical_name))
+                .map(|tool| tool.canonical_name.clone())
+                .collect::<HashSet<_>>();
+
+            let should_register_folded_mcp_controls = Self::should_register_mcp_tool_expander(
+                allowed_mcp_tools.len(),
+                folded_mcp_tools.len(),
+            );
+
+            // Register native MCP control tools before direct MCP wrappers. Registering a native
+            // tool rebuilds MCP aliases in ToolManager; doing that after copied wrappers would
+            // remove them because the session-local manager does not own the global MCP cache.
+            if should_register_folded_mcp_controls && is_allowed(TOOL_MCP_TOOL_EXECUTE) {
+                tm.register_tool(Arc::new(McpToolExecute {
+                    tool_manager: self.global_tool_manager.clone(),
+                    allowed_tools: Some(allowed_mcp_tool_names.clone()),
+                }))
+                .await?;
+            }
+            if should_register_folded_mcp_controls && is_allowed(TOOL_MCP_TOOL_EXPAND) {
+                tm.register_tool(Arc::new(McpToolExpand {
+                    tool_manager: self.global_tool_manager.clone(),
+                    allowed_tools: Some(allowed_mcp_tool_names),
+                }))
+                .await?;
+            }
+
+            // MCP wrappers are registered last so no subsequent native registration can remove
+            // the model-visible autoExpand declarations from the session-local tool list.
             for tool in &allowed_mcp_tools {
                 if exposed_mcp_tools.contains(&tool.canonical_name) {
                     if let Ok(mcp_tool) = self
@@ -2644,31 +2900,9 @@ impl WorkflowExecutor {
                         .get_tool(&tool.canonical_name)
                         .await
                     {
-                        tm.register_tool(mcp_tool).await?;
+                        tm.register_mcp_tool_wrapper(mcp_tool).await?;
                     }
                 }
-            }
-
-            let folded_mcp_tools = allowed_mcp_tools
-                .iter()
-                .filter(|tool| !exposed_mcp_tools.contains(&tool.canonical_name))
-                .map(|tool| tool.canonical_name.clone())
-                .collect::<HashSet<_>>();
-            if Self::should_register_mcp_tool_loader(
-                allowed_mcp_tools.len(),
-                folded_mcp_tools.len(),
-            ) && is_allowed(TOOL_MCP_TOOL_LOAD)
-            {
-                tm.register_tool(Arc::new(McpToolLoad {
-                    tool_manager: self.global_tool_manager.clone(),
-                    allowed_tools: Some(
-                        allowed_mcp_tools
-                            .iter()
-                            .map(|tool| tool.canonical_name.clone())
-                            .collect(),
-                    ),
-                }))
-                .await?;
             }
         }
         // if self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
@@ -2794,7 +3028,6 @@ impl WorkflowExecutor {
         self.context
             .begin_execution_segment_from_approved_plan()
             .await?;
-        self.loaded_mcp_tools.clear();
         let preserved_config = self.sync_runtime_preferences_from_snapshot();
 
         let updated_agent_config = {
@@ -3068,6 +3301,80 @@ impl WorkflowExecutor {
             &["autoApprove", "auto_approve"],
             tools,
         );
+    }
+
+    fn add_mcp_auto_approve_to_agent_config(
+        agent_config: &mut serde_json::Value,
+        canonical_tool_name: &str,
+    ) -> Option<crate::db::McpToolConfig> {
+        let config_value = agent_config
+            .get("mcpTools")
+            .or_else(|| agent_config.get("mcp_tool_exposure"))
+            .cloned()?;
+        let mut config = serde_json::from_value::<crate::db::McpToolConfig>(config_value).ok()?;
+        if !config
+            .available
+            .iter()
+            .any(|tool| tool == canonical_tool_name)
+        {
+            return None;
+        }
+        if !config
+            .auto_approve
+            .iter()
+            .any(|tool| tool == canonical_tool_name)
+        {
+            config.auto_approve.push(canonical_tool_name.to_string());
+        }
+        config.normalize();
+        let object = agent_config.as_object_mut()?;
+        object.remove("mcp_tool_exposure");
+        object.insert("mcpTools".to_string(), serde_json::to_value(&config).ok()?);
+        Some(config)
+    }
+
+    async fn persist_approved_tool(&mut self, tool_name: &str) {
+        if tool_name.contains(MCP_TOOL_NAME_SPLIT) {
+            let updated_config = {
+                let store = self.context.main_store.as_ref();
+                store
+                    .get_workflow_snapshot(&self.session_id)
+                    .ok()
+                    .and_then(|snapshot| snapshot.workflow.agent_config)
+                    .and_then(|config| serde_json::from_str::<Value>(&config).ok())
+                    .and_then(|mut agent_config| {
+                        let updated = Self::add_mcp_auto_approve_to_agent_config(
+                            &mut agent_config,
+                            tool_name,
+                        )?;
+                        let config_str = serde_json::to_string(&agent_config).ok()?;
+                        store
+                            .update_workflow_agent_config(&self.session_id, &config_str)
+                            .ok()?;
+                        Some(updated)
+                    })
+            };
+            if let Some(config) = updated_config {
+                self.agent_config.mcp_tool_exposure = serde_json::to_string(&config).ok();
+                self.rebuild_auto_approve_from_agent_config();
+            }
+            return;
+        }
+
+        self.auto_approve.insert(tool_name.to_string());
+        let tools = self.get_auto_approved_tools();
+        let store = self.context.main_store.as_ref();
+        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+            let mut agent_config: serde_json::Value = snapshot
+                .workflow
+                .agent_config
+                .and_then(|config| serde_json::from_str(&config).ok())
+                .unwrap_or(serde_json::json!({}));
+            Self::write_agent_config_auto_approve(&mut agent_config, &tools);
+            if let Ok(config_str) = serde_json::to_string(&agent_config) {
+                let _ = store.update_workflow_agent_config(&self.session_id, &config_str);
+            }
+        }
     }
 
     pub(crate) fn enqueue_pending_approval(&mut self, tool_call_id: &str) {
@@ -3552,52 +3859,22 @@ impl WorkflowExecutor {
                                                 }
                                             }
                                         } else {
-                                            self.auto_approve.insert(tool_name.to_string());
+                                            self.persist_approved_tool(&tool_name).await;
 
                                             let tools = self.get_auto_approved_tools();
                                             if let Err(e) = self
                                                 .dispatch_ui_payload(
                                                     GatewayPayload::AutoApprovedToolsUpdated {
-                                                        tools: tools.clone(),
+                                                        tools,
                                                     },
                                                 )
                                                 .await
                                             {
                                                 log::error!(
-                                                "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
-                                                self.session_id,
-                                                e
-                                            );
-                                            }
-
-                                            {
-                                                let store = self.context.main_store.as_ref();
-                                                if let Ok(snapshot) =
-                                                    store.get_workflow_snapshot(&self.session_id)
-                                                {
-                                                    let mut agent_config: serde_json::Value =
-                                                        snapshot
-                                                            .workflow
-                                                            .agent_config
-                                                            .and_then(|s| {
-                                                                serde_json::from_str(&s).ok()
-                                                            })
-                                                            .unwrap_or(serde_json::json!({}));
-
-                                                    Self::write_agent_config_auto_approve(
-                                                        &mut agent_config,
-                                                        &tools,
-                                                    );
-
-                                                    if let Ok(config_str) =
-                                                        serde_json::to_string(&agent_config)
-                                                    {
-                                                        let _ = store.update_workflow_agent_config(
-                                                            &self.session_id,
-                                                            &config_str,
-                                                        );
-                                                    }
-                                                }
+                                                    "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                                    self.session_id,
+                                                    e
+                                                );
                                             }
                                         }
                                     }
@@ -3638,10 +3915,17 @@ impl WorkflowExecutor {
                                     .await;
 
                                     let execution_started_at = Instant::now();
-                                    let canonical_mcp_tool_name = self
-                                        .global_tool_manager
-                                        .resolve_mcp_tool_name(&tool_name)
-                                        .await;
+                                    let session_mcp_tool_name =
+                                        self.tool_manager.resolve_mcp_tool_name(&tool_name).await;
+                                    let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                                    let canonical_mcp_tool_name = match session_mcp_tool_name {
+                                        Some(canonical_name) => Some(canonical_name),
+                                        None => {
+                                            self.global_tool_manager
+                                                .resolve_mcp_tool_name(&tool_name)
+                                                .await
+                                        }
+                                    };
                                     let mcp_tool_allowed = canonical_mcp_tool_name
                                         .as_ref()
                                         .is_none_or(|canonical_name| {
@@ -3656,7 +3940,12 @@ impl WorkflowExecutor {
                                         async move {
                                             if canonical_mcp_tool_name.is_some() {
                                                 if mcp_tool_allowed {
-                                                    global_tool_manager
+                                                    let mcp_tool_manager = if mcp_uses_session_manager {
+                                                        tool_manager
+                                                    } else {
+                                                        global_tool_manager
+                                                    };
+                                                    mcp_tool_manager
                                                         .tool_call(
                                                             &tool_name_for_call,
                                                             enriched_args,
@@ -4120,49 +4409,20 @@ impl WorkflowExecutor {
                                         }
                                     }
                                 } else {
-                                    self.auto_approve.insert(tool_name.to_string());
+                                    self.persist_approved_tool(&tool_name).await;
 
                                     let tools = self.get_auto_approved_tools();
                                     if let Err(e) = self
                                         .dispatch_ui_payload(
-                                            GatewayPayload::AutoApprovedToolsUpdated {
-                                                tools: tools.clone(),
-                                            },
+                                            GatewayPayload::AutoApprovedToolsUpdated { tools },
                                         )
                                         .await
                                     {
                                         log::error!(
-                                        "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
-                                        self.session_id,
-                                        e
-                                    );
-                                    }
-
-                                    {
-                                        let store = self.context.main_store.as_ref();
-                                        if let Ok(snapshot) =
-                                            store.get_workflow_snapshot(&self.session_id)
-                                        {
-                                            let mut agent_config: serde_json::Value = snapshot
-                                                .workflow
-                                                .agent_config
-                                                .and_then(|s| serde_json::from_str(&s).ok())
-                                                .unwrap_or(serde_json::json!({}));
-
-                                            Self::write_agent_config_auto_approve(
-                                                &mut agent_config,
-                                                &tools,
-                                            );
-
-                                            if let Ok(config_str) =
-                                                serde_json::to_string(&agent_config)
-                                            {
-                                                let _ = store.update_workflow_agent_config(
-                                                    &self.session_id,
-                                                    &config_str,
-                                                );
-                                            }
-                                        }
+                                            "WorkflowExecutor {}: Failed to send auto-approved tools update: {}",
+                                            self.session_id,
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -4194,10 +4454,17 @@ impl WorkflowExecutor {
                             .await;
 
                             let execution_started_at = Instant::now();
-                            let canonical_mcp_tool_name = self
-                                .global_tool_manager
-                                .resolve_mcp_tool_name(&tool_name)
-                                .await;
+                            let session_mcp_tool_name =
+                                self.tool_manager.resolve_mcp_tool_name(&tool_name).await;
+                            let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                            let canonical_mcp_tool_name = match session_mcp_tool_name {
+                                Some(canonical_name) => Some(canonical_name),
+                                None => {
+                                    self.global_tool_manager
+                                        .resolve_mcp_tool_name(&tool_name)
+                                        .await
+                                }
+                            };
                             let mcp_tool_allowed =
                                 canonical_mcp_tool_name
                                     .as_ref()
@@ -4211,7 +4478,12 @@ impl WorkflowExecutor {
                                 await_with_stop(&self.session_id, &mut signal_rx, async move {
                                     if canonical_mcp_tool_name.is_some() {
                                         if mcp_tool_allowed {
-                                            global_tool_manager
+                                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                                tool_manager
+                                            } else {
+                                                global_tool_manager
+                                            };
+                                            mcp_tool_manager
                                                 .tool_call(&tool_name_for_call, enriched_args)
                                                 .await
                                         } else {
@@ -5001,7 +5273,7 @@ impl WorkflowExecutor {
                             )
                         } else if !self.pending_completion_reports.is_empty() {
                             format!(
-                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Emit no visible text and call `complete_workflow({{}})` exactly once with no `summary`.</SYSTEM_REMINDER>",
+                                "<SYSTEM_REMINDER>You have produced {} consecutive text-only responses without a tool action. The runtime retained the valid report from your preceding response. Do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({{}})` exactly once.</SYSTEM_REMINDER>",
                                 self.consecutive_no_tool_calls
                             )
                         } else {
@@ -5015,7 +5287,7 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow is action-oriented. Choose one concrete tool action now. If your previous response was intended as the final result, do not repeat it as visible text; call `submit_result` now with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else if !self.pending_completion_reports.is_empty() {
-                            "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Emit no visible text and call `complete_workflow({})` exactly once with no `summary`.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>The runtime retained the valid completion report from your preceding response. Do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({})` exactly once.</SYSTEM_REMINDER>".to_string()
                         } else {
                             format!(
                                 "<SYSTEM_REMINDER>No completion report is pending. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
@@ -5026,7 +5298,7 @@ impl WorkflowExecutor {
                         Some(if self.is_child_agent_workflow() {
                             "<SYSTEM_REMINDER>This delegated workflow advances through tool-mediated observations. Choose one concrete tool action now. If the text you just sent was intended as the final result, do not send another visible result; call `submit_result` in the next response with the full result and summary in its arguments.</SYSTEM_REMINDER>".to_string()
                         } else if !self.pending_completion_reports.is_empty() {
-                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, call `complete_workflow({})` now with no visible text or `summary`. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
+                            "<SYSTEM_REMINDER>A completion report draft from your preceding response was captured. If it is the intended final report, do not generate or repeat a visible report. Omit both visible text and the `summary` argument, then call `complete_workflow({})` now. Do not repeat or replace the report. If work remains, call the next concrete work tool; doing so invalidates the draft.</SYSTEM_REMINDER>".to_string()
                         } else {
                             format!(
                                 "<SYSTEM_REMINDER>This workflow advances through tool-mediated observations. {} Do not send another text-only response without choosing the applicable tool.</SYSTEM_REMINDER>",
@@ -5393,15 +5665,20 @@ impl WorkflowExecutor {
         &self,
         tool_name: &str,
     ) -> (Option<String>, Option<String>, Option<String>) {
-        let Some(canonical_tool_name) = self
+        let (canonical_tool_name, mcp_tool_manager) = if let Some(canonical_tool_name) =
+            self.tool_manager.resolve_mcp_tool_name(tool_name).await
+        {
+            (canonical_tool_name, &self.tool_manager)
+        } else if let Some(canonical_tool_name) = self
             .global_tool_manager
             .resolve_mcp_tool_name(tool_name)
             .await
-        else {
+        {
+            (canonical_tool_name, &self.global_tool_manager)
+        } else {
             return (None, None, None);
         };
-        let display_name = self
-            .global_tool_manager
+        let display_name = mcp_tool_manager
             .get_mcp_tool_declaration(&canonical_tool_name)
             .await
             .map(|declaration| declaration.name)
@@ -5505,6 +5782,23 @@ impl WorkflowExecutor {
                 tool_call_id,
                 e
             );
+        }
+    }
+
+    fn tool_error_reinforced_result(
+        tool_name: &str,
+        error: &crate::tools::ToolError,
+    ) -> ReinforcedResult {
+        ReinforcedResult {
+            content: error.to_string(),
+            llm_content: None,
+            title: format!("Tool failed: {}", tool_name),
+            summary: error.to_string(),
+            is_error: true,
+            error_type: Some(Self::tool_error_type(error).to_string()),
+            display_type: "text".to_string(),
+            approval_status: None,
+            observation_kind: None,
         }
     }
 
@@ -5983,7 +6277,7 @@ impl WorkflowExecutor {
                 .unwrap_or_else(|| crate::ccproxy::get_tool_id());
 
             let func = call.get("function").unwrap_or(&call);
-            let name = func
+            let outer_name = func
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -5993,12 +6287,29 @@ impl WorkflowExecutor {
                 .cloned()
                 .or_else(|| func.get("input").cloned())
                 .unwrap_or(serde_json::json!({}));
-            let args = Self::strip_untrusted_shell_execution_details(
-                &name,
+            let outer_args = Self::strip_untrusted_shell_execution_details(
+                &outer_name,
                 Self::normalize_tool_arguments_value(args_raw),
             );
 
             call_order.push(id.clone());
+
+            let (name, args) = match self.resolve_mcp_tool_call(&outer_name, &outer_args).await {
+                Ok(Some(target)) => (target.canonical_name, target.arguments),
+                Ok(None) => (outer_name, outer_args),
+                Err(error) => {
+                    let reinforced = Self::tool_error_reinforced_result(&outer_name, &error);
+                    self.append_reinforced_tool_terminal_event(&id, &outer_name, &reinforced)
+                        .await;
+                    self.dispatch_reinforced_tool_terminal_payload(&id, &outer_name, &reinforced)
+                        .await;
+                    result_map.insert(
+                        id.clone(),
+                        ToolExecutionObservation::new(id, reinforced, call, None, None),
+                    );
+                    continue;
+                }
+            };
 
             // --- CAUSAL BLOCKING CHECK ---
             // If a PREVIOUS tool in this TURN has already transitioned the engine to a blocking state
@@ -6103,9 +6414,7 @@ impl WorkflowExecutor {
                     if name.starts_with("todo_")
                         || matches!(
                             name.as_str(),
-                            crate::tools::TOOL_SUB_AGENT_RUN
-                                | crate::tools::TOOL_SUB_AGENT_OUTPUT
-                                | crate::tools::TOOL_SUB_AGENT_STOP
+                            crate::tools::TOOL_SUB_AGENT_RUN | crate::tools::TOOL_SUB_AGENT_OUTPUT
                         )
                     {
                         if name == crate::tools::TOOL_TODO_UPDATE {
@@ -6155,10 +6464,18 @@ impl WorkflowExecutor {
                 self.dispatch_tool_started_payload(&id, &name, &args).await;
                 started_tools.insert(id.clone(), name.clone());
 
-                let canonical_mcp_tool_name = gtm.resolve_mcp_tool_name(&name).await;
-                let mcp_tool_allowed = canonical_mcp_tool_name
-                    .as_ref()
-                    .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
+                let session_mcp_tool_name = tm.resolve_mcp_tool_name(&name).await;
+                let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+                let canonical_mcp_tool_name = match session_mcp_tool_name {
+                    Some(canonical_name) => Some(canonical_name),
+                    None => gtm.resolve_mcp_tool_name(&name).await,
+                };
+                let mcp_tool_allowed =
+                    canonical_mcp_tool_name
+                        .as_ref()
+                        .is_none_or(|canonical_name| {
+                            self.is_mcp_tool_allowed(canonical_name)
+                        });
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -6172,7 +6489,12 @@ impl WorkflowExecutor {
 
                     let final_res = if canonical_mcp_tool_name.is_some() {
                         if mcp_tool_allowed {
-                            gtm_clone.tool_call(&name, enriched_args).await
+                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                tm_clone
+                            } else {
+                                gtm_clone
+                            };
+                            mcp_tool_manager.tool_call(&name, enriched_args).await
                         } else {
                             Err(crate::tools::ToolError::Security(format!(
                                 "MCP tool '{}' is not available in this workflow",
@@ -6189,32 +6511,37 @@ impl WorkflowExecutor {
             }
 
             loop {
-                let next_result =
-                    match await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await {
-                        Ok(next_result) => next_result,
-                        Err(error @ WorkflowEngineError::Cancelled(_)) => {
-                            let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
-                                "Tool execution interrupted because the workflow was cancelled"
-                                    .to_string(),
-                            ));
-                            for (tool_call_id, tool_name) in &started_tools {
-                                self.append_tool_terminal_event(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                                self.dispatch_tool_terminal_payload(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                            }
-                            return Err(error);
+                let next_result = match await_with_stop(
+                    &self.session_id,
+                    signal_rx,
+                    tool_futures.next(),
+                )
+                .await
+                {
+                    Ok(next_result) => next_result,
+                    Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                        let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                            "Tool execution interrupted because the workflow was cancelled"
+                                .to_string(),
+                        ));
+                        for (tool_call_id, tool_name) in &started_tools {
+                            self.append_tool_terminal_event(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
+                            self.dispatch_tool_terminal_payload(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
                         }
-                        Err(error) => return Err(error),
-                    };
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                };
                 let Some((id, name, args, call, res, duration_ms)) = next_result else {
                     break;
                 };
@@ -6248,32 +6575,45 @@ impl WorkflowExecutor {
             let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
 
             let execution_started_at = Instant::now();
-            let canonical_mcp_tool_name =
-                self.global_tool_manager.resolve_mcp_tool_name(&name).await;
+            let session_mcp_tool_name = self.tool_manager.resolve_mcp_tool_name(&name).await;
+            let mcp_uses_session_manager = session_mcp_tool_name.is_some();
+            let canonical_mcp_tool_name = match session_mcp_tool_name {
+                Some(canonical_name) => Some(canonical_name),
+                None => self.global_tool_manager.resolve_mcp_tool_name(&name).await,
+            };
             let mcp_tool_allowed = canonical_mcp_tool_name
                 .as_ref()
                 .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
-            let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
-                if canonical_mcp_tool_name.is_some() {
-                    if mcp_tool_allowed {
-                        global_tool_manager
+            let final_res = match await_with_stop(
+                &self.session_id,
+                signal_rx,
+                async move {
+                    if canonical_mcp_tool_name.is_some() {
+                        if mcp_tool_allowed {
+                            let mcp_tool_manager = if mcp_uses_session_manager {
+                                tool_manager
+                            } else {
+                                global_tool_manager
+                            };
+                            mcp_tool_manager
+                                .tool_call(&tool_name_for_call, enriched_args)
+                                .await
+                        } else {
+                            Err(crate::tools::ToolError::Security(format!(
+                                "MCP tool '{}' is not available in this workflow",
+                                tool_name_for_call
+                            )))
+                        }
+                    } else {
+                        tool_manager
                             .tool_call(&tool_name_for_call, enriched_args)
                             .await
-                    } else {
-                        Err(crate::tools::ToolError::Security(format!(
-                            "MCP tool '{}' is not available in this workflow",
-                            tool_name_for_call
-                        )))
                     }
-                } else {
-                    tool_manager
-                        .tool_call(&tool_name_for_call, enriched_args)
-                        .await
-                }
-            })
+                },
+            )
             .await
             {
                 Ok(result) => result,
@@ -6388,25 +6728,6 @@ impl WorkflowExecutor {
         tool_call: &serde_json::Value,
         result: Result<serde_json::Value, crate::tools::ToolError>,
     ) -> Result<ReinforcedResult, WorkflowEngineError> {
-        if name == crate::tools::TOOL_MCP_TOOL_LOAD && result.is_ok() {
-            if let Some(requested_tool_name) = args.get("tool_name").and_then(Value::as_str) {
-                if let Some(canonical_tool_name) = self
-                    .global_tool_manager
-                    .resolve_mcp_tool_name(requested_tool_name)
-                    .await
-                {
-                    if self.loaded_mcp_tools.insert(canonical_tool_name.clone()) {
-                        log::info!(
-                            "WorkflowExecutor {}: Loaded folded MCP tool '{}' as '{}' for direct use in subsequent turns",
-                            self.session_id,
-                            requested_tool_name,
-                            canonical_tool_name
-                        );
-                    }
-                }
-            }
-        }
-
         if name == crate::tools::TOOL_SUB_AGENT_RUN {
             if let Ok(val) = &result {
                 if let Some(sub_agent_id) = Self::extract_call_mode_sub_agent_task_id(args, val) {
@@ -6664,7 +6985,7 @@ impl WorkflowExecutor {
             }
 
             return Ok(Some(ReinforcedResult {
-                content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_get` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
+                content: "<SYSTEM_REMINDER>Planning note tools are only available in strict/manual Plan Mode before the plan is approved. The workflow is now in implementation, so use `todo_create`, `todo_update`, and `todo_list` for task tracking instead of planning notes.</SYSTEM_REMINDER>".to_string(),
                 llm_content: None,
                 title: format!("Tool unavailable: {}", name),
                 summary: "Planning note tool unavailable".to_string(),
@@ -6689,7 +7010,6 @@ impl WorkflowExecutor {
             crate::tools::TOOL_WRITE_FILE,
             crate::tools::TOOL_LIST_DIR,
             crate::tools::TOOL_EDIT_FILE,
-            crate::tools::TOOL_GLOB,
             crate::tools::TOOL_GREP,
         ]
         .contains(&name)
@@ -6708,7 +7028,7 @@ impl WorkflowExecutor {
             )
         {
             if let Some(review) = self
-                .review_tool_call_for_smart_mode(name, args, text_part)
+                .review_tool_call_for_smart_mode(name, args, text_part, true)
                 .await?
             {
                 if review.approved {
@@ -7444,9 +7764,12 @@ impl WorkflowExecutor {
                 "[Workflow][session={}][phase=language] Fresh-conversation user input; running blocking one-shot language detection before ReAct",
                 self.session_id
             );
-            // Strip embedded SYSTEM_REMINDER blocks (e.g. the English
-            // new-segment scope note) so detection sees the user's own words.
-            let raw_input = ContextManager::strip_system_reminder_blocks(&content);
+            // Detection reads the user's own prose only: embedded
+            // SYSTEM_REMINDER blocks (e.g. the English new-segment scope note)
+            // and the reference blocks we inject (referenced file content,
+            // directory listings, image details, quoted text) are not the
+            // user's wording and must not decide the language.
+            let raw_input = ContextManager::user_prose_for_language_detection(&content);
             let input_budget = self.lite_model_input_token_budget();
             let segment_id = self.context.current_segment_id;
             match self
@@ -7719,26 +8042,7 @@ impl WorkflowExecutor {
         }
         if self.policy.is_strict_manual_planning() {
             self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_READ_NOTE.to_string());
-            self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_WRITE_NOTE.to_string());
-            self.auto_approve
-                .insert(crate::tools::TOOL_PLAN_EDIT_NOTE.to_string());
-        }
-    }
-
-    async fn resolve_mcp_auto_approve_public_names(&mut self) {
-        let Some(config) = self.mcp_tool_config() else {
-            return;
-        };
-
-        for tool in self.global_tool_manager.get_mcp_tool_specs(None).await {
-            if config.auto_approve.contains(&tool.canonical_name)
-                && config.available.contains(&tool.canonical_name)
-            {
-                self.auto_approve.remove(&tool.canonical_name);
-                self.auto_approve.insert(tool.declaration.name);
-            }
+                .insert(crate::tools::TOOL_PLAN_NOTE.to_string());
         }
     }
 
@@ -7746,6 +8050,7 @@ impl WorkflowExecutor {
         &mut self,
         config: &crate::db::agent::AgentConfig,
     ) {
+        self.agent_config.task_tracking_enabled = config.task_tracking_enabled.unwrap_or(true);
         self.agent_config.available_tools = config
             .available_tools
             .as_ref()
@@ -7785,7 +8090,7 @@ impl WorkflowExecutor {
     ) -> Result<(), WorkflowEngineError> {
         if !self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
             self.llm_processor.mcp_tool_summaries.clear();
-            self.llm_processor.mcp_tool_loader_available = false;
+            self.llm_processor.mcp_tool_expander_available = false;
             return Ok(());
         }
 
@@ -7829,7 +8134,8 @@ impl WorkflowExecutor {
             .into_iter()
             .map(|tool| tool.declaration.name)
             .collect::<Vec<_>>();
-        let had_loader = self.tool_manager.has_tool(TOOL_MCP_TOOL_LOAD).await;
+        let had_expander = self.tool_manager.has_tool(TOOL_MCP_TOOL_EXPAND).await;
+        let had_executor = self.tool_manager.has_tool(TOOL_MCP_TOOL_EXECUTE).await;
         let had_summary_names = self
             .llm_processor
             .mcp_tool_summaries
@@ -7837,12 +8143,14 @@ impl WorkflowExecutor {
             .map(|tool| tool.name.clone())
             .collect::<Vec<_>>();
         let summaries_changed = had_summary_names != expected_folded_names;
-        let should_have_loader = Self::should_register_mcp_tool_loader(
+        let should_have_expander = Self::should_register_mcp_tool_expander(
             available_mcp_tools.len(),
             expected_folded_names.len(),
         );
+        let should_have_executor = should_have_expander;
         let registrations_changed = registered_mcp_names != expected_exposed_names
-            || had_loader != should_have_loader
+            || had_expander != should_have_expander
+            || had_executor != should_have_executor
             || summaries_changed;
 
         if summaries_changed {
@@ -7854,7 +8162,7 @@ impl WorkflowExecutor {
             );
         }
         self.llm_processor.mcp_tool_summaries = refreshed_summaries;
-        self.llm_processor.mcp_tool_loader_available = should_have_loader;
+        self.llm_processor.mcp_tool_expander_available = should_have_expander;
 
         if rebuild_if_loader_missing && registrations_changed {
             log::info!(
@@ -8311,15 +8619,16 @@ impl WorkflowExecutor {
 
             mcp_tools.normalize();
             log::info!(
-                "WorkflowExecutor {}: Updating MCP tools configuration (available={}, auto_approve={}, auto_expand={})",
+                "WorkflowExecutor {}: Persisted MCP tools configuration update (available={}, auto_approve={}, auto_expand={}); active task segment applies revocations only",
                 self.session_id,
                 mcp_tools.available.len(),
                 mcp_tools.auto_approve.len(),
                 mcp_tools.auto_expand.len()
             );
-            self.agent_config.mcp_tool_exposure = serde_json::to_string(&mcp_tools).ok();
+            let runtime_mcp_tools =
+                Self::mcp_runtime_config_after_active_update(self.mcp_tool_config(), &mcp_tools);
+            self.agent_config.mcp_tool_exposure = serde_json::to_string(&runtime_mcp_tools).ok();
             self.rebuild_auto_approve_from_agent_config();
-            self.resolve_mcp_auto_approve_public_names().await;
             self.refresh_workflow_mcp_runtime_capabilities(true).await?;
             let tools = self.get_auto_approved_tools();
             self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
@@ -9208,6 +9517,28 @@ mod recovery_tests {
         (dir, Arc::new(store))
     }
 
+    #[test]
+    fn builtin_cs_help_requires_bash_without_disabling_other_skills() {
+        let mut agent = test_agent("help-policy");
+        agent.skill_enabled = Some(true);
+        let skills = ["help", "commit"].into_iter().map(|name| {
+            (name.to_string(), SkillManifest {
+                name: name.into(), version: "1".into(), source: "builtin".into(),
+                description: String::new(), tools: vec![], instructions: String::new(),
+                skill_dir: None, references: vec![],
+            })
+        }).collect();
+        for selected in [None, Some("[\"help\",\"commit\"]".to_string())] {
+            agent.selected_skills = selected;
+            agent.available_tools = Some("[]".into());
+            let filtered = WorkflowExecutor::filter_skills_for_agent(&skills, &agent);
+            assert!(!filtered.contains_key("help"));
+            assert!(filtered.contains_key("commit"));
+            agent.available_tools = Some("[\"bash\"]".into());
+            assert!(WorkflowExecutor::filter_skills_for_agent(&skills, &agent).contains_key("help"));
+        }
+    }
+
     fn test_agent(id: &str) -> Agent {
         Agent::new(
             id.to_string(),
@@ -9232,6 +9563,142 @@ mod recovery_tests {
             Some(false),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn auto_expand_and_executor_are_model_visible_and_resume_from_saved_config() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "mcp-auto-expand-visible";
+        let canonical_tool = "browser__MCP__browser_click";
+        let folded_tool = "browser__MCP__browser_hover";
+        let agent = test_agent("mcp-auto-expand-visible-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let global_tool_manager = Arc::new(ToolManager::new());
+        global_tool_manager
+            .register_test_mcp_tool(
+                "browser",
+                "browser_click",
+                json!({
+                    "type": "object",
+                    "properties": { "element": { "type": "string" } },
+                    "required": ["element"]
+                }),
+            )
+            .await
+            .expect("autoExpand MCP wrapper must register");
+        global_tool_manager
+            .register_test_mcp_tool(
+                "browser",
+                "browser_hover",
+                json!({
+                    "type": "object",
+                    "properties": { "element": { "type": "string" } },
+                    "required": ["element"]
+                }),
+            )
+            .await
+            .expect("folded MCP wrapper must register");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![temp_dir.path().to_path_buf()],
+            temp_dir.path().join("app-data"),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(31).expect("failed to create tsid")),
+            global_tool_manager,
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor
+            .register_foundation_tools()
+            .await
+            .expect("foundation tools must register");
+
+        let initial_declarations = executor
+            .tool_manager
+            .get_tool_calling_spec(None, None)
+            .await
+            .expect("initial tool declarations");
+        let initial_names = initial_declarations
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<HashSet<_>>();
+        assert!(!initial_names.contains("browser_click"));
+        assert!(!initial_names.contains("browser_hover"));
+        assert!(initial_names.contains(TOOL_MCP_TOOL_EXECUTE));
+        assert!(initial_names.contains(TOOL_MCP_TOOL_EXPAND));
+
+        let saved_config = crate::db::McpToolConfig {
+            available: vec![canonical_tool.to_string(), folded_tool.to_string()],
+            auto_approve: vec![],
+            auto_expand: vec![canonical_tool.to_string()],
+        };
+        let config_json = json!({ "mcpTools": saved_config }).to_string();
+        executor
+            .context
+            .main_store
+            .update_workflow_agent_config(session_id, &config_json)
+            .expect("saved workflow MCP config must update");
+        let active_update = json!({
+            "type": "update_mcp_tools",
+            "mcp_tools": saved_config
+        });
+        assert!(executor
+            .handle_runtime_config_signal(&active_update, Some(SignalType::UpdateMcpTools))
+            .await
+            .expect("active MCP update must be handled"));
+
+        let active_declarations = executor
+            .tool_manager
+            .get_tool_calling_spec(None, None)
+            .await
+            .expect("active task declarations");
+        let active_names = active_declarations
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<HashSet<_>>();
+        assert!(!active_names.contains("browser_click"));
+        assert!(!active_names.contains("browser_hover"));
+        assert!(active_names.contains(TOOL_MCP_TOOL_EXECUTE));
+        assert!(active_names.contains(TOOL_MCP_TOOL_EXPAND));
+
+        executor
+            .prepare_completed_resume_internal()
+            .await
+            .expect("new task segment must refresh saved MCP config");
+
+        let declarations = executor
+            .tool_manager
+            .get_tool_calling_spec(None, None)
+            .await
+            .expect("tool declarations");
+        let declaration_names = declarations
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<HashSet<_>>();
+        assert!(declaration_names.contains("browser_click"));
+        assert!(!declaration_names.contains("browser_hover"));
+        assert!(declaration_names.contains(TOOL_MCP_TOOL_EXECUTE));
+        assert!(declaration_names.contains(TOOL_MCP_TOOL_EXPAND));
+        let browser_click = declarations
+            .iter()
+            .find(|tool| tool.name == "browser_click")
+            .expect("autoExpand declaration must be model-visible");
+        assert_eq!(browser_click.input_schema["required"], json!(["element"]));
     }
 
     #[tokio::test]
@@ -9536,6 +10003,75 @@ mod recovery_tests {
     }
 
     #[tokio::test]
+    async fn goal_tracking_accepts_proxy_routed_compression_model() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "goal-tracking-proxy-model";
+        let agent = test_agent("goal-tracking-proxy-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "Proxy routed task", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(32).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+
+        // Proxy routing stores provider 0 together with a "group@alias" model name, and the
+        // workflow agent config carries that identity into the compression role.
+        executor.agent_config.models = Some(crate::db::agent::AgentModels {
+            act: Some(crate::db::agent::ModelConfig {
+                id: 0,
+                model: "team@alpha".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                // A confirmed capacity above the default 128000 required bound keeps the
+                // action model as the compression role.
+                context_size: Some(200_000),
+                max_tokens: None,
+            }),
+            ..Default::default()
+        });
+        executor.sync_runtime_models_from_agent_config();
+        assert_eq!(executor.compressor.provider_id, 0);
+        assert_eq!(executor.compressor.model, "team@alpha");
+        let empty_window: Vec<WorkflowMessage> = Vec::new();
+        let tracked = executor
+            .track_goal_at_compression_boundary(&empty_window)
+            .await
+            .expect("a proxy-routed compression model must be accepted");
+        assert!(
+            tracked.is_none(),
+            "a window without user directives must not invent a goal"
+        );
+
+        // Only a missing model role is unresolved.
+        executor.compressor.model = String::new();
+        assert!(executor
+            .track_goal_at_compression_boundary(&empty_window)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn model_sync_falls_back_to_action_model_when_utility_context_is_too_small() {
         let (_temp_dir, store) = create_test_store();
         let session_id = "compression-gate-fallback";
@@ -9558,6 +10094,16 @@ mod recovery_tests {
                 function_call: None,
                 // Confirmed but below the default 128000 required bound.
                 context_size: Some(1_000),
+                max_tokens: None,
+            }),
+            decision_enabled: true,
+            decision: Some(crate::db::agent::ModelConfig {
+                id: 33,
+                model: "jev-latest".into(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: None,
                 max_tokens: None,
             }),
             ..Default::default()
@@ -9603,6 +10149,8 @@ mod recovery_tests {
             executor.intelligence_manager.utility_model_name,
             "utility-model"
         );
+        // Decision models are now read from the global config table, not AgentModels.
+        executor.sync_runtime_models_from_agent_config();
     }
 
     #[tokio::test]
@@ -9826,17 +10374,73 @@ mod recovery_tests {
                 .status,
             "error"
         );
-        assert!(observed_payloads
-            .lock()
-            .expect("payload lock")
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load terminal snapshot");
+        let durable_error = snapshot
+            .messages
             .iter()
-            .any(|payload| matches!(
-                payload,
-                GatewayPayload::State {
-                    state: WorkflowState::Error,
-                    wait_reason: None
-                }
-            )));
+            .find(|message| message.is_error)
+            .expect("terminal error message must be durable");
+        assert!(durable_error.id.is_some());
+        assert_eq!(durable_error.error_type.as_deref(), Some("engine"));
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("observation_type"))
+                .and_then(Value::as_str),
+            Some("terminal_error")
+        );
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("llm_visibility"))
+                .and_then(Value::as_str),
+            Some("hide")
+        );
+        assert_eq!(
+            durable_error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("ui_visibility"))
+                .and_then(Value::as_str),
+            Some("show")
+        );
+        assert!(executor
+            .context
+            .get_messages_for_llm()
+            .iter()
+            .all(|message| message.id != durable_error.id));
+
+        let payloads = observed_payloads.lock().expect("payload lock");
+        let error_message_index = payloads
+            .iter()
+            .position(|payload| {
+                matches!(
+                    payload,
+                    GatewayPayload::Message {
+                        is_error: true,
+                        error_type: Some(error_type),
+                        ..
+                    } if error_type == "engine"
+                )
+            })
+            .expect("terminal error message must be dispatched");
+        let error_state_index = payloads
+            .iter()
+            .position(|payload| {
+                matches!(
+                    payload,
+                    GatewayPayload::State {
+                        state: WorkflowState::Error,
+                        wait_reason: None
+                    }
+                )
+            })
+            .expect("terminal error state must be dispatched");
+        assert!(error_message_index < error_state_index);
     }
 
     #[tokio::test]
@@ -11204,6 +11808,47 @@ mod recovery_tests {
     }
 
     #[test]
+    fn active_mcp_update_defers_new_auto_expand_until_task_boundary() {
+        let canonical_tool = "browser__MCP__browser_click".to_string();
+        let requested = crate::db::McpToolConfig {
+            available: vec![canonical_tool.clone()],
+            auto_approve: vec![canonical_tool.clone()],
+            auto_expand: vec![canonical_tool.clone()],
+        };
+
+        let runtime = WorkflowExecutor::mcp_runtime_config_after_active_update(None, &requested);
+
+        assert_eq!(runtime.available, vec![canonical_tool]);
+        assert!(runtime.auto_approve.is_empty());
+        assert!(runtime.auto_expand.is_empty());
+    }
+
+    #[test]
+    fn active_mcp_update_applies_revocation_without_granting_new_permissions() {
+        let retained = "server__MCP__retained".to_string();
+        let revoked = "server__MCP__revoked".to_string();
+        let added = "server__MCP__added".to_string();
+        let current = crate::db::McpToolConfig {
+            available: vec![retained.clone(), revoked.clone()],
+            auto_approve: vec![retained.clone(), revoked.clone()],
+            auto_expand: vec![retained.clone(), revoked.clone()],
+        };
+        let requested = crate::db::McpToolConfig {
+            available: vec![retained.clone(), added.clone()],
+            auto_approve: vec![retained.clone(), added],
+            auto_expand: vec![retained.clone()],
+        };
+
+        let runtime =
+            WorkflowExecutor::mcp_runtime_config_after_active_update(Some(current), &requested);
+
+        assert_eq!(runtime.available, vec![retained.clone()]);
+        assert_eq!(runtime.auto_approve, vec![retained.clone()]);
+        assert_eq!(runtime.auto_expand, vec![retained]);
+        assert!(!runtime.available.contains(&revoked));
+    }
+
+    #[test]
     fn mcp_tool_exposure_respects_available_tools_authorization() {
         let exposed = HashSet::from([
             "server__MCP__direct".to_string(),
@@ -11246,9 +11891,29 @@ mod recovery_tests {
             malformed_allowlist.as_ref(),
             "server__MCP__direct"
         ));
-        assert!(WorkflowExecutor::should_register_mcp_tool_loader(2, 1));
-        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(2, 0));
-        assert!(!WorkflowExecutor::should_register_mcp_tool_loader(0, 0));
+        assert!(WorkflowExecutor::should_register_mcp_tool_expander(2, 1));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_expander(2, 0));
+        assert!(!WorkflowExecutor::should_register_mcp_tool_expander(0, 0));
+    }
+
+    #[test]
+    fn mcp_tool_exposure_uses_only_persisted_auto_expand_within_available() {
+        let available = [
+            "server__MCP__direct".to_string(),
+            "server__MCP__expanded".to_string(),
+            "server__MCP__loaded".to_string(),
+        ];
+        let config = crate::db::McpToolConfig {
+            available: available.to_vec(),
+            auto_approve: vec![available[0].clone()],
+            auto_expand: vec![available[1].clone()],
+        };
+        let exposed = WorkflowExecutor::mcp_tool_exposure_set_for_config(Some(config));
+
+        assert_eq!(exposed, HashSet::from([available[1].clone()]));
+        assert!(!exposed.contains(&available[0]));
+        assert!(!exposed.contains(&available[2]));
+        assert!(!exposed.contains("server__MCP__revoked"));
     }
 
     #[test]
@@ -11684,6 +12349,50 @@ mod recovery_tests {
         assert!(config.get("auto_approve").is_none());
         let stored = WorkflowExecutor::read_agent_config_auto_approve(&config);
         assert_eq!(stored, vec!["read_file".to_string(), "bash".to_string()]);
+    }
+
+    #[test]
+    fn mcp_approve_all_updates_only_the_target_permission() {
+        let canonical_tool = "server__MCP__write_document";
+        let mut config = json!({
+            "availableTools": ["read_file"],
+            "autoApprove": ["read_file"],
+            "mcpTools": {
+                "available": [canonical_tool],
+                "autoApprove": [],
+                "autoExpand": []
+            }
+        });
+
+        let updated =
+            WorkflowExecutor::add_mcp_auto_approve_to_agent_config(&mut config, canonical_tool)
+                .expect("available MCP target must be auto-approved");
+
+        assert_eq!(updated.auto_approve, vec![canonical_tool.to_string()]);
+        assert_eq!(config["autoApprove"], json!(["read_file"]));
+        assert_eq!(config["mcpTools"]["autoApprove"], json!([canonical_tool]));
+        assert_ne!(
+            config["mcpTools"]["autoApprove"],
+            json!([TOOL_MCP_TOOL_EXECUTE])
+        );
+    }
+
+    #[test]
+    fn mcp_approve_all_cannot_grant_an_unavailable_target() {
+        let mut config = json!({
+            "mcpTools": {
+                "available": ["server__MCP__allowed"],
+                "autoApprove": [],
+                "autoExpand": []
+            }
+        });
+
+        assert!(WorkflowExecutor::add_mcp_auto_approve_to_agent_config(
+            &mut config,
+            "server__MCP__blocked",
+        )
+        .is_none());
+        assert_eq!(config["mcpTools"]["autoApprove"], json!([]));
     }
 
     #[test]

@@ -41,11 +41,46 @@ pub(crate) fn parse_responses_non_stream_tool_call_for_test(
     openai_responses::parse_non_stream_tool_call_for_test(response)
 }
 
+fn api_error_details(response: &crate::ai::network::ApiResponse) -> String {
+    response
+        .raw_error_body
+        .clone()
+        .or_else(|| {
+            serde_json::from_str::<crate::ai::network::ResponseError>(&response.content)
+                .ok()
+                .map(|error_payload| error_payload.message)
+        })
+        .unwrap_or_else(|| response.content.clone())
+}
+
+fn api_request_error(response: &crate::ai::network::ApiResponse, provider: String) -> AiError {
+    AiError::RawApiRequestFailed {
+        status_code: response.status_code,
+        provider,
+        details: api_error_details(response),
+    }
+}
+
 /// A standardized error structure for streaming to the frontend.
 #[derive(Serialize)]
 struct JsonErrorPayload<'a> {
     status: u16,
     message: &'a str,
+}
+
+fn chat_error_payload(response: &crate::ai::network::ApiResponse) -> String {
+    response
+        .raw_error_body
+        .clone()
+        .unwrap_or_else(|| response.content.clone())
+}
+
+fn chat_error_metadata(metadata: &ChatMetadata, status_code: u16) -> Option<Value> {
+    let mut value = metadata.to_value().unwrap_or_else(|| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("upstream_status_code".to_string(), json!(status_code));
+    }
+    Some(value)
 }
 
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 15;
@@ -1116,12 +1151,24 @@ pub(crate) fn build_prompt_cache_key(
     )
 }
 
-fn is_gpt_56_model_id(model_id: &str) -> bool {
-    model_id.to_ascii_lowercase().contains("gpt-5.6")
+fn supports_reasoning_summary(model_id: &str) -> bool {
+    let model_id = model_id.rsplit(['/', '@']).next().unwrap_or_default();
+    let normalized = model_id.trim().to_ascii_lowercase();
+    let Some(version) = normalized.strip_prefix("gpt-") else {
+        return false;
+    };
+    let mut parts = version.split(['-', ':']).next().unwrap_or_default().split('.');
+    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    let Some(minor) = parts.next().unwrap_or("0").parse::<u32>().ok() else {
+        return false;
+    };
+    parts.next().is_none() && (major > 5 || (major == 5 && minor >= 6))
 }
 
 fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'static str> {
-    let model_config = model_config.filter(|model| is_gpt_56_model_id(&model.id))?;
+    let model_config = model_config.filter(|model| supports_reasoning_summary(&model.id))?;
 
     match model_config.reasoning_summary.as_deref() {
         Some("none") => None,
@@ -1135,13 +1182,42 @@ fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'s
 #[cfg(test)]
 mod tests {
     use super::{
-        build_prompt_cache_key, extract_inline_reasoning_content,
-        extract_reasoning_from_openai_message, responses_reasoning_summary,
-        sanitize_reasoning_content, should_emit_reasoning_chunk, EmptyHtmlCommentStreamState,
-        InlineThinkStreamState, OpenAIChat,
+        api_error_details, api_request_error, build_prompt_cache_key,
+        extract_inline_reasoning_content, extract_reasoning_from_openai_message,
+        responses_reasoning_summary, sanitize_reasoning_content, should_emit_reasoning_chunk,
+        EmptyHtmlCommentStreamState, InlineThinkStreamState, OpenAIChat,
     };
+    use crate::ai::error::AiError;
+    use crate::ai::network::{ApiResponse, ResponseError};
     use crate::db::ModelConfig;
     use serde_json::json;
+
+    #[test]
+    fn api_request_error_prefers_raw_upstream_body_for_chat_and_workflow() {
+        let raw_body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted"}}"#;
+        let response = ApiResponse {
+            content: serde_json::to_string(&ResponseError::new(
+                Some(429),
+                Some("quota_exceeded".to_string()),
+                "quota exhausted".to_string(),
+            ))
+            .unwrap(),
+            raw_error_body: Some(raw_body.to_string()),
+            is_error: true,
+            status_code: 429,
+            raw_response: None,
+        };
+
+        assert_eq!(api_error_details(&response), raw_body);
+        assert!(matches!(
+            api_request_error(&response, "provider".to_string()),
+            AiError::RawApiRequestFailed {
+                status_code: 429,
+                details,
+                ..
+            } if details == raw_body
+        ));
+    }
 
     #[test]
     fn endpoint_decision_preserves_chat_and_compat_fallbacks() {
@@ -1484,6 +1560,47 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[test]
+    fn responses_reasoning_summary_supports_future_gpt_versions_without_matching_other_ids() {
+        for id in [
+            "gpt-5.6-luna-pro",
+            "openai/gpt-6-astra",
+            "openai@gpt-6-sol:batch",
+            "GPT-6-LUNA",
+            "gpt-7",
+            "gpt-10.2-preview",
+        ] {
+            assert_eq!(
+                responses_reasoning_summary(Some(&ModelConfig {
+                    id: id.to_string(),
+                    reasoning_summary: Some("auto".to_string()),
+                    ..Default::default()
+                })),
+                Some("auto"),
+                "model {id} should support reasoning summaries"
+            );
+        }
+        for id in [
+            "gpt-5.4",
+            "gpt-5.5-preview",
+            "gpt-4.1",
+            "gpt-5.60x",
+            "gpt-6.1.2",
+            "my-gpt-6-sol",
+            "other/gpt-6oops",
+        ] {
+            assert_eq!(
+                responses_reasoning_summary(Some(&ModelConfig {
+                    id: id.to_string(),
+                    reasoning_summary: Some("auto".to_string()),
+                    ..Default::default()
+                })),
+                None,
+                "model {id} should not support reasoning summaries"
+            );
+        }
     }
 }
 
@@ -1919,33 +2036,15 @@ impl AiChatTrait for OpenAIChat {
         })?;
 
         if response.is_error {
+            let err = api_request_error(&response, model_detail.name.clone());
             let status_code = response.status_code;
-
-            let details = if let Ok(error_payload) =
-                serde_json::from_str::<crate::ai::network::ResponseError>(&response.content)
-            {
-                error_payload.message
-            } else {
-                response.content.clone()
-            };
-
-            let err = AiError::ApiRequestFailed {
-                status_code,
-                provider: model_detail.name.clone(),
-                details,
-            };
-
-            let error_payload = JsonErrorPayload {
-                status: status_code,
-                message: &err.to_string(),
-            };
-            let chunk = serde_json::to_string(&error_payload).unwrap_or_else(|_| err.to_string());
+            let chunk = chat_error_payload(&response);
 
             callback(ChatResponse::new_with_arc(
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                merged_metadata.to_value(),
+                chat_error_metadata(&merged_metadata, status_code),
                 Some(FinishReason::Error),
             ));
             return Err(err);

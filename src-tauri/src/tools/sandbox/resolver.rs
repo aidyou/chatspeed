@@ -8,6 +8,8 @@ use super::types::{
 };
 use std::path::{Path, PathBuf};
 
+const SANDBOX_CHAT_SPEED_CONFIG: &str = "/chatspeed-home/.chatspeed";
+
 pub struct ShellExecutionResolver;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +20,10 @@ pub struct ShellSandboxMountContext {
 }
 
 impl ShellExecutionResolver {
+    pub(crate) fn builtin_cs_plan(tool_call_id: &str, command: &str) -> ShellExecutionPlan {
+        explicit_host_plan(tool_call_id, command, "builtin_cs")
+    }
+
     pub fn complete_sandbox_mounts(
         mut plan: ShellExecutionPlan,
         context: &ShellSandboxMountContext,
@@ -35,7 +41,31 @@ impl ShellExecutionResolver {
         for root in &context.authorized_roots {
             push_mount(&mut mounts, root, workspace_access.clone());
         }
+        if let Some(home) = dirs::home_dir() {
+            let chatspeed_root = home.join(".chatspeed");
+            if !chatspeed_root.exists() {
+                if let Err(error) = std::fs::create_dir_all(&chatspeed_root) {
+                    log::warn!(
+                        "[Sandbox] Failed to create writable ChatSpeed home {:?}: {}",
+                        chatspeed_root,
+                        error
+                    );
+                }
+            }
+            push_mount_at_guest_path(
+                &mut mounts,
+                &chatspeed_root,
+                SANDBOX_CHAT_SPEED_CONFIG,
+                super::types::WorkspaceAccess::ReadWrite,
+            );
+        }
         for root in &context.skill_roots {
+            if dirs::home_dir()
+                .map(|home| root.starts_with(home.join(".chatspeed")))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             let access = if context
                 .writable_skill_roots
                 .iter()
@@ -45,6 +75,16 @@ impl ShellExecutionResolver {
             } else {
                 super::types::WorkspaceAccess::ReadOnly
             };
+            if access == super::types::WorkspaceAccess::ReadWrite && !root.exists() {
+                if let Err(error) = std::fs::create_dir_all(root) {
+                    log::warn!(
+                        "[Sandbox] Failed to create writable skill root {:?}: {}",
+                        root,
+                        error
+                    );
+                    continue;
+                }
+            }
             push_mount(&mut mounts, root, access);
         }
         let temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
@@ -92,6 +132,9 @@ impl ShellExecutionResolver {
         primary_root: Option<&Path>,
         analysis: &ShellCommandAnalysis,
     ) -> ShellExecutionPlan {
+        if crate::tools::contains_builtin_cscli_command(command) {
+            return explicit_host_plan(tool_call_id, command, "builtin_cs");
+        }
         let Some(config) = sandbox_config else {
             return host_plan(
                 tool_call_id,
@@ -184,6 +227,32 @@ impl ShellExecutionResolver {
             status: ShellExecutionPlanStatus::Ready,
         }
     }
+}
+
+fn push_mount_at_guest_path(
+    mounts: &mut Vec<SandboxMountPlan>,
+    host_root: &Path,
+    guest_path: &str,
+    access: super::types::WorkspaceAccess,
+) {
+    if !host_root.exists() {
+        return;
+    }
+    let host_path = host_root.to_string_lossy().to_string();
+    if let Some(existing) = mounts
+        .iter_mut()
+        .find(|mount| mount.guest_path == guest_path)
+    {
+        if access == super::types::WorkspaceAccess::ReadWrite {
+            existing.access = access;
+        }
+        return;
+    }
+    mounts.push(SandboxMountPlan {
+        host_path,
+        guest_path: guest_path.to_string(),
+        access,
+    });
 }
 
 fn push_mount(
@@ -585,6 +654,22 @@ mod tests {
     };
     use std::collections::BTreeMap;
 
+    #[test]
+    fn builtin_cs_routes_to_host_in_every_execution_mode() {
+        let unavailable = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec![]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        for mode in [ShellExecutionMode::Auto, ShellExecutionMode::SandboxOnly, ShellExecutionMode::HostOnly] {
+            for command in ["cscli skill list", "cscli skill list 2>&1", "cscli mcp install --descriptor-json '{}' 2>&1"] {
+                let plan = ShellExecutionResolver::resolve("test", command, Some(&config(mode.clone())), &unavailable, None);
+                assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
+                assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
+                assert_eq!(plan.profile.as_deref(), Some("builtin_cs"));
+            }
+        }
+    }
+
     fn ready_status(runtime: SandboxRuntime, images: Vec<&str>) -> SandboxRuntimeStatus {
         runtime_status(runtime, SandboxAvailabilityState::Ready, images, Vec::new())
     }
@@ -797,12 +882,51 @@ mod tests {
                 && mount.guest_path == builtin_skills.path().to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadOnly
         }));
+        assert!(plan.mounts.iter().any(|mount| {
+            dirs::home_dir()
+                .map(|home| home.join(".chatspeed").to_string_lossy() == mount.host_path)
+                .unwrap_or(false)
+                && mount.guest_path == SANDBOX_CHAT_SPEED_CONFIG
+                && mount.access == WorkspaceAccess::ReadWrite
+        }));
         let physical_temp_root = crate::libs::ai_temp::ai_temp_physical_root_unchecked();
         #[cfg(target_os = "macos")]
         assert_eq!(physical_temp_root, Path::new("/private/tmp/chatspeed"));
         assert!(plan.mounts.iter().any(|mount| {
             mount.host_path == physical_temp_root.to_string_lossy()
                 && mount.guest_path == crate::libs::ai_temp::AI_TEMP_ROOT
+                && mount.access == WorkspaceAccess::ReadWrite
+        }));
+    }
+
+    #[test]
+    fn complete_sandbox_mounts_creates_missing_writable_skill_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let skills_parent = tempfile::tempdir().unwrap();
+        let user_skills = skills_parent.path().join(".chatspeed").join("skills");
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        let plan = ShellExecutionResolver::complete_sandbox_mounts(
+            ShellExecutionResolver::resolve(
+                "tool-missing-skills",
+                "echo hi",
+                Some(&config(ShellExecutionMode::Auto)),
+                &status,
+                Some(workspace.path()),
+            ),
+            &ShellSandboxMountContext {
+                authorized_roots: vec![workspace.path().to_path_buf()],
+                skill_roots: vec![user_skills.clone()],
+                writable_skill_roots: vec![user_skills.clone()],
+            },
+        );
+
+        assert!(user_skills.is_dir());
+        assert!(plan.mounts.iter().any(|mount| {
+            mount.host_path == user_skills.to_string_lossy()
+                && mount.guest_path == user_skills.to_string_lossy()
                 && mount.access == WorkspaceAccess::ReadWrite
         }));
     }

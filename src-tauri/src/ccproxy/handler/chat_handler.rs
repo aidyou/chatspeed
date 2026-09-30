@@ -6,6 +6,7 @@ use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use std::sync::{Arc, RwLock};
 
+use crate::ccproxy::handler::decision_is_not_a_chat_protocol;
 use crate::ccproxy::handler::request_preprocessor::{
     preprocess_client_request_body, preprocess_unified_request,
 };
@@ -98,6 +99,7 @@ fn get_proxy_alias_from_body(
             Ok(payload.model)
         }
         ChatProtocol::Gemini => Ok(route_model_alias.to_string()),
+        ChatProtocol::Decision => Err(decision_is_not_a_chat_protocol()),
     }
 }
 
@@ -237,6 +239,7 @@ fn build_unified_request(
             let is_streaming_request = unified_request.stream;
             Ok((unified_request, proxy_alias, is_streaming_request))
         }
+        ChatProtocol::Decision => Err(decision_is_not_a_chat_protocol()),
     }
 }
 
@@ -312,6 +315,7 @@ pub(crate) async fn execute_unified_chat_request(
         ChatProtocol::Ollama => Arc::new(backend::OllamaBackendAdapter),
         ChatProtocol::Claude => Arc::new(backend::ClaudeBackendAdapter),
         ChatProtocol::Gemini => Arc::new(backend::GeminiBackendAdapter),
+        ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
     };
 
     let http_client = ModelResolver::build_http_client(
@@ -382,6 +386,39 @@ pub(crate) async fn execute_unified_chat_request(
                 log::info!(target: "ccproxy_upstream_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
             }
 
+            crate::ccproxy::helper::stat_guard::record_error_stat(
+                main_store_arc.as_ref(),
+                CcproxyStat {
+                    id: None,
+                    workflow_session_id: None,
+                    workflow_task_run_id: None,
+                    workflow_segment_id: None,
+                    root_session_id: None,
+                    root_task_run_id: None,
+                    request_kind: None,
+                    client_model: proxy_model.client_alias.clone(),
+                    backend_model: proxy_model.model.clone(),
+                    provider_id: Some(proxy_model.provider_id),
+                    provider: proxy_model.provider.clone(),
+                    protocol: client_protocol.to_string(),
+                    tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                    status_code: http::StatusCode::BAD_GATEWAY.as_u16() as i32,
+                    error_message: Some(message.clone()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_tokens: 0,
+                    cache_write_tokens: 0,
+                    reasoning_tokens: 0,
+                    audio_input_tokens: 0,
+                    audio_output_tokens: 0,
+                    estimated_cost: None,
+                    pricing_status: Some("unpriced".to_string()),
+                    pricing_snapshot: None,
+                    request_at: None,
+                }
+                .with_workflow_attribution(&client_headers),
+            );
+
             let response = output_adapter.adapt_error_response(UnifiedErrorResponse {
                 status_code: http::StatusCode::BAD_GATEWAY.as_u16(),
                 message,
@@ -420,6 +457,52 @@ pub(crate) async fn execute_unified_chat_request(
             status_code,
             error_body_str
         );
+
+        crate::ccproxy::helper::stat_guard::record_error_stat(
+            main_store_arc.as_ref(),
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: proxy_model.model.clone(),
+                provider_id: Some(proxy_model.provider_id),
+                provider: proxy_model.provider.clone(),
+                protocol: client_protocol.to_string(),
+                tool_compat_mode: if final_tool_compat_mode { 1 } else { 0 },
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(error_body_str.to_string()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
+        );
+
+        if crate::ccproxy::auth::is_trusted_internal_request(&client_headers) {
+            let filtered_headers =
+                crate::ccproxy::utils::http::filter_proxy_headers(&headers_from_target);
+            let mut response = Response::builder()
+                .status(status_code)
+                .body(Body::from(error_body_bytes))
+                .map_err(|e| {
+                    CCProxyError::InternalError(format!("Failed to build response: {}", e))
+                })?;
+            *response.headers_mut() = filtered_headers;
+            return log_client_response(response, &client_protocol, log_org_to_file).await;
+        }
 
         let mut unified_error = crate::ccproxy::adapter::error::normalize_backend_error(
             &proxy_model.chat_protocol,
@@ -547,6 +630,7 @@ pub(crate) async fn execute_unified_chat_request(
             let audio_input_tokens = unified_response.usage.audio_input_tokens.unwrap_or(0) as i64;
             let audio_output_tokens =
                 unified_response.usage.audio_output_tokens.unwrap_or(0) as i64;
+
             let (estimated_cost, pricing_status, pricing_snapshot) =
                 crate::ccproxy::helper::stat_guard::finalize_pricing(
                     input_tokens,
@@ -670,6 +754,11 @@ pub async fn handle_chat_completion(
             .await?
     };
 
+    // A proxy alias may point at a decision provider; that backend cannot serve chat traffic.
+    if proxy_model.chat_protocol == ChatProtocol::Decision {
+        return Err(decision_is_not_a_chat_protocol());
+    }
+
     //======================================================
     // Direct send request to ai server
     //======================================================
@@ -714,6 +803,7 @@ pub async fn handle_chat_completion(
                 req.stream.unwrap_or(false)
             }
             ChatProtocol::Gemini => generate_action == "streamGenerateContent",
+            ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
         };
 
         let result = super::handle_direct_forward(
@@ -749,6 +839,7 @@ pub async fn handle_chat_completion(
         ChatProtocol::Claude => OutputAdapterEnum::Claude(ClaudeOutputAdapter),
         ChatProtocol::Gemini => OutputAdapterEnum::Gemini(GeminiOutputAdapter),
         ChatProtocol::Ollama => OutputAdapterEnum::Ollama(OllamaOutputAdapter),
+        ChatProtocol::Decision => return Err(decision_is_not_a_chat_protocol()),
     };
 
     execute_unified_chat_request(
@@ -821,6 +912,83 @@ mod usage_attribution_tests {
             headers.insert(name, value.parse().unwrap());
         }
         headers
+    }
+
+    fn internal_headers() -> HeaderMap {
+        let mut headers = attribution_headers();
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn ccproxy_unified_internal_error_preserves_upstream_status_body_and_headers() {
+        let app = Router::new().route(
+            "/chat/completions",
+            post(|| async {
+                let body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted"}}"#;
+                axum::response::Response::builder()
+                    .status(http::StatusCode::TOO_MANY_REQUESTS)
+                    .header("content-type", "application/json")
+                    .header("x-request-id", "upstream-request")
+                    .header("content-length", body.len().to_string())
+                    .body(Body::from(body))
+                    .unwrap()
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("ccproxy-error.db")).unwrap());
+        let mut request = UnifiedRequest::default();
+        request.model = "alias".to_string();
+
+        let response = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            internal_headers(),
+            request,
+            "alias".to_string(),
+            proxy_model(format!("http://{address}")),
+            false,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store,
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get("x-request-id").unwrap(),
+            "upstream-request"
+        );
+        assert!(!response.headers().contains_key("content-length"));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            body,
+            &b"{\"error\":{\"type\":\"quota_exceeded\",\"message\":\"quota exhausted\"}}"[..]
+        );
+        server.abort();
     }
 
     #[tokio::test]

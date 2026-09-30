@@ -21,8 +21,18 @@
       <model />
     </el-main>
 
+    <el-main v-show="settingType === 'chatHub'" class="main">
+      <chatHub />
+    </el-main>
+
     <el-main v-show="settingType === 'skill'" class="main">
       <skill />
+    </el-main>
+
+    <!-- Agent Skills (file-based, managed by the capability service) is a
+         separate area from the database prompt skills above. -->
+    <el-main v-show="settingType === 'agentSkills'" class="main">
+      <agent-skills />
     </el-main>
 
     <el-main v-show="settingType === 'mcp'" class="main">
@@ -61,16 +71,21 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import about from '@/components/setting/About.vue'
 import general from '@/components/setting/General.vue'
+import chatHub from '@/components/setting/ChatHub.vue'
 import mcp from '@/components/setting/Mcp.vue'
 import model from '@/components/setting/Model.vue'
 import proxy from '@/components/setting/Proxy.vue'
 import skill from '@/components/setting/Skill.vue'
+import agentSkills from '@/components/setting/AgentSkills.vue'
 import privacy from '@/components/setting/Privacy.vue'
 import agentManagement from '@/components/setting/AgentManagement.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
 import titlebar from '@/components/window/Titlebar.vue'
 
+import { useMcpStore } from '@/stores/mcp'
+
 const { t } = useI18n()
+const mcpStore = useMcpStore()
 
 // const settingType = ref('model')
 // const settingLabel = ref(t(`settings.type.model`))
@@ -79,13 +94,15 @@ const settingLabel = ref(t('settings.type.general'))
 const menuItems = computed(() => [
   { label: t('settings.type.general'), icon: 'setting', id: 'general' },
   { label: t('settings.type.model'), icon: 'model', id: 'model' },
-  { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
-  { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
-  { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
   { label: t('settings.type.agent'), icon: 'agent', id: 'agent' },
-  { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true },
+  { label: t('settings.type.proxy'), icon: 'proxy', id: 'proxy' },
+  { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
+  { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
+  { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
+  { label: t('settings.type.agentSkills'), icon: 'hammer', id: 'agentSkills' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
-  { label: t('settings.type.about'), icon: 'about', id: 'about' }
+  { label: t('settings.type.about'), icon: 'about', id: 'about' },
+  { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }
 ])
 
 let unlistenFromRust = null
@@ -120,6 +137,14 @@ onUnmounted(() => {
 const switchSetting = id => {
   settingType.value = id
   settingLabel.value = t(`settings.type.${id}`)
+  if (id === 'mcp') {
+    // MCP rows show live runtime state, so opening the tab re-reads it. Without
+    // this, a window that was already open when the runtime settled keeps the
+    // snapshot it took while loading, and a restart is the only way out.
+    mcpStore.fetchMcpServers().catch(error => {
+      console.error('Failed to refresh MCP servers:', error)
+    })
+  }
 }
 </script>
 

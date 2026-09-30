@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0.0",
   "productName": "Chatspeed",
-  "version": "2.0.16",
+  "version": "2.0.17",
   "identifier": "ai.aidyou.chatspeed",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi",
     "frontendDist": "../dist"
   },
   "app": {
@@ -120,6 +120,9 @@
       "icons/icon.ico"
     ],
     "resources": ["assets"],
+    "externalBin": [
+      "target/release/cscli"
+    ],
     "copyright": "",
     "category": "DeveloperTool",
     "shortDescription": "",

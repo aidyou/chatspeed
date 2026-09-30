@@ -191,7 +191,7 @@
         <div class="value" style="width: 300px">
           <el-select v-model="settings.conversationTitleGenModel.id" class="auto-width-select" placement="bottom"
             clearable @change="onConversationTitleGenModelIdChange">
-            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            <el-option v-for="model in modelStore.getAvailableProviders" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
           <el-select v-model="settings.conversationTitleGenModel.model" class="auto-width-select" placement="bottom"
@@ -212,7 +212,7 @@
         <div class="value" style="width: 300px">
           <el-select v-model="settings.visionModel.id" class="auto-width-select" placement="bottom" clearable
             @change="onVisionModelIdChange">
-            <el-option v-for="model in modelStore.providers" :key="model.id" :label="model.name" :value="model.id">
+            <el-option v-for="model in modelStore.getAvailableProviders" :key="model.id" :label="model.name" :value="model.id">
             </el-option>
           </el-select>
           <el-select v-model="settings.visionModel.model" class="auto-width-select" placement="bottom" clearable
@@ -255,7 +255,7 @@
             placement="bottom"
             @change="onWebsearchModelIdChange">
             <el-option
-              v-for="model in modelStore.providers"
+              v-for="model in modelStore.getAvailableProviders"
               :key="model.id"
               :label="model.name"
               :value="model.id">
@@ -398,6 +398,20 @@
             <el-option :label="$t('settings.general.terminalColorSchemeAuto')" value="auto" />
             <el-option :label="$t('settings.general.terminalColorSchemeLight')" value="light" />
             <el-option :label="$t('settings.general.terminalColorSchemeDark')" value="dark" />
+          </el-select>
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">
+          <div class="label-text">
+            {{ $t('settings.general.terminalSkin') }}
+            <small class="tooltip">{{ $t('settings.general.terminalSkinTooltip') }}</small>
+          </div>
+        </div>
+        <div class="value" style="width: 200px">
+          <el-select v-model="settings.terminalSkin" @change="onTerminalSkinChange">
+            <el-option v-for="skin in TERMINAL_SKINS" :key="skin.id" :label="$t(skin.labelKey)"
+              :value="skin.id" />
           </el-select>
         </div>
       </div>
@@ -959,6 +973,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
 import { useUpdateStore } from '@/stores/update'
+import { DEFAULT_TERMINAL_SKIN, TERMINAL_SKINS } from '@/constants/terminalThemes'
 
 const { t } = useI18n()
 const modelStore = useModelStore()
@@ -1008,7 +1023,8 @@ const manualUpdateButtonText = computed(() => {
 
 const backups = ref([])
 const restoreDir = ref('')
-const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox']
+
+const configCategories = ['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox', 'chatHubs']
 const configExportVisible = ref(false)
 const configExportBusy = ref(false)
 const configExportCategories = ref([])
@@ -1108,29 +1124,15 @@ const primaryColors = computed(() => ({
   blue: t('settings.general.primaryColors.blue')
 }))
 
-const conversationTitleGenModelList = computed(() => {
-  if (settingStore.settings.conversationTitleGenModel.id) {
-    return (
-      modelStore.getModelProviderById(settingStore.settings.conversationTitleGenModel.id)?.models ||
-      []
-    )
-  }
-  return []
-})
+const chatProviderModels = providerId => modelStore.getAvailableProviders.find(provider => provider.id === providerId)?.models || []
 
-const visionModelList = computed(() => {
-  if (settingStore.settings.visionModel.id) {
-    return modelStore.getModelProviderById(settingStore.settings.visionModel.id)?.models || []
-  }
-  return []
-})
+const conversationTitleGenModelList = computed(() =>
+  chatProviderModels(settingStore.settings.conversationTitleGenModel.id)
+)
 
-const websearchModelList = computed(() => {
-  if (settingStore.settings.websearchModel.id) {
-    return modelStore.getModelProviderById(settingStore.settings.websearchModel.id)?.models || []
-  }
-  return []
-})
+const visionModelList = computed(() => chatProviderModels(settingStore.settings.visionModel.id))
+
+const websearchModelList = computed(() => chatProviderModels(settingStore.settings.websearchModel.id))
 
 const proxyTypes = computed(() => ({
   none: t('settings.general.proxyTypes.none'),
@@ -1283,6 +1285,10 @@ const onTerminalColorSchemeChange = value => {
   setSetting('terminalColorScheme', value || 'auto')
 }
 
+const onTerminalSkinChange = value => {
+  setSetting('terminalSkin', value || DEFAULT_TERMINAL_SKIN)
+}
+
 /**
  * Handles the change of show menu button
  * @param {boolean} value - The value of show menu button
@@ -1407,7 +1413,7 @@ const clearShortcut = shortcutKey => {
 }
 
 const restoreDefaultShortcut = shortcutKey => {
-  setSetting(shortcutKey, null)
+  setSetting(shortcutKey, defaultShortcutMap[shortcutKey] || null)
 }
 
 // =================================================

@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -93,139 +94,6 @@ fn configure_search_walker(base_path: &Path) -> ignore::Walk {
 }
 
 #[derive(Clone, Default)]
-pub struct Glob {
-    path_guard: Option<Arc<RwLock<PathGuard>>>,
-}
-
-impl Glob {
-    pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
-        Self { path_guard }
-    }
-}
-
-#[async_trait]
-impl ToolDefinition for Glob {
-    fn name(&self) -> &str {
-        crate::tools::TOOL_GLOB
-    }
-    fn description(&self) -> &str {
-        "- Fast file pattern matching tool that works with any codebase size\n\
-        - Finds files by path/name patterns; it does not search file contents\n\
-        - Supports glob patterns like \"**/*.js\", \"src/**/*.ts\", or \"**/{Cargo.toml,package.json}\"\n\
-        - Returns matching file paths, capped at 1000 matches\n\
-        - Paths under the primary working directory are shown as relative paths; matches in other authorized directories remain absolute\n\
-        - Automatically respects .gitignore; `.csignore` rules are merged at higher precedence so explicitly allowed git-ignored working data remains searchable without reopening unrelated ignored directories\n\
-        - Use this tool before grep/read_file when you need to discover likely files by extension, directory, or filename\n\
-        - When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the sub_agent_run tool instead\n\
-        - You can call multiple tools in a single response. It is always better to speculatively perform multiple searches in parallel if they are potentially useful."
-    }
-    fn category(&self) -> ToolCategory {
-        ToolCategory::FileSystem
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Workflow
-    }
-
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "The glob pattern to match files against, relative to the search path. Examples: \"**/*.rs\", \"src/**/*.ts\", \"**/{Cargo.toml,package.json}\"." },
-                    "path": { "type": "string", "description": "The directory to search in. Use a relative path for the primary working directory; use an absolute path for other authorized directories. Defaults to the primary working directory." }
-                },
-                "required": ["pattern"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-    async fn call(&self, params: Value) -> NativeToolResult {
-        let pattern = params["pattern"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("pattern required".to_string()))?;
-        let base_path_str = params["path"].as_str().unwrap_or(".");
-        let base_path = resolve_tool_path(base_path_str, self.path_guard.as_ref());
-        validate_search_path(&base_path, self.path_guard.as_ref())?;
-        let display_base_path = display_path_for_tool_output(&base_path, self.path_guard.as_ref());
-
-        // Prepare the glob matcher
-        let glob_matcher = globset::GlobBuilder::new(pattern)
-            .case_insensitive(true)
-            .literal_separator(true)
-            .build()
-            .map_err(|e| ToolError::InvalidParams(format!("Invalid glob pattern: {}", e)))?
-            .compile_matcher();
-
-        let mut results = vec![];
-        const MAX_RESULTS: usize = 1000;
-        let mut truncated = false;
-
-        // Let the ignore walker merge .gitignore and .csignore so excluded
-        // directories are pruned before their contents are visited.
-        let walker = configure_search_walker(&base_path);
-
-        for result in walker {
-            let entry = match result {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            let path = entry.path();
-            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                if !is_search_path_allowed(path, false, self.path_guard.as_ref())? {
-                    continue;
-                }
-                // Get relative path for matching
-                let rel_path = path.strip_prefix(&base_path).unwrap_or(path);
-
-                if glob_matcher.is_match(rel_path) {
-                    results.push(display_path_for_tool_output(path, self.path_guard.as_ref()));
-                    if results.len() >= MAX_RESULTS {
-                        truncated = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        results.sort();
-
-        if results.is_empty() {
-            Ok(ToolCallResult::success(
-                Some("[No matches found]".into()),
-                Some(json!({
-                    "pattern": pattern,
-                    "path": result_path_for_tool_output(&base_path),
-                    "display_path": display_base_path,
-                    "count": 0,
-                    "truncated": false,
-                    "llm_content": "[No matches found]"
-                })),
-            ))
-        } else {
-            let count = results.len();
-            Ok(ToolCallResult::success(
-                Some(results.join("\n")),
-                Some(json!({
-                    "pattern": pattern,
-                    "path": result_path_for_tool_output(&base_path),
-                    "display_path": display_base_path,
-                    "count": count,
-                    "truncated": truncated,
-                    "max_results": MAX_RESULTS,
-                    "llm_content": preview_path_lines_for_llm(&results)
-                })),
-            ))
-        }
-    }
-}
-
-#[derive(Clone, Default)]
 pub struct Grep {
     path_guard: Option<Arc<RwLock<PathGuard>>>,
 }
@@ -242,21 +110,17 @@ impl ToolDefinition for Grep {
         crate::tools::TOOL_GREP
     }
     fn description(&self) -> &str {
-        "A native, permission-aware text search tool\n\n\
+        "Search files two ways: content search (pass `pattern`) or path-only search (omit `pattern`, use `glob`).\n\n\
         Usage:\n\
-        - For ordinary content searches, ALWAYS use this Grep tool instead of invoking `grep` or `rg` through bash. It applies the tool system's permission and output controls.\n\
-        - If an available native or MCP tool can precisely resolve symbols, functions, indexed source, or static callers/callees, prefer that tool for the structural query; use Grep for textual and runtime relationships it cannot represent.\n\
-        - Uses Rust regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\"). Look-around and backreferences are not supported.\n\
-        - Supports compound searches with regex alternation (e.g., \"foo|bar|baz\", \"create_workflow|workflow_start|finalAudit\")\n\
-        - Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\", \"src-tauri/src/**/*.rs\")\n\
-        - Skips common binary, media, archive, document, and executable files such as .so, .dll, .exe, .zip, .rar, .png, .jpg, and .pdf. Only text-like files are searched.\n\
-        - Output modes: \"content\" shows matching lines with file and line number (default), \"files_with_matches\" shows only file paths, and \"count\" shows matching-line counts per file.\n\
-        - In content mode, very long matching lines are truncated from the first match position to keep output readable\n\
-        - Results are capped at 500 entries. Check the structured `truncated` field before treating a result as exhaustive; narrow path, glob, or pattern when it is true.\n\
-        - For efficient exploration, search several related terms at once, use content mode to get line numbers, then read only targeted files/ranges.\n\
-        - Use files_with_matches only for broad searches where content mode would be too noisy; follow up with content mode before reading files.\n\
-        - Use sub_agent_run for open-ended searches requiring multiple rounds\n\
-        - Patterns match within single lines."
+        - Use this instead of bash `grep`, `rg`, `find`, or `ls`.\n\
+        - `pattern` is Rust regex; look-around and backreferences are unsupported, use alternation (\"foo|bar|baz\") for several terms.\n\
+        - `glob` filters by path/name in both modes; brace alternatives are written verbatim, e.g. \"**/{AGENTS.md,CONSTITUTION.md}\" — do not add characters around the braces.\n\
+        - Path-only search returns matching file paths only, never contents: use it to discover files by extension, directory, or file name, and always pass `glob` or every file matches.\n\
+        - Path-only search never returns directories. To inspect a directory's immediate children, use list_dir.\n\
+        - Content search returns matching lines; set `context_lines` to get surrounding lines instead of reading the file afterwards.\n\
+        - Results are capped: check `truncated`, then narrow `path`, `glob`, or `pattern`.\n\
+        - Only the declared parameters exist; shell flags such as -A/-B/-C/-n/-i and head_limit are ignored.\n\
+        - Use read_file when you need a whole file."
     }
     fn category(&self) -> ToolCategory {
         ToolCategory::FileSystem
@@ -273,12 +137,13 @@ impl ToolDefinition for Grep {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string", "description": "Rust regular expression pattern to search for in file contents. Use alternation (foo|bar|baz) for compound searches; look-around and backreferences are unsupported." },
-                    "path": { "type": "string", "description": "Required file or directory to search. Use a relative path for the primary working directory; use an absolute path for other authorized directories." },
-                    "glob": { "type": "string", "description": "Glob pattern to filter files (e.g. \"*.js\", \"**/*.tsx\", \"src/**/*.rs\")." },
-                    "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content", "description": "Output format. content is the default and returns file:line:matched_content. files_with_matches returns only file paths for broad noise-reduction searches. count returns matching-line counts per file." }
+                    "pattern": { "type": "string", "description": "Rust regex matched inside file contents. Omit it for path-only search: only `glob` is applied and contents are not read." },
+                    "path": { "type": "string", "description": "File or directory to search. Relative for the primary working directory, absolute for other authorized directories." },
+                    "glob": { "type": "string", "description": "Path/name filter, used in both modes. Brace alternatives verbatim: \"**/{AGENTS.md,CONSTITUTION.md}\", with no characters added around the braces." },
+                    "context_lines": { "type": "integer", "description": "Surrounding lines to include with each content match, replacing -A/-B/-C. Default 0; content mode only." },
+                    "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "default": "content", "description": "content: matching lines with file and line number (default). files_with_matches: paths of files that match. count: per-file match counts. Content mode only." }
                 },
-                "required": ["pattern", "path"]
+                "required": ["path"]
             }),
             output_schema: None,
             disabled: false,
@@ -286,9 +151,7 @@ impl ToolDefinition for Grep {
         }
     }
     async fn call(&self, params: Value) -> NativeToolResult {
-        let pattern_str = params["pattern"]
-            .as_str()
-            .ok_or(ToolError::InvalidParams("pattern required".to_string()))?;
+        let pattern_str = params["pattern"].as_str().unwrap_or("").trim().to_string();
         let search_path = params["path"]
             .as_str()
             .ok_or(ToolError::InvalidParams("path required".to_string()))?;
@@ -299,21 +162,34 @@ impl ToolDefinition for Grep {
                 output_mode
             )));
         }
-        let glob_set = Self::build_glob_set(params["glob"].as_str())?;
-        let re = Regex::new(pattern_str)
-            .map_err(|e| ToolError::InvalidParams(format!("Invalid regex: {}", e)))?;
+        let glob_str = params["glob"]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let glob_set = Self::build_glob_set(glob_str, pattern_str.is_empty())?;
+        let context_lines = Self::parse_context_lines(&params)?;
         let path = resolve_tool_path(search_path, self.path_guard.as_ref());
         validate_search_path(&path, self.path_guard.as_ref())?;
         let display_path = display_path_for_tool_output(&path, self.path_guard.as_ref());
-        let mut matches = vec![];
-        let mut truncated = false;
 
         if !path.exists() {
             return Err(ToolError::IoError(format!(
-                "Search path not found: {}. Use list_dir/glob to verify the correct path.",
+                "Search path not found: {}. Verify the path with list_dir before searching.",
                 display_path
             )));
         }
+
+        // An omitted or blank `pattern` selects path-only search. This is how the tool
+        // that was previously exposed separately as `glob` is expressed now.
+        if pattern_str.is_empty() {
+            return self.search_paths_only(&path, &display_path, glob_str, glob_set.as_ref());
+        }
+
+        let re = Regex::new(&pattern_str)
+            .map_err(|e| ToolError::InvalidParams(format!("Invalid regex: {}", e)))?;
+        let mut matches = vec![];
+        let mut match_count = 0_usize;
+        let mut truncated = false;
 
         if path.is_file() {
             if is_search_path_allowed(&path, false, self.path_guard.as_ref())?
@@ -324,7 +200,9 @@ impl ToolDefinition for Grep {
                     &path,
                     &re,
                     output_mode,
+                    context_lines,
                     &mut matches,
+                    &mut match_count,
                     Self::MAX_MATCHES,
                     self.path_guard.as_ref(),
                 )?;
@@ -354,7 +232,9 @@ impl ToolDefinition for Grep {
                         entry.path(),
                         &re,
                         output_mode,
+                        context_lines,
                         &mut matches,
+                        &mut match_count,
                         Self::MAX_MATCHES,
                         self.path_guard.as_ref(),
                     )?;
@@ -366,15 +246,18 @@ impl ToolDefinition for Grep {
             }
         }
 
+        let result_path = result_path_for_tool_output(&path);
         if matches.is_empty() {
             Ok(ToolCallResult::success(
                 Some("[No matches found]".into()),
                 Some(json!({
                     "pattern": pattern_str,
-                    "path": result_path_for_tool_output(&path),
+                    "path": result_path,
                     "display_path": display_path,
                     "output_mode": output_mode,
+                    "context_lines": context_lines,
                     "count": 0,
+                    "match_count": 0,
                     "truncated": false,
                     "max_matches": Self::MAX_MATCHES,
                     "llm_content": "[No matches found]"
@@ -393,10 +276,12 @@ impl ToolDefinition for Grep {
                 Some(matches.join("\n")),
                 Some(json!({
                     "pattern": pattern_str,
-                    "path": result_path_for_tool_output(&path),
+                    "path": result_path,
                     "display_path": display_path,
                     "output_mode": output_mode,
+                    "context_lines": context_lines,
                     "count": matches.len(),
+                    "match_count": match_count,
                     "truncated": truncated,
                     "max_matches": Self::MAX_MATCHES,
                     "llm_content": llm_content
@@ -408,8 +293,102 @@ impl ToolDefinition for Grep {
 
 impl Grep {
     const MAX_MATCHES: usize = 500;
+    const MAX_PATH_MATCHES: usize = 1000;
     const MAX_CONTENT_MATCH_CHARS: usize = 500;
     const TEXT_SNIFF_BYTES: usize = 8192;
+
+    fn parse_context_lines(params: &Value) -> Result<usize, ToolError> {
+        match params.get("context_lines") {
+            None | Some(Value::Null) => Ok(0),
+            Some(Value::Number(value)) => value
+                .as_u64()
+                .filter(|value| *value <= 1000)
+                .map(|value| value as usize)
+                .ok_or_else(|| {
+                    ToolError::InvalidParams(
+                        "context_lines must be an integer from 0 to 1000".to_string(),
+                    )
+                }),
+            _ => Err(ToolError::InvalidParams(
+                "context_lines must be an integer from 0 to 1000".to_string(),
+            )),
+        }
+    }
+
+    fn search_paths_only(
+        &self,
+        path: &Path,
+        display_path: &str,
+        glob: Option<&str>,
+        glob_set: Option<&GlobSet>,
+    ) -> NativeToolResult {
+        let mut paths = Vec::new();
+        let mut truncated = false;
+        let root = if path.is_file() {
+            path.parent()
+        } else {
+            Some(path)
+        };
+        let entries: Box<dyn Iterator<Item = PathBuf>> = if path.is_file() {
+            Box::new(std::iter::once(path.to_path_buf()))
+        } else {
+            Box::new(
+                configure_search_walker(path)
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| {
+                        entry
+                            .file_type()
+                            .is_some_and(|kind| kind.is_file())
+                            .then(|| entry.into_path())
+                    }),
+            )
+        };
+
+        for entry_path in entries {
+            if !is_search_path_allowed(&entry_path, false, self.path_guard.as_ref())? {
+                continue;
+            }
+            if !Self::matches_glob(&entry_path, root, glob_set) {
+                continue;
+            }
+            paths.push(display_path_for_tool_output(
+                &entry_path,
+                self.path_guard.as_ref(),
+            ));
+            if paths.len() >= Self::MAX_PATH_MATCHES {
+                truncated = true;
+                break;
+            }
+        }
+
+        paths.sort();
+        let content = if paths.is_empty() {
+            "[No matches found]".to_string()
+        } else {
+            paths.join("\n")
+        };
+        let mut llm_content = if paths.is_empty() {
+            content.clone()
+        } else {
+            preview_path_lines_for_llm(&paths).unwrap_or_default()
+        };
+        if truncated {
+            llm_content.push_str("\n<SYSTEM_REMINDER>Search stopped after 1000 paths. Narrow path or glob before treating the result as exhaustive.</SYSTEM_REMINDER>");
+        }
+        Ok(ToolCallResult::success(
+            Some(content),
+            Some(json!({
+                "path": result_path_for_tool_output(path),
+                "display_path": display_path,
+                "glob": glob,
+                "output_mode": "files_with_matches",
+                "count": paths.len(),
+                "truncated": truncated,
+                "max_matches": Self::MAX_PATH_MATCHES,
+                "llm_content": llm_content,
+            })),
+        ))
+    }
     const SKIPPED_BINARY_EXTENSIONS: &'static [&'static str] = &[
         "7z", "a", "apk", "avi", "bin", "bmp", "bz2", "class", "cur", "dat", "deb", "dib", "dll",
         "dmg", "doc", "docm", "docx", "dylib", "ear", "elc", "eot", "epub", "exe", "flac", "gif",
@@ -421,16 +400,22 @@ impl Grep {
         "woff2", "psd", "ai", "sketch", "blend", "db", "db3", "sqlite3", "rmeta", "rlib",
     ];
 
-    fn build_glob_set(glob: Option<&str>) -> Result<Option<GlobSet>, ToolError> {
+    fn build_glob_set(glob: Option<&str>, path_only: bool) -> Result<Option<GlobSet>, ToolError> {
         let Some(glob) = glob.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
 
         let mut builder = GlobSetBuilder::new();
-        builder.add(
+        let pattern = if path_only {
+            globset::GlobBuilder::new(glob)
+                .case_insensitive(true)
+                .literal_separator(true)
+                .build()
+        } else {
             GlobPattern::new(glob)
-                .map_err(|e| ToolError::InvalidParams(format!("Invalid glob: {}", e)))?,
-        );
+        }
+        .map_err(|e| ToolError::InvalidParams(format!("Invalid glob: {}", e)))?;
+        builder.add(pattern);
         Ok(Some(builder.build().map_err(|e| {
             ToolError::InvalidParams(format!("Invalid glob: {}", e))
         })?))
@@ -509,46 +494,70 @@ impl Grep {
         path: &Path,
         re: &Regex,
         mode: &str,
+        context_lines: usize,
         matches: &mut Vec<String>,
+        match_count: &mut usize,
         max: usize,
         path_guard: Option<&Arc<RwLock<PathGuard>>>,
     ) -> Result<bool, ToolError> {
         let file = fs::File::open(path).map_err(|e| ToolError::IoError(e.to_string()))?;
         let reader = BufReader::new(file);
         let mut count = 0;
+        let mut pending: VecDeque<(usize, String, bool)> = VecDeque::new();
+        let mut last_match_line = 0_usize;
+        let display_path = display_path_for_tool_output(path, path_guard);
         for (i, line) in reader.lines().enumerate() {
             if let Ok(content) = line {
-                if let Some(matched) = re.find(&content) {
+                let line_number = i + 1;
+                let found = re.find(&content);
+                if found.is_some() {
                     count += 1;
-                    match mode {
-                        "content" => {
-                            let display_content =
-                                Self::format_content_match(&content, matched.start());
-                            matches.push(format!(
-                                "{}:{}:{}",
-                                display_path_for_tool_output(path, path_guard),
-                                i + 1,
-                                display_content
-                            ));
-                        }
-                        "files_with_matches" if count == 1 => {
-                            matches.push(display_path_for_tool_output(path, path_guard));
-                            return Ok(matches.len() >= max);
-                        }
-                        _ => {}
+                    *match_count += 1;
+                    if mode == "files_with_matches" {
+                        matches.push(display_path);
+                        return Ok(matches.len() >= max);
                     }
-                    if matches.len() >= max {
-                        return Ok(true);
+                    if mode == "content" {
+                        last_match_line = line_number;
+                        for (previous_number, _, included) in pending.iter_mut() {
+                            if line_number - *previous_number <= context_lines {
+                                *included = true;
+                            }
+                        }
+                    }
+                }
+                if mode != "content" {
+                    continue;
+                }
+                let included = found.is_some()
+                    || (last_match_line > 0 && line_number - last_match_line <= context_lines);
+                let display_content = Self::format_content_match(
+                    &content,
+                    found.map_or(0, |matched| matched.start()),
+                );
+                pending.push_back((line_number, display_content, included));
+                if pending.len() > context_lines {
+                    if let Some((number, text, included)) = pending.pop_front() {
+                        if included {
+                            matches.push(format!("{display_path}:{number}:{text}"));
+                            if matches.len() >= max {
+                                return Ok(true);
+                            }
+                        }
                     }
                 }
             }
         }
+        while let Some((number, text, included)) = pending.pop_front() {
+            if included {
+                matches.push(format!("{display_path}:{number}:{text}"));
+                if matches.len() >= max {
+                    return Ok(true);
+                }
+            }
+        }
         if mode == "count" && count > 0 {
-            matches.push(format!(
-                "{}: {}",
-                display_path_for_tool_output(path, path_guard),
-                count
-            ));
+            matches.push(format!("{display_path}: {count}"));
         }
         Ok(matches.len() >= max)
     }
@@ -595,7 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_basic() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         // Create test files
@@ -604,7 +613,7 @@ mod tests {
         fs::write(temp_dir.path().join("other.md"), "").unwrap();
 
         let params = json!({
-            "pattern": "*.txt",
+            "glob": "*.txt",
             "path": temp_dir.path().to_string_lossy()
         });
 
@@ -619,7 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_recursive() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         // Create nested structure
@@ -628,7 +637,7 @@ mod tests {
         fs::write(subdir.join("nested.txt"), "").unwrap();
 
         let params = json!({
-            "pattern": "**/*.txt",
+            "glob": "**/*.txt",
             "path": temp_dir.path().to_string_lossy()
         });
 
@@ -679,9 +688,9 @@ mod tests {
             vec![],
         )));
 
-        let glob_result = Glob::new(Some(guard.clone()))
+        let glob_result = Grep::new(Some(guard.clone()))
             .call(json!({
-                "pattern": "**/*.txt",
+                "glob": "**/*.txt",
                 "path": root.to_string_lossy()
             }))
             .await
@@ -709,11 +718,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_no_matches() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         let params = json!({
-            "pattern": "*.nonexistent",
+            "glob": "*.nonexistent",
             "path": temp_dir.path().to_string_lossy()
         });
 
@@ -725,12 +734,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_invalid_pattern() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         // Invalid glob pattern
         let params = json!({
-            "pattern": "**/*[invalid",
+            "glob": "**/*[invalid",
             "path": temp_dir.path().to_string_lossy()
         });
 
@@ -741,7 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_max_results() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let temp_dir = tempdir().unwrap();
 
         // Create many files
@@ -750,7 +759,7 @@ mod tests {
         }
 
         let params = json!({
-            "pattern": "*.txt",
+            "glob": "*.txt",
             "path": temp_dir.path().to_string_lossy()
         });
 
@@ -764,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_supports_relative_path_and_returns_relative_matches() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let (_temp_dir, relative_root) = make_relative_test_dir();
         let absolute_root = primary_directory(None).join(&relative_root);
         fs::create_dir(absolute_root.join("src")).unwrap();
@@ -772,7 +781,7 @@ mod tests {
 
         let result = tool
             .call(json!({
-                "pattern": "**/*.rs",
+                "glob": "**/*.rs",
                 "path": relative_root.to_string_lossy().to_string()
             }))
             .await
@@ -785,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_includes_llm_content_preview() {
-        let tool = Glob::default();
+        let tool = Grep::default();
         let (_temp_dir, relative_root) = make_relative_test_dir();
         let absolute_root = primary_directory(None).join(&relative_root);
 
@@ -795,7 +804,7 @@ mod tests {
 
         let result = tool
             .call(json!({
-                "pattern": "**/*.rs",
+                "glob": "**/*.rs",
                 "path": relative_root.to_string_lossy().to_string()
             }))
             .await
@@ -809,18 +818,124 @@ mod tests {
         assert!(!llm_content.contains("file-219.rs"));
     }
 
+    #[test]
+    fn merged_search_schema_preserves_tested_tool_guidance() {
+        let tool = Grep::default();
+        let declaration = tool.tool_calling_spec();
+        let description = tool.description();
+        let properties = &declaration.input_schema["properties"];
+
+        // Model tests needed this sentence to choose path search over list_dir for extensions.
+        assert!(description.contains("discover files by extension, directory, or file name"));
+        // Brace syntax was often corrupted when the verbatim instruction was removed.
+        assert!(description.contains("brace alternatives are written verbatim"));
+        assert!(properties["glob"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("with no characters added around the braces"));
+        // The explicit parameter replaced hallucinated shell -A/-B/-C arguments in model tests.
+        assert_eq!(properties["context_lines"]["type"], "integer");
+        assert_eq!(declaration.input_schema["required"], json!(["path"]));
+    }
+
+    #[tokio::test]
+    async fn path_only_search_matches_binary_files_without_reading_contents() {
+        let tool = Grep::default();
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join("payload.bin"), b"needle\0binary").unwrap();
+        fs::write(temp_dir.path().join("other.txt"), "needle").unwrap();
+
+        let result = tool
+            .call(json!({"path": temp_dir.path(), "glob": "*.bin"}))
+            .await
+            .unwrap();
+        let content = result.content.unwrap();
+        assert!(content.ends_with("payload.bin"));
+        assert!(!content.contains("needle"));
+        assert_eq!(result.structured_content.unwrap()["count"], 1);
+    }
+
+    #[tokio::test]
+    async fn path_only_search_keeps_brace_alternatives_verbatim() {
+        let tool = Grep::default();
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join("AGENTS.md"), "rules").unwrap();
+        fs::write(temp_dir.path().join("CONSTITUTION.md"), "rules").unwrap();
+        fs::write(temp_dir.path().join("other.md"), "rules").unwrap();
+
+        let result = tool
+            .call(json!({
+                "path": temp_dir.path(),
+                "glob": "**/{AGENTS.md,CONSTITUTION.md}"
+            }))
+            .await
+            .unwrap();
+        let content = result.content.unwrap();
+        assert!(content.contains("AGENTS.md"));
+        assert!(content.contains("CONSTITUTION.md"));
+        assert!(!content.contains("other.md"));
+    }
+
+    #[tokio::test]
+    async fn content_search_includes_surrounding_lines_once() {
+        let tool = Grep::default();
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(
+            temp_file.path(),
+            "before\nmatch one\nbetween\nmatch two\nafter\noutside",
+        )
+        .unwrap();
+
+        let result = tool
+            .call(json!({
+                "path": temp_file.path(),
+                "pattern": "match",
+                "context_lines": 1
+            }))
+            .await
+            .unwrap();
+        let content = result.content.unwrap();
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].contains(":1:before"));
+        assert!(lines[4].contains(":5:after"));
+        assert!(!content.contains(":6:outside"));
+        assert_eq!(result.structured_content.unwrap()["match_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn content_pattern_and_path_glob_remain_distinct() {
+        let tool = Grep::default();
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join("source.rs"), "target symbol").unwrap();
+        fs::write(temp_dir.path().join("notes.md"), "target symbol").unwrap();
+
+        let result = tool
+            .call(json!({
+                "path": temp_dir.path(),
+                "pattern": "target\\s+symbol",
+                "glob": "*.rs"
+            }))
+            .await
+            .unwrap();
+        let content = result.content.unwrap();
+        assert!(content.contains("source.rs"));
+        assert!(!content.contains("notes.md"));
+        assert_eq!(result.structured_content.unwrap()["match_count"], 1);
+    }
+
     #[tokio::test]
     async fn test_grep_basic() {
         let tool = Grep::default();
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_string_lossy().to_string();
-        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
+        let display_path = display_path_for_tool_output(temp_file.path(), None);
 
         fs::write(&path, "Hello World\nGoodbye World\nAnother line").unwrap();
 
         let params = json!({
             "pattern": "World",
-            "path": display_path,
+            "path": path,
             "output_mode": "content"
         });
 
@@ -855,7 +970,7 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
-        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
+        let display_path = display_path_for_tool_output(temp_file.path(), None);
 
         // Should return file path once even with multiple matches
         assert_eq!(matches.len(), 1);
@@ -922,7 +1037,7 @@ mod tests {
         let result = tool.call(params).await.unwrap();
         let content = result.content.unwrap();
         let matches: Vec<&str> = content.lines().collect();
-        let display_path = display_ai_temp_path(Path::new(&path)).unwrap();
+        let display_path = display_path_for_tool_output(temp_file.path(), None);
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].contains(&display_path));

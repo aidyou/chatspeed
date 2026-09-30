@@ -273,8 +273,10 @@ pub fn adapt_stream_chunk_to_log(
                 log::info!(target: "ccproxy_client_logger", "[Proxy] {} Stream Response: \n{}\n================\n\n", client_protocol.to_string(), serde_json::to_string_pretty(&recorder).unwrap_or_default());
             }
         }
-        UnifiedStreamChunk::Error { .. } => {
+        UnifiedStreamChunk::Error { message } => {
             recorder.stream_failed = true;
+            recorder.stream_status_code = 502;
+            recorder.error_message = Some(message.clone());
         }
         _ => {}
     }

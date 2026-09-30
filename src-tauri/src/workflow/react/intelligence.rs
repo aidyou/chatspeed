@@ -5,6 +5,7 @@ use crate::ccproxy::utils::token_estimator::estimate_tokens;
 use crate::db::WorkflowMessage;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
+use crate::workflow::react::decision::{parse_tool_approval_review, CompletionReportCandidate};
 use crate::workflow::react::error::WorkflowEngineError;
 
 use std::sync::Arc;
@@ -22,6 +23,8 @@ pub struct IntelligenceManager {
     pub utility_model_name: String,
     pub lite_provider_id: i64,
     pub lite_model_name: String,
+    pub decision_provider_id: i64,
+    pub decision_model_name: String,
     pub approval_provider_id: i64,
     pub approval_model_name: String,
     pub workflow_task_run_id: String,
@@ -29,57 +32,9 @@ pub struct IntelligenceManager {
     pub root_task_run_id: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ToolApprovalReview {
-    pub approved: bool,
-    pub reason: String,
-    pub risk_level: String,
-}
+pub use crate::workflow::react::decision::ToolApprovalReview;
 
 impl IntelligenceManager {
-    fn parse_tool_approval_review(result: &str) -> ToolApprovalReview {
-        let invalid_review = || ToolApprovalReview {
-            approved: false,
-            reason: "Approval reviewer returned invalid structured output; manual review required"
-                .to_string(),
-            risk_level: "medium".to_string(),
-        };
-
-        let Ok(review_json) = serde_json::from_str::<serde_json::Value>(
-            crate::libs::util::format_json_str(result).as_str(),
-        ) else {
-            return invalid_review();
-        };
-        let Some(review) = review_json.as_object() else {
-            return invalid_review();
-        };
-        let Some(approved) = review.get("approved").and_then(|value| value.as_bool()) else {
-            return invalid_review();
-        };
-        let Some(reason) = review
-            .get("reason")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return invalid_review();
-        };
-        let Some(risk_level) = review
-            .get("risk_level")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| matches!(*value, "low" | "medium" | "high"))
-        else {
-            return invalid_review();
-        };
-
-        ToolApprovalReview {
-            approved: approved && risk_level == "low",
-            reason: reason.to_string(),
-            risk_level: risk_level.to_string(),
-        }
-    }
-
     pub(crate) fn extract_completion_summary(message: &WorkflowMessage) -> String {
         let visible_content = message.message.trim();
         let tool_summary = message
@@ -127,7 +82,7 @@ impl IntelligenceManager {
         }
     }
 
-    fn truncate_text(value: &str, max_chars: usize) -> String {
+    pub(crate) fn truncate_text(value: &str, max_chars: usize) -> String {
         let mut text: String = value.chars().take(max_chars).collect();
         if value.chars().count() > max_chars {
             text.push_str("...");
@@ -231,6 +186,8 @@ impl IntelligenceManager {
         active_model_name: String,
         lite_provider_id: i64,
         lite_model_name: String,
+        decision_provider_id: i64,
+        decision_model_name: String,
         workflow_task_run_id: String,
         root_session_id: String,
         root_task_run_id: String,
@@ -244,6 +201,8 @@ impl IntelligenceManager {
             utility_model_name: active_model_name.clone(),
             lite_provider_id,
             lite_model_name,
+            decision_provider_id,
+            decision_model_name,
             approval_provider_id: active_provider_id,
             approval_model_name: active_model_name,
             workflow_task_run_id,
@@ -265,7 +224,104 @@ impl IntelligenceManager {
         }
     }
 
-    /// Reviews a proposed tool call in smart approval mode.
+    pub async fn review_completion(
+        &self,
+        candidates: &[CompletionReportCandidate],
+        detailed_report: bool,
+        user_request: &str,
+        segment_id: i32,
+    ) -> Option<usize> {
+        if let Some(index) = self
+            .try_decision_completion(candidates, detailed_report, user_request)
+            .await
+        {
+            return Some(index);
+        }
+        let contents: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.content.clone())
+            .collect();
+        self.review_completion_with_lite(&contents, detailed_report, segment_id)
+            .await
+    }
+
+    fn parse_completion_choice(response: &str, count: usize) -> Option<usize> {
+        let value: serde_json::Value = serde_json::from_str(response).ok()?;
+        let content = value.get("content").and_then(|value| value.as_str()).unwrap_or(response);
+        let result: serde_json::Value = serde_json::from_str(content).ok()?;
+        let choice = result.get("selected_candidate")?.as_str()?;
+        let index = choice.strip_prefix("report_")?.parse::<usize>().ok()?;
+        (index < count && result.get("report_meets_requirement")?.as_bool() == Some(true))
+            .then_some(index)
+    }
+
+    async fn review_completion_with_lite(
+        &self,
+        candidates: &[String],
+        detailed_report: bool,
+        segment_id: i32,
+    ) -> Option<usize> {
+        if self.lite_provider_id <= 0 || self.lite_model_name.trim().is_empty() {
+            return None;
+        }
+        let messages = vec![
+            serde_json::json!({
+                "role": "system",
+                "content": "Choose the one accurate completion report satisfying the required detail. Return only JSON: {\"selected_candidate\":\"report_0\",\"report_meets_requirement\":true}. Use selected_candidate null when uncertain. Do not generate or merge a report.",
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": serde_json::json!({
+                    "required_detail": if detailed_report { "detailed" } else { "brief" },
+                    "candidates": candidates.iter().enumerate().map(|(index, content)| {
+                        serde_json::json!({"id": format!("report_{index}"), "content": content})
+                    }).collect::<Vec<_>>(),
+                }).to_string(),
+            }),
+        ];
+        let chat_interface = {
+            let mut chats_guard = self.chat_state.chats.lock().await;
+            chats_guard
+                .entry(crate::ccproxy::ChatProtocol::OpenAI)
+                .or_default()
+                .entry(self.session_id.clone() + "_completion_reviewer")
+                .or_insert_with(|| crate::create_chat!(self.chat_state.main_store))
+                .clone()
+        };
+        match chat_interface
+            .chat(
+                self.lite_provider_id,
+                &self.lite_model_name,
+                self.session_id.clone() + "_completion_reviewer",
+                messages,
+                None,
+                Some(ChatMetadata {
+                    stream: Some(false),
+                    workflow_usage_attribution: Some(WorkflowUsageAttribution {
+                        workflow_session_id: self.session_id.clone(),
+                        workflow_task_run_id: self.workflow_task_run_id.clone(),
+                        workflow_segment_id: segment_id,
+                        root_session_id: self.root_session_id.clone(),
+                        root_task_run_id: self.root_task_run_id.clone(),
+                        request_kind: "completion_review_lite".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                |_| {},
+            )
+            .await
+        {
+            Ok(response) => Self::parse_completion_choice(&response, candidates.len()),
+            Err(error) => {
+                log::warn!(
+                    "[Workflow][session={}][completion] Lite review unavailable; using existing completion path: {error}",
+                    self.session_id
+                );
+                None
+            }
+        }
+    }
+
     pub async fn review_tool_approval(
         &self,
         context: &ContextManager,
@@ -276,7 +332,13 @@ impl IntelligenceManager {
         tool_description: &str,
         tool_args: &serde_json::Value,
         assistant_text: &str,
+        decision_may_approve: bool,
     ) -> Result<ToolApprovalReview, WorkflowEngineError> {
+        if decision_may_approve {
+            if let Some(review) = self.try_decision_approval(context, workspace_context, tool_name, tool_category, tool_scope, tool_description, tool_args, assistant_text).await {
+                return Ok(review);
+            }
+        }
         log::info!(
             "IntelligenceManager {}: Reviewing tool approval for '{}'",
             self.session_id,
@@ -388,7 +450,7 @@ impl IntelligenceManager {
             }
         }
 
-        Ok(Self::parse_tool_approval_review(result.trim()))
+        Ok(parse_tool_approval_review(result.trim()))
     }
 
     /// Generates a concise title for the workflow session based on the user's initial query.
@@ -409,7 +471,10 @@ impl IntelligenceManager {
                     (Some(provider_id), Some(model_name))
                         if provider_id > 0 && !model_name.trim().is_empty() =>
                     {
-                        Some((provider_id, model_name.to_string()))
+                        store.config.get_ai_model_by_id(provider_id).ok()
+                            .filter(|provider| !provider.disabled && provider.api_protocol != "decision")
+                            .filter(|provider| provider.models.iter().any(|model| model.id == model_name))
+                            .map(|_| (provider_id, model_name.to_string()))
                     }
                     _ => None,
                 }
@@ -545,7 +610,71 @@ impl IntelligenceManager {
         max_input_tokens: usize,
         segment_id: i32,
     ) -> Option<String> {
-        const MAX_DETECTION_ATTEMPTS: u32 = 3;
+        // The input is user content, so only its shape is logged; that is what
+        // makes a production misdetection diagnosable without leaking text.
+        log::info!(
+            "[Workflow][session={}][language] Detection input profile: {}",
+            self.session_id,
+            Self::language_detection_input_profile(user_input)
+        );
+        if let Some(language) = self.try_decision_language(user_input, max_input_tokens).await {
+            return Some(language);
+        }
+        self.detect_input_language_with_lite(user_input, max_input_tokens, segment_id)
+            .await
+    }
+
+    /// Privacy-safe shape of one detection input: how much of it is CJK script
+    /// versus alphabetic and numeric text, and which runtime wrappers it still
+    /// carries, so a misdetection can be diagnosed without logging the content.
+    fn language_detection_input_profile(input: &str) -> String {
+        let mut cjk = 0usize;
+        let mut alpha = 0usize;
+        let mut digits = 0usize;
+        for character in input.chars() {
+            if matches!(
+                character as u32,
+                0x3040..=0x30FF
+                    | 0x3400..=0x4DBF
+                    | 0x4E00..=0x9FFF
+                    | 0xF900..=0xFAFF
+                    | 0xAC00..=0xD7AF
+            ) {
+                cjk += 1;
+            } else if character.is_numeric() {
+                digits += 1;
+            } else if character.is_alphabetic() {
+                alpha += 1;
+            }
+        }
+        let wrappers: Vec<&str> = [
+            "<SYSTEM_REMINDER>",
+            "<file_content",
+            "<list_dir",
+            "<img_detail",
+            "<quoted-response",
+            "<user_query>",
+        ]
+        .into_iter()
+        .filter(|wrapper| input.contains(wrapper))
+        .collect();
+        format!(
+            "chars={} cjk={} alpha={} digits={} wrappers={:?}",
+            input.chars().count(),
+            cjk,
+            alpha,
+            digits,
+            wrappers
+        )
+    }
+
+    async fn detect_input_language_with_lite(
+        &self,
+        user_input: &str,
+        max_input_tokens: usize,
+        segment_id: i32,
+    ) -> Option<String> {
+        let max_detection_attempts = 3;
 
         let trimmed = user_input.trim();
         if trimmed.is_empty() {
@@ -580,7 +709,7 @@ impl IntelligenceManager {
         };
 
         let mut last_error: Option<String> = None;
-        for attempt in 1..=MAX_DETECTION_ATTEMPTS {
+        for attempt in 1..=max_detection_attempts {
             if attempt > 1 {
                 let wait_secs = 2u64.pow(attempt - 1);
                 log::info!(
@@ -588,7 +717,7 @@ impl IntelligenceManager {
                     self.session_id,
                     wait_secs,
                     attempt,
-                    MAX_DETECTION_ATTEMPTS
+                    max_detection_attempts
                 );
                 sleep(Duration::from_secs(wait_secs)).await;
             }
@@ -624,7 +753,7 @@ impl IntelligenceManager {
                             "[Workflow][session={}][language] Empty language detection result on attempt {}/{}",
                             self.session_id,
                             attempt,
-                            MAX_DETECTION_ATTEMPTS
+                            max_detection_attempts
                         );
                         continue;
                     }
@@ -635,7 +764,7 @@ impl IntelligenceManager {
                         "[Workflow][session={}][language] Language detection failed on attempt {}/{}: {}",
                         self.session_id,
                         attempt,
-                        MAX_DETECTION_ATTEMPTS,
+                        max_detection_attempts,
                         error
                     );
                     last_error = Some(error.to_string());
@@ -646,7 +775,7 @@ impl IntelligenceManager {
         log::warn!(
             "[Workflow][session={}][language] Language detection failed after {} attempts; continuing without a language directive{}",
             self.session_id,
-            MAX_DETECTION_ATTEMPTS,
+            max_detection_attempts,
             last_error
                 .map(|error| format!(": {}", error))
                 .unwrap_or_default()
@@ -657,7 +786,7 @@ impl IntelligenceManager {
     /// Truncates text to a rough token budget using the shared estimator.
     /// Keeps the head (2/3) and tail (1/3) of the input so language cues at
     /// either end survive, and always cuts on char boundaries (CJK-safe).
-    fn truncate_to_token_budget(text: &str, max_tokens: usize) -> String {
+    pub(crate) fn truncate_to_token_budget(text: &str, max_tokens: usize) -> String {
         if max_tokens == 0 || estimate_tokens(text) <= max_tokens as f64 {
             return text.to_string();
         }
@@ -758,7 +887,10 @@ mod tests {
             IntelligenceManager::sanitize_detected_language("\"中文\"\nextra"),
             "中文"
         );
-        assert_eq!(IntelligenceManager::sanitize_detected_language("  English. "), "English");
+        assert_eq!(
+            IntelligenceManager::sanitize_detected_language("  English. "),
+            "English"
+        );
         assert_eq!(IntelligenceManager::sanitize_detected_language(""), "");
     }
 
@@ -777,32 +909,41 @@ mod tests {
     }
 
     #[test]
-    fn smart_approval_requires_valid_low_risk_json() {
-        let approved = IntelligenceManager::parse_tool_approval_review(
-            r#"{"approved":true,"reason":"Read-only inspection","risk_level":"low"}"#,
+    fn language_detection_input_profile_reports_shape_without_content() {
+        let profile = IntelligenceManager::language_detection_input_profile(
+            "修复按钮 <file_content path=\"app.vue\">fn main() {}</file_content>",
         );
-        assert!(approved.approved);
-
-        for invalid in [
-            "I approve this action",
-            "I do not recommend approving this action",
-            r#"{"approved":true,"reason":"Mutation","risk_level":"medium"}"#,
-            r#"{"approved":"true","reason":"Invalid type","risk_level":"low"}"#,
-            r#"{"approved":true,"reason":"Missing risk"}"#,
-        ] {
-            let review = IntelligenceManager::parse_tool_approval_review(invalid);
-            assert!(!review.approved, "invalid review was approved: {invalid}");
-            assert_eq!(review.risk_level, "medium");
-        }
+        assert!(profile.contains("cjk=4"), "profile was {profile}");
+        assert!(
+            profile.contains("wrappers=[\"<file_content\"]"),
+            "profile was {profile}"
+        );
+        assert!(
+            !profile.contains("修复按钮") && !profile.contains("fn main"),
+            "profile leaked content: {profile}"
+        );
+        assert_eq!(
+            IntelligenceManager::language_detection_input_profile("hello 123"),
+            "chars=9 cjk=0 alpha=5 digits=3 wrappers=[]"
+        );
     }
 
     #[test]
-    fn smart_approval_preserves_structured_rejection() {
-        let review = IntelligenceManager::parse_tool_approval_review(
-            r#"{"approved":false,"reason":"Needs user review","risk_level":"high"}"#,
+    fn completion_choice_requires_valid_structured_selection() {
+        assert_eq!(
+            IntelligenceManager::parse_completion_choice(
+                r#"{"content":"{\"selected_candidate\":\"report_1\",\"report_meets_requirement\":true}"}"#,
+                2,
+            ),
+            Some(1)
         );
-        assert!(!review.approved);
-        assert_eq!(review.reason, "Needs user review");
-        assert_eq!(review.risk_level, "high");
+        for invalid in [
+            r#"{"selected_candidate":"report_2","report_meets_requirement":true}"#,
+            r#"{"selected_candidate":"report_0","report_meets_requirement":false}"#,
+            r#"{"selected_candidate":null,"report_meets_requirement":true}"#,
+            "COMPLETE",
+        ] {
+            assert_eq!(IntelligenceManager::parse_completion_choice(invalid, 2), None);
+        }
     }
 }

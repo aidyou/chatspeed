@@ -1145,6 +1145,11 @@ const analyzeImagesWithVisionModel = async (imageAttachments, textAttachments, u
   console.log('Image Attachments:', imageAttachments.length)
   console.log('Text Attachments:', textAttachments.length)
 
+  const visionProvider = modelStore.getAvailableProviders.find(provider => provider.id === visionModel.id)
+  if (!visionProvider?.models?.some(model => model.id === visionModel.model)) {
+    throw new Error(t('settings.general.visionModelRequired'))
+  }
+
   // Build vision analysis request - analyze all images together
   const visionMessage = {
     role: 'user',
@@ -1316,7 +1321,9 @@ const dispatchChatCompletion = async (messageId = null) => {
     const visionModel = settingStore.settings.visionModel
 
     if (hasImageAttachments) {
-      if (!visionModel.id || !visionModel.model) {
+      if (!visionModel.id || !visionModel.model ||
+          !modelStore.getAvailableProviders.some(provider =>
+            provider.id === visionModel.id && provider.models?.some(model => model.id === visionModel.model))) {
         // 回退 UI 状态
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
@@ -1615,10 +1622,13 @@ const genTitleByAi = () => {
   let genModel = currentModel.value
   let model = currentModel.value.defaultModel
   if (settingStore.settings.conversationTitleGenModel?.id) {
-    genModel =
-      modelStore.getModelProviderById(settingStore.settings.conversationTitleGenModel.id) ||
-      currentModel.value
-    model = settingStore.settings.conversationTitleGenModel?.model || model
+    const titleProvider = modelStore.getAvailableProviders.find(
+      provider => provider.id === settingStore.settings.conversationTitleGenModel.id
+    )
+    if (titleProvider?.models?.some(item => item.id === settingStore.settings.conversationTitleGenModel.model)) {
+      genModel = titleProvider
+      model = settingStore.settings.conversationTitleGenModel.model
+    }
   }
   titleChatId.value = Uuid()
   invokeWrapper('chat_completion', {

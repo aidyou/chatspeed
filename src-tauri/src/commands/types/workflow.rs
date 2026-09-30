@@ -15,6 +15,7 @@ pub struct AgentPayload {
     pub planning_prompt: Option<String>,
     pub image_recognition_prompt: Option<String>,
     pub available_tools: Option<String>,
+    pub task_tracking_enabled: Option<bool>,
     pub auto_approve: Option<String>,
     pub models: Option<crate::db::agent::AgentModels>,
     pub shell_policy: Option<String>,
@@ -23,6 +24,7 @@ pub struct AgentPayload {
     pub allowed_paths: Option<String>,
     pub final_audit: Option<bool>,
     pub approval_level: Option<String>,
+    pub report_required_sections: Option<String>,
     pub skill_enabled: Option<bool>,
     pub selected_skills: Option<String>,
     pub mcp_tool_exposure: Option<String>,
@@ -58,12 +60,14 @@ impl From<AgentPayload> for Agent {
             payload.max_contexts,
         );
         agent.personality = payload.personality;
+        agent.task_tracking_enabled = payload.task_tracking_enabled.unwrap_or(true);
         agent.mcp_tool_exposure = payload.mcp_tool_exposure;
         agent.sandbox_execution_mode = payload
             .sandbox_execution_mode
             .unwrap_or(crate::tools::ShellExecutionMode::HostOnly);
         agent.sandbox_scheme_id = payload.sandbox_scheme_id;
         agent.sub_agent_role = payload.sub_agent_role;
+        agent.report_required_sections = payload.report_required_sections;
         agent
     }
 }

@@ -9,7 +9,7 @@ use tokio::sync::{
     Mutex,
 };
 
-use crate::ccproxy::ChatProtocol;
+use crate::ccproxy::{decision, ChatProtocol};
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -313,6 +313,34 @@ pub async fn list_models_async(
 ) -> crate::error::Result<Vec<ModelDetails>> {
     let chat_protocol = ChatProtocol::from_str(&api_protocol)
         .map_err(|_| CCProxyError::InvalidProtocolError(api_protocol.clone()))?;
+    if chat_protocol == ChatProtocol::Decision {
+        let models = decision::list_models(
+            main_store,
+            api_url.unwrap_or_default(),
+            api_key.unwrap_or_default(),
+            metadata,
+        )
+        .await
+        .map_err(|error| AppError::Ai(AiError::InitFailed(error.to_string())))?;
+        return Ok(models
+            .into_iter()
+            .map(|(id, name)| ModelDetails {
+                id,
+                name,
+                protocol: ChatProtocol::OpenAI,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                description: None,
+                last_updated: None,
+                family: None,
+                reasoning: None,
+                function_call: None,
+                image_input: None,
+                recommended_temperature: None,
+                metadata: None,
+            })
+            .collect());
+    }
     let (api_url_clone, api_key_clone) = prepare_chat_parameters(
         chat_protocol.clone(),
         api_url.as_deref(),
@@ -335,6 +363,34 @@ pub async fn list_models_async(
         .map_err(AppError::Ai)
 }
 
+fn is_decision_chat_provider(provider: &crate::db::AiModel) -> bool {
+    ChatProtocol::from_str(&provider.api_protocol)
+        .is_ok_and(|protocol| protocol == ChatProtocol::Decision)
+}
+
+fn validate_chat_provider(store: &MainStore, provider_id: i64) -> crate::error::Result<()> {
+    if store.config.get_ai_model_by_id(provider_id)
+        .is_ok_and(|provider| is_decision_chat_provider(&provider))
+    {
+        return Err(CCProxyError::InvalidProtocolError("decision".to_string()).into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod chat_provider_tests {
+    use super::is_decision_chat_provider;
+    use crate::db::AiModel;
+
+    #[test]
+    fn decision_cannot_enter_chat_while_chat_provider_still_can() {
+        let decision = AiModel { api_protocol: "decision".into(), ..Default::default() };
+        let chat = AiModel { api_protocol: "openai".into(), ..Default::default() };
+        assert!(is_decision_chat_provider(&decision));
+        assert!(!is_decision_chat_provider(&chat));
+    }
+}
+
 pub async fn start_new_chat_interaction(
     chat_state_arc: Arc<ChatState>,
     provider_id: i64,
@@ -345,6 +401,8 @@ pub async fn start_new_chat_interaction(
     metadata: Option<ChatMetadata>,
     callback: Option<Box<dyn Fn(Arc<ChatResponse>) + Send + 'static>>,
 ) -> crate::error::Result<()> {
+    validate_chat_provider(chat_state_arc.main_store.as_ref(), provider_id)?;
+
     // Update the shared message history with the complete list of messages for this turn.
     // This ensures that the history reflects the state *before* the AI responds to the current messages.
     {
@@ -424,8 +482,10 @@ fn add_loaded_mcp_tool_to_turn_tools(
 
     for declaration in messages.iter().filter_map(|message| {
         (message.get("role").and_then(Value::as_str) == Some("tool")
-            && message.get("name").and_then(Value::as_str)
-                == Some(crate::tools::TOOL_MCP_TOOL_LOAD))
+            && message
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(crate::tools::is_mcp_tool_expand_tool))
         .then(|| {
             message
                 .get("structured_content")
@@ -877,7 +937,7 @@ async fn global_message_processor_loop(
                                     )
                                 ),
                             });
-                            if t_name_clone == crate::tools::TOOL_MCP_TOOL_LOAD {
+                            if crate::tools::is_mcp_tool_expand_tool(&t_name_clone) {
                                 if let Some(structured_content) = tool_execution_actual_result
                                     .get("structured_content")
                                     .cloned()

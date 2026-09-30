@@ -29,6 +29,23 @@ mod tests {
     async fn mock_runtime_app_handle_builds() {
         let _app_handle = super::get_app_handle();
     }
+
+    /// The ChatHub page widens the window it is docked in, so a remembered window size has to
+    /// leave the width of that page out.
+    #[test]
+    fn a_remembered_window_width_leaves_the_docked_page_width_out() {
+        // A window without a docked page is remembered as it is measured.
+        assert_eq!(crate::remembered_width(1024.0, 0.0), 1024.0);
+        // A window holding a page hands the width of that page back.
+        assert_eq!(crate::remembered_width(1624.0, 600.0), 1024.0);
+        // The width the workflow UI keeps next to a page is the floor of what is remembered.
+        assert_eq!(
+            crate::remembered_width(800.0, 600.0),
+            crate::chat_hub::CHAT_HUB_MIN_HOST_WIDTH
+        );
+        // A page wider than the window it is docked in never produces a nonsense width.
+        assert_eq!(crate::remembered_width(500.0, 600.0), 500.0);
+    }
 }
 
 // use lazy_static::*;

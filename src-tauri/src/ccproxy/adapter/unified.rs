@@ -436,6 +436,10 @@ pub struct StreamLogRecorder {
     #[serde(skip)]
     pub stream_failed: bool,
     #[serde(skip)]
+    pub stream_status_code: u16,
+    #[serde(skip)]
+    pub error_message: Option<String>,
+    #[serde(skip)]
     pub stream_response_logged: bool,
 }
 

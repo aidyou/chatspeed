@@ -348,6 +348,11 @@ assert.match(
   nativeToolProjection,
   /props\.selectedAgent\?\.availableTools[\s\S]*configuredNativeTools/
 )
+assert.match(
+  nativeToolProjection,
+  /filter\(id => !isMcpToolId\(id\)\)/,
+  'MCP tools are configured in the MCP panel and must stay out of the available tools tab'
+)
 assert.doesNotMatch(
   nativeToolProjection,
   /return workflowAvailableToolIds\.value/,
@@ -371,10 +376,40 @@ assert.ok(
     visibleAutoApprovalTools.indexOf('props.selectedAgent?.availableTools'),
   'workflow tool capabilities must take precedence over a newer unsynchronized Agent definition'
 )
-assert.match(visibleAutoApprovalTools, /filter\(tool => availableSet\.has\(tool\)\)/)
+assert.match(
+  visibleAutoApprovalTools,
+  /filter\(tool => availableSet\.has\(tool\) && !isMcpToolId\(tool\)\)/,
+  'workflow auto-approval options must stay a native subset of the effective tool capabilities'
+)
+assert.match(
+  visibleAutoApprovalTools,
+  /const mcp = workflowMcpTools\.value[\s\S]*\.filter\(tool => tool\.available\)/,
+  'the effective available set must keep MCP targets so native toggles cannot disable them'
+)
+const approvalToolOptions = sourceSection(
+  workflowInputArea,
+  'const availableApprovalTools',
+  'const canAddShellPolicyItem'
+)
+assert.doesNotMatch(
+  approvalToolOptions,
+  /workflowMcpTools|isMcp/,
+  'MCP targets are configured in the MCP panel and must stay out of the tool configuration popover'
+)
 assert.match(
   workflowInputArea,
-  /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.toolConfig[\s\S]*workflow\.allowedShellCommands/
+  /toggleWorkflowMcpConfig\(tool\.id, 'available', checked\)[\s\S]*toggleWorkflowMcpConfig\(tool\.id, 'autoApprove', checked\)[\s\S]*toggleWorkflowMcpConfig\(tool\.id, 'autoExpand', checked\)/,
+  'MCP availability and approval must stay managed by the MCP panel'
+)
+assert.match(
+  workflowInputArea,
+  /toggleAutoApprovedTool[\s\S]*\.filter\(id => !isMcpToolId\(id\)\)/,
+  'rewriting workflow auto-approval must drop legacy MCP entries'
+)
+assert.match(
+  workflowInputArea,
+  /<el-tabs v-model="approvalToolsTab"[\s\S]*settings\.agent\.availableTools[\s\S]*workflow\.autoApproveTab[\s\S]*workflow\.shellRulesTab/,
+  'tool configuration tabs must read available tools, auto approve, then shell rules'
 )
 assert.match(workflowInputArea, /workflow\.mcpConfig[\s\S]*name="mcp"|name="mcp"[\s\S]*workflow\.mcpConfig/)
 assert.match(workflowInputArea, /settings\.agent\.mcpToolAvailable[\s\S]*settings\.agent\.mcpToolAutoApprove[\s\S]*settings\.agent\.mcpToolAutoExpand/)
@@ -765,13 +800,11 @@ const rustToolName = constantName => {
 assert.deepEqual(WORKFLOW_TODO_TOOL_NAMES, [
   rustToolName('TOOL_TODO_CREATE'),
   rustToolName('TOOL_TODO_LIST'),
-  rustToolName('TOOL_TODO_UPDATE'),
-  rustToolName('TOOL_TODO_GET')
+  rustToolName('TOOL_TODO_UPDATE')
 ])
 assert.deepEqual(WORKFLOW_SUB_AGENT_TOOL_NAMES, [
   rustToolName('TOOL_SUB_AGENT_RUN'),
-  rustToolName('TOOL_SUB_AGENT_OUTPUT'),
-  rustToolName('TOOL_SUB_AGENT_STOP')
+  rustToolName('TOOL_SUB_AGENT_OUTPUT')
 ])
 
 console.log('workflow constitution tests passed')

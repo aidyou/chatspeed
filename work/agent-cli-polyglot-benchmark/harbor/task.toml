@@ -1,0 +1,38 @@
+schema_version = "1.0"
+
+[task]
+name = "exercism-polyglot/bowling"
+description = "Runs the fixed Python Bowling public unittest inside a Harbor task sandbox."
+keywords = ["exercism", "bowling", "python", "smoke"]
+
+[environment]
+# The image is built from `environment/Dockerfile` (pinned `ubuntu:26.04` base
+# plus a distro python3 and the ChatSpeed control-plane binaries needed by the
+# candidate smoke). Nothing is downloaded at task runtime.
+docker_image = "chatspeed-bowling-task:3e"
+workdir = "/workspace"
+cpus = 1
+memory_mb = 512
+# Enforced by Harbor's egress-control sidecar (`deny-all`). The deterministic
+# runner never needs the network, and a task that cannot honour the declared
+# policy is refused by Harbor instead of silently downgraded.
+network_mode = "no-network"
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 420.0
+
+[verifier]
+# A fresh verifier environment receives only the declared artifacts under
+# `/logs/artifacts` plus this task's image-owned `/tests`. It recomputes the
+# result from artifact bytes and returns evaluation/verdict documents through
+# `/logs/verifier`, which Harbor downloads back to the host trial directory.
+environment_mode = "separate"
+network_mode = "no-network"
+timeout_sec = 300.0
+
+# The verifier receives the declared artifact root only. The file-level
+# allowlist lives in tools/harbor/polyglot_bowling_contract.py (the Bowling
+# namespace) — the shared ChatSpeed artifact contract is not touched.
+[[artifacts]]
+source = "/logs/artifacts"

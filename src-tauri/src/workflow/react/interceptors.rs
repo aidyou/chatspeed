@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 use crate::db::WorkflowMessage;
 use crate::tools::{
     READ_ONLY_BASH_CMDS_EXACT, READ_ONLY_BASH_PREFIXES, TOOL_ASK_USER, TOOL_BASH,
-    TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE,
-    TOOL_PLAN_WRITE_NOTE, TOOL_SUBMIT_PLAN, TOOL_TODO_GET, TOOL_TODO_LIST, TOOL_WRITE_FILE,
+    TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_PLAN_NOTE, TOOL_SUBMIT_PLAN, TOOL_TODO_LIST,
+    TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
 use crate::workflow::react::engine::WorkflowExecutor;
@@ -17,7 +17,9 @@ use crate::workflow::react::file_preview::{
     attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
     render_preview_details_text,
 };
-use crate::workflow::react::intelligence::ToolApprovalReview;
+use crate::workflow::react::decision::{
+    CompletionReportCandidate, CompletionReportOrigin, ToolApprovalReview,
+};
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
@@ -216,10 +218,7 @@ impl WorkflowExecutor {
                         | TOOL_COMPLETE_WORKFLOW
                         | TOOL_ASK_USER
                         | TOOL_TODO_LIST
-                        | TOOL_TODO_GET
-                        | TOOL_PLAN_READ_NOTE
-                        | TOOL_PLAN_EDIT_NOTE
-                        | TOOL_PLAN_WRITE_NOTE
+                        | TOOL_PLAN_NOTE
                 )
             )
         })
@@ -314,6 +313,17 @@ impl WorkflowExecutor {
             .and_then(Self::normalize_review_file_path)
     }
 
+    fn is_excluded_review_path(path: &str) -> bool {
+        let mut components = path.trim_start_matches('/').split('/');
+        let is_absolute_tmp = path.starts_with('/')
+            && components
+                .clone()
+                .next()
+                .is_some_and(|component| component == "tmp");
+        is_absolute_tmp
+            || components.any(|component| matches!(component, ".cs" | ".tmp" | ".codegraph"))
+    }
+
     fn review_payload_changed_files(messages: &[WorkflowMessage]) -> Vec<Value> {
         let mut files = BTreeMap::<String, Value>::new();
         for message in messages {
@@ -338,23 +348,20 @@ impl WorkflowExecutor {
             let Some(path) = Self::review_file_path(details) else {
                 continue;
             };
+            if Self::is_excluded_review_path(&path) {
+                continue;
+            }
             let entry = files.entry(path.clone()).or_insert_with(|| {
                 json!({
                     "path": path,
                     "operations": Vec::<String>::new(),
                     "change_types": Vec::<String>::new(),
-                    "successful_call_count": 0,
                     "first_message_id": message.id,
                     "last_message_id": message.id,
                     "line_ranges": Vec::<Value>::new(),
-                    "summaries": Vec::<String>::new(),
                 })
             });
 
-            entry["successful_call_count"] = json!(entry["successful_call_count"]
-                .as_u64()
-                .unwrap_or(0)
-                .saturating_add(1));
             if entry["first_message_id"].is_null() && message.id.is_some() {
                 entry["first_message_id"] = json!(message.id);
             }
@@ -410,24 +417,13 @@ impl WorkflowExecutor {
                     "end_line": end_line
                 });
                 if let Some(line_ranges) = entry["line_ranges"].as_array_mut() {
-                    if !line_ranges.contains(&line_range) {
+                    if let Some(existing) = line_ranges.first_mut() {
+                        let existing_start = existing["start_line"].as_u64().unwrap_or(start_line);
+                        let existing_end = existing["end_line"].as_u64().unwrap_or(end_line);
+                        existing["start_line"] = json!(existing_start.min(start_line));
+                        existing["end_line"] = json!(existing_end.max(end_line));
+                    } else {
                         line_ranges.push(line_range);
-                    }
-                }
-            }
-
-            if let Some(summary) = metadata
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                if let Some(summaries) = entry["summaries"].as_array_mut() {
-                    if !summaries
-                        .iter()
-                        .any(|value| value.as_str() == Some(summary))
-                    {
-                        summaries.push(json!(summary));
                     }
                 }
             }
@@ -523,49 +519,67 @@ impl WorkflowExecutor {
 
     fn review_payload_fixed_requirements(messages: &[WorkflowMessage]) -> Vec<String> {
         const MAX_REQUIREMENT_CHARS: usize = 2_000;
+        let Some(message) = messages.iter().rev().find(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("message_kind"))
+                .and_then(Value::as_str)
+                == Some("final_review_feedback")
+        }) else {
+            return Vec::new();
+        };
+        let Some(required_fixes) = message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("review_verdict"))
+            .and_then(|verdict| verdict.get("required_fixes"))
+            .and_then(Value::as_array)
+        else {
+            return Vec::new();
+        };
+
         let mut seen = HashSet::new();
         let mut requirements = Vec::new();
-
-        for message in messages.iter().rev() {
-            let Some(metadata) = message.metadata.as_ref() else {
-                continue;
-            };
-            if metadata.get("message_kind").and_then(Value::as_str) != Some("final_review_feedback")
-            {
-                continue;
-            }
-            let Some(required_fixes) = metadata
-                .get("review_verdict")
-                .and_then(|verdict| verdict.get("required_fixes"))
-                .and_then(Value::as_array)
+        for requirement in required_fixes {
+            let Some(requirement) = requirement
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
             else {
                 continue;
             };
-
-            for requirement in required_fixes.iter().rev() {
-                let Some(requirement) = requirement
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                else {
-                    continue;
-                };
-                let mut characters = requirement.chars();
-                let mut requirement = characters
-                    .by_ref()
-                    .take(MAX_REQUIREMENT_CHARS)
-                    .collect::<String>();
-                if characters.next().is_some() {
-                    requirement.push_str("\n...[truncated]");
-                }
-                if seen.insert(requirement.clone()) {
-                    requirements.push(requirement);
-                }
+            let mut characters = requirement.chars();
+            let mut requirement = characters
+                .by_ref()
+                .take(MAX_REQUIREMENT_CHARS)
+                .collect::<String>();
+            if characters.next().is_some() {
+                requirement.push_str("\n...[truncated]");
+            }
+            if seen.insert(requirement.clone()) {
+                requirements.push(requirement);
             }
         }
-
-        requirements.reverse();
         requirements
+    }
+
+    fn latest_final_review_feedback_index(messages: &[WorkflowMessage]) -> Option<usize> {
+        messages.iter().rposition(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("message_kind"))
+                .and_then(Value::as_str)
+                == Some("final_review_feedback")
+        })
+    }
+
+    fn review_delta_messages(messages: &[WorkflowMessage]) -> (Vec<WorkflowMessage>, Option<i64>) {
+        let Some(index) = Self::latest_final_review_feedback_index(messages) else {
+            return (messages.to_vec(), None);
+        };
+        (messages[index + 1..].to_vec(), messages[index].id)
     }
 
     fn final_review_optional_context_budget(reviewer_context_limit: usize) -> usize {
@@ -580,27 +594,14 @@ impl WorkflowExecutor {
     fn select_fixed_requirements(
         payload: &mut serde_json::Map<String, Value>,
         fixed_requirements: Vec<String>,
-        token_budget: usize,
-    ) -> (usize, usize) {
-        let total = fixed_requirements.len();
-        let mut selected = Vec::new();
-        for requirement in fixed_requirements.into_iter().rev() {
-            let mut candidate = selected.clone();
-            candidate.push(requirement);
-            payload.insert("fixed_requirements".to_string(), json!(candidate.clone()));
-            if !selected.is_empty() && Self::estimated_payload_tokens(payload) > token_budget {
-                payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
-                break;
-            }
-            selected = candidate;
-        }
-        if selected.is_empty() {
+    ) -> usize {
+        let count = fixed_requirements.len();
+        if fixed_requirements.is_empty() {
             payload.remove("fixed_requirements");
         } else {
-            selected.reverse();
-            payload.insert("fixed_requirements".to_string(), json!(selected.clone()));
+            payload.insert("fixed_requirements".to_string(), json!(fixed_requirements));
         }
-        (total.saturating_sub(selected.len()), selected.len())
+        count
     }
 
     fn structured_tool_arguments(metadata: &Value) -> Option<Value> {
@@ -697,17 +698,20 @@ impl WorkflowExecutor {
 
             if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE) {
                 let details = metadata.get("details");
-                mutation_ledger.push(json!({
-                    "message_id": message.id,
-                    "tool_name": tool_name,
-                    "status": execution_status,
-                    "path": details
-                        .and_then(Self::review_file_path)
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                    "summary": summary,
-                    "details": Self::review_mutation_details(details)
-                }));
+                let path = details.and_then(Self::review_file_path);
+                if path
+                    .as_deref()
+                    .map_or(true, |path| !Self::is_excluded_review_path(path))
+                {
+                    mutation_ledger.push(json!({
+                        "message_id": message.id,
+                        "tool_name": tool_name,
+                        "status": execution_status,
+                        "path": path.map(Value::String).unwrap_or(Value::Null),
+                        "summary": summary,
+                        "details": Self::review_mutation_details(details)
+                    }));
+                }
             }
 
             let arguments = Self::structured_tool_arguments(metadata);
@@ -785,7 +789,9 @@ impl WorkflowExecutor {
             })
             .map(|message| message.message.clone());
         let changed_files = Self::review_payload_changed_files(&task_messages);
-        let evidence = Self::build_final_review_evidence(&task_messages);
+        let (review_evidence_messages, review_baseline_message_id) =
+            Self::review_delta_messages(&task_messages);
+        let evidence = Self::build_final_review_evidence(&review_evidence_messages);
         let fixed_requirements = Self::review_payload_fixed_requirements(&task_messages);
         let todo_status =
             self.context
@@ -830,10 +836,25 @@ impl WorkflowExecutor {
         );
         payload.insert("changed_files".to_string(), json!(changed_files));
         payload.insert(
+            "review_scope".to_string(),
+            json!({
+                "mode": if review_baseline_message_id.is_some() {
+                    "re_review"
+                } else {
+                    "initial_review"
+                },
+                "evidence_baseline_message_id": review_baseline_message_id,
+                "evidence_message_count": review_evidence_messages.len(),
+                "history_policy": "Only the latest rejected review's required fixes are replayed; prior review ledgers are not replayed."
+            }),
+        );
+        payload.insert(
             "changed_files_source".to_string(),
             json!({
                 "kind": "successful_structured_file_tool_calls",
                 "scope": "durable_current_task_transcript",
+                "identity": "one entry per normalized product file path",
+                "excluded_paths": ["/tmp/**", "**/.cs/**", "**/.tmp/**", "**/.codegraph/**"],
                 "included_tools": [TOOL_EDIT_FILE, TOOL_WRITE_FILE],
                 "included_statuses": ["completed"],
                 "limitations": "Git status/diff remains authoritative for current workspace changes made through shell commands, generators, MCP tools, deletions, renames, or other non-file-tool paths."
@@ -866,8 +887,8 @@ impl WorkflowExecutor {
             }
         }
 
-        let (fixed_requirements_omitted, fixed_requirements_included) =
-            Self::select_fixed_requirements(&mut payload, fixed_requirements, token_budget);
+        let fixed_requirements_included =
+            Self::select_fixed_requirements(&mut payload, fixed_requirements);
 
         if planned_mode && Self::estimated_payload_tokens(&payload) < token_budget {
             if let Some(summary) = latest_compression_summary.as_ref() {
@@ -893,17 +914,16 @@ impl WorkflowExecutor {
         }
 
         let estimated_tokens = Self::estimated_payload_tokens(&payload);
-        if estimated_tokens > token_budget || fixed_requirements_omitted > 0 {
+        if estimated_tokens > token_budget {
             log::debug!(
-                "[Workflow][session={}][phase=final_review_context] Final review context budget decision: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, fixed_requirements_included={}, fixed_requirements_omitted={}",
+                "[Workflow][session={}][phase=final_review_context] Final review context exceeds optional context budget: reviewer_context_limit={}, optional_budget={}, estimated_payload_tokens={}, planned_mode={}, compression_summary_included={}, fixed_requirements_included={}",
                 self.session_id,
                 context_limit,
                 token_budget,
                 estimated_tokens,
                 planned_mode,
                 compression_summary_included,
-                fixed_requirements_included,
-                fixed_requirements_omitted
+                fixed_requirements_included
             );
         }
         payload.insert(
@@ -913,8 +933,7 @@ impl WorkflowExecutor {
                 "optional_context_token_budget": token_budget,
                 "estimated_payload_tokens_before_budget_metadata": estimated_tokens,
                 "compression_summary_included": compression_summary_included,
-                "fixed_requirements_included": fixed_requirements_included,
-                "fixed_requirements_omitted": fixed_requirements_omitted
+                "fixed_requirements_included": fixed_requirements_included
             }),
         );
         let payload = Value::Object(payload);
@@ -927,8 +946,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
   {{\"approved\": boolean, \"summary\": string, \"findings\": [{{\"severity\": \"blocker|major|minor|info\", \"file\": string|null, \"detail\": string}}], \"required_fixes\": [string]}}\n\
 - `user_messages` is the authoritative chronological current-task input recovered from the durable transcript. Later explicit user instructions override conflicting earlier instructions, approved-plan content, or acceptance criteria; non-conflicting constraints remain applicable.\n\
 - `runtime_snapshot`, when present, is a derived compression snapshot and must not override user messages, the approved plan as updated by later user instructions, or structured evidence.\n\
-- `fixed_requirements` is the compact, deduplicated list of requirements from completed prior review rounds that fit the context budget. The workflow treats them as fixed by this subsequent completion attempt; prior verdicts, findings, severities, summaries, and reviewer metadata are intentionally omitted.\n\
-- Use `fixed_requirements` only as regression checkpoints for the current diff and relevant execution path. Do not repeat one in `findings` or `required_fixes` merely because it is listed. Reopen it only when current direct evidence proves that the same in-scope defect remains or has regressed.\n\
+- `fixed_requirements` contains only the bounded, deduplicated required fixes from the latest rejected review. It is a compact re-review checkpoint, not a replay of all prior review verdicts or ledgers; earlier review results must not be reconstructed from it.\n\
+- `review_scope.mode` identifies whether this is the initial review or a re-review. In a re-review, `mutation_ledger`, `verification_ledger`, and `failed_actions` contain only evidence after `evidence_baseline_message_id`; use the full unique `changed_files` manifest for scope, then inspect the directly affected paths. A real, in-scope blocker or major must still be reported even if it was present before the latest fix or is discovered during re-review.\n\
 - If the work should not be allowed to finish, set `approved` to false and provide only concrete fixes for in-scope blocker or major findings.\n\
 - If no in-scope blocker or major remains, set `approved` to true; minor and info findings must not block approval.\n\
 - Do not modify the deliverable. Inspect relevant evidence directly with your available read/search tools when needed.\n\n\
@@ -1654,13 +1673,36 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         !Self::completion_reports_have_material_conflict(left, right)
     }
 
-    fn resolve_completion_report_at_step(
-        args: &serde_json::Value,
+    /// True when every candidate is a near-identical representation of one completion report.
+    ///
+    /// The assistant text and the identical `complete_workflow.summary` argument are alternate
+    /// representations of one completion attempt, so choosing between them needs no model call: the
+    /// deterministic resolution already selected the canonical report. Measured on real completions,
+    /// candidate pairs at or above this similarity never produced an accepted decision answer.
+    fn completion_candidates_are_equivalent(candidates: &[ResolvedCompletionReport]) -> bool {
+        const EQUIVALENT_SIMILARITY: f64 = 0.85;
+        if candidates.len() < 2 {
+            return false;
+        }
+        let texts: Vec<Vec<char>> = candidates
+            .iter()
+            .map(|candidate| Self::completion_report_similarity_text(&candidate.content))
+            .collect();
+        (0..texts.len()).all(|left| {
+            ((left + 1)..texts.len()).all(|right| {
+                let (dice, containment) =
+                    Self::completion_report_trigram_scores(&texts[left], &texts[right]);
+                dice >= EQUIVALENT_SIMILARITY && containment >= EQUIVALENT_SIMILARITY
+            })
+        })
+    }
+
+    fn completion_report_candidates(
+        args: &Value,
         text_part: &str,
         pending_reports: &[PendingCompletionReport],
         current_segment_id: i32,
-        current_step: usize,
-    ) -> Result<ResolvedCompletionReport, &'static str> {
+    ) -> Result<Vec<ResolvedCompletionReport>, &'static str> {
         let object = args
             .as_object()
             .ok_or("complete_workflow arguments must be an object")?;
@@ -1668,7 +1710,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         if object.contains_key("summary") && summary.is_none() {
             return Err("complete_workflow summary must be a string");
         }
-
         let mut candidates = Vec::<ResolvedCompletionReport>::new();
 
         if Self::is_valid_finish_task_summary(text_part) {
@@ -1736,6 +1777,22 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         }
 
+        Ok(unique)
+    }
+
+    fn resolve_completion_report_at_step(
+        args: &Value,
+        text_part: &str,
+        pending_reports: &[PendingCompletionReport],
+        current_segment_id: i32,
+        current_step: usize,
+    ) -> Result<ResolvedCompletionReport, &'static str> {
+        let mut unique = Self::completion_report_candidates(
+            args,
+            text_part,
+            pending_reports,
+            current_segment_id,
+        )?;
         match unique.len() {
             0 => Err("no valid completion report is available"),
             1 => Ok(unique.remove(0)),
@@ -2035,6 +2092,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         tool_name: &str,
         args: &serde_json::Value,
         assistant_text: &str,
+        decision_may_approve: bool,
     ) -> Result<Option<ToolApprovalReview>, WorkflowEngineError> {
         let tool = match self.tool_manager.get_tool(tool_name).await {
             Ok(tool) => tool,
@@ -2060,6 +2118,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 tool.description(),
                 args,
                 assistant_text,
+                decision_may_approve,
             )
             .await
         {
@@ -2102,7 +2161,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
 
         // MCP tool schema loading is a built-in discovery step and should not require approval.
-        if name == crate::tools::TOOL_MCP_TOOL_LOAD {
+        if crate::tools::is_mcp_tool_expand_tool(name) {
             return false;
         }
 
@@ -2379,14 +2438,24 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        let mut completion_report = match Self::resolve_completion_report_at_step(
-            args,
-            text_part,
-            &self.pending_completion_reports,
-            self.context.current_segment_id,
-            self.current_step,
-        ) {
+        let candidate_reports = Self::completion_report_candidates(
+            args, text_part, &self.pending_completion_reports, self.context.current_segment_id,
+        ).unwrap_or_default();
+        let report_result = Self::resolve_completion_report_at_step(
+            args, text_part, &self.pending_completion_reports,
+            self.context.current_segment_id, self.current_step,
+        );
+        let mut completion_report = match report_result {
             Ok(report) => report,
+            Err("multiple different completion reports are available") => {
+                // Defer semantic ambiguity until the deterministic completion gates have passed.
+                ResolvedCompletionReport {
+                    content: String::new(),
+                    source_message_id: None,
+                    persist_as_message: false,
+                    recency: (0, 0, 0),
+                }
+            }
             Err(reason) => {
                 let has_current_segment_pending_report = self
                     .pending_completion_reports
@@ -2491,6 +2560,51 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        // Equivalent candidates need no decision call: the deterministic resolution above already
+        // selected the canonical report, and no model answer could change which text is published.
+        let candidates_are_equivalent = !completion_report.content.is_empty()
+            && Self::completion_candidates_are_equivalent(&candidate_reports);
+        if !candidates_are_equivalent
+            && (candidate_reports.len() > 1 || completion_report.content.is_empty())
+        {
+            let reports = candidate_reports.iter().map(|candidate| CompletionReportCandidate {
+                content: candidate.content.clone(),
+                origin: if candidate.persist_as_message {
+                    CompletionReportOrigin::ThisCallSummary
+                } else if candidate.recency.0 == 1 {
+                    CompletionReportOrigin::ThisCallText
+                } else {
+                    CompletionReportOrigin::EarlierDraft
+                },
+            }).collect::<Vec<_>>();
+            let user_request = self.context.current_user_request_since_last_completion();
+            if let Some(index) = self.intelligence_manager.review_completion(
+                &reports, self.final_review_mode_enabled(), &user_request, self.context.current_segment_id,
+            ).await {
+                if let Some(selected) = candidate_reports.get(index) {
+                    completion_report = ResolvedCompletionReport {
+                        content: selected.content.clone(),
+                        source_message_id: selected.source_message_id,
+                        persist_as_message: selected.persist_as_message,
+                        recency: selected.recency,
+                    };
+                }
+            }
+        }
+        if completion_report.content.is_empty() {
+            return Ok(Some(ReinforcedResult {
+                content: Self::completion_report_rejection_reminder("multiple different completion reports are available", true),
+                llm_content: None,
+                title: "FinishTask Error".to_string(),
+                summary: "Invalid completion report source".to_string(),
+                is_error: true,
+                error_type: Some("InvalidFinishSummary".into()),
+                display_type: "text".to_string(),
+                approval_status: None,
+                observation_kind: None,
+            }));
+        }
+
         let pending_source = self.pending_completion_reports.iter().find(|pending| {
             pending.segment_id == self.context.current_segment_id
                 && pending.content_hash
@@ -2546,6 +2660,20 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }))
     }
 
+    fn required_report_sections(&self) -> Vec<String> {
+        self.agent_config
+            .report_required_sections
+            .as_deref()
+            .and_then(|sections| serde_json::from_str::<Vec<String>>(sections).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn submit_result_report_is_complete(result: &str, sections: &[String]) -> bool {
+        sections.iter().all(|section| {
+            let heading = format!("## {}", section.trim());
+            result.lines().any(|line| line.trim() == heading)
+        })
+    }
     pub(crate) async fn handle_submit_result_intercept(
         &mut self,
         args: &serde_json::Value,
@@ -2573,6 +2701,74 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 approval_status: None,
                 observation_kind: None,
             }));
+        }
+
+        let mut required_sections = self.required_report_sections();
+        let write_capable = self
+            .agent_config
+            .available_tools
+            .as_deref()
+            .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    matches!(
+                        tool.as_str(),
+                        TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_BASH
+                    )
+                })
+            });
+        if !required_sections.is_empty() && write_capable {
+            let todos = self
+                .context
+                .main_store
+                .get_todo_list_for_workflow(&self.session_id)
+                .map_err(WorkflowEngineError::Db)?;
+            let has_failed_todo = todos.iter().any(|todo| {
+                matches!(
+                    todo.get("status").and_then(serde_json::Value::as_str),
+                    Some("failed" | "blocked" | "data_missing")
+                )
+            });
+            if has_failed_todo && !required_sections.iter().any(|section| section == "Failed reason") {
+                required_sections.push("Failed reason".to_string());
+            }
+            if !Self::todos_allow_completion_report_capture(&todos) {
+                return Ok(Some(ReinforcedResult {
+                    content: "<SYSTEM_REMINDER>Before calling `submit_result`, finish every todo item. Terminal statuses are completed, done, failed, blocked, or data_missing.</SYSTEM_REMINDER>".into(),
+                    llm_content: None,
+                    title: "Submit Result Error".to_string(),
+                    summary: "Pending todos".to_string(),
+                    is_error: true,
+                    error_type: Some("PendingTodos".into()),
+                    display_type: "text".to_string(),
+                    approval_status: None,
+                    observation_kind: None,
+                }));
+            }
+
+            let missing_sections = required_sections
+                .iter()
+                .filter(|section| {
+                    !Self::submit_result_report_is_complete(result, std::slice::from_ref(section))
+                })
+                .map(|section| section.trim().to_string())
+                .collect::<Vec<_>>();
+            if !missing_sections.is_empty() {
+                return Ok(Some(ReinforcedResult {
+                    content: format!(
+                        "<SYSTEM_REMINDER>Report is missing required sections: {}. Add each section as a Markdown level-two heading, then call `submit_result` again.</SYSTEM_REMINDER>",
+                        missing_sections.join(", ")
+                    ),
+                    llm_content: None,
+                    title: "Submit Result Error".to_string(),
+                    summary: "Incomplete report".to_string(),
+                    is_error: true,
+                    error_type: Some("IncompleteSubmitResult".into()),
+                    display_type: "text".to_string(),
+                    approval_status: None,
+                    observation_kind: None,
+                }));
+            }
         }
 
         let sanitized_result = Self::completion_response_without_reasoning(result);
@@ -2614,6 +2810,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let policy_engine =
             crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
         let execution_audit = policy_engine.execution_audit_decision(command_str);
+        let decision_may_approve = !matches!(execution_audit, crate::tools::ShellDecision::Review(_) | crate::tools::ShellDecision::Deny(_))
+            && !policy_engine.has_explicit_review_or_deny(command_str, self.policy.phase == ExecutionPhase::Planning);
         let shell_policy_decision =
             policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning);
         if let crate::tools::ShellDecision::Deny(reason) = &shell_policy_decision {
@@ -2677,7 +2875,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             // Don't intercept - allow the read-only command
                         } else {
                             if let Some(review) = self
-                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str)
+                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str, decision_may_approve)
                                 .await?
                             {
                                 if review.approved {
@@ -2763,7 +2961,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             )
         } else {
             match name {
-                TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE => {
+                TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE => {
                     display_type = "diff".to_string();
                     let mut preview_args = args.clone();
                     if let Ok(guard) = self.path_guard.read() {
@@ -2951,7 +3149,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
 
 #[cfg(test)]
 mod tests {
-    use super::{SmartApprovalDecision, WorkflowExecutor};
+    use super::{ResolvedCompletionReport, SmartApprovalDecision, WorkflowExecutor};
     use crate::db::WorkflowMessage;
     use crate::tools::{
         TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_READ_FILE, TOOL_WRITE_FILE,
@@ -3127,6 +3325,33 @@ mod tests {
 
         assert_eq!(resolved.content, full_report);
         assert_eq!(resolved.source_message_id, Some(42));
+    }
+
+    #[test]
+    fn equivalent_completion_candidates_skip_the_decision_call() {
+        let resolved = |content: &str| ResolvedCompletionReport {
+            content: content.to_string(),
+            source_message_id: None,
+            persist_as_message: false,
+            recency: (1, 0, 0),
+        };
+        let text = "已完成首页样式优化，改动写入 pages/home/index.vue，并通过 vite build 验证。";
+        // The summary argument repeats the visible text with different whitespace and backticks.
+        let reformatted =
+            "已完成首页样式优化，改动写入 pages/home/index.vue，\n并通过 `vite build` 验证。";
+        let unrelated = "只读分析：中继转发与重连链路按设计工作，未修改任何代码。";
+
+        assert!(WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text),
+            resolved(reformatted),
+        ]));
+        assert!(!WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text),
+            resolved(unrelated),
+        ]));
+        assert!(!WorkflowExecutor::completion_candidates_are_equivalent(&[
+            resolved(text)
+        ]));
     }
 
     #[test]
@@ -3742,37 +3967,59 @@ mod tests {
     }
 
     #[test]
-    fn review_history_deduplicates_fixed_requirements() {
-        let feedback = json!({
-            "message_kind": "final_review_feedback",
-            "review_summary": "Fix the missing test",
-            "review_verdict": {
-                "approved": false,
-                "summary": "A focused regression test is required",
-                "findings": [],
-                "required_fixes": ["Add the missing test"]
-            }
-        });
+    fn latest_review_feedback_is_the_only_replayed_requirement_set() {
         let messages = vec![
             workflow_message(
                 1,
-                "tool",
-                "Earlier feedback",
+                "user",
+                "old feedback",
                 Some("observe"),
-                Some(feedback.clone()),
+                Some(json!({
+                    "message_kind": "final_review_feedback",
+                    "review_verdict": {"required_fixes": ["old fix"]}
+                })),
             ),
             workflow_message(
                 2,
-                "tool",
-                "Latest feedback",
+                "user",
+                "new feedback",
                 Some("observe"),
-                Some(feedback),
+                Some(json!({
+                    "message_kind": "final_review_feedback",
+                    "review_verdict": {"required_fixes": ["new fix"]}
+                })),
             ),
         ];
 
-        let requirements = WorkflowExecutor::review_payload_fixed_requirements(&messages);
+        assert_eq!(
+            WorkflowExecutor::review_payload_fixed_requirements(&messages),
+            vec!["new fix"]
+        );
+    }
 
-        assert_eq!(requirements, vec!["Add the missing test"]);
+    #[test]
+    fn review_delta_starts_after_latest_feedback() {
+        let messages = vec![
+            workflow_message(1, "tool", "old", Some("observe"), None),
+            workflow_message(
+                2,
+                "user",
+                "feedback",
+                Some("observe"),
+                Some(json!({"message_kind": "final_review_feedback"})),
+            ),
+            workflow_message(3, "tool", "new", Some("observe"), None),
+        ];
+
+        let (delta, baseline_id) = WorkflowExecutor::review_delta_messages(&messages);
+        assert_eq!(baseline_id, Some(2));
+        assert_eq!(
+            delta
+                .iter()
+                .filter_map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]
@@ -3807,20 +4054,16 @@ mod tests {
 
     #[test]
     fn fixed_requirement_budget_keeps_the_newest_values_that_fit() {
-        let mut payload = serde_json::Map::new();
-        payload.insert("base".to_string(), json!("base"));
         let fixed_requirements = (1..=3)
             .map(|round| format!("Requirement {round}: {}", "x".repeat(200)))
             .collect::<Vec<_>>();
-        let newest_requirement = fixed_requirements[2].clone();
 
-        let (omitted, included) =
-            WorkflowExecutor::select_fixed_requirements(&mut payload, fixed_requirements, 100);
+        let mut payload = serde_json::Map::new();
+        let included =
+            WorkflowExecutor::select_fixed_requirements(&mut payload, fixed_requirements);
 
-        assert_eq!(included, 1);
-        assert_eq!(omitted, 2);
-        assert_eq!(payload["fixed_requirements"][0], newest_requirement);
-        assert!(WorkflowExecutor::estimated_payload_tokens(&payload) <= 100);
+        assert_eq!(included, 3);
+        assert_eq!(payload["fixed_requirements"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -3957,7 +4200,6 @@ mod tests {
         assert_eq!(changed_files.len(), 2);
         assert_eq!(changed_files[0]["path"], "config/app.toml");
         assert_eq!(changed_files[0]["change_types"], json!(["overwritten"]));
-        assert_eq!(changed_files[0]["successful_call_count"], 1);
         assert_eq!(changed_files[1]["path"], "src/feature.rs");
         assert_eq!(
             changed_files[1]["operations"],
@@ -3967,17 +4209,55 @@ mod tests {
             changed_files[1]["change_types"],
             json!(["created", "edited"])
         );
-        assert_eq!(changed_files[1]["successful_call_count"], 2);
         assert_eq!(changed_files[1]["first_message_id"], 41);
         assert_eq!(changed_files[1]["last_message_id"], 42);
         assert_eq!(
             changed_files[1]["line_ranges"],
             json!([{"start_line": 10, "end_line": 11}])
         );
+    }
+
+    #[test]
+    fn changed_files_use_unique_paths_and_exclude_workspace_artifacts() {
+        let messages = [
+            (51, "src/feature.rs", 10, "one"),
+            (52, "./src/feature.rs", 20, "two"),
+            (53, "/tmp/generated.rs", 30, "tmp"),
+            (54, ".cs/handoffs/review.txt", 40, "cs"),
+            (55, "project/.tmp/cache.rs", 50, "tmp dir"),
+            (56, "project/.codegraph/index.json", 60, "codegraph"),
+        ]
+        .into_iter()
+        .map(|(id, path, start_line, text)| {
+            tool_message(
+                id,
+                "edited",
+                false,
+                json!({
+                    "tool_name": TOOL_EDIT_FILE,
+                    "execution_status": "completed",
+                    "details": {
+                        "display_path": path,
+                        "start_line": start_line,
+                        "new_string": text
+                    }
+                }),
+            )
+        })
+        .collect::<Vec<_>>();
+
+        let changed_files = WorkflowExecutor::review_payload_changed_files(&messages);
+
+        assert_eq!(changed_files.len(), 1);
+        assert_eq!(changed_files[0]["path"], "src/feature.rs");
         assert_eq!(
-            changed_files[1]["summaries"],
-            json!(["Created feature", "Updated feature"])
+            changed_files[0]["line_ranges"],
+            json!([{"start_line": 10, "end_line": 20}])
         );
+        assert!(!changed_files[0]
+            .to_string()
+            .contains("successful_call_count"));
+        assert!(!changed_files[0].to_string().contains("summaries"));
     }
 
     #[test]

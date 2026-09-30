@@ -15,6 +15,7 @@ use crate::ccproxy::{
     handler::chat_handler::{
         execute_unified_chat_request, prepare_unified_request_for_proxy_model,
     },
+    handler::decision_is_not_a_chat_protocol,
     helper::{get_msg_id, send_with_retry, CcproxyQuery, ModelResolver, RetryConfig},
     types::{openai_responses::OpenAIResponsesRequest, ProxyModel},
     utils::token_estimator::{estimate_known_request_json_tokens, token_usage_is_missing_or_zero},
@@ -276,7 +277,13 @@ async fn direct_forward_responses(
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
     let retry_config = RetryConfig::from_settings(max_retries);
-    let target_response = send_with_retry(onward_request_builder, &retry_config).await?;
+
+    let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(error);
+        }
+    };
 
     let status_code = target_response.status();
     let response_headers = target_response.headers().clone();
@@ -314,6 +321,7 @@ async fn direct_forward_responses(
     } else {
         (0, 0, 0, 0, 0, 0, 0)
     };
+
     let should_estimate = status_code.is_success()
         && token_usage_is_missing_or_zero(&[
             Some(input_tokens as u64),
@@ -331,6 +339,41 @@ async fn direct_forward_responses(
     } else {
         Some(String::from_utf8_lossy(&body_bytes).to_string())
     };
+
+    if !status_code.is_success() {
+        crate::ccproxy::helper::stat_guard::record_error_stat(
+            main_store_arc.as_ref(),
+            CcproxyStat {
+                id: None,
+                workflow_session_id: None,
+                workflow_task_run_id: None,
+                workflow_segment_id: None,
+                root_session_id: None,
+                root_task_run_id: None,
+                request_kind: None,
+                client_model: proxy_model.client_alias.clone(),
+                backend_model: model_name.clone(),
+                provider_id: Some(proxy_model.provider_id),
+                provider: provider_name.clone(),
+                protocol: ChatProtocol::OpenAI.to_string(),
+                tool_compat_mode: 0,
+                status_code: status_code.as_u16() as i32,
+                error_message: Some(String::from_utf8_lossy(&body_bytes).to_string()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_tokens: 0,
+                cache_write_tokens: 0,
+                reasoning_tokens: 0,
+                audio_input_tokens: 0,
+                audio_output_tokens: 0,
+                estimated_cost: None,
+                pricing_status: Some("unpriced".to_string()),
+                pricing_snapshot: None,
+                request_at: None,
+            }
+            .with_workflow_attribution(&client_headers),
+        );
+    }
 
     if status_code.is_success() && responses_has_output(&body_bytes) {
         let store = main_store_arc.as_ref();
@@ -432,6 +475,11 @@ pub async fn handle_responses(
         )
         .await?
     };
+
+    // A proxy alias may point at a decision provider; that backend cannot serve Responses traffic.
+    if proxy_model.chat_protocol == ChatProtocol::Decision {
+        return Err(decision_is_not_a_chat_protocol());
+    }
 
     let final_tool_compat_mode = match proxy_model.tool_compat_mode.as_deref() {
         Some("compat") => true,

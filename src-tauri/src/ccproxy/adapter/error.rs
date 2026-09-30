@@ -39,7 +39,10 @@ pub fn normalize_backend_error(
         ChatProtocol::Gemini => error_value
             .and_then(|error| error.get("status"))
             .and_then(Value::as_str),
-        ChatProtocol::OpenAI | ChatProtocol::HuggingFace | ChatProtocol::Claude => error_value
+        ChatProtocol::OpenAI
+        | ChatProtocol::HuggingFace
+        | ChatProtocol::Claude
+        | ChatProtocol::Decision => error_value
             .and_then(|error| error.get("type"))
             .and_then(Value::as_str),
         ChatProtocol::Ollama => None,

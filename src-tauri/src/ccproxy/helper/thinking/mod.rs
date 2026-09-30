@@ -283,6 +283,40 @@ mod tests {
     }
 
     #[test]
+    fn gemini_maps_effort_for_unlisted_family_variants() {
+        for model in ["gemini-3.8-flash", "gemini-2.5-pro-exp"] {
+            let mut body = json!({
+                "generationConfig": { "thinkingConfig": { "thinkingLevel": "xhigh" } }
+            });
+
+            normalize_request(
+                &mut body,
+                model,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent",
+            );
+
+            assert_eq!(
+                body["generationConfig"]["thinkingConfig"]["thinkingLevel"], "high",
+                "model {model} should keep a level the Gemini family accepts"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_does_not_add_thinking_to_requests_that_omit_it() {
+        let mut body = json!({ "generationConfig": { "temperature": 0.2 } });
+        let original = body.clone();
+
+        normalize_request(
+            &mut body,
+            "gemini-3.5-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent",
+        );
+
+        assert_eq!(body, original);
+    }
+
+    #[test]
     fn mistral_maps_effort_to_high_or_none() {
         let mut body = json!({ "reasoning_effort": "medium" });
 

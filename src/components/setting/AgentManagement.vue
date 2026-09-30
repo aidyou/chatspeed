@@ -6,6 +6,9 @@
     <el-tab-pane :label="$t('settings.sandbox.title')" name="sandbox">
       <sandbox />
     </el-tab-pane>
+    <el-tab-pane :label="$t('settings.sandbox.decisionTitle')" name="decision">
+      <decision />
+    </el-tab-pane>
   </el-tabs>
 </template>
 
@@ -13,6 +16,7 @@
 import { ref } from 'vue'
 import Agent from './Agent.vue'
 import Sandbox from './Sandbox.vue'
+import Decision from './Decision.vue'
 
 const activeTab = ref('agents')
 </script>

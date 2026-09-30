@@ -23,12 +23,21 @@ const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 
 /// Codex CLI version advertised in the User-Agent. Defaults to a current
 /// release version; update when the mimicked client moves forward.
-const CODEX_VERSION: &str = "0.150.1";
+const CODEX_VERSION: &str = "0.158.0";
 
 /// Terminal token used by Codex when no terminal can be detected. ChatSpeed
 /// is a desktop app, so Codex's terminal detection would not find a terminal
 /// either.
 const CODEX_TERMINAL_TOKEN: &str = "unknown";
+
+/// Installation id advertised to the Responses API.
+///
+/// Codex mints this once per client install and reuses it across every
+/// session, thread and turn, so it is a machine-level constant rather than a
+/// conversation-scoped value. Deriving it per conversation would make every
+/// ChatSpeed request look like it came from a fresh install, which is a
+/// visible divergence from the client surface we are mimicking.
+const CODEX_INSTALLATION_ID: &str = "f826fb51-ef00-4fe0-b6df-37e47d472938";
 
 /// Stable UUID v5 derived from the conversation id.
 ///
@@ -121,11 +130,16 @@ fn unix_ms() -> u128 {
 /// stable session/thread/window/installation ids are what matters for cache
 /// affinity.
 ///
-/// The `workspaces` entry of the turn metadata is intentionally omitted: it
-/// contains the client's local paths and git remotes, which ChatSpeed cannot
-/// report truthfully and should not fabricate.
+/// The `workspaces` entry is intentionally omitted: it carries the client's
+/// local paths and git remotes, which would leak the user's repository
+/// layout to the upstream provider.
+///
+/// `client_type` and `workspace_kind` are not part of Codex's core turn
+/// metadata struct: the official client injects them through the flat extra
+/// metadata map that is flattened into the same blob. They are emitted as
+/// sibling keys here because the resulting JSON is identical either way.
 pub(crate) fn codex_client_metadata(identity_seed: &str) -> Value {
-    let installation_id = stable_conversation_uuid(identity_seed, "installation");
+    let installation_id = CODEX_INSTALLATION_ID;
     let context_window_id = stable_conversation_uuid(identity_seed, "context-window");
     let window_id = format!("{identity_seed}:1");
     let turn_id = Uuid::now_v7().to_string();
@@ -137,16 +151,24 @@ pub(crate) fn codex_client_metadata(identity_seed: &str) -> Value {
         "agent_name": "/root",
         "turn_id": turn_id,
         "window_id": window_id,
+        // Codex counts context windows from 1 and keeps one window per
+        // conversation, which matches the ":1" suffix used in window_id.
+        "window_number": 1,
         "context_window_id": context_window_id,
         "request_kind": "turn",
         "root_turn_id": turn_id,
         "thread_source": "user",
+        "turn_trigger": "composer",
         "sandbox": "seatbelt",
         "sandbox_mode": "workspace-write",
         "auto_review_enabled": true,
-        "node_repl_auto_review_required": false,
+        "node_repl_auto_review_required": true,
         "node_repl_disabled": false,
         "turn_started_at_unix_ms": unix_ms(),
+        // ChatSpeed never uploads analytics events, so the client reports
+        // collection as disabled instead of mimicking the default on-switch.
+        "analytics_enabled": false,
+        "client_type": "desktop_app",
         "workspace_kind": "project",
     });
 
@@ -206,7 +228,7 @@ mod tests {
             .find(|(name, _)| name == "user-agent")
             .map(|(_, value)| value.as_str())
             .unwrap();
-        assert!(user_agent.starts_with("codex_cli_rs/0.150.1 ("));
+        assert!(user_agent.starts_with(&format!("{CODEX_ORIGINATOR}/{CODEX_VERSION} (")));
         assert!(user_agent.contains(std::env::consts::ARCH));
 
         // session-id and thread-id must equal the seed (prompt_cache_key).
@@ -261,6 +283,19 @@ mod tests {
         assert_eq!(parsed.get_version_num(), 7);
         assert_eq!(metadata["root_turn_id"].as_str().unwrap(), turn_id);
 
+        // The installation id is install-scoped, so it must stay fixed across
+        // conversations instead of deriving from the identity seed.
+        assert_eq!(
+            metadata["x-codex-installation-id"].as_str().unwrap(),
+            CODEX_INSTALLATION_ID
+        );
+        let other_seed = Uuid::now_v7().to_string();
+        let other = codex_client_metadata(&other_seed);
+        assert_eq!(
+            other["x-codex-installation-id"].as_str().unwrap(),
+            metadata["x-codex-installation-id"].as_str().unwrap()
+        );
+
         // The turn metadata is a JSON-encoded string with the observed keys.
         let turn_metadata: Value =
             serde_json::from_str(metadata["x-codex-turn-metadata"].as_str().unwrap()).unwrap();
@@ -271,21 +306,32 @@ mod tests {
             "agent_name",
             "turn_id",
             "window_id",
+            "window_number",
             "context_window_id",
             "request_kind",
             "root_turn_id",
             "thread_source",
+            "turn_trigger",
             "sandbox",
             "sandbox_mode",
             "auto_review_enabled",
             "node_repl_auto_review_required",
             "node_repl_disabled",
             "turn_started_at_unix_ms",
+            "analytics_enabled",
+            "client_type",
             "workspace_kind",
         ] {
             assert!(turn_metadata.get(key).is_some(), "missing key: {key}");
         }
         assert_eq!(turn_metadata["turn_id"].as_str().unwrap(), turn_id);
         assert!(!turn_metadata.get("workspaces").is_some());
+        // Window number must line up with the ":1" counter embedded in window_id.
+        assert_eq!(turn_metadata["window_number"].as_u64(), Some(1));
+        assert_eq!(turn_metadata["analytics_enabled"].as_bool(), Some(false));
+        assert_eq!(
+            turn_metadata["node_repl_auto_review_required"].as_bool(),
+            Some(true)
+        );
     }
 }

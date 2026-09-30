@@ -209,7 +209,7 @@ SYSTEM_REMINDER {
 
   .el-dropdown-menu__item {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     min-width: 150px;
     max-width: 300px;
     width: auto;
@@ -926,7 +926,34 @@ SYSTEM_REMINDER {
 .el-overlay {
   top: var(--cs-titlebar-height) !important;
   height: calc(100% - var(--cs-titlebar-height)) !important;
+  /*
+   * The docked ChatHub page is a native view over the right side of the workflow window, so a
+   * layer that centers itself in the window would lose its right part under the page. The
+   * space the page reserves is kept free here as well; the variable is only set in the window
+   * that hosts the page, so every other window keeps its full width. A drawer slides out of
+   * this layer, which is why the width belongs to the overlay itself.
+   */
+  width: calc(100% - var(--cs-chathub-reserved-width, 0px)) !important;
   border-radius: 0 0 var(--cs-border-radius-lg) var(--cs-border-radius-lg);
+}
+
+/*
+ * A dialog and a message box position themselves in a fixed layer of their own, so the
+ * reserved width has to be handed to those layers instead of to the overlay they sit in.
+ */
+.el-overlay-dialog,
+.el-overlay-message-box {
+  width: calc(100% - var(--cs-chathub-reserved-width, 0px)) !important;
+}
+
+/* A toast centers itself on the window and a notification is anchored to its right edge. */
+.el-message.is-center {
+  left: calc((100% - var(--cs-chathub-reserved-width, 0px)) / 2) !important;
+  max-width: calc(100% - 32px - var(--cs-chathub-reserved-width, 0px));
+}
+
+.el-notification.right {
+  right: calc(16px + var(--cs-chathub-reserved-width, 0px)) !important;
 }
 
 .el-image-viewer__mask {

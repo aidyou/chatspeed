@@ -3,7 +3,7 @@
 footer.input-container {
     flex-shrink: 0;
     background-color: transparent;
-    padding: 0 var(--cs-space-sm) var(--cs-space-sm);
+    padding: 0 var(--cs-space) var(--cs-space-sm);
     height: unset;
     z-index: 1;
     position: relative;
@@ -258,8 +258,8 @@ footer.input-container {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 32px;
-            height: 32px;
+            width: 24px;
+            height: 24px;
             padding: 0;
             border: 0;
             border-radius: var(--cs-border-radius);
@@ -717,6 +717,20 @@ footer.input-container {
         color: var(--cs-text-color-secondary);
         font-size: var(--cs-font-size-sm);
     }
+
+    .sandbox-refresh {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        color: var(--cs-text-color-secondary);
+        cursor: pointer;
+        transition: color 0.16s ease;
+
+        &:hover {
+            color: var(--cs-color-primary);
+        }
+    }
 }
 
 // Auto-approved tools popover
@@ -870,6 +884,14 @@ footer.input-container {
             }
         }
     }
+}
+
+// Tooltip for the MCP tool name inside the MCP configuration popover.
+// The popper is teleported to the body, so it needs a global rule.
+.mcp-tool-tooltip {
+    max-width: 420px;
+    line-height: 1.4;
+    word-break: break-all;
 }
 
 // Badge styling for the trigger button

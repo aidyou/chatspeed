@@ -1,0 +1,24 @@
+schema_version: 1
+builtin_id: mini-coding
+builtin_version: 2
+name: Mini Coding
+description: A minimal coding agent for direct implementation with a small tool surface.
+role: primary
+disabled: true
+prompts:
+  system: system.md
+config:
+  shell_policy: default
+  approval_level: default
+  auto_approve:
+    - read_file
+  available_tools:
+    - bash
+    - edit_file
+    - read_file
+    - write_file
+  final_audit: false
+  task_tracking_enabled: false
+  skill_enabled: false
+  selected_skills: []
+  phase: standard

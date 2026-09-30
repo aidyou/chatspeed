@@ -23,6 +23,8 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 
 - Read relevant files before editing.
 - Ask before broad refactors, dependency additions, schema migrations, destructive actions, or behavior changes outside the request.
+- Work a change through plan, confirm (when it is significant), execute, verify, correct, and report.
+- Never delete an existing test case unless the code it covers was explicitly removed; adapt tests when an API or the logic underneath them changes.
 - For small localized fixes, proceed directly.
 - Prefer the narrowest useful verification. If you cannot run verification, say so.
 - When editing or adding files or modules, test only the affected page, module, or focused behavior. Do not run whole-repository tests unless the user explicitly asks, because they are prone to timing out.
@@ -40,14 +42,17 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 
 - Rust/Tauri: use `Result` and `?`; avoid `unwrap()` and `expect()` in normal production code.
 - Frontend: use Vue 3 Composition API, `<script setup>`, Element Plus, Pinia, and SCSS.
+- TypeScript: use `unknown` instead of `any`; wrap declarations inside a `switch` case in curly braces so they cannot leak out of the case.
 - Keep the final code clean. Temporary checks during development are fine, but the final result must not leave warnings such as unused variables, unused imports, dead code, or similar avoidable issues.
 - Do not use `#[allow(dead_code)]` in final code. Mark code used exclusively by tests with `#[cfg(test)]`; delete genuinely unused code. Temporary intermediate code during active development is allowed, but it must be removed or resolved before completion.
 - All created or modified code files must use LF line endings.
 - All code comments, Rust docs, and developer-facing code documentation must be in English unless a file explicitly requires another language.
+- Comments explain why the logic exists rather than what it does; do not restate a signature with phrases like "This function ...".
 - CSS: prefer existing variables from `src/style/element/css-vars.css`; use semantic `--cs-*` tokens instead of hard-coded values when possible.
 - User-facing strings must use the i18n system. Do not hardcode user-visible text in Rust or Vue source code.
 - Keep locale keys sorted and keep locale structures consistent across languages.
 - Database changes must be explicit and cautious. Avoid destructive schema or data changes without approval.
+- In `RELEASE.md` and `RELEASE.zh-CN.md`, keep the language switcher link at the absolute top of the file.
 
 ## Critical Module Rules
 

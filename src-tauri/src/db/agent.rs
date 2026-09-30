@@ -15,11 +15,12 @@ use crate::tools::{AgentSandboxConfig, ShellExecutionMode};
 
 pub const SUB_AGENT_ROLE_EXPLORER: &str = "explorer";
 pub const SUB_AGENT_ROLE_FINAL_REVIEWER: &str = "final_reviewer";
+pub const SUB_AGENT_ROLE_CODE_IMPLEMENTER: &str = "code_implementer";
 
 pub fn is_supported_sub_agent_role(role: &str) -> bool {
     matches!(
         role,
-        SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER
+        SUB_AGENT_ROLE_EXPLORER | SUB_AGENT_ROLE_FINAL_REVIEWER | SUB_AGENT_ROLE_CODE_IMPLEMENTER
     )
 }
 
@@ -161,6 +162,9 @@ pub struct AgentConfig {
     pub auto_approve_plan: Option<bool>,
     pub auto_compress: Option<bool>,
     pub available_tools: Option<Vec<String>>,
+    /// Whether the workflow should expose the persistent todo task-tracking tools.
+    #[serde(default)]
+    pub task_tracking_enabled: Option<bool>,
     pub final_audit: Option<bool>,
     pub final_review_mode: Option<String>,
     pub skill_enabled: Option<bool>,
@@ -175,6 +179,8 @@ pub struct AgentConfig {
     pub phase: Option<String>,
     pub models: Option<AgentModels>,
     pub max_contexts: Option<i32>,
+    /// Required headings that a write-capable child must include in its handoff.
+    pub report_required_sections: Option<Vec<String>>,
 }
 
 impl AgentConfig {
@@ -252,6 +258,10 @@ pub struct AgentModels {
     pub vision: Option<ModelConfig>,
     pub utility: Option<ModelConfig>,
     pub lite: Option<ModelConfig>,
+    #[serde(default)]
+    pub decision_enabled: bool,
+    #[serde(default)]
+    pub decision: Option<ModelConfig>,
 }
 
 /// Represents an AI agent for ReAct workflows
@@ -279,6 +289,8 @@ pub struct Agent {
     pub image_recognition_prompt: Option<String>,
     /// JSON array of available tool IDs
     pub available_tools: Option<String>,
+    /// Whether the workflow should expose the persistent todo task-tracking tools.
+    pub task_tracking_enabled: bool,
     /// JSON array of tools that can be executed without user confirmation
     pub auto_approve: Option<String>,
     /// Unified models configuration (JSON string)
@@ -298,7 +310,8 @@ pub struct Agent {
     pub final_audit: Option<bool>,
     /// Approval level for tool calls (default, smart, full)
     pub approval_level: Option<String>,
-    /// Whether skills are enabled for this agent
+    /// Required report section headings for delegated write tasks.
+    pub report_required_sections: Option<String>,
     pub skill_enabled: Option<bool>,
     /// JSON array of enabled skill names for this agent
     pub selected_skills: Option<String>,
@@ -360,6 +373,7 @@ impl Agent {
             planning_prompt,
             image_recognition_prompt,
             available_tools,
+            task_tracking_enabled: true,
             auto_approve,
             models,
             shell_policy,
@@ -378,6 +392,7 @@ impl Agent {
             version: None,
             sort_index: None,
             max_contexts,
+            report_required_sections: None,
             created_at: None,
             updated_at: None,
         }
@@ -476,6 +491,9 @@ impl Agent {
             }
 
             // Merge available_tools (Vec<String> -> JSON string)
+            if let Some(enabled) = config.task_tracking_enabled {
+                self.task_tracking_enabled = enabled;
+            }
             if let Some(tools) = config.available_tools {
                 self.available_tools = serde_json::to_string(&tools).ok();
             }
@@ -507,6 +525,7 @@ impl From<&Row<'_>> for Agent {
             planning_prompt: row.get("planning_prompt").ok(),
             image_recognition_prompt: row.get("image_recognition_prompt").ok(),
             available_tools: row.get("available_tools").ok(),
+            task_tracking_enabled: row.get("task_tracking_enabled").unwrap_or(true),
             auto_approve: row.get("auto_approve").ok(),
             models: row
                 .get::<_, String>("models")
@@ -523,6 +542,7 @@ impl From<&Row<'_>> for Agent {
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
             approval_level: row.get("approval_level").ok(),
+            report_required_sections: row.get("report_required_sections").ok(),
             skill_enabled: row.get("skill_enabled").ok(),
             selected_skills: row.get("selected_skills").ok(),
             mcp_tool_exposure: row.get("mcp_tool_exposure").ok(),
@@ -561,17 +581,17 @@ impl MainStore {
             )?;
             let models = agent.models.as_ref().and_then(|models| serde_json::to_string(models).ok());
             transaction.execute(
-                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
+                "INSERT INTO agents (id, name, description, personality, role, parent_agent_id, sub_agent_role, system_prompt, planning_prompt, image_recognition_prompt, available_tools, task_tracking_enabled, auto_approve, models, shell_policy, sandbox_execution_mode, sandbox_scheme_id, allowed_paths, final_audit, approval_level, report_required_sections, skill_enabled, selected_skills, mcp_tool_exposure, phase, is_system, disabled, version, sort_index, max_contexts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
                 params![
                     agent.id, agent.name, agent.description, agent.personality,
                     agent.role.unwrap_or_else(|| "primary".to_string()),
                     agent.parent_agent_id, agent.sub_agent_role, agent.system_prompt,
                     agent.planning_prompt, agent.image_recognition_prompt, agent.available_tools,
-                    agent.auto_approve, models, agent.shell_policy,
+                    agent.task_tracking_enabled, agent.auto_approve, models, agent.shell_policy,
                     agent.sandbox_execution_mode.as_str(), agent.sandbox_scheme_id,
                     agent.allowed_paths, agent.final_audit, agent.approval_level,
-                    agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
+                    agent.report_required_sections, agent.skill_enabled, agent.selected_skills, agent.mcp_tool_exposure,
                     agent.phase, agent.is_system, agent.disabled, agent.version.unwrap_or(0),
                     agent.sort_index.unwrap_or(sort_index + 1), agent.max_contexts,
                 ],
@@ -619,13 +639,13 @@ impl MainStore {
                 "UPDATE agents SET
                     name = ?1, description = ?2, personality = ?3, role = ?4, parent_agent_id = ?5,
                     sub_agent_role = ?6, system_prompt = ?7, planning_prompt = ?8,
-                    image_recognition_prompt = ?9, available_tools = ?10, auto_approve = ?11,
-                    models = ?12, shell_policy = ?13, sandbox_execution_mode = ?14,
-                    sandbox_scheme_id = ?15, allowed_paths = ?16,
-                    final_audit = ?17, approval_level = ?18, skill_enabled = ?19,
-                    selected_skills = ?20, mcp_tool_exposure = ?21, phase = ?22,
-                    is_system = ?23, disabled = ?24, version = ?25, sort_index = ?26,
-                    max_contexts = ?27, updated_at = CURRENT_TIMESTAMP WHERE id = ?28",
+                    image_recognition_prompt = ?9, available_tools = ?10, task_tracking_enabled = ?11, auto_approve = ?12,
+                    models = ?13, shell_policy = ?14, sandbox_execution_mode = ?15,
+                    sandbox_scheme_id = ?16, allowed_paths = ?17,
+                    final_audit = ?18, approval_level = ?19, report_required_sections = ?20,
+                    skill_enabled = ?21, selected_skills = ?22, mcp_tool_exposure = ?23, phase = ?24,
+                    is_system = ?25, disabled = ?26, version = ?27, sort_index = ?28,
+                    max_contexts = ?29, updated_at = CURRENT_TIMESTAMP WHERE id = ?30",
                 params![
                     effective_name,
                     agent.description,
@@ -637,6 +657,7 @@ impl MainStore {
                     agent.planning_prompt,
                     agent.image_recognition_prompt,
                     agent.available_tools,
+                    agent.task_tracking_enabled,
                     agent.auto_approve,
                     models,
                     agent.shell_policy,
@@ -645,6 +666,7 @@ impl MainStore {
                     agent.allowed_paths,
                     agent.final_audit,
                     agent.approval_level,
+                    agent.report_required_sections,
                     agent.skill_enabled,
                     agent.selected_skills,
                     agent.mcp_tool_exposure,
@@ -883,6 +905,7 @@ mod tests {
             planning_prompt: None,
             image_recognition_prompt: None,
             available_tools: Some("[]".to_string()),
+            task_tracking_enabled: true,
             auto_approve: Some("[]".to_string()),
             models: None,
             shell_policy: Some("[]".to_string()),
@@ -901,6 +924,7 @@ mod tests {
             version: None,
             sort_index: None,
             max_contexts: Some(128000),
+            report_required_sections: None,
             created_at: None,
             updated_at: None,
         }
@@ -1153,9 +1177,19 @@ mod tests {
             .expect("failed to count remaining records");
 
         assert_eq!(remaining_agents, 0, "agent tree should be deleted");
-        assert_eq!(
-            remaining_workflows, 0,
-            "workflows bound to the deleted agents should be removed first"
-        );
+        assert_eq!(remaining_workflows, 0, "workflows bound to the deleted agents should be removed first");
+    }
+
+    #[test]
+    fn decision_models_are_ignored_by_runtime_configuration() {
+        use super::AgentModels;
+        let legacy: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null,"decisionEnabled":true}"#).unwrap();
+        assert!(legacy.decision_enabled);
+        assert!(legacy.decision.is_none());
+
+        // The agent editor no longer owns decision configuration, so its payload omits both fields.
+        let editor_payload: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null}"#).unwrap();
+        assert!(!editor_payload.decision_enabled);
+        assert!(editor_payload.decision.is_none());
     }
 }

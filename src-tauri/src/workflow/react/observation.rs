@@ -4,8 +4,8 @@ use crate::libs::ai_temp::{
 use crate::tools::helper::detect_json_stdout;
 use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_GLOB, TOOL_GREP,
-    TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE, TOOL_READ_FILE,
-    TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_GET, TOOL_TODO_LIST,
+    TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
+    TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_LIST,
     TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
 };
 use crate::workflow::react::file_preview::{
@@ -155,7 +155,7 @@ impl ObservationReinforcer {
 
         match result {
             Ok(val) => {
-                let llm_content_override = val
+                let mut llm_content_override = val
                     .get("structured_content")
                     .and_then(|structured| structured.get("llm_content"))
                     .and_then(|value| value.as_str())
@@ -199,6 +199,13 @@ impl ObservationReinforcer {
                             list_str.push_str(&format!("{}. {} ({})\n", i + 1, subject, status));
                         }
                         raw_res = list_str;
+                        if let Some(llm_content) = val
+                            .get("structured_content")
+                            .and_then(|structured| structured.get("llm_content"))
+                            .and_then(Value::as_str)
+                        {
+                            llm_content_override = Some(llm_content.to_string());
+                        }
                     }
                 } else if tool_name == TOOL_TODO_UPDATE {
                     if let Some(todos) = extra_context.and_then(|v| v.as_array().cloned()) {
@@ -248,10 +255,7 @@ impl ObservationReinforcer {
                 }
 
                 // --- Custom Logic for File Tools (Formatting for UI Diff) ---
-                if matches!(
-                    tool_name,
-                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
-                ) {
+                if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE) {
                     let mut preview_args = args.clone();
                     merge_tool_result_into_preview_args(
                         &mut preview_args,
@@ -269,19 +273,18 @@ impl ObservationReinforcer {
                     raw_res = serde_json::to_string(&preview_args).unwrap_or(raw_res);
                 }
 
-                let display_type = if matches!(
-                    tool_name,
-                    TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_EDIT_NOTE | TOOL_PLAN_WRITE_NOTE
-                ) {
-                    "diff"
-                } else {
-                    "text"
-                };
+                let display_type =
+                    if matches!(tool_name, TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_PLAN_NOTE) {
+                        "diff"
+                    } else {
+                        "text"
+                    };
 
                 let json_compacted_res = if !matches!(
                     tool_name,
                     TOOL_BASH
                         | TOOL_READ_FILE
+                        | TOOL_PLAN_NOTE
                         | TOOL_PLAN_READ_NOTE
                         | TOOL_EDIT_FILE
                         | TOOL_WRITE_FILE
@@ -374,6 +377,7 @@ impl ObservationReinforcer {
                 } else if !matches!(
                     tool_name,
                     TOOL_READ_FILE
+                        | TOOL_PLAN_NOTE
                         | TOOL_PLAN_READ_NOTE
                         | TOOL_EDIT_FILE
                         | TOOL_WRITE_FILE
@@ -558,6 +562,10 @@ impl ObservationReinforcer {
                 let display_path = get_relative_path(path);
                 format!("Edit {}", display_path)
             }
+            TOOL_PLAN_NOTE => {
+                let action = args["action"].as_str().unwrap_or("read");
+                format!("Plan note {}", action)
+            }
             TOOL_PLAN_READ_NOTE => {
                 let note_name = args["note_name"].as_str().unwrap_or("");
                 format!("Read plan note {}", note_name)
@@ -589,6 +597,7 @@ impl ObservationReinforcer {
                 let pattern = args["pattern"]
                     .as_str()
                     .or(args["query"].as_str())
+                    .or(args["glob"].as_str())
                     .unwrap_or("");
                 let path = args["path"].as_str().unwrap_or("");
                 if !path.is_empty() {
@@ -672,7 +681,6 @@ impl ObservationReinforcer {
                 .to_string()
             }
             TOOL_TODO_LIST => t!("workflow.summary.todo_list").to_string(),
-            TOOL_TODO_GET => t!("workflow.summary.todo_get").to_string(),
             TOOL_SUBMIT_PLAN => "Submit Plan".to_string(),
             TOOL_COMPLETE_WORKFLOW => "Complete Workflow".to_string(),
             TOOL_SUBMIT_RESULT => "Submit Result".to_string(),
@@ -730,7 +738,7 @@ impl ObservationReinforcer {
         }
     }
 
-    fn generate_summary(tool_name: &str, content: &str, _args: &Value) -> String {
+    fn generate_summary(tool_name: &str, content: &str, args: &Value) -> String {
         match tool_name {
             TOOL_SUBMIT_PLAN => t!("workflow.summary.submit_plan").to_string(),
             TOOL_COMPLETE_WORKFLOW => t!("workflow.task_finished").to_string(),
@@ -758,7 +766,14 @@ impl ObservationReinforcer {
             }
             TOOL_GREP => {
                 let lines = content.lines().count();
-                format!("Found {} matches", lines)
+                if args["pattern"]
+                    .as_str()
+                    .is_some_and(|pattern| !pattern.trim().is_empty())
+                {
+                    format!("Found {} matches", lines)
+                } else {
+                    format!("Found {} entries", lines)
+                }
             }
             TOOL_WEB_SEARCH => {
                 if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(content) {
@@ -770,6 +785,14 @@ impl ObservationReinforcer {
             TOOL_WEB_FETCH => {
                 // Return success immediately, handled by reinforcement usually
                 "Fetched content".to_string()
+            }
+            TOOL_PLAN_NOTE => {
+                let action = args["action"].as_str().unwrap_or("read");
+                match action {
+                    "write" => t!("workflow.summary.write_file").to_string(),
+                    "edit" => t!("workflow.summary.edit_file").to_string(),
+                    _ => format!("Read {} lines", content.lines().count()),
+                }
             }
             TOOL_EDIT_FILE => t!("workflow.summary.edit_file").to_string(),
             TOOL_PLAN_EDIT_NOTE => t!("workflow.summary.edit_file").to_string(),
@@ -810,6 +833,22 @@ mod tests {
     fn remove_persisted_output(content: &str) {
         let path = persisted_path(content);
         fs::remove_file(resolve_ai_temp_path(Path::new(&path))).unwrap();
+    }
+
+    #[test]
+    fn grep_summary_distinguishes_content_and_path_search() {
+        assert_eq!(
+            ObservationReinforcer::generate_summary(
+                TOOL_GREP,
+                "a.rs:1:match",
+                &json!({"pattern": "match"})
+            ),
+            "Found 1 matches"
+        );
+        assert_eq!(
+            ObservationReinforcer::generate_summary(TOOL_GREP, "a.rs", &json!({"glob": "*.rs"})),
+            "Found 1 entries"
+        );
     }
 
     #[test]
@@ -1159,6 +1198,44 @@ mod tests {
         fs::remove_file(physical_path).unwrap();
     }
 
+    #[test]
+    fn reinforce_todo_create_keeps_details_in_llm_projection_only() {
+        let tool_call = json!({
+            "function": {
+                "name": TOOL_TODO_CREATE,
+                "arguments": {"mode":"replace"}
+            }
+        });
+        let todos = json!([
+            {
+                "id":"1",
+                "subject":"Short task",
+                "status":"pending",
+                "description":"Preserve the complete requirement"
+            }
+        ]);
+        let result = json!({
+            "content":"Successfully created 1 todo item(s)",
+            "structured_content": {
+                "llm_content":"Current todo list with details:\n- id=1 status=pending subject=Short task description=Preserve the complete requirement"
+            }
+        });
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(result),
+            Some(todos),
+            None,
+        );
+
+        assert!(!reinforced
+            .content
+            .contains("Preserve the complete requirement"));
+        assert!(reinforced
+            .llm_content
+            .as_deref()
+            .is_some_and(|content| content.contains("Preserve the complete requirement")));
+    }
     #[test]
     fn reinforce_terminal_todos_requires_atomic_completion_submission() {
         let tool_call = json!({

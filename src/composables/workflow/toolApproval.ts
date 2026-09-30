@@ -4,9 +4,7 @@ const AUTO_EXECUTE_WORKFLOW_TOOLS = new Set([
   'skill',
   'sub_agent_run',
   'sub_agent_output',
-  'sub_agent_stop',
   'todo_create',
-  'todo_get',
   'todo_list',
   'todo_update'
 ])

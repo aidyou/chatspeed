@@ -39,7 +39,9 @@ test('authored frontend color literals are centralized in css-vars.css', () => {
   const allowed = new Set([
     'src/style/element/css-vars.css',
     'src/tool/ic.js',
-    'src/libs/chat.js'
+    'src/libs/chat.js',
+    // Third-party terminal palettes copied verbatim from the upstream themes they name.
+    'src/constants/terminalThemes.js'
   ])
   const literal = /#[0-9a-fA-F]{3,8}\b|\brgba?\(/
   const walk = directory => readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

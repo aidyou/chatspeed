@@ -6,16 +6,22 @@ import {
   isWorkflowTodoTool
 } from './toolClassification.js'
 
-for (const toolName of ['todo_create', 'todo_list', 'todo_update', 'todo_get']) {
+for (const toolName of ['todo_create', 'todo_list', 'todo_update']) {
   assert.equal(isWorkflowTodoTool(toolName), true, `${toolName} must be an exact Todo tool`)
   assert.equal(getWorkflowToolFamily(toolName), 'todo')
 }
 
-for (const toolName of ['sub_agent_run', 'sub_agent_output', 'sub_agent_stop']) {
+for (const toolName of ['sub_agent_run', 'sub_agent_output']) {
   assert.equal(getWorkflowToolFamily(toolName), 'task')
 }
 
-for (const toolName of ['server__MCP__search', 'SERVER__mcp__WRITE', 'mcp_tool_load']) {
+for (const toolName of [
+  'server__MCP__search',
+  'SERVER__mcp__WRITE',
+  'mcp_tool_expand',
+  'mcp_tool_execute',
+  'mcp_tool_load'
+]) {
   assert.equal(isWorkflowMcpTool(toolName), true, `${toolName} must be classified as MCP`)
 }
 

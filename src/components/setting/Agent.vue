@@ -211,7 +211,7 @@
                   <template v-if="modelModes[role.key] === 'provider'">
                     <el-select v-model="agentForm[role.key + 'Model'].id" size="small" filterable
                       @change="onModelIdChange(role.key)" style="flex: 1">
-                      <el-option v-for="provider in modelStore.getAvailableProviders" :key="provider.id"
+                      <el-option v-for="provider in sortedModelProviders" :key="provider.id"
                         :label="provider.name" :value="provider.id" />
                     </el-select>
                     <el-select v-model="agentForm[role.key + 'Model'].model" size="small" filterable
@@ -224,7 +224,7 @@
                   <template v-else>
                     <el-select v-model="proxyGroups[role.key]" size="small" filterable
                       @change="onProxyGroupChange(role.key)" style="flex: 1">
-                      <el-option v-for="group in proxyGroupStore.list" :key="group.name" :label="group.name"
+                      <el-option v-for="group in sortedProxyGroups" :key="group.name" :label="group.name"
                         :value="group.name" />
                     </el-select>
                     <el-select v-model="proxyAliases[role.key]" size="small" filterable
@@ -259,11 +259,11 @@
                 </div>
                 <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: 6px">
                   <div class="param-item">
-                    <span class="param-label">{{ $t('settings.model.reasoning') }}</span>
+                    <span class="param-label">{{ $t('settings.model.reasoningCompact') }}</span>
                     <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
                   </div>
                   <div class="param-item" v-if="agentForm[role.key + 'Model'].thinkingEnabled">
-                    <span class="param-label">{{ $t('settings.model.thinkingLevel') }}</span>
+                    <span class="param-label">{{ $t('settings.model.thinkingLevelCompact') }}</span>
                     <el-select v-model="agentForm[role.key + 'Model'].thinkingLevel" size="small" style="width: 120px">
                       <el-option v-for="option in agentThinkingLevelOptions" :key="option.value"
                         :label="$t(option.label)" :value="option.value" />
@@ -309,10 +309,16 @@
           <el-form-item :label="$t('settings.agent.approvalLevel')"
             prop="approvalLevel" :label-width="150">
             <el-select v-model="agentForm.approvalLevel" style="width: 100%">
+              <el-option v-if="agentForm.role === AGENT_ROLE.CHILD" :label="$t('settings.agent.approvalLevelInherit')" value="inherit" />
               <el-option :label="$t('settings.agent.approvalLevelDefault')" value="default" />
               <el-option :label="$t('settings.agent.approvalLevelSmart')" value="smart" />
               <el-option :label="$t('settings.agent.approvalLevelFull')" value="full" class="danger-option" />
             </el-select>
+          </el-form-item>
+          <el-form-item :label="$t('settings.agent.taskTracking')"
+            prop="taskTrackingEnabled" :label-width="150">
+            <el-switch v-model="agentForm.taskTrackingEnabled" />
+            <div class="form-tip">{{ $t('settings.agent.taskTrackingHint') }}</div>
           </el-form-item>
           <el-form-item :label="$t('settings.agent.availableTools')" prop="availableTools" :label-width="150">
             <el-select v-model="agentForm.availableTools" :placeholder="$t('settings.agent.selectAvailableTools')"
@@ -371,24 +377,28 @@
 
         <el-tab-pane :label="$t('settings.agent.security')" name="security" lazy>
           <div class="security-group">
-            <div class="shell-policy-header">
-              <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
-              <div class="shell-policy-actions">
-                <el-button type="primary" size="small" @click="addAuthorizedPath">
-                  {{ $t('settings.agent.authorizedPathsAdd') }}
-                </el-button>
+            <!-- Children inherit their authorized directories from the parent session. -->
+            <template v-if="canConfigureAuthorizedPaths">
+              <div class="shell-policy-header">
+                <h3>{{ $t('settings.agent.authorizedPaths') }}</h3>
+                <div class="shell-policy-actions">
+                  <el-button type="primary" size="small" @click="addAuthorizedPath">
+                    {{ $t('settings.agent.authorizedPathsAdd') }}
+                  </el-button>
+                </div>
               </div>
-            </div>
-            <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
-            <div class="shell-policy-list">
-              <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
-                <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
-                <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
-                  <cs name="trash" size="12px" />
-                </el-button>
+              <p class="security-tip">{{ $t('settings.agent.authorizedPathsTip') }}</p>
+              <div class="shell-policy-list">
+                <div v-for="(path, index) in agentForm.allowedPaths" :key="index" class="shell-policy-item">
+                  <el-input v-model="agentForm.allowedPaths[index]" size="small" readonly style="flex: 1" />
+                  <el-button type="danger" size="small" circle @click="removeAuthorizedPath(index)">
+                    <cs name="trash" size="12px" />
+                  </el-button>
+                </div>
               </div>
-            </div>
-            <div v-if="agentForm.role !== AGENT_ROLE.CHILD" class="security-switch-row">
+            </template>
+            <p v-else class="security-tip">{{ $t('settings.agent.authorizedPathsInherited') }}</p>
+            <div class="security-switch-row">
               <span class="security-switch-label">{{ $t('settings.agent.allowShell') }}</span>
               <el-switch v-model="agentForm.allowShell" />
               <span class="security-switch-tip">{{ $t('settings.agent.allowShellTip') }}</span>
@@ -765,22 +775,40 @@ const modelRoles = computed(() => {
   return allModelRoles
 })
 
-const READ_ONLY_TOOLS = ['read_file', 'grep', 'glob', 'web_fetch', 'todo_list', 'list_dir']
+// Model configuration reads alphabetically: provider, proxy group, and alias lists
+// come from stores whose order is not the editor's presentation order, so the
+// editor sorts copies and never reorders the store arrays.
+const compareOptionLabels = (left, right) => String(left).localeCompare(String(right))
+
+const sortedModelProviders = computed(() =>
+  [...modelStore.getAvailableProviders].sort((left, right) =>
+    compareOptionLabels(left.name, right.name)
+  )
+)
+
+const sortedProxyGroups = computed(() =>
+  [...proxyGroupStore.list].sort((left, right) =>
+    compareOptionLabels(left.name, right.name)
+  )
+)
+
+const READ_ONLY_TOOLS = ['read_file', 'grep', 'web_fetch', 'todo_list', 'list_dir']
 const CHILD_ONLY_TOOL_IDS = ['git_diff', 'git_inspect']
+// Shell execution is enabled by the security-policy switch, never by picking a tool.
 const HIDDEN_AGENT_TOOL_IDS = ['bash']
 const MCP_TOOL_NAME_SEPARATOR = '__MCP__'
 const CORE_MANAGEMENT_TOOLS = [
   'sub_agent_run',
   'sub_agent_output',
-  'sub_agent_stop',
   'todo_create',
   'todo_list',
   'todo_update',
-  'todo_get',
   'skill',
   'ask_user',
   'complete_workflow',
   'submit_plan',
+  'mcp_tool_expand',
+  'mcp_tool_execute',
   'mcp_tool_load',
   'read_history_message'
 ]
@@ -798,10 +826,12 @@ const defaultAgentModelConfig = () => ({
 const THINKING_LEVEL_TO_BUDGET = {
   low: 1024,
   medium: 2048,
-  high: 4096
+  high: 4096,
+  max: 8192
 }
 const thinkingLevelFromBudget = budget => {
   const normalized = Number(budget) || 0
+  if (normalized > 4096) return 'max'
   if (normalized > 2048) return 'high'
   if (normalized > 1024) return 'medium'
   return 'low'
@@ -811,7 +841,8 @@ const budgetFromThinkingLevel = level =>
 const agentThinkingLevelOptions = [
   { value: 'low', label: 'settings.model.reasoningLow' },
   { value: 'medium', label: 'settings.model.reasoningMedium' },
-  { value: 'high', label: 'settings.model.reasoningHigh' }
+  { value: 'high', label: 'settings.model.reasoningHigh' },
+  { value: 'max', label: 'settings.model.reasoningMax' }
 ]
 
 const defaultFormData = {
@@ -827,6 +858,7 @@ const defaultFormData = {
   planningPrompt: '',
   imageRecognitionPrompt: '',
   availableTools: [],
+  taskTrackingEnabled: true,
   allowShell: false,
   sandboxExecutionMode: 'host_only',
   sandboxSchemeId: null,
@@ -1060,9 +1092,12 @@ const isSystemAgentReadOnly = computed(() => !!editId.value && agentForm.value.i
 const isSystemIdentityLocked = computed(() => isSystemAgentReadOnly.value)
 const isSystemPromptsLocked = computed(() => isSystemAgentReadOnly.value)
 
-const canConfigureShellPolicy = computed(
-  () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
-)
+// Children inherit their authorized directories from the parent session, so only a primary
+// agent owns that list.
+const canConfigureAuthorizedPaths = computed(() => agentForm.value.role !== AGENT_ROLE.CHILD)
+// Shell rules are a per-agent capability, so the security switch controls them for both roles.
+const canConfigureShellPolicy = computed(() => agentForm.value.allowShell)
+// Sandbox execution stays a primary-agent capability: children always run on the host.
 const canConfigureSandbox = computed(
   () => agentForm.value.role !== AGENT_ROLE.CHILD && agentForm.value.allowShell
 )
@@ -1432,14 +1467,20 @@ const normalizeAgentFormForSave = form => {
     normalized.utilityModel = defaultAgentModelConfig()
     normalized.liteModel = defaultAgentModelConfig()
     normalized.allowedPaths = []
-    normalized.shellPolicy = []
+    normalized.shellPolicy = Array.isArray(normalized.shellPolicy)
+      ? normalized.shellPolicy.filter(rule => rule.pattern && rule.pattern.trim() !== '')
+      : []
     normalized.sandboxExecutionMode = 'host_only'
-    normalized.sandboxSchemeId = null
-    normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
-    normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+    normalized.approvalLevel = normalized.approvalLevel || 'default'
+    // A child's shell access uses the same opt-in switch a primary agent uses.
+    if (normalized.allowShell) {
+      normalized.availableTools = [...new Set([...normalized.availableTools, 'bash'])]
+    } else {
+      normalized.availableTools = normalized.availableTools.filter(tool => tool !== 'bash')
+      normalized.autoApprove = normalized.autoApprove.filter(tool => tool !== 'bash')
+    }
     normalized.skillEnabled = false
     normalized.selectedSkills = []
-    normalized.allowShell = false
   } else {
     normalized.parentAgentId = null
     normalized.subAgentRole = ''
@@ -1496,7 +1537,11 @@ const syncCurrentWorkflowSkillsConfig = async (savedAgentId, finalForm) => {
 
 const getModelList = key => {
   const id = agentForm.value[key + 'Model']?.id
-  return id ? modelStore.getModelProviderById(id)?.models || [] : []
+  const provider = id ? modelStore.getModelProviderById(id) : null
+  // Sorted copy: the option shows `name || id`, and the store array keeps its own order.
+  return [...(provider?.models || [])].sort((left, right) =>
+    compareOptionLabels(left.name || left.id, right.name || right.id)
+  )
 }
 
 const onModelIdChange = key => {
@@ -1555,7 +1600,7 @@ const supportsThinking = key => {
 const getProxyAliases = groupName => {
   if (!groupName) return []
   const groupData = settingStore.settings.chatCompletionProxy[groupName]
-  return groupData ? Object.keys(groupData) : []
+  return groupData ? Object.keys(groupData).sort(compareOptionLabels) : []
 }
 
 const onProxyGroupChange = key => {
@@ -2030,13 +2075,9 @@ watch(
     if (activeTab.value === 'personality') {
       activeTab.value = 'basic'
     }
-    agentForm.value.allowShell = false
-    agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
-      tool => tool !== 'bash'
-    )
-    agentForm.value.autoApprove = (agentForm.value.autoApprove || []).filter(
-      tool => tool !== 'bash'
-    )
+    agentForm.value.allowShell = agentForm.value.availableTools?.includes('bash') === true
+    agentForm.value.availableTools = (agentForm.value.availableTools || [])
+    agentForm.value.autoApprove = (agentForm.value.autoApprove || [])
 
     if (!agentForm.value.parentAgentId && primaryAgentOptions.value.length > 0) {
       agentForm.value.parentAgentId = primaryAgentOptions.value[0].id
@@ -2064,11 +2105,6 @@ watch(
 watch(
   () => agentForm.value.allowShell,
   enabled => {
-    if (agentForm.value.role === AGENT_ROLE.CHILD) {
-      agentForm.value.allowShell = false
-      return
-    }
-
     if (!enabled) {
       agentForm.value.availableTools = (agentForm.value.availableTools || []).filter(
         tool => tool !== 'bash'
@@ -2188,6 +2224,7 @@ watch(
     overflow-y: auto;
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius);
+    box-sizing: border-box;
   }
 
   .personality-option {

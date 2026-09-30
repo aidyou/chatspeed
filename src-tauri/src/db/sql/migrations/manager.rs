@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v2, v3, v4, v5, v6,
-    v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2,
+    v3, v4, v5, v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -23,6 +23,7 @@ const MIGRATIONS: &[MigrationDefinition] = &[
     v15::MIGRATION,
     v16::MIGRATION,
     v17::MIGRATION,
+    v18::MIGRATION,
 ];
 
 fn latest_migration_version() -> i32 {
@@ -81,11 +82,14 @@ fn execute_migration(
     Ok(())
 }
 
-fn run_post_migration_ensures(conn: &Connection, current_version: i32) -> Result<(), StoreError> {
-    for migration in MIGRATIONS
-        .iter()
-        .filter(|migration| migration.version <= current_version)
-    {
+fn run_post_migration_ensures(
+    conn: &Connection,
+    current_version: i32,
+    minimum_version: i32,
+) -> Result<(), StoreError> {
+    for migration in MIGRATIONS.iter().filter(|migration| {
+        migration.version >= minimum_version && migration.version <= current_version
+    }) {
         if let Some(ensure) = migration.ensure {
             ensure(conn)?;
         }
@@ -133,16 +137,26 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             current_version
         );
 
-        run_post_migration_ensures(conn, current_version)?;
+        run_post_migration_ensures(conn, current_version, 0)?;
         return Ok(());
     }
 
-    if current_version >= latest_version {
+    if current_version == latest_version {
         log::info!(
             "Database is already up to date at version {}.",
             current_version
         );
-        run_post_migration_ensures(conn, current_version)?;
+        run_post_migration_ensures(conn, current_version, current_version)?;
+        return Ok(());
+    }
+
+    if current_version > latest_version {
+        log::info!(
+            "Database is ahead of this build at version {} (latest known version {}). Running compatibility ensures.",
+            current_version,
+            latest_version
+        );
+        run_post_migration_ensures(conn, current_version, 0)?;
         return Ok(());
     }
 
@@ -173,7 +187,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
     }
 
     let final_version = get_db_version(conn)?;
-    run_post_migration_ensures(conn, final_version)?;
+    run_post_migration_ensures(conn, final_version, current_version)?;
     log::info!(
         "All migrations applied. Database is now at version {}.",
         final_version
@@ -214,6 +228,32 @@ mod tests {
     }
 
     #[test]
+    fn current_database_skips_historical_ensures() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+
+        run_migrations(&mut conn).expect("fresh install should build the latest schema");
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-current', 'current', ?1, '0', '0')",
+            ["complete_workflow_with_summary"],
+        )
+        .expect("failed to seed current database");
+
+        run_migrations(&mut conn).expect("current database should remain usable");
+
+        let prompt: String = conn
+            .query_row(
+                "SELECT system_prompt FROM agents WHERE id = 'agent-current'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("seeded agent should remain readable");
+        // v10's ensure rewrites the legacy completion tool name, so an unchanged
+        // prompt proves historical ensures were not replayed on a current database.
+        assert_eq!(prompt, "complete_workflow_with_summary");
+    }
+
+    #[test]
     fn fresh_install_builds_latest_schema_directly() {
         let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
 
@@ -234,6 +274,9 @@ mod tests {
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
         assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
 
         let recorded_versions: i64 = conn
             .query_row("SELECT COUNT(1) FROM db_version", [], |row| row.get(0))
@@ -316,6 +359,9 @@ mod tests {
         assert!(has_column(&conn, "agents", "sandbox_scheme_id"));
         assert!(has_column(&conn, "agents", "personality"));
         assert!(table_exists(&conn, "sandbox_schemes"));
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
 
         let has_v3_marker: i64 = conn
             .query_row(
@@ -328,5 +374,151 @@ mod tests {
             has_v3_marker, 1,
             "placeholder migrations should still advance db_version"
         );
+    }
+
+    /// Builds a database at exactly `version` by replaying the historical
+    /// statements, which is how the pre-v18 shape is reproduced for the
+    /// consolidated CLI upgrade test.
+    fn build_at_version(conn: &mut Connection, version: i32) {
+        let mut statements: Vec<(&'static str, &'static str)> = Vec::new();
+        statements.extend_from_slice(v1::INIT_SQL);
+        for migration in MIGRATIONS
+            .iter()
+            .filter(|migration| migration.version <= version)
+        {
+            statements.extend_from_slice(migration.sql);
+        }
+        execute_migration_statements(conn, statements, version)
+            .expect("historical schema should build");
+    }
+
+    /// The v18 CLI migration is consolidated and therefore upgrades an older
+    /// v17 database directly to the complete CLI schema, and every later
+    /// additive migration applies on top of it.
+    #[test]
+    fn v17_database_upgrades_to_v18_without_touching_existing_rows() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        build_at_version(&mut conn, 17);
+        assert_eq!(get_db_version(&conn).expect("version"), 17);
+        assert!(!table_exists(&conn, "capability_operations"));
+
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-1', 'kept', 'prompt', '0', '0')",
+            [],
+        )
+        .expect("seed an existing row");
+
+        run_migrations(&mut conn).expect("v17 -> latest should succeed");
+
+        // The assertion tracks the latest registered migration instead of a
+        // literal, so adding an additive migration does not make this
+        // consolidated-upgrade test stale.
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            latest_migration_version()
+        );
+        // The pre-existing row survived untouched.
+        let name: String = conn
+            .query_row("SELECT name FROM agents WHERE id = 'agent-1'", [], |row| {
+                row.get(0)
+            })
+            .expect("existing row survives");
+        assert_eq!(name, "kept");
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
+    }
+
+    /// The v18 schema includes the capability journal for older databases.
+    /// Existing rows survive an incremental upgrade.
+    #[test]
+    fn pre_v18_database_upgrades_without_touching_existing_rows() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        build_at_version(&mut conn, 17);
+        assert_eq!(get_db_version(&conn).expect("version"), 17);
+        assert!(!table_exists(&conn, "capability_operations"));
+
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-v19', 'kept', 'prompt', '0', '0')",
+            [],
+        )
+        .expect("seed an existing row");
+
+        run_migrations(&mut conn).expect("v17 -> v18 should succeed");
+
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            latest_migration_version(),
+            "v18 upgrades to the current head"
+        );
+        let name: String = conn
+            .query_row("SELECT name FROM agents WHERE id = 'agent-v19'", [], |row| {
+                row.get(0)
+            })
+            .expect("existing row survives");
+        assert_eq!(name, "kept");
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
+        assert!(has_column(&conn, "capability_operations", "request_hash"));
+        assert!(has_column(&conn, "capability_operations", "reconcile_reason"));
+        assert!(has_column(&conn, "skill_installations", "marker_nonce"));
+    }
+
+    /// A database that records a version *ahead* of the newest migration still
+    /// gains the capability journal.
+    ///
+    /// The database can already record a version *ahead* of the newest
+    /// migration this tree knows about, for example when it was created by an
+    /// older build. `run_migrations` then skips every step, so an additive
+    /// migration that only ships `sql` would silently never run and the
+    /// capability service would fail on an otherwise healthy database. The
+    /// idempotent `ensure` hook is what makes that case work.
+    #[test]
+    fn a_database_recorded_ahead_of_the_latest_version_still_gets_the_capability_journal() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite connection");
+        build_at_version(&mut conn, 17);
+        let ahead = latest_migration_version() + 1;
+        conn.execute("INSERT INTO db_version (version) VALUES (?1)", [ahead])
+            .expect("record a consolidated ahead version");
+        assert_eq!(get_db_version(&conn).expect("version"), ahead);
+        assert!(
+            ahead > latest_migration_version(),
+            "the seeded version must be ahead of the current head"
+        );
+        assert!(!table_exists(&conn, "capability_operations"));
+
+        run_migrations(&mut conn)
+            .expect("an ahead-of-latest database stays usable");
+
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            ahead,
+            "a newer recorded version is never downgraded or rewritten"
+        );
+        assert!(table_exists(&conn, "capability_operations"));
+        assert!(table_exists(&conn, "capability_operation_effects"));
+        assert!(table_exists(&conn, "skill_installations"));
+
+        // Running it twice is still a no-op, because startup calls this path on
+        // every launch and the journal must keep its rows.
+        conn.execute(
+            "INSERT INTO skill_installations (installation_id, skill_name, target_id,
+                install_path, source_kind, source_ref, checker_version, verdict,
+                content_digest, file_manifest_json, marker_nonce, manifest_digest,
+                state, operation_id, created_at_ms, updated_at_ms)
+             VALUES ('ins-keep', 'demo', 'chatspeed', '/x', 'local_directory',
+                'local_directory:x', 'skill-checker.v1', 'pass', 'digest', '[]',
+                'nonce', 'manifest', 'installed', 'op-1', 0, 0)",
+            [],
+        )
+        .expect("seed an ownership row");
+        run_migrations(&mut conn).expect("a second startup still succeeds");
+        let kept: i64 = conn
+            .query_row("SELECT COUNT(1) FROM skill_installations", [], |row| row.get(0))
+            .expect("count ownership rows");
+        assert_eq!(kept, 1, "the ensure hook never rewrites existing rows");
     }
 }

@@ -1337,6 +1337,14 @@ export function useWorkflowMessages(source = null) {
       grep: args => {
         const pattern = args.pattern || args.query || ''
         const path = formatDisplayPath(args.path || '', displayRoots())
+        if (!pattern) {
+          return {
+            icon: resolveWorkflowToolIcon(name, 'search'),
+            toolType: 'tool-file',
+            action: `Grep ${args.glob || '*'}`,
+            target: path
+          }
+        }
         const action = path ? `Grep "${pattern}" in ${path}` : `Grep "${pattern}"`
         return {
           icon: resolveWorkflowToolIcon(name, 'search'),
@@ -1456,17 +1464,17 @@ export function useWorkflowMessages(source = null) {
           target: ''
         }
       },
-      todo_list: () => ({
+      todo_list: args => ({
         icon: resolveWorkflowToolIcon(name, 'list'),
         toolType: 'tool-todo',
-        action: t('workflow.todo.list'),
+        action: args.todo_id ? `${t('workflow.todo.view')} ${args.todo_id}` : t('workflow.todo.list'),
         target: ''
       }),
-      todo_get: () => ({
-        icon: resolveWorkflowToolIcon(name, 'list'),
+      plan_note: args => ({
+        icon: resolveWorkflowToolIcon(name, 'edit'),
         toolType: 'tool-todo',
-        action: t('workflow.todo.view'),
-        target: ''
+        action: t('workflow.todo.planNote'),
+        target: args.action || 'read'
       }),
       complete_workflow: () => ({
         icon: resolveWorkflowToolIcon(name, 'check-circle'),
@@ -1622,7 +1630,7 @@ export function useWorkflowMessages(source = null) {
 
     const inferredDisplayType =
       meta.display_type ||
-      (['edit_file', 'write_file', 'plan_edit_note', 'plan_write_note'].includes(name)
+      (['edit_file', 'write_file', 'plan_note', 'plan_edit_note', 'plan_write_note'].includes(name)
         ? 'diff'
         : looksLikeFileChangePayload(parsedPayload) || looksLikeFileChangePayload(args)
           ? 'diff'
