@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cs-$target && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cs && cp src-tauri/target/release/cs src-tauri/target/release/cs-$target",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi",
     "frontendDist": "../dist"
   },
   "app": {
@@ -121,7 +121,7 @@
     ],
     "resources": ["assets"],
     "externalBin": [
-      "target/release/cs"
+      "target/release/cscli"
     ],
     "copyright": "",
     "category": "DeveloperTool",

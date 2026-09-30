@@ -1,4 +1,4 @@
-//! Offline Help Skill output for the `cs` CLI.
+//! Offline Help Skill output for the `cscli` CLI.
 //!
 //! The bundled Help Skill is the manually maintained source of truth for the
 //! capability and documentation index. Keeping the CLI output sourced from the
@@ -44,8 +44,11 @@ mod tests {
     #[test]
     fn bundled_help_contains_the_capability_index_and_manual_maintenance_note() {
         assert!(HELP_SKILL.contains("## Capability Operations"));
-        assert!(HELP_SKILL.contains("cs skill install"));
-        assert!(HELP_SKILL.contains("cs mcp install"));
+        assert!(HELP_SKILL.contains("cscli skill install"));
+        assert!(HELP_SKILL.contains("cscli mcp install"));
+        assert!(HELP_SKILL.contains("## Built-in CLI Invocation"));
+        assert!(HELP_SKILL.contains("which cscli"));
+        assert!(HELP_SKILL.contains("2>&1"));
         assert!(HELP_SKILL.contains("## Maintenance"));
         assert!(HELP_SKILL.contains("manually maintained"));
     }

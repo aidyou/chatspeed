@@ -5,7 +5,7 @@ description: Explains ChatSpeed and manages its local capabilities. Activate whe
 
 # ChatSpeed Help and Capability Skill
 
-This is the only bundled capability Skill besides `commit`. It combines official product documentation with the operational guidance for Agent Skills, MCP servers, and the `cs` CLI.
+This is the only bundled capability Skill besides `commit`. It combines official product documentation with the operational guidance for Agent Skills, MCP servers, and the `cscli` CLI.
 
 ## AI Assistant Instructions
 
@@ -17,22 +17,30 @@ When a user asks a question about ChatSpeed:
 4. **Synthesize**: Provide a concise answer based on the official documentation or operation result. Include the source link when documentation was fetched.
 5. **Fallback**: If the question is not covered or fetching fails, direct the user to `https://docs.chatspeed.aidyou.ai/`.
 
+## Built-in CLI Invocation
+
+`cscli` is short for ChatSpeed CLI. Inside ChatSpeed, invoke it directly through the `bash` tool as a standalone command, for example `cscli skill targets`. ChatSpeed automatically resolves this command to the bundled executable and runs it on the host; it does not rely on shell PATH lookup.
+
+The bundled CLI is not automatically added to PATH. Do not use `which cscli`, `command -v cscli`, or similar shell lookup commands to locate or validate it: they do not test ChatSpeed's built-in resolution. Do not substitute a PATH executable or fall back to the old `cs` name. Outside ChatSpeed, use the bundled executable's explicit path unless you have separately configured PATH.
+
+Prefer standalone commands without shell operators. A trailing `2>&1` is accepted for compatibility and ignored because the tool already captures stdout and stderr. Pipelines, other redirects, environment prefixes, and chained commands are not supported by built-in resolution. If a direct invocation fails, report the actual error instead of searching for another executable. Automatic resolution does not bypass approval for mutating operations.
+
 ## Capability Operations
 
-The capability control plane is the single authority for local Skill and MCP state. Existing CLI command formats remain stable:
+The capability control plane is the single authority for local Skill and MCP state. Use these commands with the `cscli` executable:
 
-- `cs skill targets` — list known Skill targets and whether their paths are verified.
-- `cs skill list` — list installed Skills, ownership, and drift.
-- `cs skill check --source-json '<document>'` — check a Skill without installing it.
-- `cs skill install --source-json '<document>' [--target <id>]` — install a checked Skill.
-- `cs skill uninstall <name> [--target <id>]` — uninstall only a managed, owned Skill.
-- `cs mcp list` — list MCP servers and desired/runtime state.
-- `cs mcp status <name>` — inspect one MCP server.
-- `cs mcp install --descriptor-json '<document>' [--enable]` — register an MCP server; enabling is a separate effect.
-- `cs mcp enable|disable|restart|refresh|uninstall <name>` — manage a registered MCP server.
-- `cs mcp tools <name>` — list published tools without invoking one.
-- `cs doctor capabilities` — report capability journal, ownership, runtime, and staging drift.
-- `cs doctor reconcile` — converge only effects proven safe to recover.
+- `cscli skill targets` — list known Skill targets and whether their paths are verified.
+- `cscli skill list` — list installed Skills, ownership, and drift.
+- `cscli skill check --source-json '<document>'` — check a Skill without installing it.
+- `cscli skill install --source-json '<document>' [--target <id>]` — install a checked Skill.
+- `cscli skill uninstall <name> [--target <id>]` — uninstall only a managed, owned Skill.
+- `cscli mcp list` — list MCP servers and desired/runtime state.
+- `cscli mcp status <name>` — inspect one MCP server.
+- `cscli mcp install --descriptor-json '<document>' [--enable]` — register an MCP server; enabling is a separate effect.
+- `cscli mcp enable|disable|restart|refresh|uninstall <name>` — manage a registered MCP server.
+- `cscli mcp tools <name>` — list published tools without invoking one.
+- `cscli doctor capabilities` — report capability journal, ownership, runtime, and staging drift.
+- `cscli doctor reconcile` — converge only effects proven safe to recover.
 
 Mutating operations must preserve the capability service's fail-closed behavior and idempotency handling. The CLI is an HTTP adapter; it does not open the database, capability directories, or MCP processes itself.
 
@@ -47,7 +55,7 @@ Before installing a Skill from GitHub or another external source:
 5. Ask for human approval before HIGH or EXTREME risk installation.
 6. After a successful install, run the non-LLM Skill checker and report any blocked findings. If vetting fails, recommend removal and do not treat the install as trusted.
 
-The bundled installer helpers were removed from the built-in Skill set; use the `cs skill` capability commands and this consolidated guidance instead.
+The bundled installer helpers were removed from the built-in Skill set; use the `cscli skill` capability commands and this consolidated guidance instead.
 
 ## Creating or Updating a Skill
 
@@ -91,7 +99,7 @@ Below are the key topics. All links are relative to `https://docs.chatspeed.aidy
 
 ## Maintenance
 
-This file is the manually maintained source of truth for the bundled Help Skill and the offline `cs help` command. When CLI capability commands, safety requirements, or documentation links change, update this file in the same change and rebuild ChatSpeed.
+This file is the manually maintained source of truth for the bundled Help Skill and the offline `cscli help` command. When CLI capability commands, safety requirements, or documentation links change, update this file in the same change and rebuild ChatSpeed.
 
 ## Additional Resources
 - **GitHub**: [https://github.com/chatspeed-ai/chatspeed](https://github.com/chatspeed-ai/chatspeed)

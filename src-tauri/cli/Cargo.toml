@@ -10,7 +10,7 @@ default = ["standalone-cli"]
 standalone-cli = []
 
 [[bin]]
-name = "cs"
+name = "cscli"
 path = "../src/bin/cs.rs"
 
 [dependencies]

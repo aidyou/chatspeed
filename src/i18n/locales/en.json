@@ -826,6 +826,7 @@
       "editProxyServer": "Edit Proxy Server",
       "enable": "Enable",
       "enableSuccess": "Model \"{name}\" has been enabled.",
+      "faviconInvalidUrl": "Enter a valid http or https URL first",
       "frequencyPenalty": "Frequency Penalty",
       "frequencyPenaltyPlaceholder": "Adjusts the frequency of the model repeating the same words. A higher value results in less repetition. Set to 0 or leave blank to disable.",
       "functionCall": "Function Call",
@@ -912,6 +913,7 @@
       "topPPlaceholder": "Controls the model's selection from the P most likely words. A smaller value results in more deterministic output. Set to 0 or leave blank to disable.",
       "ungrouped": "Ungrouped",
       "updateSuccess": "Model updated",
+      "useGoogleIcon": "Use Google Favicon",
       "username": "Username",
       "enableFailed": "Failed to enable model \"{name}\": {error}",
       "disableFailed": "Failed to disable model \"{name}\": {error}"

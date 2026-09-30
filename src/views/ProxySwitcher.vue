@@ -78,6 +78,16 @@
 
                 <div class="value" @click.stop>
                   <el-tooltip
+                    :content="$t('proxySwitcher.copyProxyId')"
+                    placement="top"
+                    :hide-after="0"
+                    :enterable="false">
+                    <span class="icon-btn action-btn" @click="copyProxyIdToClipboard(proxy.alias)">
+                      <cs name="copy" size="16px" color="secondary" />
+                    </span>
+                  </el-tooltip>
+
+                  <el-tooltip
                     :content="$t('settings.proxy.stats.dailyCostTitle')"
                     placement="top"
                     :hide-after="0"
@@ -100,16 +110,6 @@
                       :class="{ active: selectedProxyKey === proxy.key }"
                       @click="openServerModelSelector(group.name, proxy.alias)">
                       <cs name="switch" size="16px" color="secondary" />
-                    </span>
-                  </el-tooltip>
-
-                  <el-tooltip
-                    :content="$t('proxySwitcher.copyProxyId')"
-                    placement="top"
-                    :hide-after="0"
-                    :enterable="false">
-                    <span class="icon-btn action-btn" @click="copyProxyIdToClipboard(proxy.alias)">
-                      <cs name="copy" size="16px" color="secondary" />
                     </span>
                   </el-tooltip>
                 </div>

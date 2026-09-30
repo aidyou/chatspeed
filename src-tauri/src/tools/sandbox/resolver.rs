@@ -132,7 +132,7 @@ impl ShellExecutionResolver {
         primary_root: Option<&Path>,
         analysis: &ShellCommandAnalysis,
     ) -> ShellExecutionPlan {
-        if crate::tools::builtin_cs_args(command).is_some() {
+        if crate::tools::contains_builtin_cscli_command(command) {
             return explicit_host_plan(tool_call_id, command, "builtin_cs");
         }
         let Some(config) = sandbox_config else {
@@ -661,7 +661,7 @@ mod tests {
             docker: ready_status(SandboxRuntime::Docker, vec![]),
         };
         for mode in [ShellExecutionMode::Auto, ShellExecutionMode::SandboxOnly, ShellExecutionMode::HostOnly] {
-            for command in ["cs skill list", "cs mcp install --descriptor-json '{}'"] {
+            for command in ["cscli skill list", "cscli skill list 2>&1", "cscli mcp install --descriptor-json '{}' 2>&1"] {
                 let plan = ShellExecutionResolver::resolve("test", command, Some(&config(mode.clone())), &unavailable, None);
                 assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
                 assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);

@@ -1,4 +1,4 @@
-//! Clap command tree for the `cs` CLI.
+//! Clap command tree for the `cscli` CLI.
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -40,12 +40,12 @@ pub enum OutputFormat {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "cs",
+    name = "cscli",
     disable_help_subcommand = true,
     version,
     about = "ChatSpeed workflow CLI",
     long_about = "ChatSpeed workflow CLI.\n\n\
-        `cs` talks to a running ChatSpeed desktop app over its local loopback\n\
+        `cscli` talks to a running ChatSpeed desktop app over its local loopback\n\
         control plane. It never opens the database or runs agents itself.\n\n\
         Exit codes:\n  \
         0  success\n  \
@@ -124,7 +124,7 @@ pub enum Command {
     },
 }
 
-/// Additive `cs doctor` sub-capabilities.
+/// Additive `cscli doctor` sub-capabilities.
 #[derive(Debug, Subcommand)]
 pub enum DoctorCommand {
     /// Report the capability journal, Skill ownership, MCP desired/runtime
@@ -571,17 +571,17 @@ mod tests {
         Cli::command().debug_assert();
     }
 
-    /// Bare `cs doctor` keeps its previous behaviour; the capabilities report
+    /// Bare `cscli doctor` keeps its previous behaviour; the capabilities report
     /// is strictly additive.
     #[test]
     fn doctor_is_optional_subcommand_additive() {
-        let bare = parse(&["cs", "doctor"]).expect("bare doctor");
+        let bare = parse(&["cscli", "doctor"]).expect("bare doctor");
         match bare.command {
             Command::Doctor { command } => assert!(command.is_none()),
             _ => panic!("expected the doctor command"),
         }
 
-        let capabilities = parse(&["cs", "doctor", "capabilities"]).expect("doctor capabilities");
+        let capabilities = parse(&["cscli", "doctor", "capabilities"]).expect("doctor capabilities");
         match capabilities.command {
             Command::Doctor {
                 command: Some(DoctorCommand::Capabilities),
@@ -590,8 +590,8 @@ mod tests {
         }
 
         // The reconcile subcommand carries an optional idempotency key and stays
-        // additive; bare `cs doctor` is untouched.
-        let reconcile = parse(&["cs", "doctor", "reconcile"]).expect("doctor reconcile");
+        // additive; bare `cscli doctor` is untouched.
+        let reconcile = parse(&["cscli", "doctor", "reconcile"]).expect("doctor reconcile");
         match reconcile.command {
             Command::Doctor {
                 command: Some(DoctorCommand::Reconcile { idempotency_key }),
@@ -599,7 +599,7 @@ mod tests {
             _ => panic!("expected doctor reconcile"),
         }
         let keyed = parse(&[
-            "cs",
+            "cscli",
             "doctor",
             "reconcile",
             "--idempotency-key",
@@ -616,25 +616,25 @@ mod tests {
 
     #[test]
     fn skill_and_mcp_read_commands_parse() {
-        match parse(&["cs", "skill", "targets"]).expect("skill targets").command {
+        match parse(&["cscli", "skill", "targets"]).expect("skill targets").command {
             Command::Skill {
                 command: SkillCommand::Targets,
             } => {}
             _ => panic!("expected skill targets"),
         }
-        match parse(&["cs", "skill", "list"]).expect("skill list").command {
+        match parse(&["cscli", "skill", "list"]).expect("skill list").command {
             Command::Skill {
                 command: SkillCommand::List,
             } => {}
             _ => panic!("expected skill list"),
         }
-        match parse(&["cs", "mcp", "list"]).expect("mcp list").command {
+        match parse(&["cscli", "mcp", "list"]).expect("mcp list").command {
             Command::Mcp {
                 command: McpCommand::List,
             } => {}
             _ => panic!("expected mcp list"),
         }
-        match parse(&["cs", "mcp", "status", "weather"])
+        match parse(&["cscli", "mcp", "status", "weather"])
             .expect("mcp status")
             .command
         {
@@ -649,14 +649,14 @@ mod tests {
     fn an_unknown_capability_subcommand_is_a_usage_error() {
         // `skill check/install/uninstall` are the Phase 3 mutations; a name
         // that does not exist stays a parse error.
-        assert!(parse(&["cs", "skill", "verify"]).is_err());
-        assert!(parse(&["cs", "mcp", "call"]).is_err());
+        assert!(parse(&["cscli", "skill", "verify"]).is_err());
+        assert!(parse(&["cscli", "mcp", "call"]).is_err());
     }
 
     #[test]
     fn skill_mutations_parse_a_source_and_repeatable_targets() {
         match parse(&[
-            "cs",
+            "cscli",
             "skill",
             "install",
             "--source-json",
@@ -689,7 +689,7 @@ mod tests {
 
         // An inline document and a file are mutually exclusive.
         assert!(parse(&[
-            "cs",
+            "cscli",
             "skill",
             "check",
             "--source-json",
@@ -699,7 +699,7 @@ mod tests {
         ])
         .is_err());
 
-        match parse(&["cs", "skill", "uninstall", "demo"])
+        match parse(&["cscli", "skill", "uninstall", "demo"])
             .expect("skill uninstall")
             .command
         {

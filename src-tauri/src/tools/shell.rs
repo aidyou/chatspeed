@@ -39,16 +39,128 @@ use tokio::process::{Child, Command};
 use tokio::time::Instant;
 use tokio::time::{timeout, Duration};
 
-/// Returns the arguments only for a literal, standalone invocation of the bundled `cs` CLI.
-///
-/// This is intentionally narrower than a general shell parser: the special routing and
-/// approval behavior must never apply to pipelines, redirects, substitutions, globbing,
-/// environment-prefixed commands, or a command that merely happens to be named `cs`.
-pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
+pub(crate) fn builtin_cscli_command_args(command: &str) -> Option<Vec<Vec<String>>> {
+    let segments = split_shell_command_segments(command);
+    if segments.is_empty() {
+        return None;
+    }
+    segments
+        .into_iter()
+        .map(|segment| builtin_cs_args(&segment))
+        .collect()
+}
+
+pub(crate) fn contains_builtin_cscli_command(command: &str) -> bool {
+    split_shell_command_segments(command).iter().any(|segment| {
+        shell_tokens(segment)
+            .and_then(|tokens| tokens.get(leading_command_index(&tokens)).cloned())
+            .as_deref()
+            == Some("cscli")
+    })
+}
+
+fn bundled_cscli_path() -> Result<std::path::PathBuf, ToolError> {
+    let executable = std::env::current_exe()
+        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+    let directory = executable.parent().ok_or_else(|| {
+        ToolError::ExecutionFailed("Application executable has no parent directory".into())
+    })?;
+    let cli = directory.join(if cfg!(windows) { "cscli.exe" } else { "cscli" });
+    if !cli.is_file() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Bundled CLI not found: {}", cli.display()
+        )));
+    }
+    Ok(cli)
+}
+
+fn shell_quote(value: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn shell_token_start(command: &str, target_index: usize) -> Option<usize> {
+    let mut token_index = 0;
+    let mut token_start = None;
     let mut single = false;
     let mut double = false;
     let mut escaped = false;
-    for ch in command.chars() {
+    for (index, ch) in command.char_indices() {
+        if escaped {
+            escaped = false;
+            token_start.get_or_insert(index.saturating_sub(1));
+            continue;
+        }
+        if ch == '\\' && !single {
+            escaped = true;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if ch == '\'' && !double {
+            single = !single;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if ch == '"' && !single {
+            double = !double;
+            token_start.get_or_insert(index);
+            continue;
+        }
+        if !single && !double && ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                if token_index == target_index {
+                    return Some(start);
+                }
+                token_index += 1;
+            }
+            continue;
+        }
+        token_start.get_or_insert(index);
+    }
+    if token_start.is_some() && token_index == target_index {
+        return token_start;
+    }
+    None
+}
+
+fn rewrite_builtin_cscli_commands(command: &str, cli: &std::path::Path) -> Option<String> {
+    let cli = shell_quote(&cli.to_string_lossy());
+    let mut rewritten = String::with_capacity(command.len());
+    let mut search_start = 0;
+    let mut found = false;
+    for segment in split_shell_command_segments(command) {
+        let segment_start = command[search_start..].find(&segment)? + search_start;
+        rewritten.push_str(&command[search_start..segment_start]);
+        let tokens = shell_tokens(&segment)?;
+        let command_index = leading_command_index(&tokens);
+        if tokens.get(command_index).map(String::as_str) == Some("cscli") {
+            let token_start = shell_token_start(&segment, command_index)?;
+            rewritten.push_str(&segment[..token_start]);
+            rewritten.push_str(&cli);
+            rewritten.push_str(&segment[token_start + "cscli".len()..]);
+            found = true;
+        } else {
+            rewritten.push_str(&segment);
+        }
+        search_start = segment_start + segment.len();
+    }
+    rewritten.push_str(&command[search_start..]);
+    found.then_some(rewritten)
+}
+
+/// Returns the arguments only for a literal, standalone invocation of the bundled `cscli` CLI.
+///
+/// A trailing `2>&1` is redundant because the tool already captures both streams.
+/// Other shell operators must never acquire trusted CLI routing or approval behavior.
+pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
+    let mut command = command;
+    let mut single = false;
+    let mut double = false;
+    let mut escaped = false;
+    for (index, ch) in command.char_indices() {
         if (ch.is_control() && ch != '\t')
             || ('\u{2000}'..='\u{200F}').contains(&ch)
             || ('\u{202A}'..='\u{202F}').contains(&ch)
@@ -64,6 +176,13 @@ pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
             escaped = true;
             continue;
         }
+        if !single && !double && ch == '2'
+            && command[..index].ends_with([' ', '\t'])
+            && command[index..].trim_end_matches([' ', '\t']) == "2>&1"
+        {
+            command = &command[..index];
+            break;
+        }
         if ch == '\'' && !double {
             single = !single;
         } else if ch == '"' && !single {
@@ -73,42 +192,28 @@ pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
         }
     }
     let mut args = shlex::split(command)?;
-    if args.first().map(String::as_str) != Some("cs") {
+    if args.first().map(String::as_str) != Some("cscli") {
         return None;
     }
     args.remove(0);
     Some(args)
 }
 
-pub(crate) fn builtin_cs_is_read_only(command: &str) -> bool {
-    let Some(args) = builtin_cs_args(command) else { return false; };
-    matches!(args.first().map(String::as_str), Some("help"))
-        || matches!((args.first().map(String::as_str), args.get(1).map(String::as_str)),
-            (Some("skill"), Some("targets" | "list" | "check"))
-            | (Some("mcp"), Some("list" | "status" | "tools"))
-            | (Some("doctor"), None | Some("capabilities")))
-}
-
 fn host_process_command(command: &str) -> Result<Command, ToolError> {
     if let Some(args) = builtin_cs_args(command) {
-        let executable = std::env::current_exe()
-            .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
-        let directory = executable.parent().ok_or_else(|| {
-            ToolError::ExecutionFailed("Application executable has no parent directory".into())
-        })?;
-        let cli = directory.join(if cfg!(windows) { "cs.exe" } else { "cs" });
-        if !cli.is_file() {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Bundled CLI not found: {}", cli.display()
-            )));
-        }
-        // Never use PATH or a shell for the trusted CLI, including quoted JSON arguments.
+        let cli = bundled_cscli_path()?;
         let mut process = Command::new(cli);
         process.args(args);
         configure_no_window(&mut process);
         return Ok(process);
     }
-    let host_command = crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command);
+    let host_command = if contains_builtin_cscli_command(command) {
+        let cli = bundled_cscli_path()?;
+        rewrite_builtin_cscli_commands(command, &cli)
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to parse cscli command segments".into()))?
+    } else {
+        crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command)
+    };
     let mut process = if cfg!(windows) {
         let mut process = Command::new("cmd");
         process.args(["/C", &host_command]);
@@ -289,7 +394,7 @@ impl ShellPolicyEngine {
     }
 
     pub fn execution_audit_decision(&self, command_str: &str) -> ShellDecision {
-        if builtin_cs_args(command_str).is_some() {
+        if contains_builtin_cscli_command(command_str) {
             return ShellDecision::Allow;
         }
         self.audit_execution_forms(command_str, 0)
@@ -634,13 +739,14 @@ impl ShellPolicyEngine {
     }
 
     pub fn check(&self, command_str: &str, restrict_to_planning: bool) -> ShellDecision {
-        if builtin_cs_args(command_str).is_some() {
-            // Only the explicit read-only capability commands bypass shell approval.
-            // Host routing is not mutation authorization: install/uninstall, MCP lifecycle
-            // changes, reconcile, and unknown commands retain user Allow/Review/Deny rules.
-            // Without a matching rule they require review; the workflow approval layer
-            // decides whether Full mode or another configured policy can approve them.
-            if builtin_cs_is_read_only(command_str) {
+        if let Some(commands) = builtin_cscli_command_args(command_str) {
+            if commands.iter().all(|args| {
+                matches!(args.first().map(String::as_str), Some("help"))
+                    || matches!((args.first().map(String::as_str), args.get(1).map(String::as_str)),
+                        (Some("skill"), Some("targets" | "list" | "check"))
+                        | (Some("mcp"), Some("list" | "status" | "tools"))
+                        | (Some("doctor"), None | Some("capabilities")))
+            }) {
                 return ShellDecision::Allow;
             }
             if restrict_to_planning {
@@ -2667,7 +2773,7 @@ impl ShellExecute {
         tool_call_id: &str,
         command_str: &str,
     ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
-        if builtin_cs_args(command_str).is_some() {
+        if contains_builtin_cscli_command(command_str) {
             return Ok(crate::tools::ShellExecutionResolver::builtin_cs_plan(tool_call_id, command_str));
         }
         let runtime_status = self.cached_runtime_status().await?;
@@ -3271,10 +3377,31 @@ mod tests {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
+    fn rewrites_every_standalone_cscli_command_after_shell_parsing() {
+        let cli = Path::new("/Applications/Chatspeed.app/Contents/MacOS/cscli");
+        assert_eq!(
+            rewrite_builtin_cscli_commands(
+                "cscli mcp status context7 && echo 'cscli' | cscli mcp tools context7 2>&1",
+                cli,
+            ),
+            Some("'/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp status context7 && echo 'cscli' | '/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp tools context7 2>&1".into())
+        );
+        assert_eq!(
+            rewrite_builtin_cscli_commands("FOO=cscli cscli mcp list && echo cscli", cli),
+            Some("FOO=cscli '/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp list && echo cscli".into())
+        );
+
+    }
+    #[test]
     fn builtin_cs_only_accepts_literal_standalone_commands() {
-        assert_eq!(builtin_cs_args("cs skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"),
+        assert_eq!(builtin_cs_args("cscli skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"),
             Some(vec!["skill".into(), "install".into(), "--source-json".into(), "{\"url\":\"https://example.com/a?b=1\"}".into()]));
-        for command in ["./cs skill list", "cs list && echo ok", "cs list > file", "cs list\necho ok", "cs \"$(echo list)\"", "cs `echo list`", "cs *", "env cs skill list", "cs 'unterminated"] {
+        for command in ["cscli skill list 2>&1", "cscli skill list\t2>&1  "] {
+            assert_eq!(builtin_cs_args(command), Some(vec!["skill".into(), "list".into()]));
+        }
+        assert_eq!(builtin_cs_args("cscli mcp status '2>&1' 2>&1"),
+            Some(vec!["mcp".into(), "status".into(), "2>&1".into()]));
+        for command in ["cs skill list", "./cscli skill list", "cscli list && echo ok", "cscli list > file", "cscli list\necho ok", "cscli \"$(echo list)\"", "cscli `echo list`", "cscli *", "env cscli skill list", "cscli 'unterminated", "cscli list 2>&1 && echo ok", "cscli list 2>&1 > file", "cscli list 2>&1\n", "cscli list 2>&1 2>&1", "cscli list2>&1", "cscli list 1>&2", "cscli list 2>file"] {
             assert!(builtin_cs_args(command).is_none(), "{command}");
         }
     }
@@ -3283,15 +3410,16 @@ mod tests {
     fn builtin_cs_mutations_preserve_user_approval_rules() {
         let (_root, _, guard) = setup_test_context();
         let policy = ShellPolicyEngine::new(guard.clone(), vec![]);
-        assert_eq!(policy.check("cs skill list", false), ShellDecision::Allow);
-        assert_eq!(policy.check("cs mcp status demo", false), ShellDecision::Allow);
-        for command in ["cs skill install --source-json '{}'", "cs skill uninstall demo", "cs mcp install --descriptor-json '{}'", "cs mcp enable demo", "cs doctor reconcile", "cs workflow run --prompt test"] {
+        assert_eq!(policy.check("cscli skill list", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cscli mcp status demo", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cscli skill list 2>&1", false), ShellDecision::Allow);
+        for command in ["cscli mcp install --descriptor-json '{}'", "cscli mcp install --descriptor-json '{}' 2>&1"] {
             assert!(matches!(policy.check(command, false), ShellDecision::Review(_)), "{command}");
         }
         let policy = ShellPolicyEngine::new(guard, vec![ShellPolicyRule {
-            pattern: "^cs mcp enable demo$".into(), decision: ShellDecision::Allow, description: None,
+            pattern: "^cscli mcp enable demo$".into(), decision: ShellDecision::Allow, description: None,
         }]);
-        assert_eq!(policy.check("cs mcp enable demo", false), ShellDecision::Allow);
+        assert_eq!(policy.check("cscli mcp enable demo", false), ShellDecision::Allow);
     }
 
 

@@ -74,7 +74,12 @@
             <el-input v-model="modelForm.name" />
           </el-form-item>
           <el-form-item :label="$t('settings.model.logo')" prop="logo">
-            <el-input v-model="modelForm.logo" :placeholder="$t('settings.model.logoPlaceholder')" />
+            <div class="model-logo-field">
+              <el-input v-model="modelForm.logo" :placeholder="$t('settings.model.logoPlaceholder')" />
+              <el-button @click="fillModelLogoFromFavicon">
+                {{ $t('settings.model.useGoogleIcon') }}
+              </el-button>
+            </div>
           </el-form-item>
           <el-form-item :label="$t('settings.model.baseUrl')" prop="baseUrl">
             <el-input v-model="modelForm.baseUrl" :placeholder="baseUrlPlaceholder" />
@@ -976,6 +981,20 @@ const onModelDialogClose = () => {
   editId.value = null
   modelForm.value = createDefaultFormData()
   formRef.value?.resetFields()
+}
+
+/**
+ * Replaces the logo with the public Google favicon for the current base URL.
+ * The image is never downloaded or parsed here; an invalid or empty base URL
+ * only reports an error without touching the existing logo.
+ */
+const fillModelLogoFromFavicon = () => {
+  const baseUrl = String(modelForm.value.baseUrl || '').trim()
+  if (!isValidUrl(baseUrl)) {
+    showMessage(t('settings.model.faviconInvalidUrl'), 'error')
+    return
+  }
+  modelForm.value.logo = `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(baseUrl)}`
 }
 
 /**
@@ -1888,6 +1907,12 @@ const importPresetModel = provider => {
       }
     }
   }
+}
+
+.model-logo-field {
+  display: flex;
+  width: 100%;
+  gap: var(--cs-space-xs);
 }
 
 .provider-logo {

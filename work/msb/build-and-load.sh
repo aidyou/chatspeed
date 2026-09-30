@@ -6,11 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 Usage: ./build-and-load.sh [--cn] [name ...]
+       ./build-and-load.sh --load|-l image:tag
 
 Build Dockerfiles in this directory, export them as Docker archives, and load them into msb.
 
 Options:
   --cn              Use China mirrors for package downloads during image builds.
+  -l, --load IMAGE  Load an existing Docker image into msb without building.
   -h, --help        Show this help.
 
 Arguments:
@@ -22,8 +24,11 @@ Examples:
   ./build-and-load.sh --cn
   ./build-and-load.sh php
   ./build-and-load.sh --cn node python-slim
+  ./build-and-load.sh --load dev:latest
+  ./build-and-load.sh -l registry.example.com/team/dev:v1
 
-Images are tagged in msb as: <name>:latest
+Built images are tagged in msb as: <name>:latest
+Loaded images retain their supplied image reference.
 EOF
 }
 
@@ -33,6 +38,21 @@ require_command() {
     exit 1
   fi
 }
+
+load_image() (
+  local image_ref="$1"
+  local temp_dir archive
+
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/msb-load.XXXXXX")"
+  trap 'rm -rf "$temp_dir"' EXIT
+  archive="$temp_dir/image.tar"
+
+  printf '==> Exporting %s from Docker\n' "$image_ref"
+  docker save --output "$archive" "$image_ref"
+
+  printf '==> Loading %s into msb\n' "$image_ref"
+  msb image load --input "$archive" --tag "$image_ref"
+)
 
 build_and_load() {
   local dockerfile="$1"
@@ -64,10 +84,22 @@ build_and_load() {
 
 main() {
   local -a dockerfiles=()
-  local name dockerfile use_cn_mirrors=0
+  local name dockerfile use_cn_mirrors=0 load_ref=''
 
   while (( $# > 0 )); do
     case "$1" in
+      --load|-l)
+        if (( $# < 2 )) || [[ -z "$2" || "$2" == -* ]]; then
+          printf 'Error: %s requires an image reference (image:tag).\n' "$1" >&2
+          exit 1
+        fi
+        if [[ -n "$load_ref" ]]; then
+          printf 'Error: only one image can be loaded at a time.\n' >&2
+          exit 1
+        fi
+        load_ref="$2"
+        shift 2
+        ;;
       --cn)
         use_cn_mirrors=1
         shift
@@ -91,8 +123,19 @@ main() {
     esac
   done
 
+  if [[ -n "$load_ref" ]] && (( use_cn_mirrors != 0 || $# != 0 )); then
+    printf 'Error: --load cannot be combined with --cn or Dockerfile names.\n' >&2
+    exit 1
+  fi
+
   require_command docker
   require_command msb
+
+  if [[ -n "$load_ref" ]]; then
+    load_image "$load_ref"
+    printf '\nDone. View imported images with: msb image list\n'
+    return
+  fi
 
   if ! docker buildx version >/dev/null 2>&1; then
     printf 'Error: Docker Buildx is required to build and load images.\n' >&2

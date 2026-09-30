@@ -34,7 +34,7 @@ doctest    = false
 name = "chatspeed"
 path = "src/main.rs"
 
-# `cs` is maintained as the independent workspace package at `cli`.
+# `cscli` is maintained as the independent workspace package at `cli`.
 # Keeping it out of this desktop package prevents Tauri/runtime dependencies
 # from becoming part of the CLI dependency graph.
 
