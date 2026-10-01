@@ -5,7 +5,7 @@
       "documentationUrl": "https://doc.302.ai",
       "id": "302ai",
       "logo": "https://models.dev/logos/302ai.svg",
-      "modelCount": 121,
+      "modelCount": 122,
       "name": "302.AI",
       "protocol": "openai",
       "responses": false
@@ -206,7 +206,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 183,
+      "modelCount": 186,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -473,7 +473,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 110,
+      "modelCount": 109,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -693,7 +693,7 @@
       "documentationUrl": "https://docs.gitlab.com/user/duo_agent_platform/",
       "id": "gitlab",
       "logo": "https://models.dev/logos/gitlab.svg",
-      "modelCount": 28,
+      "modelCount": 30,
       "name": "GitLab Duo",
       "responses": false
     },
@@ -702,7 +702,7 @@
       "documentationUrl": "https://docs.gmicloud.ai/inference-engine/api-reference/llm-api-reference",
       "id": "gmicloud",
       "logo": "https://models.dev/logos/gmicloud.svg",
-      "modelCount": 15,
+      "modelCount": 17,
       "name": "GMI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1041,7 +1041,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 432,
+      "modelCount": 429,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1305,7 +1305,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 599,
+      "modelCount": 600,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1406,7 +1406,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 150,
+      "modelCount": 151,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1688,7 +1688,7 @@
       "documentationUrl": "https://help.sap.com/docs/sap-ai-core",
       "id": "sap-ai-core",
       "logo": "https://models.dev/logos/sap-ai-core.svg",
-      "modelCount": 49,
+      "modelCount": 50,
       "name": "SAP AI Core",
       "responses": false
     },
@@ -2069,7 +2069,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 394,
+      "modelCount": 395,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2089,7 +2089,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 34,
+      "modelCount": 36,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2120,7 +2120,7 @@
       "documentationUrl": "https://api.vultrinference.com/",
       "id": "vultr",
       "logo": "https://models.dev/logos/vultr.svg",
-      "modelCount": 10,
+      "modelCount": 15,
       "name": "Vultr",
       "protocol": "openai",
       "responses": false
@@ -2298,9 +2298,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "1ffd71282953551fb9b5040787380b58ced00b006048d66581103d3cb93ecc51",
-    "generatedAt": "2026-09-30T09:44:25Z",
+    "catalogSha256": "fdb01f7da8db7d92f518a3765e2a5cd87b3ed185c1b3682e72c3dbfa1829d331",
+    "generatedAt": "2026-10-01T10:10:44Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "e2b1d16c17cc927d6dc0f7f29e32112cdcf54b12"
+    "revision": "2281b5e2bf65d443215810cd6f26fdb41b8d7f23"
   }
 }
