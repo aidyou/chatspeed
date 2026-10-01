@@ -152,11 +152,15 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
 
     if current_version > latest_version {
         log::info!(
-            "Database is ahead of this build at version {} (latest known version {}). Running compatibility ensures.",
+            "Database is ahead of this build at version {} (latest known version {}). Running current compatibility ensures.",
             current_version,
             latest_version
         );
-        run_post_migration_ensures(conn, current_version, 0)?;
+        // Versions above the published head are local development/test markers, not
+        // published migrations. Only the current head's ensure can repair the schema
+        // owned by this build; replaying every historical ensure here turns ordinary
+        // startup into a full legacy-data scan.
+        run_post_migration_ensures(conn, latest_version, latest_version)?;
         return Ok(());
     }
 
@@ -467,8 +471,44 @@ mod tests {
         assert!(has_column(&conn, "skill_installations", "marker_nonce"));
     }
 
-    /// A database that records a version *ahead* of the newest migration still
-    /// gains the capability journal.
+    /// A database above the published head is treated as a local development/test
+    /// marker. It receives only the current head's compatibility ensure, so old
+    /// data-rewrite ensures are not replayed on every startup.
+    #[test]
+    fn ahead_of_head_database_does_not_replay_historical_ensures() {
+        let mut conn = Connection::open_in_memory().expect("failed to open sqlite database");
+        build_at_version(&mut conn, latest_migration_version());
+        conn.execute(
+            "INSERT INTO agents (id, name, system_prompt, created_at, updated_at)
+             VALUES ('agent-ahead', 'ahead', 'complete_workflow_with_summary', '0', '0')",
+            [],
+        )
+        .expect("seed an agent with a historical tool name");
+
+        let ahead = latest_migration_version() + 3;
+        conn.execute("INSERT INTO db_version (version) VALUES (?1)", [ahead])
+            .expect("record a local development version marker");
+
+        run_migrations(&mut conn).expect("an ahead database should stay usable");
+
+        let prompt: String = conn
+            .query_row(
+                "SELECT system_prompt FROM agents WHERE id = 'agent-ahead'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("historical agent row should remain readable");
+        assert_eq!(
+            prompt, "complete_workflow_with_summary",
+            "v10 data rewriting must not run for a local version marker"
+        );
+        assert_eq!(
+            get_db_version(&conn).expect("version"),
+            ahead,
+            "local version markers must not be rewritten"
+        );
+    }
+
     ///
     /// The database can already record a version *ahead* of the newest
     /// migration this tree knows about, for example when it was created by an

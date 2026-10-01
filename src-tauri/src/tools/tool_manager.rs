@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::constants::CFG_SEARCH_ENGINE;
@@ -21,6 +21,10 @@ use crate::tools::{ToolCallResult, ToolCategory, ToolScope, MCP_TOOL_NAME_SPLIT}
 // use super::tools::{ChatCompletion, ModelName};
 
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
+
+/// Per-name registration generations prevent detached discovery tasks from
+/// restoring state after a stop or same-name restart.
+type McpRegistrationGenerations = HashMap<String, u64>;
 
 /// The result type of a function call.
 pub type NativeToolResult = Result<ToolCallResult, ToolError>;
@@ -271,6 +275,8 @@ pub struct ToolManager {
     mcp_status_event_sender: broadcast::Sender<(String, McpStatus)>,
     /// A channel for notifying consumers that the externally visible MCP tool list changed.
     mcp_tool_change_event_sender: broadcast::Sender<()>,
+    /// Registration generations prevent stale discovery tasks from restoring old state.
+    mcp_registration_generations: Mutex<McpRegistrationGenerations>,
 }
 
 impl ToolManager {
@@ -285,6 +291,7 @@ impl ToolManager {
             mcp_alias_registry: RwLock::new(McpAliasRegistry::default()),
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
+            mcp_registration_generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -301,8 +308,9 @@ impl ToolManager {
             .canonical_to_alias
             .clear();
         if clear_mcp {
-            self.mcp_servers.write().await.clear();
+            let _generations = self.mcp_registration_generations.lock().await;
             self.mcp_tools.write().await.clear();
+            self.mcp_servers.write().await.clear();
             self.notify_mcp_tools_changed();
         }
     }
@@ -490,29 +498,28 @@ impl ToolManager {
     }
 
     pub async fn register_available_mcp_tools(
-        self: Arc<Self>, // Changed to take Arc<Self>
+        self: Arc<Self>,
         main_store: Arc<MainStore>,
     ) -> Result<(), ToolError> {
-        // Collect MCP configurations first to release the lock on main_store
-        let mcp_configs_to_process: Vec<_> = {
-            main_store
-                .config
-                .get_mcps()
-                .into_iter()
-                .filter(|mcp_db_config| !mcp_db_config.disabled)
-                .map(|mcp_db_config| mcp_db_config.config.clone()) // Clone the config
-                .collect()
-        };
+        // Each server gets an independent startup task. A slow or failed server
+        // must not delay the others or the first window paint.
+        let mcp_configs_to_process: Vec<_> = main_store
+            .config
+            .get_mcps()
+            .into_iter()
+            .filter(|mcp_db_config| !mcp_db_config.disabled)
+            .map(|mcp_db_config| mcp_db_config.config.clone())
+            .collect();
 
         for mcp_server_config in mcp_configs_to_process {
             let tool_manager = self.clone();
             tokio::spawn(async move {
                 let server_name = mcp_server_config.name.clone();
-                if let Err(e) = tool_manager.register_mcp_server(mcp_server_config).await {
+                if let Err(error) = tool_manager.register_mcp_server(mcp_server_config).await {
                     log::error!(
                         "Failed to register MCP server '{}' during startup: {}",
                         server_name,
-                        e
+                        error
                     );
                 }
             });
@@ -896,6 +903,15 @@ impl ToolManager {
         // Clone for logging in case of early error
         let server_name_for_log = mcp_server_config.name.clone();
 
+        // Invalidate any older attempt for the same server before starting this one.
+        // A detached tool-list task from that attempt may still complete later.
+        let registration_generation = {
+            let mut generations = self.mcp_registration_generations.lock().await;
+            let generation = generations.entry(server_name_for_log.clone()).or_insert(0);
+            *generation = generation.saturating_add(1);
+            *generation
+        };
+
         // Immediately broadcast "Starting" status to provide user feedback
         if let Err(e) = self
             .mcp_status_event_sender
@@ -971,112 +987,110 @@ impl ToolManager {
         // report a server that was up and still listing. The read projection reports a
         // server the runtime does not know as a proven stop, so a healthy cold start
         // showed as "enabled but not running" with zero tools for the whole listing.
-        self.publish_connected_mcp_client(client_arc.clone()).await;
+        if let Err(error) = self
+            .publish_connected_mcp_client(client_arc.clone(), registration_generation)
+            .await
+        {
+            let _ = client_arc.stop().await;
+            return Err(error);
+        }
 
-        // 4. Spawn a task to wait for status, list tools, and fill the tool cache.
-        // This allows the main registration flow to return quickly, while the tool discovery
-        // happens in the background.
-        let tool_manager_arc = self.clone(); // Clone the Arc<Self> for the spawned task
-        let client_arc_for_task = client_arc.clone(); // Clone the client Arc for the spawned task
-        let server_name_for_task = name.clone(); // Clone name for logging in task
-        let config_for_task = client_arc.config().await.clone(); // Clone config for disabled_tools check in task
+        // 4. Each MCP finishes independently: list its tools and register the
+        // completed snapshot as soon as this server is ready. The generation guard
+        // prevents a late result from a stopped/restarted server from being applied.
+        let tool_manager_arc = self.clone();
+        let client_arc_for_task = client_arc.clone();
+        let server_name_for_task = name.clone();
+        let config_for_task = client_arc.config().await.clone();
 
         tokio::spawn(async move {
-            // Check status again within the task. Could add retries/timeout here if needed.
             let status = client_arc_for_task.status().await;
-            if status == McpStatus::Connected || status == McpStatus::Running {
-                let tools_result = client_arc_for_task.list_tools().await;
-                match tools_result {
-                    Ok(tools) => {
-                        // #[cfg(debug_assertions)]
-                        // {
-                        //     log::debug!("MCP server {} tools: {:?}", server_name_for_task, tools);
-                        // }
-
-                        // Get the set of disabled tool names from the config
-                        let disabled_tool_names: HashSet<String> =
-                            config_for_task.disabled_tools.unwrap_or_default();
-
-                        // Add a 'disabled' flag to each tool based on the config
-                        let tools_with_disabled_flag: Vec<MCPToolDeclaration> = tools
-                            .into_iter()
-                            .map(|mut tool_decl| {
-                                tool_decl.disabled = disabled_tool_names.contains(&tool_decl.name);
-                                tool_decl
-                            })
-                            .collect();
-
-                        // 5. Fill the tool cache for the already published server
-                        // We register the tools (with disabled flags) regardless of
-                        // whether all tools are disabled, so the frontend can see them.
-                        if let Err(e) = tool_manager_arc
-                            .register_mcp_server_inner(
-                                client_arc_for_task.clone(),
-                                Some(tools_with_disabled_flag), // Pass the list with disabled flags
-                            )
-                            .await
-                        {
-                            log::error!(
-                                "Failed to register MCP server {} tools internally: {}",
-                                server_name_for_task,
-                                e
-                            );
-                        } else {
-                            log::info!("MCP server {} tools (with disabled flags) registered successfully.",server_name_for_task );
-                        }
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to list tools for MCP server {}: {}",
-                            server_name_for_task,
-                            e
-                        );
-                        // If listing tools failed, we still register the server itself (without tools)
-                        // so the frontend knows the server exists but couldn't fetch tools.
-                        if let Err(e_inner) = tool_manager_arc
-                            .register_mcp_server_inner(client_arc_for_task.clone(), None)
-                            .await
-                        {
-                            log::error!(
-                                "Failed to register MCP server {} (without tools due to list_tools error) internally: {}",
-                                server_name_for_task,
-                                e_inner
-                            );
-                        }
-                    }
-                }
-            } else {
-                // The client stays published, so the runtime keeps reporting its own
-                // status; only the tool listing is skipped.
+            if status != McpStatus::Connected && status != McpStatus::Running {
                 log::warn!(
                     "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing.",
                     server_name_for_task,
                     status
                 );
+                return;
             }
-        }); // Task spawned
 
-        // 6. Return immediately, the rest happens in the spawned task
+            let tools_result = client_arc_for_task.list_tools().await;
+            let declarations = match tools_result {
+                Ok(tools) => {
+                    let disabled_tool_names = config_for_task.disabled_tools.unwrap_or_default();
+                    Some(
+                        tools
+                            .into_iter()
+                            .map(|mut tool_decl| {
+                                tool_decl.disabled = disabled_tool_names.contains(&tool_decl.name);
+                                tool_decl
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                Err(error) => {
+                    log::error!(
+                        "Failed to list tools for MCP server {}: {}",
+                        server_name_for_task,
+                        error
+                    );
+                    None
+                }
+            };
+
+            if let Err(error) = tool_manager_arc
+                .register_mcp_server_inner(
+                    client_arc_for_task,
+                    registration_generation,
+                    declarations,
+                )
+                .await
+            {
+                log::debug!(
+                    "Discarded MCP server {} discovery result for generation {}: {}",
+                    server_name_for_task,
+                    registration_generation,
+                    error
+                );
+            } else {
+                log::info!(
+                    "MCP server {} tools registered for generation {}",
+                    server_name_for_task,
+                    registration_generation
+                );
+            }
+        });
+
+        // 5. Return after this server is connected and its independent discovery task is queued.
         Ok(())
     }
 
     /// Makes a started client visible to the runtime before its tool list is read.
     ///
-    /// `register_mcp_server_inner` publishes a server together with its tools, which
-    /// is too late for the read projection: a server the runtime does not list is
-    /// reported as a proven stop, so the seconds a cold child needs to list its tools
-    /// were reported as an "enabled but not running" server with zero tools. Publishing
-    /// the connected client keeps its real status observable throughout.
-    async fn publish_connected_mcp_client(&self, client: Arc<dyn McpClient>) {
+    /// The client is published before listing so status observers can distinguish a
+    /// connected/loading server from a server that is absent.
+    async fn publish_connected_mcp_client(
+        &self,
+        client: Arc<dyn McpClient>,
+        generation: u64,
+    ) -> Result<(), ToolError> {
         let name = client.name().await;
+        let generations = self.mcp_registration_generations.lock().await;
+        if generations.get(&name).copied() != Some(generation) {
+            return Err(ToolError::StateChangeFailed(format!(
+                "Stale MCP registration for server '{}'",
+                name
+            )));
+        }
         let mut servers_guard = self.mcp_servers.write().await;
         servers_guard.insert(name, client);
+        drop(servers_guard);
+        drop(generations);
+        Ok(())
     }
 
-    /// Registers a new MCP server and its tools with the manager's internal state.
-    /// The server itself is already published by `publish_connected_mcp_client`; this
-    /// method fills in the tool list fetched from it, and it is called from within the
-    /// spawned task in `register_mcp_server`.
+    /// The server itself is published by `publish_connected_mcp_client`; this method
+    /// commits the completed tool snapshot for the matching generation.
     ///
     /// # Arguments
     /// * `client` - The Arc to the started McpClient instance.
@@ -1085,32 +1099,44 @@ impl ToolManager {
     /// # Returns
     /// * `Result<(), ToolError>` - The result of the registration.
     async fn register_mcp_server_inner(
-        &self, // This function's signature remains &self as it's called by the Arc<Self> holding task
+        &self,
         client: Arc<dyn McpClient>,
+        generation: u64,
         tools_declarations: Option<Vec<MCPToolDeclaration>>,
     ) -> Result<(), ToolError> {
         let name = client.name().await;
-        #[cfg(debug_assertions)]
-        {
-            log::debug!("register_mcp_server_inner: client.name() = {}", &name);
+        // Keep the generation lock first, matching unregister/clear. This makes
+        // invalidation and snapshot commit atomic with respect to each other.
+        let generations = self.mcp_registration_generations.lock().await;
+        if generations.get(&name).copied() != Some(generation) {
+            return Err(ToolError::StateChangeFailed(format!(
+                "Stale MCP registration for server '{}'",
+                name
+            )));
         }
 
-        // Update server/declaration state, then rebuild all MCP wrappers and aliases as one set.
+        let mut mcp_tools_guard = self.mcp_tools.write().await;
+        let servers_guard = self.mcp_servers.write().await;
+        if !servers_guard
+            .get(&name)
+            .is_some_and(|registered| Arc::ptr_eq(registered, &client))
         {
-            let mut mcp_tools_guard = self.mcp_tools.write().await;
-            let mut servers_guard = self.mcp_servers.write().await;
-            servers_guard.insert(name.clone(), client);
-            if let Some(declarations) = tools_declarations {
-                mcp_tools_guard.insert(name.clone(), declarations);
-            }
+            return Err(ToolError::StateChangeFailed(format!(
+                "MCP registration changed for server '{}'",
+                name
+            )));
         }
+        if let Some(declarations) = tools_declarations {
+            mcp_tools_guard.insert(name.clone(), declarations);
+        } else {
+            mcp_tools_guard.insert(name.clone(), Vec::new());
+        }
+        drop(servers_guard);
+        drop(mcp_tools_guard);
+        drop(generations);
+
         self.rebuild_mcp_wrappers().await;
         self.notify_mcp_tools_changed();
-
-        #[cfg(debug_assertions)]
-        {
-            log::debug!("MCP server {} inner registration process completed.", name);
-        }
         Ok(())
     }
 
@@ -1123,6 +1149,10 @@ impl ToolManager {
     /// # Returns
     /// * `Result<(), ToolError>` - The result of the unregistration.
     pub async fn unregister_mcp_server(&self, name: &str) -> Result<(), ToolError> {
+        let mut generations = self.mcp_registration_generations.lock().await;
+        let generation = generations.entry(name.to_string()).or_insert(0);
+        *generation = generation.saturating_add(1);
+
         // Scope the locks to ensure they are released before awaiting .stop()
         {
             let mut mcp_tools = self.mcp_tools.write().await;
@@ -1132,6 +1162,7 @@ impl ToolManager {
             let mut servers_guard = self.mcp_servers.write().await;
             servers_guard.remove(name)
         };
+        drop(generations);
         self.rebuild_mcp_wrappers().await;
         self.notify_mcp_tools_changed();
 
@@ -1834,7 +1865,16 @@ mod tests {
         // answers with the client's own status while the cache is still empty. Staying
         // absent until the listing finished is what made a cold start read as a proven
         // "stopped" server ("enabled but not running") with zero tools.
-        manager.publish_connected_mcp_client(client.clone()).await;
+        let generation = {
+            let mut generations = manager.mcp_registration_generations.lock().await;
+            let generation = generations.entry("weather".to_string()).or_insert(0);
+            *generation = generation.saturating_add(1);
+            *generation
+        };
+        manager
+            .publish_connected_mcp_client(client.clone(), generation)
+            .await
+            .expect("test client publication");
 
         let statuses = manager.get_mcp_serves_status().await.expect("status read");
         let published = statuses
@@ -1845,6 +1885,81 @@ mod tests {
             manager.get_mcp_server_tools("weather").await.is_err(),
             "the tool cache is filled by the listing, not by the publish"
         );
+    }
+
+    #[tokio::test]
+    async fn stale_mcp_discovery_cannot_overwrite_a_same_name_restart() {
+        let manager = Arc::new(ToolManager::new());
+        let old_client: Arc<dyn McpClient> = Arc::new(
+            StdioClient::new(McpServerConfig {
+                name: "weather".into(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("ls".into()),
+                args: Some(vec!["-la".into()]),
+                ..Default::default()
+            })
+            .expect("old test MCP client"),
+        );
+        let new_client: Arc<dyn McpClient> = Arc::new(
+            StdioClient::new(McpServerConfig {
+                name: "weather".into(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("ls".into()),
+                args: Some(vec!["-la".into()]),
+                ..Default::default()
+            })
+            .expect("new test MCP client"),
+        );
+
+        let old_generation = {
+            let mut generations = manager.mcp_registration_generations.lock().await;
+            let generation = generations.entry("weather".to_string()).or_insert(0);
+            *generation = generation.saturating_add(1);
+            *generation
+        };
+        manager
+            .publish_connected_mcp_client(old_client.clone(), old_generation)
+            .await
+            .expect("publish old client");
+
+        manager
+            .unregister_mcp_server("weather")
+            .await
+            .expect("stop old client");
+
+        let new_generation = {
+            let mut generations = manager.mcp_registration_generations.lock().await;
+            let generation = generations.entry("weather".to_string()).or_insert(0);
+            *generation = generation.saturating_add(1);
+            *generation
+        };
+        manager
+            .publish_connected_mcp_client(new_client.clone(), new_generation)
+            .await
+            .expect("publish new client");
+
+        let stale = manager
+            .register_mcp_server_inner(
+                old_client,
+                old_generation,
+                Some(vec![MCPToolDeclaration {
+                    name: "old_tool".into(),
+                    description: "old".into(),
+                    input_schema: json!({}),
+                    output_schema: None,
+                    disabled: false,
+                    scope: Some(ToolScope::Both),
+                }]),
+            )
+            .await;
+        assert!(stale.is_err(), "old discovery must be rejected");
+        assert!(manager.get_mcp_server_tools("weather").await.is_err());
+
+        manager
+            .register_mcp_server_inner(new_client, new_generation, Some(Vec::new()))
+            .await
+            .expect("new discovery should register");
+        assert!(manager.get_mcp_server_tools("weather").await.is_ok());
     }
 
     #[tokio::test]
