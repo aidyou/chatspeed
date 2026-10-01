@@ -10,6 +10,7 @@ use crate::{
     constants::CFG_CHAT_COMPLETION_PROXY,
     db::{AiModel, MainStore, ProxyGroup},
 };
+use indexmap::IndexMap;
 use reqwest::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
@@ -249,6 +250,21 @@ fn get_model_pricing(ai_model: &AiModel, model_id: &str) -> Option<crate::db::Pr
 
 /// Common logic for model retrieval and rotation.
 pub struct ModelResolver;
+
+fn find_matching_backend_target(
+    group_config: &IndexMap<String, Vec<BackendModelTarget>>,
+    proxy_alias: &str,
+) -> Option<(String, Vec<BackendModelTarget>)> {
+    group_config
+        .get(proxy_alias)
+        .map(|value| (proxy_alias.to_string(), value.clone()))
+        .or_else(|| {
+            group_config
+                .iter()
+                .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
+                .map(|(key, value)| (key.clone(), value.clone()))
+        })
+}
 
 impl ModelResolver {
     /// Retrieves AI model details and API key using global rotation by proxy alias.
@@ -701,13 +717,7 @@ impl ModelResolver {
 
         proxy_config
             .get(group)
-            .and_then(|group_config| {
-                // Find the first key that matches the proxy_alias using wildmatch
-                group_config
-                    .iter()
-                    .find(|(key, _)| wildmatch::WildMatch::new(key).matches(proxy_alias))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-            })
+            .and_then(|group_config| find_matching_backend_target(group_config, proxy_alias))
             .ok_or_else(|| {
                 log::debug!(
                     "proxy configs: {}",
@@ -1183,8 +1193,11 @@ pub fn get_msg_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{api_key_suffix, resolve_catalog_adapter, should_forward_header, ModelResolver};
-    use crate::ccproxy::types::{ChatProtocol, ProxyModel};
+    use super::{
+        api_key_suffix, find_matching_backend_target, resolve_catalog_adapter,
+        should_forward_header, ModelResolver,
+    };
+    use crate::ccproxy::types::{BackendModelTarget, ChatProtocol, ProxyModel};
     use indexmap::IndexMap;
 
     fn proxy_model() -> ProxyModel {
@@ -1350,6 +1363,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn exact_alias_match_takes_priority_over_an_earlier_wildcard() {
+        let mut group_config = IndexMap::new();
+        group_config.insert(
+            "gpt-*-sol".to_string(),
+            vec![BackendModelTarget {
+                id: 1,
+                model: "wildcard".to_string(),
+            }],
+        );
+        group_config.insert(
+            "gpt-6.1-sol".to_string(),
+            vec![BackendModelTarget {
+                id: 2,
+                model: "exact".to_string(),
+            }],
+        );
+
+        let (matched_key, targets) =
+            find_matching_backend_target(&group_config, "gpt-6.1-sol").expect("alias matches");
+
+        assert_eq!(matched_key, "gpt-6.1-sol");
+        assert_eq!(targets[0].id, 2);
+        assert_eq!(targets[0].model, "exact");
+    }
+
+    #[test]
+    fn wildcard_aliases_keep_configuration_order_as_fallback() {
+        let mut group_config = IndexMap::new();
+        group_config.insert(
+            "gpt-*-sol".to_string(),
+            vec![BackendModelTarget {
+                id: 1,
+                model: "first".to_string(),
+            }],
+        );
+        group_config.insert(
+            "gpt-?.1-sol".to_string(),
+            vec![BackendModelTarget {
+                id: 2,
+                model: "second".to_string(),
+            }],
+        );
+
+        let (matched_key, targets) =
+            find_matching_backend_target(&group_config, "gpt-5.1-sol").expect("alias matches");
+
+        assert_eq!(matched_key, "gpt-*-sol");
+        assert_eq!(targets[0].id, 1);
+    }
     #[test]
     fn test_wildmatch_logic() {
         let mut group_config = IndexMap::new();
