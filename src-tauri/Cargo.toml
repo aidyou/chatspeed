@@ -34,8 +34,18 @@ doctest    = false
 name = "chatspeed"
 path = "src/main.rs"
 
+# Tauri scans `src/bin` even when Cargo's `autobins` is false. Keep the
+# legacy source name explicitly disabled so it is not bundled alongside cscli.
+[features]
+legacy-cli-binary = []
+
+[[bin]]
+name = "cs"
+path = "src/bin/cs.rs"
+required-features = ["legacy-cli-binary"]
+
 # `cscli` is maintained as the independent workspace package at `cli`.
-# Keeping it out of this desktop package prevents Tauri/runtime dependencies
+# Keeping its normal build in that package prevents Tauri/runtime dependencies
 # from becoming part of the CLI dependency graph.
 
 [build-dependencies]
