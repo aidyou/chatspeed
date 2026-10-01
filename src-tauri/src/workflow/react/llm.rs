@@ -61,8 +61,10 @@ pub struct LlmProcessor {
     pub root_task_run_id: String,
     // Cached prompt inputs that should remain stable for the workflow lifetime.
     cached_global_agents_path: Option<PathBuf>,
+    cached_agent_agents_path: Option<PathBuf>,
     cached_project_agents_path: Option<PathBuf>,
     cached_global_agents: Option<String>,
+    cached_agent_agents: Option<String>,
     cached_project_agents: Option<String>,
 }
 
@@ -505,9 +507,11 @@ impl LlmProcessor {
         root_session_id: String,
         root_task_run_id: String,
     ) -> Self {
-        let (cached_global_agents, cached_project_agents) =
-            AgentsMdScanner::scan(project_root.clone());
+        let (cached_global_agents, cached_agent_agents, cached_project_agents) =
+            AgentsMdScanner::scan(project_root.clone(), Some(agent_config.id.as_str()));
         let cached_global_agents_path = AgentsMdScanner::global_path().filter(|path| path.exists());
+        let cached_agent_agents_path =
+            AgentsMdScanner::agent_path(&agent_config.id).filter(|path| path.exists());
         let cached_project_agents_path = project_root
             .as_deref()
             .map(AgentsMdScanner::project_path)
@@ -528,8 +532,10 @@ impl LlmProcessor {
             root_session_id,
             root_task_run_id,
             cached_global_agents_path,
+            cached_agent_agents_path,
             cached_project_agents_path,
             cached_global_agents,
+            cached_agent_agents,
             cached_project_agents,
         }
     }
@@ -1318,6 +1324,23 @@ Avoid redundant or ceremonial delegation. Do not use a child agent when the same
             ));
         }
 
+        if let Some(content) = self.cached_agent_agents.as_deref() {
+            let source_path = self
+                .cached_agent_agents_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "~/.chatspeed/{agent_id}/AGENTS.md".to_string());
+            stable_system_parts.push(format!(
+                "<AGENT_INSTRUCTIONS>\n\\
+                <SOURCE_PATH>{}</SOURCE_PATH>\n{}\n\\
+                <SYSTEM_REMINDER>\n\\
+                This provides Agent-specific guidance for the current workflow. Apply it only within the scope of this Agent and do not let it override system, runtime, project, safety, or user instructions.\n\\
+                </SYSTEM_REMINDER>\n\\
+                </AGENT_INSTRUCTIONS>",
+                source_path, content
+            ));
+        }
+
         if let Some(content) = self.cached_project_agents.as_deref() {
             let source_path = self
                 .cached_project_agents_path
@@ -2100,8 +2123,10 @@ mod tests {
             root_session_id: "test-session".to_string(),
             root_task_run_id: "test-session:task:1".to_string(),
             cached_global_agents_path: None,
+            cached_agent_agents_path: None,
             cached_project_agents_path: None,
             cached_global_agents: None,
+            cached_agent_agents: None,
             cached_project_agents: None,
         }
     }
@@ -2440,8 +2465,10 @@ mod tests {
     fn inject_prompts_keeps_volatile_context_out_of_system_message() {
         let mut processor = test_llm_processor();
         processor.cached_global_agents_path = Some(PathBuf::from("/tmp/global/AGENTS.md"));
+        processor.cached_agent_agents_path = Some(PathBuf::from("/tmp/agent/AGENTS.md"));
         processor.cached_project_agents_path = Some(PathBuf::from("/tmp/project/AGENTS.md"));
         processor.cached_global_agents = Some("global agent".into());
+        processor.cached_agent_agents = Some("agent-specific guidance".into());
         processor.cached_project_agents = Some("project agent".into());
 
         let history = vec![json!({ "role": "user", "content": "Do work" })];
@@ -2455,6 +2482,8 @@ mod tests {
 
         assert!(env_idx < date_idx);
         assert!(system.contains("<SOURCE_PATH>/tmp/global/AGENTS.md</SOURCE_PATH>"));
+        assert!(system.contains("<SOURCE_PATH>/tmp/agent/AGENTS.md</SOURCE_PATH>"));
+        assert!(system.contains("agent-specific guidance"));
         assert!(system.contains("<SOURCE_PATH>/tmp/project/AGENTS.md</SOURCE_PATH>"));
         // The core prompt documents the `<PREVIOUS_CONTEXT_SNAPSHOT>` tag, so assert on
         // payload-only markers that would appear only if real snapshot/todo content were

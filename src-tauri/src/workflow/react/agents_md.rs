@@ -2,6 +2,7 @@
 //!
 //! Scans for AGENTS.md files in standard locations:
 //! - Global: ~/.chatspeed/AGENTS.md
+//! - Agent: ~/.chatspeed/{agent_id}/AGENTS.md
 //! - Project: {project_root}/AGENTS.md
 
 use regex::Regex;
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentsScope {
     Global,
+    Agent,
     Project,
 }
 
@@ -31,18 +33,45 @@ impl AgentsMdScanner {
         project_root.join("AGENTS.md")
     }
 
+    pub fn agent_path(agent_id: &str) -> Option<PathBuf> {
+        if agent_id.is_empty()
+            || !agent_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return None;
+        }
+
+        dirs::home_dir().map(|home| home.join(".chatspeed").join(agent_id).join("AGENTS.md"))
+    }
+
     /// Scans for AGENTS.md files.
     ///
     /// # Arguments
     /// * `project_root` - Optional project root directory. If None, only scans global.
     ///
     /// # Returns
-    /// A tuple of `(global_content, project_content)`.
+    /// A tuple of `(global_content, agent_content, project_content)`.
     /// Each element is `Some(content)` if file exists, `None` otherwise.
-    pub fn scan(project_root: Option<PathBuf>) -> (Option<String>, Option<String>) {
+    pub fn scan(
+        project_root: Option<PathBuf>,
+        agent_id: Option<&str>,
+    ) -> (Option<String>, Option<String>, Option<String>) {
         let global = Self::read_global();
+        let agent = agent_id.and_then(Self::read_agent);
         let project = project_root.and_then(|p| Self::read_project(p));
-        (global, project)
+        (global, agent, project)
+    }
+
+    /// Reads agent-specific AGENTS.md from ~/.chatspeed/{agent_id}/AGENTS.md
+    fn read_agent(agent_id: &str) -> Option<String> {
+        Self::agent_path(agent_id)
+            .filter(|p| p.exists())
+            .and_then(|p| {
+                let content = std::fs::read_to_string(&p).ok()?;
+                let parent = p.parent()?;
+                Some(Self::process_mentions(&content, parent))
+            })
     }
 
     /// Reads global AGENTS.md from ~/.chatspeed/AGENTS.md
@@ -121,7 +150,10 @@ impl AgentsMdScanner {
 
     /// Returns all search paths for test verification.
     #[cfg(test)]
-    pub fn get_search_paths(project_root: Option<PathBuf>) -> Vec<(PathBuf, AgentsScope)> {
+    pub fn get_search_paths(
+        project_root: Option<PathBuf>,
+        agent_id: Option<&str>,
+    ) -> Vec<(PathBuf, AgentsScope)> {
         let mut paths = Vec::new();
 
         // Global path
@@ -130,6 +162,11 @@ impl AgentsMdScanner {
                 home.join(".chatspeed").join("AGENTS.md"),
                 AgentsScope::Global,
             ));
+            if let Some(agent_id) = agent_id {
+                if let Some(path) = Self::agent_path(agent_id) {
+                    paths.push((path, AgentsScope::Agent));
+                }
+            }
         }
 
         // Project path
@@ -147,19 +184,24 @@ mod tests {
 
     #[test]
     fn test_scan_without_project() {
-        let (_global, project) = AgentsMdScanner::scan(None);
-        // Global should be checked (may or may not exist)
-        // Project should be None since no root provided
+        let (_global, _agent, project) = AgentsMdScanner::scan(None, Some("coding"));
+        // Global and agent files are checked; project should be None since no root was provided.
         assert!(project.is_none());
     }
 
     #[test]
     fn test_scan_with_temp_project() {
         let temp_dir = std::env::temp_dir();
-        let (global, project) = AgentsMdScanner::scan(Some(temp_dir));
-        // Both are checked, results depend on whether files exist
-        // No error should occur
-        let _ = (global, project);
+        let (global, agent, project) = AgentsMdScanner::scan(Some(temp_dir), Some("coding"));
+        // All configured locations are checked; results depend on whether files exist.
+        let _ = (global, agent, project);
+    }
+
+    #[test]
+    fn agent_path_rejects_path_traversal() {
+        assert!(AgentsMdScanner::agent_path("../coding").is_none());
+        assert!(AgentsMdScanner::agent_path("coding/extra").is_none());
+        assert!(AgentsMdScanner::agent_path("coding").is_some());
     }
 
     #[test]
@@ -186,9 +228,9 @@ mod tests {
 
     #[test]
     fn test_get_search_paths() {
-        let paths = AgentsMdScanner::get_search_paths(None);
-        // Should at least have global path
-        assert!(!paths.is_empty());
+        let paths = AgentsMdScanner::get_search_paths(None, Some("coding"));
+        // Should include global and agent paths.
         assert!(paths.iter().any(|(_p, s)| *s == AgentsScope::Global));
+        assert!(paths.iter().any(|(_p, s)| *s == AgentsScope::Agent));
     }
 }
