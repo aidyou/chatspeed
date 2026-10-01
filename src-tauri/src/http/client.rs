@@ -22,7 +22,7 @@
 //!
 //! // File download
 //! let config = HttpConfig::get("https://httpbin.org/image/jpeg")
-//!                 .download_to("test_download.jpg");
+//!                 .download_to("/tmp/test_download.jpg");
 //! let response = client.send_request(config)?;
 //! ```
 
