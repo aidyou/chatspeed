@@ -97,6 +97,11 @@ impl StdioClient {
             core: McpClientCore::new(config),
         })
     }
+
+    #[cfg(test)]
+    pub(crate) async fn set_test_status(&self, status: McpStatus) {
+        self.core.set_status(status).await;
+    }
 }
 
 #[async_trait::async_trait]

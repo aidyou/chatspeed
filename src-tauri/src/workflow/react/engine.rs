@@ -879,7 +879,9 @@ impl WorkflowExecutor {
                     "Invalid canonical MCP tool name".to_string(),
                 )
             })?;
-        let server = mcp_tool_manager.get_mcp_server(server_name).await?;
+        // Session-local managers may hold copied MCP wrappers for model visibility, but the live
+        // server registry remains owned by the global manager.
+        let server = self.global_tool_manager.get_mcp_server(server_name).await?;
         match server.status().await {
             crate::mcp::client::McpStatus::Connected | crate::mcp::client::McpStatus::Running => {}
             status => {
@@ -9675,6 +9677,28 @@ mod recovery_tests {
         assert!(!active_names.contains("browser_hover"));
         assert!(active_names.contains(TOOL_MCP_TOOL_EXECUTE));
         assert!(active_names.contains(TOOL_MCP_TOOL_EXPAND));
+
+        let resolved_direct = executor
+            .resolve_mcp_tool_call("browser_click", &json!({ "element": "button" }))
+            .await
+            .expect("direct MCP calls must resolve through the global server registry")
+            .expect("the exposed MCP alias must resolve");
+        assert_eq!(resolved_direct.canonical_name, canonical_tool);
+        assert_eq!(resolved_direct.arguments, json!({ "element": "button" }));
+
+        let resolved_folded = executor
+            .resolve_mcp_tool_call(
+                TOOL_MCP_TOOL_EXECUTE,
+                &json!({
+                    "tool_name": "browser_hover",
+                    "arguments": { "element": "button" }
+                }),
+            )
+            .await
+            .expect("folded MCP calls must resolve through the global server registry")
+            .expect("the folded MCP target must resolve");
+        assert_eq!(resolved_folded.canonical_name, folded_tool);
+        assert_eq!(resolved_folded.arguments, json!({ "element": "button" }));
 
         executor
             .prepare_completed_resume_internal()

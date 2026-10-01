@@ -586,30 +586,36 @@ impl ToolManager {
         input_schema: Value,
     ) -> Result<String, ToolError> {
         let canonical_name = format!("{}{}{}", server_name, MCP_TOOL_NAME_SPLIT, public_name);
-        self.register_mcp_tool_wrapper(Arc::new(McpToolWrapper {
-            server_name: server_name.to_string(),
-            tool_decl: MCPToolDeclaration {
+        let client = StdioClient::new(McpServerConfig {
+            name: server_name.to_string(),
+            protocol_type: McpProtocolType::Stdio,
+            command: Some("ls".to_string()),
+            args: Some(vec!["-la".to_string()]),
+            ..Default::default()
+        })
+        .map_err(|error| ToolError::Initialization(error.to_string()))?;
+        client.set_test_status(McpStatus::Connected).await;
+        let client: Arc<dyn McpClient> = Arc::new(client);
+
+        self.mcp_servers
+            .write()
+            .await
+            .insert(server_name.to_string(), client);
+        self.mcp_tools
+            .write()
+            .await
+            .entry(server_name.to_string())
+            .or_default()
+            .push(MCPToolDeclaration {
                 name: public_name.to_string(),
                 description: format!("Test MCP tool {}", public_name),
                 input_schema,
                 output_schema: None,
                 disabled: false,
                 scope: Some(ToolScope::Both),
-            },
-            client: Arc::new(
-                StdioClient::new(McpServerConfig {
-                    name: server_name.to_string(),
-                    protocol_type: McpProtocolType::Stdio,
-                    command: Some("ls".to_string()),
-                    args: Some(vec!["-la".to_string()]),
-                    ..Default::default()
-                })
-                .map_err(|error| ToolError::Initialization(error.to_string()))?,
-            ),
-            canonical_name: canonical_name.clone(),
-            public_name: public_name.to_string(),
-        }))
-        .await?;
+            });
+        self.rebuild_mcp_wrappers().await;
+        self.notify_mcp_tools_changed();
         Ok(canonical_name)
     }
 
