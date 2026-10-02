@@ -213,6 +213,7 @@ pub struct AutomationView {
     pub prompt: Option<String>,
     pub prompt_file_path: Option<String>,
     pub agent_id: String,
+    pub agent_config: Option<Value>,
     pub allowed_paths: Vec<String>,
     pub shell_config: Option<Value>,
     pub schedule_kind: String,

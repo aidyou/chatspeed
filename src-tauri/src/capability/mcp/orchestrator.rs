@@ -28,16 +28,14 @@ use crate::capability::error::{code, CapabilityError};
 use crate::capability::mcp::descriptor::parse_descriptor;
 use crate::capability::mcp::repository::NewMcpRecord;
 use crate::capability::mcp::runtime::ObservedMcpRuntime;
-use crate::capability::mcp_service::{
-    project_mcp_server, redact_record_secrets, McpServerView,
-};
+use crate::capability::mcp_service::{project_mcp_server, redact_record_secrets, McpServerView};
 use crate::capability::operation;
 use crate::capability::types::{
     CapabilityKind, EffectOutcome, OperationBegin, OperationRequest, OperationState,
 };
-use crate::mcp::client::McpServerConfig;
 use crate::capability::CapabilityApplicationService;
 use crate::db::Mcp;
+use crate::mcp::client::McpServerConfig;
 
 /// Effect key: the runtime was asked to start a server.
 const EFFECT_START: &str = "mcp.start";
@@ -55,7 +53,6 @@ const EFFECT_UPDATE: &str = "mcp.update";
 const EFFECT_TOOL_PERSIST: &str = "mcp.tool.persist";
 /// Effect key: the live client's tool set changed.
 const EFFECT_TOOL_RUNTIME: &str = "mcp.tool.runtime";
-
 
 /// How long the service waits for a runtime effect and its confirmation.
 ///
@@ -195,9 +192,7 @@ impl CapabilityApplicationService {
                 &resource_key,
                 // Only the redacted shape is journaled: a bearer token or env
                 // value never enters the journal (AC-13).
-                redacted_descriptor(
-                    &serde_json::to_value(&config).unwrap_or(Value::Null),
-                ),
+                redacted_descriptor(&serde_json::to_value(&config).unwrap_or(Value::Null)),
                 key,
                 actor_scope,
             )
@@ -218,7 +213,12 @@ impl CapabilityApplicationService {
                 "disabled": existing.disabled,
                 "server": project_one(&existing, None),
             });
-            self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+            self.finish_operation(
+                &operation_id,
+                OperationState::Completed,
+                Some(&result),
+                None,
+            )?;
             return Ok(McpMutationResult {
                 operation_id,
                 replayed: false,
@@ -239,7 +239,12 @@ impl CapabilityApplicationService {
         match registered {
             Ok(record) => {
                 let observation = json!({ "id": record.id, "disabled": record.disabled });
-                self.record_effect_outcome(&operation_id, EFFECT_REGISTER, crate::capability::types::EffectOutcome::Applied, Some(&observation))?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_REGISTER,
+                    crate::capability::types::EffectOutcome::Applied,
+                    Some(&observation),
+                )?;
                 let result = json!({
                     "status": "registered",
                     "id": record.id,
@@ -247,7 +252,12 @@ impl CapabilityApplicationService {
                     "disabled": record.disabled,
                     "server": project_one(&record, None),
                 });
-                self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::Completed,
+                    Some(&result),
+                    None,
+                )?;
                 Ok(McpMutationResult {
                     operation_id,
                     replayed: false,
@@ -255,7 +265,12 @@ impl CapabilityApplicationService {
                 })
             }
             Err(error) => {
-                self.record_effect_outcome(&operation_id, EFFECT_REGISTER, crate::capability::types::EffectOutcome::Failed, None)?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_REGISTER,
+                    crate::capability::types::EffectOutcome::Failed,
+                    None,
+                )?;
                 self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
                 Err(error)
             }
@@ -331,8 +346,11 @@ impl CapabilityApplicationService {
 
         self.record_effect_intent(&operation_id, EFFECT_START, Some(&name), None)?;
         let timing = self.mcp_timing();
-        let started = with_timeout(timing.effect_timeout, self.mcp_effects().start(desired.config.clone()))
-            .await;
+        let started = with_timeout(
+            timing.effect_timeout,
+            self.mcp_effects().start(desired.config.clone()),
+        )
+        .await;
 
         match started {
             Err(_) => {
@@ -379,9 +397,14 @@ impl CapabilityApplicationService {
                 } else {
                     crate::capability::types::EffectOutcome::Unknown
                 };
-                self.record_effect_outcome(&operation_id, EFFECT_START, outcome, Some(&json!({
-                    "observed_state": observed.as_ref().map(|runtime| runtime.state.clone()),
-                })))?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_START,
+                    outcome,
+                    Some(&json!({
+                        "observed_state": observed.as_ref().map(|runtime| runtime.state.clone()),
+                    })),
+                )?;
 
                 if !running {
                     self.require_reconcile(&operation_id, "start_not_observable")?;
@@ -398,7 +421,12 @@ impl CapabilityApplicationService {
                     "desired_enabled": true,
                     "server": project_one(&desired, observed.as_ref()),
                 });
-                self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::Completed,
+                    Some(&result),
+                    None,
+                )?;
                 Ok(McpMutationResult {
                     operation_id,
                     replayed: false,
@@ -456,7 +484,12 @@ impl CapabilityApplicationService {
         });
 
         if confirmed {
-            self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+            self.finish_operation(
+                &operation_id,
+                OperationState::Completed,
+                Some(&result),
+                None,
+            )?;
             Ok(McpMutationResult {
                 operation_id,
                 replayed: false,
@@ -586,7 +619,12 @@ impl CapabilityApplicationService {
             "record_present": false,
             "runtime_present": false,
         });
-        self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+        self.finish_operation(
+            &operation_id,
+            OperationState::Completed,
+            Some(&result),
+            None,
+        )?;
         Ok(McpMutationResult {
             operation_id,
             replayed: false,
@@ -634,7 +672,11 @@ impl CapabilityApplicationService {
         self.set_state(&operation_id, OperationState::Applying, Some("refresh"))?;
         self.record_effect_intent(&operation_id, EFFECT_REFRESH_TOOLS, Some(&name), None)?;
         let timing = self.mcp_timing();
-        let refreshed = with_timeout(timing.effect_timeout, self.mcp_effects().refresh_tools(&name)).await;
+        let refreshed = with_timeout(
+            timing.effect_timeout,
+            self.mcp_effects().refresh_tools(&name),
+        )
+        .await;
 
         // Every non-completed refresh still journals the last-known snapshot, so
         // what was cached stays inspectable, but the *caller* gets the same
@@ -768,7 +810,11 @@ impl CapabilityApplicationService {
     /// One persisted record by id with secret values removed, for the command
     /// returns that hand the edited `Mcp` back to the page.
     pub async fn mcp_record_redacted(&self, id: i64) -> Result<Option<Mcp>, CapabilityError> {
-        Ok(self.mcp_repository().get(id)?.as_ref().map(redact_record_secrets))
+        Ok(self
+            .mcp_repository()
+            .get(id)?
+            .as_ref()
+            .map(redact_record_secrets))
     }
 
     /// One bounded runtime observation for one name, tri-stated for reconcile:
@@ -839,12 +885,19 @@ impl CapabilityApplicationService {
         self.set_state(&operation_id, OperationState::Applying, Some("start"))?;
         self.record_effect_intent(&operation_id, EFFECT_START, Some(&name), None)?;
         let timing = self.mcp_timing();
-        let started =
-            with_timeout(timing.effect_timeout, self.mcp_effects().start(record.config.clone()))
-                .await;
+        let started = with_timeout(
+            timing.effect_timeout,
+            self.mcp_effects().start(record.config.clone()),
+        )
+        .await;
         match started {
             Err(_) => {
-                self.record_effect_outcome(&operation_id, EFFECT_START, EffectOutcome::Unknown, None)?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_START,
+                    EffectOutcome::Unknown,
+                    None,
+                )?;
                 self.require_reconcile(&operation_id, "restart_start_timed_out")?;
                 Err(CapabilityError::new(
                     code::NEEDS_RECONCILE,
@@ -852,7 +905,12 @@ impl CapabilityApplicationService {
                 ))
             }
             Ok(Err(error)) => {
-                self.record_effect_outcome(&operation_id, EFFECT_START, EffectOutcome::Failed, None)?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_START,
+                    EffectOutcome::Failed,
+                    None,
+                )?;
                 self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
                 Err(error)
             }
@@ -883,7 +941,12 @@ impl CapabilityApplicationService {
                     "name": name,
                     "server": project_one(&record, observed.as_ref()),
                 });
-                self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+                self.finish_operation(
+                    &operation_id,
+                    OperationState::Completed,
+                    Some(&result),
+                    None,
+                )?;
                 Ok(McpMutationResult {
                     operation_id,
                     replayed: false,
@@ -928,16 +991,16 @@ impl CapabilityApplicationService {
             .open_operation(
                 "mcp.update",
                 &resource_key,
-            // Only the redacted shape is journaled: a rewritten bearer token or
-            // env value must never be stored (AC-13).
-            json!({
-                "id": id,
-                "name": name,
-                "disabled": disabled,
-                "config": redacted_descriptor(
-                    &serde_json::to_value(&config).unwrap_or(Value::Null)
-                ),
-            }),
+                // Only the redacted shape is journaled: a rewritten bearer token or
+                // env value must never be stored (AC-13).
+                json!({
+                    "id": id,
+                    "name": name,
+                    "disabled": disabled,
+                    "config": redacted_descriptor(
+                        &serde_json::to_value(&config).unwrap_or(Value::Null)
+                    ),
+                }),
                 key,
                 actor_scope,
             )
@@ -956,12 +1019,22 @@ impl CapabilityApplicationService {
             Ok(Some(updated)) => updated,
             Ok(None) => {
                 let error = CapabilityError::new(code::NOT_FOUND, "the MCP record vanished");
-                self.record_effect_outcome(&operation_id, EFFECT_UPDATE, EffectOutcome::Failed, None)?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_UPDATE,
+                    EffectOutcome::Failed,
+                    None,
+                )?;
                 self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
                 return Err(error);
             }
             Err(error) => {
-                self.record_effect_outcome(&operation_id, EFFECT_UPDATE, EffectOutcome::Failed, None)?;
+                self.record_effect_outcome(
+                    &operation_id,
+                    EFFECT_UPDATE,
+                    EffectOutcome::Failed,
+                    None,
+                )?;
                 self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
                 return Err(error);
             }
@@ -1077,7 +1150,12 @@ impl CapabilityApplicationService {
             "disabled": updated.disabled,
             "server": project_one(&updated, observed.as_ref()),
         });
-        self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+        self.finish_operation(
+            &operation_id,
+            OperationState::Completed,
+            Some(&result),
+            None,
+        )?;
         Ok(McpMutationResult {
             operation_id,
             replayed: false,
@@ -1136,7 +1214,12 @@ impl CapabilityApplicationService {
             self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
             return Err(error);
         };
-        self.record_effect_outcome(&operation_id, EFFECT_TOOL_PERSIST, EffectOutcome::Applied, None)?;
+        self.record_effect_outcome(
+            &operation_id,
+            EFFECT_TOOL_PERSIST,
+            EffectOutcome::Applied,
+            None,
+        )?;
 
         // A running client keeps its own copy of the set, so an enabled server
         // needs both the record and the live client to change (AC-12).
@@ -1144,14 +1227,26 @@ impl CapabilityApplicationService {
         let runtime_effect = if record.disabled {
             Ok(())
         } else {
-            self.mcp_effects().set_tool_disabled(&name, tool, disabled).await
+            self.mcp_effects()
+                .set_tool_disabled(&name, tool, disabled)
+                .await
         };
         if let Err(error) = runtime_effect {
-            self.record_effect_outcome(&operation_id, EFFECT_TOOL_RUNTIME, EffectOutcome::Failed, None)?;
+            self.record_effect_outcome(
+                &operation_id,
+                EFFECT_TOOL_RUNTIME,
+                EffectOutcome::Failed,
+                None,
+            )?;
             self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
             return Err(error);
         }
-        self.record_effect_outcome(&operation_id, EFFECT_TOOL_RUNTIME, EffectOutcome::Applied, None)?;
+        self.record_effect_outcome(
+            &operation_id,
+            EFFECT_TOOL_RUNTIME,
+            EffectOutcome::Applied,
+            None,
+        )?;
 
         let result = json!({
             "status": "tool_state_applied",
@@ -1161,7 +1256,12 @@ impl CapabilityApplicationService {
             "disabled": disabled,
             "server": project_one(&updated, None),
         });
-        self.finish_operation(&operation_id, OperationState::Completed, Some(&result), None)?;
+        self.finish_operation(
+            &operation_id,
+            OperationState::Completed,
+            Some(&result),
+            None,
+        )?;
         Ok(McpMutationResult {
             operation_id,
             replayed: false,
@@ -1185,13 +1285,13 @@ impl CapabilityApplicationService {
         actor_scope: &str,
     ) -> Result<OpenedOperation, CapabilityError> {
         let begin = self.repository().begin(&OperationRequest {
-                capability: CapabilityKind::Mcp,
-                operation_kind: operation_kind.to_string(),
-                actor_scope: actor_scope.to_string(),
-                idempotency_key,
-                request,
-                resource_key: resource_key.to_string(),
-            })?;
+            capability: CapabilityKind::Mcp,
+            operation_kind: operation_kind.to_string(),
+            actor_scope: actor_scope.to_string(),
+            idempotency_key,
+            request,
+            resource_key: resource_key.to_string(),
+        })?;
         Ok(match begin {
             OperationBegin::Started(operation) => OpenedOperation::Fresh(operation.operation_id),
             OperationBegin::Replay(operation) => {
@@ -1199,7 +1299,6 @@ impl CapabilityApplicationService {
             }
         })
     }
-
 
     /// Takes the locks for all MCP names in a stable order.
     ///
@@ -1210,7 +1309,11 @@ impl CapabilityApplicationService {
         &self,
         names: &[&str],
     ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
-        let mut names: Vec<&str> = names.iter().copied().filter(|name| !name.is_empty()).collect();
+        let mut names: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|name| !name.is_empty())
+            .collect();
         names.sort_unstable();
         names.dedup();
 
@@ -1404,8 +1507,7 @@ impl CapabilityApplicationService {
     async fn tools_snapshot(&self, name: &str) -> McpToolsSnapshot {
         let timing = self.mcp_timing();
         let observed_at_ms = operation::now_ms();
-        let listed =
-            with_timeout(timing.status_timeout, self.mcp_effects().list_tools(name)).await;
+        let listed = with_timeout(timing.status_timeout, self.mcp_effects().list_tools(name)).await;
 
         let last_refreshed_at_ms = self
             .repository()

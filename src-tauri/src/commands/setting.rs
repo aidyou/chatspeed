@@ -1,41 +1,20 @@
+//! Settings, AI model/skill and backup Tauri commands.
 //!
-//! This module contains Tauri commands for managing settings, AI models and skills
-//! within the configuration store. It provides functionalities to get, set,
-//! update, and delete AI models and skills, as well as to synchronize the
-//! application state. The commands are designed to be invoked from the
-//! frontend, allowing seamless interaction with the AI capabilities of the
-//! application.
-//!
-//! ## Overview
-//!
-//! - **AI Models**: Functions to manage AI models, including adding, updating,
-//!   deleting, and retrieving models.
-//! - **AI Skills**: Functions to manage AI skills, including adding, updating,
-//!   deleting, and retrieving skills.
-//! - **Synchronization**: A command to sync the application state with the
-//!   frontend.
-//!
-//! ## Usage
-//!
-//! The commands can be invoked from the frontend using Tauri's `invoke`
-//! function. Each command is annotated with detailed documentation, including
-//! parameters, return types, and examples of usage.
-//!
-//! ## Example
-//!
-//! ```js
-//! // Call from frontend to get all AI models:
-//! import { invoke } from '@tauri-apps/api/core'
-//! const aiModels = await invoke('get_all_ai_models');
-//! console.log(aiModels);
-//! ```
-//!
+//! The configuration store, the AI model/skill tables and the database backup
+//! maintenance are runtime-owned and reached through
+//! `/control/v1/data-commands/*`. Desktop-only side effects (locale, tray,
+//! shortcuts, the local static-file server) are applied in the wrappers, after a
+//! successful runtime reply, and the local `httpServer` URL is merged back into
+//! the configuration read.
 
 use crate::constants::*;
-use crate::db::api_key_crypto::{ApiKeyEncryptionStatus, API_KEY_FILE_CONFIG_KEY};
-use crate::db::{AiModel, AiSkill, MainStore, ModelConfig};
-use crate::db::{BackupConfig, DbBackup};
+use crate::db::{AiModel, AiSkill, ModelConfig};
+use crate::error::{AppError, Result as AppResult};
 use crate::libs::fs::{self, get_file_name};
+use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_data::{
+    AddAiModelBody, AddAiSkillBody, RestoreSettingResponse, UpdateAiModelBody, UpdateAiSkillBody,
+};
 use crate::tray::create_tray;
 use crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR;
 
@@ -47,137 +26,49 @@ use std::sync::Arc;
 use tauri::State;
 use tauri::{command, AppHandle};
 
-use crate::error::{AppError, Result};
-
-// =================================================
-// Structs
-// =================================================
-
-/// Response for restore_setting command
-#[derive(serde::Serialize)]
-pub struct RestoreSettingResponse {
-    /// Indicates if restoration was successful
-    pub success: bool,
-    /// Warning message if some files were skipped (e.g., locked MCP sessions)
-    pub warning: Option<String>,
-    /// Indicates if application restart is recommended
-    pub restart_recommended: bool,
-}
-
-const MACHINE_SPECIFIC_CONFIG_KEYS: &[&str] = &[
-    "backup_dir",
-    API_KEY_FILE_CONFIG_KEY,
-    CFG_WINDOW_POSITION,
-    CFG_WINDOW_SIZE,
-    CFG_ASSISTANT_WINDOW_SIZE,
-    CFG_WORKFLOW_WINDOW_SIZE,
-    CFG_WORKFLOW_WINDOW_POSITION,
-    CFG_CCPROXY_PORT,
-    CFG_CCPROXY_LISTEN,
-    "proxy_type",
-    "proxy_server",
-    "proxy_username",
-    "proxy_password",
-];
-
 // =================================================
 // About Configuration
 // =================================================
 
-/// Get the configuration information
-///
-/// This function is used to get the configuration information from the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-///
-/// # Returns
-/// * `Result<Value, String>` - Returns the configuration as a JSON value or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// const config = await invoke('get_all_config');
-/// console.log(config);
-/// ```
+/// Returns the whole runtime configuration map plus the local `httpServer` url.
 #[command]
-pub fn get_all_config(state: State<Arc<MainStore>>) -> Result<HashMap<String, Value>> {
-    let config_store = &*state;
-    let mut settings = config_store.config.settings();
+pub async fn get_all_config(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<HashMap<String, Value>, String> {
+    let value = crate::runtime_data::get_all_config(supervisor.inner().as_ref()).await?;
+    let mut settings: HashMap<String, Value> =
+        serde_json::from_value(value).map_err(|error| error.to_string())?;
     settings.insert(
         "httpServer".to_string(),
         Value::String(get_static_var(&HTTP_SERVER)),
     );
-
     Ok(settings)
 }
 
-/// Set the configuration information
-///
-/// This function is used to set the configuration information in the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `key` - The key of the configuration item to set
-/// - `value` - The value of the configuration item (in JSON format)
-///
-/// # Returns
-/// * `Result<(), String>` - Returns Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// await invoke('set_config', { key: 'theme', value: 'dark' });
-/// ```
+/// Sets (or deletes) a configuration key, then applies local desktop effects.
 #[command]
-pub fn set_config(
+pub async fn set_config(
     app: tauri::AppHandle,
-    state: State<Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     key: &str,
     value: Value,
-) -> Result<()> {
+) -> Result<(), String> {
     let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
-    let value = if key == CFG_INTERFACE_LANGUAGE {
-        Value::String(
-            crate::libs::lang::normalize_interface_locale(value.as_str().unwrap_or_default())
-                .to_string(),
-        )
-    } else {
-        value
-    };
+    crate::runtime_data::set_config(supervisor.inner().as_ref(), key.to_string(), value.clone())
+        .await?;
 
-    {
-        let config_store = &*state;
-
-        let result = if value.is_null() {
-            config_store.delete_config(key).map_err(AppError::Db)
-        } else {
-            config_store.set_config(key, &value).map_err(AppError::Db)
-        };
-
-        match result {
-            Ok(_) => match key {
-                CFG_INTERFACE_LANGUAGE => {
-                    let lang =
-                        config_store.get_config::<String>(CFG_INTERFACE_LANGUAGE, "en".to_string());
-                    let lang = crate::libs::lang::normalize_interface_locale(&lang);
-                    set_locale(lang);
-                    #[cfg(debug_assertions)]
-                    log::debug!("Language set to: {}", lang);
-                }
-                CFG_WORKFLOW_PREVENT_IDLE_SLEEP => {
-                    WORKFLOW_IDLE_SLEEP_INHIBITOR.set_enabled(value.as_bool().unwrap_or(false));
-                }
-                _ => {}
-            },
-            Err(e) => return Err(e),
+    match key {
+        CFG_INTERFACE_LANGUAGE => {
+            let lang =
+                crate::libs::lang::normalize_interface_locale(value.as_str().unwrap_or_default());
+            set_locale(lang);
+            #[cfg(debug_assertions)]
+            log::debug!("Language set to: {}", lang);
         }
+        CFG_WORKFLOW_PREVENT_IDLE_SLEEP => {
+            WORKFLOW_IDLE_SLEEP_INHIBITOR.set_enabled(value.as_bool().unwrap_or(false));
+        }
+        _ => {}
     }
 
     if should_refresh_tray {
@@ -187,138 +78,64 @@ pub fn set_config(
     Ok(())
 }
 
-/// Reload the configuration from the database
+/// Reloads the runtime configuration cache from the database.
 #[command]
-pub fn reload_config(state: State<Arc<MainStore>>) -> Result<()> {
-    let config_store = &*state;
-    config_store.reload_config().map_err(AppError::Db)
+pub async fn reload_config(supervisor: State<'_, Arc<RuntimeSupervisor>>) -> Result<(), String> {
+    crate::runtime_data::reload_config(supervisor.inner().as_ref()).await
 }
 
+/// Returns the API-key encryption status.
 #[command]
-pub fn get_api_key_encryption_status(
-    state: State<Arc<MainStore>>,
-) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = &*state;
-    config_store
-        .api_key_encryption_status()
-        .map_err(AppError::Db)
+pub async fn get_api_key_encryption_status(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<Value, String> {
+    crate::runtime_data::get_api_key_encryption_status(supervisor.inner().as_ref()).await
 }
 
+/// Activates a client-chosen API-key file.
 #[command]
-pub fn activate_api_key_file(
-    state: State<Arc<MainStore>>,
+pub async fn activate_api_key_file(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     path: String,
-) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = &*state;
-    config_store
-        .activate_api_key_file(Path::new(&path))
-        .map_err(AppError::Db)?;
-    config_store
-        .api_key_encryption_status()
-        .map_err(AppError::Db)
+) -> Result<Value, String> {
+    crate::runtime_data::activate_api_key_file(supervisor.inner().as_ref(), path).await
 }
 
+/// Generates and activates an API-key file at a client-chosen path.
 #[command]
-pub fn generate_api_key_file(
-    state: State<Arc<MainStore>>,
+pub async fn generate_api_key_file(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     path: String,
-) -> Result<ApiKeyEncryptionStatus> {
-    let config_store = &*state;
-    config_store
-        .generate_and_activate_api_key_file(Path::new(&path))
-        .map_err(AppError::Db)?;
-    config_store
-        .api_key_encryption_status()
-        .map_err(AppError::Db)
+) -> Result<Value, String> {
+    crate::runtime_data::generate_api_key_file(supervisor.inner().as_ref(), path).await
 }
 
 // =================================================
 // About AI Model
 // =================================================
 
-/// Get an AI model by its ID
-///
-/// Retrieves an AI model by its ID from the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `id` - The ID of the AI model to retrieve
-///
-/// # Returns
-/// * `Result<AiModel, String>` - The AI model or an error message
+/// Returns an AI model by id.
 #[command]
-pub fn get_ai_model_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiModel> {
-    let config_store = &*state;
-    config_store
-        .config
-        .get_ai_model_by_id(id)
-        .map_err(AppError::Db)
+pub async fn get_ai_model_by_id(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<AiModel, String> {
+    crate::runtime_data::get_ai_model_by_id(supervisor.inner().as_ref(), id).await
 }
 
-/// Get all AI models
-///
-/// Retrieves a list of all AI models from the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-///
-/// # Returns
-/// * `Result<Vec<AiModel>, String>` - A vector of AI models or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const aiModels = await invoke('get_all_ai_models');
-/// console.log(aiModels);
-/// ```
+/// Returns all AI models.
 #[command]
-pub fn get_all_ai_models(state: State<Arc<MainStore>>) -> Result<Vec<AiModel>> {
-    let config_store = &*state;
-    config_store.config.get_ai_models().map_err(AppError::Db)
+pub async fn get_all_ai_models(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<Vec<AiModel>, String> {
+    crate::runtime_data::get_all_ai_models(supervisor.inner().as_ref()).await
 }
 
-/// Add a new AI model
-///
-/// Adds a new AI model to the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `name` - The name of the AI model to add
-/// - `models` - A vector of model names associated with the new AI model
-/// - `default_model` - The name of the default model to be used
-/// - `base_url` - The base URL for the AI model's API
-/// - `api_key` - The API key for accessing the AI model
-/// - `disabled` - A boolean indicating whether the model is disabled
-///
-/// # Returns
-/// * `Result<AiModel, String>` - The AI model or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const newModelId = await invoke('add_ai_model', {
-///     name: 'GPT-4',
-///     models: ['gpt-4'],
-///     defaultModel: 'gpt-4',
-///     baseUrl: 'https://api.example.com',
-///     apiKey: 'your_api_key',
-///     maxTokens: 4096,
-///     temperature: 1.0,
-///     topP: 1.0,
-///     topK: 40,
-///     disabled: false
-/// });
-/// console.log(`Added AI Model with ID: ${newModelId}`);
-/// ```
+/// Adds an AI model and returns the stored record.
 #[command]
-pub fn add_ai_model(
-    state: State<Arc<MainStore>>,
+#[allow(clippy::too_many_arguments)]
+pub async fn add_ai_model(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     name: String,
     models: Vec<ModelConfig>,
     default_model: String,
@@ -331,12 +148,10 @@ pub fn add_ai_model(
     top_k: i32,
     disabled: bool,
     metadata: Option<Value>,
-) -> Result<AiModel> {
-    let config_store = &*state;
-
-    // First add the model to get the ID
-    let id = config_store
-        .add_ai_model(
+) -> Result<AiModel, String> {
+    crate::runtime_data::add_ai_model(
+        supervisor.inner().as_ref(),
+        AddAiModelBody {
             name,
             models,
             default_model,
@@ -349,62 +164,16 @@ pub fn add_ai_model(
             top_k,
             disabled,
             metadata,
-        )
-        .map_err(AppError::Db)?;
-
-    // Return the newly created model data
-    config_store
-        .config
-        .get_ai_model_by_id(id)
-        .map_err(AppError::Db)
+        },
+    )
+    .await
 }
 
-/// Update an existing AI model
-///
-/// Updates the details of an existing AI model in the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `id` - The ID of the AI model to update
-/// - `name` - The new name for the AI model
-/// - `models` - A vector of model names associated with the AI model
-/// - `default_model` - The name of the new default model to be used
-/// - `base_url` - The new base URL for the AI model's API
-/// - `api_key` - The new API key for accessing the AI model
-/// - `max_tokens` - The new max tokens for the AI model
-/// - `temperature` - The new temperature for the AI model
-/// - `top_p` - The new top p for the AI model
-/// - `top_k` - The new top k for the AI model
-/// - `disabled` - A boolean indicating whether the model should be disabled
-/// - `metadata` - The new metadata for the AI model
-///
-/// # Returns
-/// * `Result<AiModel, String>` - Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// await invoke('update_ai_model', {
-///     id: 1,
-///     name: 'GPT-4 Updated',
-///     models: ['gpt-4'],
-///     defaultModel: 'gpt-4',
-///     baseUrl: 'https://api.example.com',
-///     apiKey: 'your_new_api_key',
-///     maxTokens: 4096,
-///     temperature: 1.0,
-///     topP: 1.0,
-///     topK: 40,
-///     disabled: false
-/// });
-/// console.log('AI Model updated successfully');
-/// ```
+/// Updates an AI model and returns the stored record.
 #[command]
-pub fn update_ai_model(
-    state: State<Arc<MainStore>>,
+#[allow(clippy::too_many_arguments)]
+pub async fn update_ai_model(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
     name: String,
     models: Vec<ModelConfig>,
@@ -418,11 +187,10 @@ pub fn update_ai_model(
     top_k: i32,
     disabled: bool,
     metadata: Option<Value>,
-) -> Result<AiModel> {
-    let config_store = &*state;
-
-    config_store
-        .update_ai_model(
+) -> Result<AiModel, String> {
+    crate::runtime_data::update_ai_model(
+        supervisor.inner().as_ref(),
+        UpdateAiModelBody {
             id,
             name,
             models,
@@ -436,182 +204,83 @@ pub fn update_ai_model(
             top_k,
             disabled,
             metadata,
-        )
-        .map_err(AppError::Db)?;
-
-    config_store
-        .config
-        .get_ai_model_by_id(id)
-        .map_err(AppError::Db)
+        },
+    )
+    .await
 }
 
-/// Update the order of AI models
-///
-/// Updates the order of AI models in the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `model_ids` - A vector of IDs representing the new order of AI models
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// await invoke('update_model_order', { modelIds: [1, 2, 3] });
-/// console.log('AI Model order updated successfully');
+/// Persists the AI model order.
 #[command]
-pub fn update_ai_model_order(state: State<Arc<MainStore>>, model_ids: Vec<i64>) -> Result<()> {
-    let config_store = &*state;
-    config_store
-        .update_ai_model_order(model_ids)
-        .map_err(AppError::Db)
+pub async fn update_ai_model_order(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    model_ids: Vec<i64>,
+) -> Result<(), String> {
+    crate::runtime_data::update_ai_model_order(supervisor.inner().as_ref(), model_ids).await
 }
 
-/// Delete an AI model
-///
-/// Removes an AI model from the configuration store by its ID.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `id` - The ID of the AI model to delete
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// await invoke('delete_ai_model', { id: 1 });
-/// console.log('AI Model deleted successfully');
-/// ```
+/// Deletes an AI model.
 #[command]
-pub fn delete_ai_model(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    let config_store = &*state;
-    config_store.delete_ai_model(id).map_err(AppError::Db)
+pub async fn delete_ai_model(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<(), String> {
+    crate::runtime_data::delete_ai_model(supervisor.inner().as_ref(), id).await
 }
 
 // =================================================
 // About AI Skill
 // =================================================
 
-/// Get an AI skill by its ID
-///
-/// Retrieves an AI skill by its ID from the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `id` - The ID of the AI skill to retrieve
-///
-/// # Returns
-/// * `Result<AiSkill, String>` - The AI skill or an error message
+/// Returns an AI skill by id.
 #[command]
-pub fn get_ai_skill_by_id(state: State<Arc<MainStore>>, id: i64) -> Result<AiSkill> {
-    let config_store = &*state;
-    config_store
-        .config
-        .get_ai_skill_by_id(id)
-        .map_err(AppError::Db)
+pub async fn get_ai_skill_by_id(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<AiSkill, String> {
+    crate::runtime_data::get_ai_skill_by_id(supervisor.inner().as_ref(), id).await
 }
 
-/// Get all AI skills
-///
-/// Retrieves a list of all AI skills from the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-///
-/// # Returns
-/// * `Result<Vec<AiSkill>, String>` - A vector of AI skills or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// const aiSkills = await invoke('get_all_ai_skills');
-/// console.log(aiSkills);
-/// ```
+/// Returns all AI skills.
 #[command]
-pub fn get_all_ai_skills(state: State<Arc<MainStore>>) -> Result<Vec<AiSkill>> {
-    let config_store = &*state;
-    Ok(config_store.config.get_ai_skills())
+pub async fn get_all_ai_skills(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<Vec<AiSkill>, String> {
+    crate::runtime_data::get_all_ai_skills(supervisor.inner().as_ref()).await
 }
 
-/// Add a new AI skill
-///
-/// Adds a new AI skill to the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `skill` - The AI skill to add
-///
-/// # Returns
-/// * `Result<i64, String>` - The ID of the added skill or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// const newSkillId = await invoke('add_ai_skill', {  name: 'Natural Language Processing', prompt: 'This is a test prompt', icon: 'write', disabled: false });
-/// console.log(`Added AI Skill with ID: ${newSkillId}`);
-/// ```
+/// Adds an AI skill; the desktop uploads the logo before the remote call.
 #[command]
-pub fn add_ai_skill(
-    state: State<Arc<MainStore>>,
+pub async fn add_ai_skill(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     name: String,
     icon: Option<String>,
     logo: Option<String>,
     prompt: String,
     disabled: bool,
     metadata: Option<Value>,
-) -> Result<AiSkill> {
-    let config_store = &*state;
-
-    let logo_url = if let Some(logo) = logo {
-        upload_logo(logo)?
-    } else {
-        "".to_string()
+) -> Result<AiSkill, String> {
+    let logo_url = match logo {
+        Some(logo) => Some(upload_logo(logo)?),
+        None => None,
     };
-
-    config_store
-        .add_ai_skill(name, icon, Some(logo_url), prompt, disabled, metadata)
-        .map_err(AppError::Db)
+    crate::runtime_data::add_ai_skill(
+        supervisor.inner().as_ref(),
+        AddAiSkillBody {
+            name,
+            icon,
+            logo: logo_url,
+            prompt,
+            disabled,
+            metadata,
+        },
+    )
+    .await
 }
 
-/// Update an existing AI skill
-///
-/// Updates the details of an existing AI skill in the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `skill` - The AI skill with updated information
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// await invoke('update_ai_skill', { skill: { id: 1, name: 'Machine Learning', ... } });
-/// console.log('AI Skill updated successfully');
-/// ```
+/// Updates an AI skill; the desktop uploads the logo before the remote call.
 #[command]
-pub fn update_ai_skill(
-    state: State<Arc<MainStore>>,
+pub async fn update_ai_skill(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
     name: String,
     icon: Option<String>,
@@ -619,73 +288,51 @@ pub fn update_ai_skill(
     prompt: String,
     disabled: bool,
     metadata: Option<Value>,
-) -> Result<AiSkill> {
-    let config_store = &*state;
-
-    let logo_url = if let Some(logo) = logo {
-        upload_logo(logo)?
-    } else {
-        "".to_string()
+) -> Result<AiSkill, String> {
+    let logo_url = match logo {
+        Some(logo) => Some(upload_logo(logo)?),
+        None => None,
     };
-
-    config_store
-        .update_ai_skill(id, name, icon, Some(logo_url), prompt, disabled, metadata)
-        .map_err(AppError::Db)
+    crate::runtime_data::update_ai_skill(
+        supervisor.inner().as_ref(),
+        UpdateAiSkillBody {
+            id,
+            name,
+            icon,
+            logo: logo_url,
+            prompt,
+            disabled,
+            metadata,
+        },
+    )
+    .await
 }
 
-/// Update the order of AI skills
-///
-/// Updates the order of AI skills in the configuration store.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `skill_ids` - A vector of IDs representing the new order of AI skills
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful or an error message
+/// Persists the AI skill order.
 #[command]
-pub fn update_ai_skill_order(state: State<Arc<MainStore>>, skill_ids: Vec<i64>) -> Result<()> {
-    let config_store = &*state;
-    config_store
-        .update_ai_skill_order(skill_ids)
-        .map_err(AppError::Db)
+pub async fn update_ai_skill_order(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    skill_ids: Vec<i64>,
+) -> Result<(), String> {
+    crate::runtime_data::update_ai_skill_order(supervisor.inner().as_ref(), skill_ids).await
 }
 
-/// Delete an AI skill
-///
-/// Removes an AI skill from the configuration store by its ID.
-///
-/// # Arguments
-/// - `state` - The state of the configuration store, automatically injected by Tauri
-/// - `id` - The ID of the AI skill to delete
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful or an error message
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core';
-///
-/// await invoke('delete_ai_skill', { id: 1 });
-/// console.log('AI Skill deleted successfully');
-/// ```
+/// Deletes an AI skill.
 #[command]
-pub fn delete_ai_skill(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    let config_store = &*state;
-    config_store.delete_ai_skill(id).map_err(AppError::Db)
+pub async fn delete_ai_skill(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<(), String> {
+    crate::runtime_data::delete_ai_skill(supervisor.inner().as_ref(), id).await
 }
 
-/// Update the shortcut
-///
 /// Updates the shortcut for the main window or assistant window.
 #[tauri::command]
 pub async fn update_shortcut(
     app: tauri::AppHandle,
     key: &str,
     value: Option<String>,
-) -> Result<()> {
+) -> AppResult<()> {
     let shortcut_value = value.unwrap_or_else(|| {
         crate::shortcut::get_default_shortcut(key)
             .unwrap_or_default()
@@ -701,18 +348,12 @@ pub async fn update_shortcut(
     Ok(())
 }
 
-/// Uploads a logo image to the server.
+/// Uploads a logo image to the local static-file server.
 ///
-/// This function takes the path of an image file, checks if a preview image exists in the temporary directory,
-/// and either moves it to the upload directory or saves a new thumbnail image. The function organizes the
-/// uploaded images by month.
-///
-/// # Arguments
-/// - `image_path`: The path of the image file to upload.
-///
-/// # Returns
-/// * `Result<String, String>` - Returns the relative path of the uploaded image or an error message.
-fn upload_logo(image_path: String) -> Result<String> {
+/// This is a desktop capability: it moves the file the user picked into the
+/// local upload directory (or saves a thumbnail) and returns the relative url
+/// that the runtime then persists with the skill.
+fn upload_logo(image_path: String) -> AppResult<String> {
     if image_path == "" {
         return Ok("".to_string());
     }
@@ -792,136 +433,36 @@ fn upload_logo(image_path: String) -> Result<String> {
 // =================================================
 // Backup
 // =================================================
+
+/// Flushes and writes a full backup under the runtime-owned data directory.
 #[tauri::command]
 pub async fn backup_setting(
-    app: AppHandle,
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     backup_dir: Option<String>,
-) -> Result<()> {
-    // 1. Ensure all data is flushed from WAL to the main DB file before copying.
-    // This is critical when WAL mode is enabled.
-    {
-        let store = state.inner().as_ref();
-        store.checkpoint().map_err(AppError::Db)?;
-    }
-
-    let result = tokio::spawn(async move {
-        DbBackup::new(
-            &app,
-            BackupConfig {
-                backup_dir,
-                read_only: false,
-            },
-        )
-        .and_then(|mut backup| backup.backup_to_directory())
-    })
-    .await
-    .map_err(|e| AppError::General {
-        message: e.to_string(),
-    })?;
-
-    result.map_err(AppError::Db)
+) -> Result<(), String> {
+    crate::runtime_data::backup_setting(supervisor.inner().as_ref(), backup_dir).await
 }
 
+/// Restores a full backup.
 #[tauri::command]
 pub async fn restore_setting(
-    app: AppHandle,
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     backup_dir: String,
-) -> Result<RestoreSettingResponse> {
-    // 1. Preserve machine-specific configuration from the current installation.
-    // Remote backups must not replace local paths, network bindings, or proxy settings.
+) -> Result<RestoreSettingResponse, String> {
+    crate::runtime_data::restore_setting(supervisor.inner().as_ref(), backup_dir).await
+}
 
-    // 2. Prepare paths and backup instance
-    let theme_dir = HTTP_SERVER_THEME_DIR.read().clone();
-    let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
-    let schema_dir = SCHEMA_DIR.read().clone();
-    let shared_dir = SHARED_DATA_DIR.read().clone();
-    let static_dir = HTTP_SERVER_DIR.read().clone();
-    let store_dir = STORE_DIR.read().clone();
-    let mcp_sessions_dir = store_dir.join("mcp_sessions");
-    let main_db_path = store_dir.join("chatspeed.db");
-
-    let db_backup = DbBackup::new(
-        &app,
-        BackupConfig {
-            backup_dir: Some(backup_dir.clone()),
-            read_only: true,
-        },
-    )
-    .map_err(AppError::Db)?;
-
-    // 3. Decrypt database to a temporary file FIRST. Prefer compressed backups while
-    // retaining restore support for backups created before database ZIP compression.
-    let compressed_backup_db_file = Path::new(&backup_dir).join("chatspeed.db.zip");
-    let backup_db_file = if compressed_backup_db_file.exists() {
-        compressed_backup_db_file
-    } else {
-        Path::new(&backup_dir).join("chatspeed.db")
-    };
-    let temp_db_file = db_backup
-        .decrypt_to_temp(&backup_db_file, &main_db_path)
-        .map_err(AppError::Db)?;
-
-    // 4. Perform atomic database restoration. The temporary file removes itself if
-    // restoration fails before ownership transfers to the destination database.
-    {
-        let config_store = state.inner().as_ref();
-        config_store
-            .atomic_restore(&temp_db_file, &main_db_path, MACHINE_SPECIFIC_CONFIG_KEYS)
-            .map_err(AppError::Db)?;
-    }
-
-    // 5. Restore user files (static assets, etc.)
-    let files_skipped = db_backup
-        .restore_user_files(
-            &Path::new(&backup_dir).join("user_files.zip"),
-            &Path::new(&*theme_dir),
-            &Path::new(&*upload_dir),
-            &Path::new(&mcp_sessions_dir),
-            &Path::new(&*schema_dir),
-            &Path::new(&*shared_dir),
-            &Path::new(&*static_dir),
-        )
-        .map_err(AppError::Db)?;
-
-    // 6. Prepare response based on whether files were skipped
-    let response = if files_skipped {
-        RestoreSettingResponse {
-            success: true,
-            warning: Some(t!("db.backup.some_files_skipped_restart_required").to_string()),
-            restart_recommended: true,
-        }
-    } else {
-        RestoreSettingResponse {
-            success: true,
-            warning: None,
-            restart_recommended: false,
-        }
-    };
-
-    Ok(response)
+/// Lists available backups.
+#[tauri::command]
+pub async fn get_all_backups(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    backup_dir: Option<String>,
+) -> Result<Vec<String>, String> {
+    crate::runtime_data::get_all_backups(supervisor.inner().as_ref(), backup_dir).await
 }
 
 #[tauri::command]
-pub fn get_all_backups(app: AppHandle, backup_dir: Option<String>) -> Result<Vec<String>> {
-    let db_backup = DbBackup::new(
-        &app,
-        BackupConfig {
-            backup_dir,
-            read_only: true,
-        },
-    )?;
-
-    let backups = db_backup.list_backups().map_err(AppError::Db)?;
-    Ok(backups
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect())
-}
-
-#[tauri::command]
-pub fn update_tray(app: AppHandle) -> Result<()> {
+pub fn update_tray(app: AppHandle) -> AppResult<()> {
     #[cfg(debug_assertions)]
     log::debug!("update_tray");
 
@@ -933,50 +474,6 @@ pub fn update_tray(app: AppHandle) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn restore_preserves_local_ccproxy_binding_settings() {
-        let temp_dir = tempdir().unwrap();
-        let main_path = temp_dir.path().join("main.db");
-        let staged_path = temp_dir.path().join("staged.db");
-        let main_store = MainStore::new(&main_path).unwrap();
-        main_store
-            .set_config(CFG_CCPROXY_PORT, &serde_json::json!(11436))
-            .unwrap();
-        main_store
-            .set_config(CFG_CCPROXY_LISTEN, &serde_json::json!("127.0.0.1"))
-            .unwrap();
-        main_store
-            .set_config("restore_test", &serde_json::json!("local-value"))
-            .unwrap();
-
-        let staged_store = MainStore::new(&staged_path).unwrap();
-        staged_store
-            .set_config(CFG_CCPROXY_PORT, &serde_json::json!(11435))
-            .unwrap();
-        staged_store
-            .set_config(CFG_CCPROXY_LISTEN, &serde_json::json!("0.0.0.0"))
-            .unwrap();
-        staged_store
-            .set_config("restore_test", &serde_json::json!("remote-value"))
-            .unwrap();
-        drop(staged_store);
-
-        main_store
-            .atomic_restore(&staged_path, &main_path, MACHINE_SPECIFIC_CONFIG_KEYS)
-            .unwrap();
-
-        assert_eq!(main_store.get_config(CFG_CCPROXY_PORT, 0), 11436);
-        assert_eq!(
-            main_store.get_config(CFG_CCPROXY_LISTEN, String::new()),
-            "127.0.0.1"
-        );
-        assert_eq!(
-            main_store.get_config("restore_test", String::new()),
-            "remote-value"
-        );
-    }
 
     #[test]
     fn test_upload_logo() {

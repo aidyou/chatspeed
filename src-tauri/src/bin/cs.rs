@@ -84,26 +84,57 @@ async fn run(cli: &Cli) -> Result<(), CliError> {
         return help::run(cli);
     }
 
-    let discovery = discovery::load_discovery(cli.discovery_file.as_deref())?;
-    let client = ControlPlaneClient::new(&discovery)?;
+    // Discovery resolution includes the readiness handshake, so every command
+    // talks to a verified runtime before a lease is registered.
+    let (discovery, client, _runtime_child) =
+        discovery::load_or_spawn(cli.discovery_file.as_deref()).await?;
+    let client_id = format!("cscli-{}", uuid::Uuid::new_v4().simple());
+    let mut lease = client.register_lease(&client_id, "cscli").await?;
+    let mut heartbeat = lease.heartbeat();
 
+    let result = tokio::select! {
+        result = run_command(cli, &discovery, &client) => result,
+        failure = heartbeat.failure() => match failure {
+            Some(message) => Err(CliError::transport(format!(
+                "lease heartbeat failed: {message}"
+            ))),
+            None => Ok(()),
+        },
+    };
+
+    // Stop and join the heartbeat before releasing: a renewal must never be in
+    // flight while the lease is released.
+    heartbeat.stop().await;
+    match result {
+        Ok(()) => lease.release().await.map_err(client::map_client_error),
+        Err(error) => {
+            let _ = lease.release().await;
+            Err(error)
+        }
+    }
+}
+
+async fn run_command(
+    cli: &Cli,
+    discovery: &ControlPlaneDiscovery,
+    client: &ControlPlaneClient,
+) -> Result<(), CliError> {
     match &cli.command {
         Command::Help => Ok(()),
         Command::Doctor { command } => match command {
-            // Bare `cs doctor` keeps its exact connectivity/identity check.
-            None => doctor(cli, &discovery, &client).await,
-            Some(DoctorCommand::Capabilities) => {
-                capability::doctor_capabilities(cli, &client).await
-            }
+            // Bare `cs doctor` reports connectivity/identity from the verified
+            // control plane.
+            None => doctor(cli, discovery, client).await,
+            Some(DoctorCommand::Capabilities) => capability::doctor_capabilities(cli, client).await,
             Some(DoctorCommand::Reconcile { idempotency_key }) => {
-                capability::doctor_reconcile(cli, &client, idempotency_key).await
+                capability::doctor_reconcile(cli, client, idempotency_key).await
             }
         },
-        Command::Skill { command } => skill::run(cli, &client, command).await,
-        Command::Mcp { command } => mcp::run(cli, &client, command).await,
-        Command::Automation { command } => automation::run(cli, &client, command).await,
-        Command::Agent { command } => run_agent_command(cli, &client, command).await,
-        Command::Workflow { command } => run_workflow_command(cli, &client, command).await,
+        Command::Skill { command } => skill::run(cli, client, command).await,
+        Command::Mcp { command } => mcp::run(cli, client, command).await,
+        Command::Automation { command } => automation::run(cli, client, command).await,
+        Command::Agent { command } => run_agent_command(cli, client, command).await,
+        Command::Workflow { command } => run_workflow_command(cli, client, command).await,
     }
 }
 
@@ -114,13 +145,9 @@ async fn doctor(
 ) -> Result<(), CliError> {
     let meta = client.get("/control/v1/meta").await?;
 
-    // Instance binding: the discovery document must belong to the running
-    // control plane, otherwise it is stale and must not be trusted.
-    if discovery.server_instance_id != meta["server_instance_id"].as_str().unwrap_or("") {
-        return Err(CliError::protocol(
-            "Discovery document does not match the running control plane instance; it may be stale",
-        ));
-    }
+    // Instance/pid/protocol/schema binding was already verified by the readiness
+    // handshake in `load_or_spawn`; `doctor` only reports the live identity and
+    // warns when the publishing process is gone.
     if !process_alive(discovery.pid) {
         eprint_diagnostic(
             "cs: warning: the process that published the discovery document is not running; the document may be stale",

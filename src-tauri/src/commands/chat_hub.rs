@@ -1,21 +1,24 @@
 //! ChatHub commands.
 //!
-//! These commands expose the independent `chat_hubs` table and the single ChatHub
-//! page docked inside the Workflow window. They never touch workflow sessions, tasks,
-//! messages or approvals: showing or hiding an entry only changes the view layer.
+//! The `chat_hubs` table CRUD is runtime-owned data reached through
+//! `/control/v1/data-commands/*`. The docked ChatHub page commands (webview
+//! lifecycle) remain local desktop capabilities and never touch the store.
+
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 
 use crate::chat_hub;
-use crate::db::{ChatHub, MainStore};
-use crate::error::{AppError, Result};
+use crate::db::ChatHub;
+use crate::error::{AppError, Result as AppResult};
+use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_data::{ChatHubAddBody, ChatHubUpdateBody};
 
 /// `cs://sync-state` type broadcast after every successful ChatHub mutation so
 /// open windows can refresh their entry list.
 const CHAT_HUB_SYNC_TYPE: &str = "chat_hubs";
 
-fn broadcast_chat_hubs_changed(app: &AppHandle) -> Result<()> {
+fn broadcast_chat_hubs_changed(app: &AppHandle) -> AppResult<()> {
     app.emit(
         "cs://sync-state",
         serde_json::json!({
@@ -28,55 +31,74 @@ fn broadcast_chat_hubs_changed(app: &AppHandle) -> Result<()> {
 
 /// Returns every ChatHub entry ordered by `sort_index`.
 #[tauri::command]
-pub fn get_all_chat_hubs(state: State<Arc<MainStore>>) -> Result<Vec<ChatHub>> {
-    state.get_all_chat_hubs().map_err(AppError::from)
+pub async fn get_all_chat_hubs(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<Vec<ChatHub>, String> {
+    crate::runtime_data::get_all_chat_hubs(supervisor.inner().as_ref()).await
 }
 
 /// Adds a ChatHub entry at the end of the list.
 #[tauri::command]
-pub fn add_chat_hub(
+pub async fn add_chat_hub(
     app: AppHandle,
-    state: State<Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     name: String,
     logo: String,
     url: String,
-) -> Result<ChatHub> {
-    let hub = state.add_chat_hub(&name, &logo, &url)?;
-    broadcast_chat_hubs_changed(&app)?;
+) -> Result<ChatHub, String> {
+    let hub = crate::runtime_data::add_chat_hub(
+        supervisor.inner().as_ref(),
+        ChatHubAddBody { name, logo, url },
+    )
+    .await?;
+    broadcast_chat_hubs_changed(&app).map_err(|error| error.to_string())?;
     Ok(hub)
 }
 
 /// Updates the editable fields of an existing ChatHub entry.
 #[tauri::command]
-pub fn update_chat_hub(
+pub async fn update_chat_hub(
     app: AppHandle,
-    state: State<Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
     name: String,
     logo: String,
     url: String,
-) -> Result<ChatHub> {
-    let hub = state.update_chat_hub(id, &name, &logo, &url)?;
-    broadcast_chat_hubs_changed(&app)?;
+) -> Result<ChatHub, String> {
+    let hub = crate::runtime_data::update_chat_hub(
+        supervisor.inner().as_ref(),
+        ChatHubUpdateBody {
+            id,
+            name,
+            logo,
+            url,
+        },
+    )
+    .await?;
+    broadcast_chat_hubs_changed(&app).map_err(|error| error.to_string())?;
     Ok(hub)
 }
 
 /// Deletes a ChatHub entry, including preset entries.
 #[tauri::command]
-pub fn delete_chat_hub(app: AppHandle, state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    state.delete_chat_hub(id)?;
-    broadcast_chat_hubs_changed(&app)
+pub async fn delete_chat_hub(
+    app: AppHandle,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<(), String> {
+    crate::runtime_data::delete_chat_hub(supervisor.inner().as_ref(), id).await?;
+    broadcast_chat_hubs_changed(&app).map_err(|error| error.to_string())
 }
 
 /// Persists the full ChatHub order after a drag and drop reorder.
 #[tauri::command]
-pub fn update_chat_hub_order(
+pub async fn update_chat_hub_order(
     app: AppHandle,
-    state: State<Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     hub_ids: Vec<i64>,
-) -> Result<()> {
-    state.update_chat_hub_order(hub_ids)?;
-    broadcast_chat_hubs_changed(&app)
+) -> Result<(), String> {
+    crate::runtime_data::update_chat_hub_order(supervisor.inner().as_ref(), hub_ids).await?;
+    broadcast_chat_hubs_changed(&app).map_err(|error| error.to_string())
 }
 
 /// Reveals the ChatHub page, docked to the right edge of the Workflow window.
@@ -94,7 +116,7 @@ pub async fn show_chat_hub_page(
     width: f64,
     top_inset: f64,
     corner_radius: f64,
-) -> Result<()> {
+) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, move |state, app| {
         state.show(app, &url, width, top_inset, corner_radius)
     })
@@ -103,19 +125,19 @@ pub async fn show_chat_hub_page(
 
 /// Hides the ChatHub page while keeping its session alive.
 #[tauri::command]
-pub async fn hide_chat_hub_page(app: AppHandle) -> Result<()> {
+pub async fn hide_chat_hub_page(app: AppHandle) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, |state, app| state.hide(app)).await
 }
 
 /// Applies a new width to the docked page.
 #[tauri::command]
-pub async fn set_chat_hub_page_width(app: AppHandle, width: f64) -> Result<()> {
+pub async fn set_chat_hub_page_width(app: AppHandle, width: f64) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, move |state, app| state.set_width(app, width)).await
 }
 
 /// Releases the ChatHub page and the browsing session it holds.
 #[tauri::command]
-pub async fn destroy_chat_hub_page(app: AppHandle) -> Result<()> {
+pub async fn destroy_chat_hub_page(app: AppHandle) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, |state, app| state.destroy(app)).await
 }
 

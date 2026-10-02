@@ -133,14 +133,22 @@ pub async fn handle_decision(
 fn parse_body(client_request_body: &Bytes) -> ProxyResult<Value> {
     let value: Value = serde_json::from_slice(client_request_body).map_err(|error| {
         CCProxyError::InvalidRequestBody(
-            t!("proxy.error.invalid_request_format", error = error.to_string()).to_string(),
+            t!(
+                "proxy.error.invalid_request_format",
+                error = error.to_string()
+            )
+            .to_string(),
         )
     })?;
     if value.is_object() {
         Ok(value)
     } else {
         Err(CCProxyError::InvalidRequestBody(
-            t!("proxy.error.invalid_request", error = "body must be a JSON object").to_string(),
+            t!(
+                "proxy.error.invalid_request",
+                error = "body must be a JSON object"
+            )
+            .to_string(),
         ))
     }
 }
@@ -176,28 +184,26 @@ async fn resolve_proxy_model(
             .filter(|value| !value.is_empty())
             .unwrap_or(requested_model)
             .to_string();
-        return ModelResolver::get_ai_model_by_provider_and_model(main_store, provider_id, model_id)
-            .await;
+        return ModelResolver::get_ai_model_by_provider_and_model(
+            main_store,
+            provider_id,
+            model_id,
+        )
+        .await;
     }
 
     let (alias, inline_group) = match requested_model.split_once('@') {
         Some((group, alias)) => (alias.to_string(), Some(group.to_string())),
         None => (requested_model.to_string(), None),
     };
-    ModelResolver::get_ai_model_by_alias(
-        main_store,
-        alias,
-        inline_group.as_deref().or(group_name),
-    )
-    .await
+    ModelResolver::get_ai_model_by_alias(main_store, alias, inline_group.as_deref().or(group_name))
+        .await
 }
 
 /// Failed decision transport cannot answer HTTP, so it surfaces as a proxy backend failure.
 fn map_forward_error(error: DecisionError) -> CCProxyError {
     match error {
-        DecisionError::InvalidUrl(detail) => {
-            CCProxyError::InvalidProtocolError(detail.to_string())
-        }
+        DecisionError::InvalidUrl(detail) => CCProxyError::InvalidProtocolError(detail.to_string()),
         DecisionError::Catalog(detail) => CCProxyError::InvalidProtocolError(detail),
         other => CCProxyError::BackendRequestError(other.to_string()),
     }
@@ -386,16 +392,11 @@ mod tests {
             br#"["state","model"]"#.to_vec(),
             b"not json".to_vec(),
         ] {
-            let status = handle_decision(
-                HeaderMap::new(),
-                Bytes::from(body),
-                None,
-                store.clone(),
-            )
-            .await
-            .unwrap_err()
-            .into_response()
-            .status();
+            let status = handle_decision(HeaderMap::new(), Bytes::from(body), None, store.clone())
+                .await
+                .unwrap_err()
+                .into_response()
+                .status();
             assert_eq!(status, StatusCode::BAD_REQUEST);
         }
     }
@@ -403,9 +404,8 @@ mod tests {
     #[tokio::test]
     async fn decision_route_rejects_aliases_resolving_to_chat_providers() {
         let directory = tempdir().unwrap();
-        let store = Arc::new(
-            MainStore::new(directory.path().join("decision-chat-provider.db")).unwrap(),
-        );
+        let store =
+            Arc::new(MainStore::new(directory.path().join("decision-chat-provider.db")).unwrap());
         let provider_id = decision_provider(
             &store,
             "https://api.example.test/v1".to_string(),

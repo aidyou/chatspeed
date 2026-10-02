@@ -149,7 +149,9 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let app_data = temp.path().join("app-data");
         let area = StagingArea::create(&app_data, "../../etc").expect("staging");
-        assert!(area.root().starts_with(crate::capability::staging_dir(&app_data)));
+        assert!(area
+            .root()
+            .starts_with(crate::capability::staging_dir(&app_data)));
         assert_eq!(area.root().file_name().unwrap(), "etc");
     }
 }

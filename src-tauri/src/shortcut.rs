@@ -17,7 +17,7 @@ use tauri_plugin_global_shortcut::Shortcut;
 
 use crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
 use crate::constants::DEFAULT_ASSISTANT_WINDOW_VISIBLE_AND_PASTE_SHORTCUT;
-use crate::db::MainStore;
+use crate::runtime_config::{RuntimeConfigCache, RuntimeConfigSnapshot};
 use crate::window::toggle_window_activate;
 use crate::window::{activate_window, toggle_assistant_window};
 use crate::{
@@ -29,21 +29,21 @@ use crate::{
     DEFAULT_MOVE_WINDOW_RIGHT_SHORTCUT, DEFAULT_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
 };
 
-/// Retrieves current shortcuts from the configuration store
+/// Retrieves the current shortcuts from the runtime configuration snapshot.
 ///
 /// # Arguments
-/// * `config_store` - Reference to the configuration store containing shortcut settings
+/// * `snapshot` - The runtime configuration snapshot containing shortcut settings
 ///
 /// # Returns
 /// Returns a HashMap containing effective shortcut values used for registration.
 /// Missing configuration falls back to defaults, while empty strings remain empty to indicate disabled shortcuts.
-fn get_shortcuts(config_store: Arc<MainStore>) -> HashMap<String, String> {
+fn get_shortcuts(snapshot: &RuntimeConfigSnapshot) -> HashMap<String, String> {
     let mut shortcuts = HashMap::new();
 
     for shortcut_key in SHORTCUT_KEYS {
         shortcuts.insert(
             shortcut_key.to_string(),
-            get_effective_shortcut(config_store.clone(), shortcut_key),
+            get_effective_shortcut(snapshot, shortcut_key),
         );
     }
 
@@ -85,22 +85,80 @@ pub fn get_default_shortcut(key: &str) -> Option<&'static str> {
     }
 }
 
-fn get_effective_shortcut(config_store: Arc<MainStore>, key: &str) -> String {
-    if let Some(value) = config_store
-        .config
-        .get_setting(key)
-        .and_then(|value| value.as_str().map(ToString::to_string))
-    {
-        return value;
-    }
-
-    get_default_shortcut(key).unwrap_or("").to_string()
+fn get_effective_shortcut(snapshot: &RuntimeConfigSnapshot, key: &str) -> String {
+    // A value stored in the runtime configuration wins, including an explicit
+    // empty string that disables the shortcut; otherwise the desktop default.
+    snapshot.get_string(key, get_default_shortcut(key).unwrap_or(""))
 }
 
 lazy_static! {
     static ref LAST_CALLS: Mutex<HashMap<String, Instant>> = Mutex::new(HashMap::new());
+    /// The hotkey currently bound to each shortcut type.
+    ///
+    /// A previous binding cannot be read back from the runtime configuration
+    /// snapshot because that snapshot is refreshed only when the supervisor
+    /// connects, so it can lag a just-issued update. Tracking the binding the
+    /// desktop itself registered keeps an update able to unregister the old
+    /// hotkey. This is desktop-local registration state, not runtime state.
+    static ref REGISTERED_SHORTCUTS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
 }
 const DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
+
+/// Records the hotkey now bound to `shortcut_type`.
+fn remember_shortcut(shortcut_type: &str, shortcut: &str) {
+    match REGISTERED_SHORTCUTS.lock() {
+        Ok(mut registered) => {
+            registered.insert(shortcut_type.to_string(), shortcut.to_string());
+        }
+        Err(poisoned) => {
+            log::warn!("Registered-shortcut mutex poisoned, recovering.");
+            poisoned
+                .into_inner()
+                .insert(shortcut_type.to_string(), shortcut.to_string());
+        }
+    }
+}
+
+/// Removes and returns the recorded binding for `shortcut_type`, if any.
+fn take_registered_shortcut(shortcut_type: &str) -> Option<String> {
+    match REGISTERED_SHORTCUTS.lock() {
+        Ok(mut registered) => registered.remove(shortcut_type),
+        Err(poisoned) => poisoned.into_inner().remove(shortcut_type),
+    }
+}
+
+/// Unregisters whatever hotkey is currently bound to `shortcut_type`.
+fn unregister_registered_shortcut(app: &AppHandle, shortcut_type: &str) -> Result<(), String> {
+    let Some(previous) = take_registered_shortcut(shortcut_type) else {
+        return Ok(());
+    };
+    if previous.is_empty() {
+        return Ok(());
+    }
+    let Ok(hotkey) = Shortcut::from_str(&previous) else {
+        return Ok(());
+    };
+
+    let shortcut_manager = app.global_shortcut();
+    if shortcut_manager.is_registered(hotkey.clone()) {
+        log::debug!("Unregistering old shortcut: {}", previous);
+        shortcut_manager.unregister(hotkey).map_err(|err| {
+            t!(
+                "main.shortcut.failed_to_unregister_old",
+                error = err.to_string()
+            )
+            .to_string()
+        })?;
+    } else {
+        log::debug!(
+            "Old shortcut {} for type {} was not registered or empty",
+            previous,
+            shortcut_type
+        );
+    }
+
+    Ok(())
+}
 
 /// Executes the appropriate action for a given shortcut type
 ///
@@ -211,29 +269,40 @@ fn register_shortcuts(
 
     // Process all shortcuts
     for (shortcut_type, shortcut) in shortcuts {
-        if !shortcut.is_empty() {
-            if let Ok(hotkey) = Shortcut::from_str(&shortcut) {
-                // Alaway unregister the old shortcut before registering a new one
-                if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
-                    log::info!("Failed to unregister shortcut '{}': {}", shortcut, err);
-                }
-
-                log::debug!("Registering shortcut: {} for {}", shortcut, shortcut_type);
-                let _ = shortcut_manager
-                    .on_shortcut(hotkey, move |app_handle, _shortcut, _event| {
-                        handle_shortcut(&app_handle, &shortcut_type);
-                    })
-                    .map_err(|e| {
-                        log::error!(
-                            "Error on register shortcut, shortcut:{}, error:{:?}",
-                            &shortcut,
-                            e
-                        );
-                        e
-                    });
-            } else {
-                log::error!("Invalid shortcut '{}' for {}", shortcut, shortcut_type);
+        if shortcut.is_empty() {
+            // An empty value disables the shortcut: drop whatever was bound for
+            // this type instead of leaving a stale binding active.
+            if let Err(err) = unregister_registered_shortcut(app, &shortcut_type) {
+                log::error!("{}", err);
             }
+            continue;
+        }
+
+        let Ok(hotkey) = Shortcut::from_str(&shortcut) else {
+            log::error!("Invalid shortcut '{}' for {}", shortcut, shortcut_type);
+            continue;
+        };
+
+        // Replace the binding this type previously held, then make sure the
+        // requested hotkey is not still bound from an earlier registration.
+        if let Err(err) = unregister_registered_shortcut(app, &shortcut_type) {
+            log::error!("{}", err);
+        }
+        if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
+            log::info!("Failed to unregister shortcut '{}': {}", shortcut, err);
+        }
+
+        log::debug!("Registering shortcut: {} for {}", shortcut, shortcut_type);
+        let registered_key = shortcut_type.clone();
+        match shortcut_manager.on_shortcut(hotkey, move |app_handle, _shortcut, _event| {
+            handle_shortcut(&app_handle, &shortcut_type);
+        }) {
+            Ok(()) => remember_shortcut(&registered_key, &shortcut),
+            Err(e) => log::error!(
+                "Error on register shortcut, shortcut:{}, error:{:?}",
+                shortcut,
+                e
+            ),
         }
     }
 
@@ -248,23 +317,32 @@ fn register_shortcuts(
 /// # Returns
 /// Returns Ok(()) if registration is successful, or an error if registration fails
 pub fn register_desktop_shortcut(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let config_store = match app.try_state::<Arc<MainStore>>() {
-        Some(store) => store,
-        None => {
-            log::warn!("MainStore not available yet during shortcut registration");
-            return Ok(()); // Skip gracefully if state not ready
-        }
+    let Some(cache) = app.try_state::<Arc<RuntimeConfigCache>>() else {
+        log::warn!("Runtime config cache not found; desktop shortcuts are unavailable");
+        return Ok(());
     };
-    let shortcuts = get_shortcuts(config_store.inner().clone());
+    let Some(snapshot) = cache.current() else {
+        // The runtime owns the shortcut configuration. Until the supervisor has
+        // published a snapshot there is nothing to register, so the desktop
+        // fails closed instead of reading a local database. The caller is
+        // expected to retry once the snapshot arrives.
+        log::warn!("Runtime configuration is not available yet; desktop shortcuts are unavailable");
+        return Ok(());
+    };
+    let shortcuts = get_shortcuts(snapshot.as_ref());
     register_shortcuts(app, shortcuts)
 }
 
 /// Updates a specific shortcut configuration
 ///
 /// This function:
-/// 1. Unregisters the old shortcut if it exists
+/// 1. Unregisters the shortcut this type currently holds, if any
 /// 2. Registers the new shortcut if provided
 /// 3. Leaves other shortcuts untouched
+///
+/// The old binding is taken from the desktop's own registration record rather
+/// than the runtime configuration snapshot, which is only refreshed when the
+/// supervisor connects and can therefore lag a just-issued update.
 ///
 /// # Arguments
 /// * `app` - Application handle for shortcut management
@@ -284,64 +362,40 @@ pub fn update_shortcut(
         new_shortcut
     );
 
-    let config_store = app.state::<Arc<MainStore>>();
-    let shortcuts = get_shortcuts(config_store.inner().clone());
     let shortcut_manager = app.global_shortcut();
 
     // unregister old shortcut
-    if let Some(old_shortcut) = shortcuts.get(shortcut_type) {
-        if !old_shortcut.is_empty() {
-            if let Ok(old_hotkey) = Shortcut::from_str(old_shortcut) {
-                if shortcut_manager.is_registered(old_hotkey.clone()) {
-                    log::debug!("Unregistering old shortcut: {}", old_shortcut);
-                    if let Err(err) = shortcut_manager.unregister(old_hotkey) {
-                        log::error!(
-                            "Failed to unregister old shortcut '{}': {}",
-                            old_shortcut,
-                            err
-                        );
-                        return Err(t!(
-                            "main.shortcut.failed_to_unregister_old",
-                            error = err.to_string()
-                        )
-                        .into());
-                    }
-                } else {
-                    log::debug!(
-                        "Old shortcut {} for type {} was not registered or empty",
-                        old_shortcut,
-                        shortcut_type
-                    );
-                }
-            }
-        }
-    }
+    unregister_registered_shortcut(app, shortcut_type)?;
 
     // register new shortcut
     if !new_shortcut.is_empty() {
-        if let Ok(hotkey) = Shortcut::from_str(new_shortcut) {
-            // Check if the new shortcut is already registered
-            if shortcut_manager.is_registered(hotkey.clone()) {
-                log::debug!("Unregistering existing shortcut: {}", new_shortcut);
-                if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
-                    log::error!("Failed to unregister shortcut '{}': {}", new_shortcut, err);
-                    return Err(t!(
-                        "main.shortcut.failed_to_unregister_existing",
-                        error = err.to_string()
-                    )
-                    .into());
-                }
+        let hotkey = match Shortcut::from_str(new_shortcut) {
+            Ok(hotkey) => hotkey,
+            Err(_) => {
+                return Err(t!("main.shortcut.invalid_format", shortcut = new_shortcut).into());
             }
+        };
 
-            log::debug!("Registering new shortcut: {}", new_shortcut);
-            let shortcut_type = shortcut_type.to_string();
-
-            shortcut_manager.on_shortcut(hotkey, move |app_handle, _shortcut, _event| {
-                handle_shortcut(app_handle, &shortcut_type);
-            })?;
-        } else {
-            return Err(t!("main.shortcut.invalid_format", shortcut = new_shortcut).into());
+        // Check if the new shortcut is already registered
+        if shortcut_manager.is_registered(hotkey.clone()) {
+            log::debug!("Unregistering existing shortcut: {}", new_shortcut);
+            if let Err(err) = shortcut_manager.unregister(hotkey.clone()) {
+                log::error!("Failed to unregister shortcut '{}': {}", new_shortcut, err);
+                return Err(t!(
+                    "main.shortcut.failed_to_unregister_existing",
+                    error = err.to_string()
+                )
+                .into());
+            }
         }
+
+        log::debug!("Registering new shortcut: {}", new_shortcut);
+        let registered_key = shortcut_type.to_string();
+
+        shortcut_manager.on_shortcut(hotkey, move |app_handle, _shortcut, _event| {
+            handle_shortcut(app_handle, &registered_key);
+        })?;
+        remember_shortcut(shortcut_type, new_shortcut);
     }
 
     Ok(())

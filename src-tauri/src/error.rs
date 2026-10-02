@@ -24,12 +24,18 @@ pub enum AppError {
     Workflow(#[from] crate::workflow::error::WorkflowError),
 
     /// Errors originating from the HTTP module.
+    ///
+    /// The HTTP server is part of the desktop client, so this variant is absent
+    /// from the desktop-free runtime closure.
+    #[cfg(feature = "desktop")]
     #[error(transparent)]
     Http(#[from] crate::http::error::HttpError),
     /// Errors originating from the CCProxy module.
     #[error(transparent)]
     Ccproxy(#[from] crate::ccproxy::CCProxyError),
 
+    /// Errors originating from the updater, which only the desktop client runs.
+    #[cfg(feature = "desktop")]
     #[error(transparent)]
     Updater(#[from] crate::updater::UpdateError),
 
@@ -85,6 +91,7 @@ impl From<AppError> for String {
     }
 }
 
+#[cfg(feature = "desktop")]
 impl From<tauri::Error> for AppError {
     fn from(err: tauri::Error) -> Self {
         AppError::General {
@@ -94,6 +101,7 @@ impl From<tauri::Error> for AppError {
 }
 
 /// Errors reported by the `wry` webview that carries the ChatHub page.
+#[cfg(feature = "desktop")]
 impl From<wry::Error> for AppError {
     fn from(err: wry::Error) -> Self {
         AppError::General {

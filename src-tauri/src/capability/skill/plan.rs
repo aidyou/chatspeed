@@ -71,7 +71,10 @@ impl SkillInstallPlan {
                 "an install plan requires at least one target",
             ));
         }
-        let mut unique: Vec<String> = targets.iter().map(|target| target.as_str().to_string()).collect();
+        let mut unique: Vec<String> = targets
+            .iter()
+            .map(|target| target.as_str().to_string())
+            .collect();
         unique.sort();
         unique.dedup();
         if unique.len() != targets.len() {
@@ -80,18 +83,19 @@ impl SkillInstallPlan {
             ));
         }
 
-        let skill_name = report.skill_name.clone().ok_or_else(|| {
-            CapabilityError::refused("the checked skill has no declared name")
-        })?;
-        let expected_digest = report.content_digest.clone().ok_or_else(|| {
-            CapabilityError::refused("the checked skill has no content digest")
-        })?;
+        let skill_name = report
+            .skill_name
+            .clone()
+            .ok_or_else(|| CapabilityError::refused("the checked skill has no declared name"))?;
+        let expected_digest = report
+            .content_digest
+            .clone()
+            .ok_or_else(|| CapabilityError::refused("the checked skill has no content digest"))?;
 
         freeze_content(content_root, &frozen_root)?;
         let frozen = compute_file_manifest(&frozen_root)?;
-        let frozen_digest = manifest_digest(&frozen).ok_or_else(|| {
-            CapabilityError::refused("the frozen skill content is empty")
-        })?;
+        let frozen_digest = manifest_digest(&frozen)
+            .ok_or_else(|| CapabilityError::refused("the frozen skill content is empty"))?;
         if frozen_digest != expected_digest {
             return Err(CapabilityError::refused(
                 "the skill content changed between the check and the plan",

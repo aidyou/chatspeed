@@ -119,10 +119,7 @@ pub fn items<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 ///
 /// This is an additive sub-capability of `cs doctor`: the bare `cs doctor`
 /// connectivity check keeps its exact previous behaviour and exit codes.
-pub async fn doctor_capabilities(
-    cli: &Cli,
-    client: &ControlPlaneClient,
-) -> Result<(), CliError> {
+pub async fn doctor_capabilities(cli: &Cli, client: &ControlPlaneClient) -> Result<(), CliError> {
     fetch_and_render(cli, client, "/control/v1/capability-doctor", human_doctor).await
 }
 
@@ -142,7 +139,11 @@ pub async fn doctor_reconcile(
         _ => format!("cs-reconcile-{}", uuid::Uuid::new_v4().simple()),
     };
     let value = client
-        .post("/control/v1/capability-doctor/reconcile", json!({}), Some(&key))
+        .post(
+            "/control/v1/capability-doctor/reconcile",
+            json!({}),
+            Some(&key),
+        )
         .await?;
     render(cli, &value, human_reconcile)
 }

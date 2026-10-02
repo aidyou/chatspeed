@@ -90,8 +90,9 @@ pub(crate) fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<
     // Re-apply the receipt table for version-skew databases whose recorded
     // version is already at or past this migration (mirrors v20 robustness).
     for (name, sql) in MIGRATION_SQL {
-        conn.execute(sql, [])
-            .map_err(|e| StoreError::Query(format!("automation schema ensure {name} failed: {e}")))?;
+        conn.execute(sql, []).map_err(|e| {
+            StoreError::Query(format!("automation schema ensure {name} failed: {e}"))
+        })?;
     }
 
     Ok(())
@@ -124,7 +125,11 @@ mod tests {
 
         assert!(has_column(&conn, "workflow_automations", "revision"));
         assert!(has_column(&conn, "workflow_automation_runs", "trigger"));
-        assert!(has_column(&conn, "workflow_automation_runs", "dispatch_key"));
+        assert!(has_column(
+            &conn,
+            "workflow_automation_runs",
+            "dispatch_key"
+        ));
         assert!(index_exists(&conn, "idx_workflow_automation_runs_dispatch"));
     }
 }

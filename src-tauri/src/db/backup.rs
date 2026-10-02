@@ -8,12 +8,13 @@ use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "desktop")]
 use tauri::AppHandle;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 use zip::{write::FileOptions, ZipWriter};
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(feature = "desktop", not(debug_assertions)))]
 use tauri::Manager;
 
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -55,7 +56,7 @@ pub struct DbBackup {
 }
 
 impl DbBackup {
-    /// Creates a new `DbBackup` instance.
+    /// Creates a new `DbBackup` instance for the desktop client.
     ///
     /// # Arguments
     ///
@@ -65,6 +66,7 @@ impl DbBackup {
     /// # Errors
     ///
     /// Returns a `StoreError` if initialization fails
+    #[cfg(feature = "desktop")]
     pub fn new(_app: &AppHandle, config: BackupConfig) -> Result<Self, StoreError> {
         #[cfg(debug_assertions)]
         let app_dir = { &*crate::STORE_DIR.read() };
@@ -82,6 +84,22 @@ impl DbBackup {
             app_local_data_dir
         };
 
+        Self::with_app_dir(app_dir.clone(), config)
+    }
+
+    /// Path-neutral constructor for a process that owns its data directory
+    /// explicitly instead of receiving it from a desktop host.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `StoreError` if initialization fails
+    #[cfg(not(feature = "desktop"))]
+    pub fn new(app_dir: impl AsRef<Path>, config: BackupConfig) -> Result<Self, StoreError> {
+        Self::with_app_dir(app_dir.as_ref().to_path_buf(), config)
+    }
+
+    /// Shared initialization over an already-resolved application data directory.
+    fn with_app_dir(app_dir: PathBuf, config: BackupConfig) -> Result<Self, StoreError> {
         // Ensure backup directory exists
         let backup_dir = match config.backup_dir.as_deref() {
             None | Some("") => app_dir.join("backup"),

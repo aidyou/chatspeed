@@ -1157,7 +1157,11 @@ fn supports_reasoning_summary(model_id: &str) -> bool {
     let Some(version) = normalized.strip_prefix("gpt-") else {
         return false;
     };
-    let mut parts = version.split(['-', ':']).next().unwrap_or_default().split('.');
+    let mut parts = version
+        .split(['-', ':'])
+        .next()
+        .unwrap_or_default()
+        .split('.');
     let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
         return false;
     };

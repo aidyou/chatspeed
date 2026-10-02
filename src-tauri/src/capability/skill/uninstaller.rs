@@ -56,7 +56,9 @@ pub struct UninstallOutcome {
 impl UninstallOutcome {
     pub fn effect_outcome(&self) -> EffectOutcome {
         match self.status {
-            UninstallOutcomeStatus::Removed | UninstallOutcomeStatus::Finalized => EffectOutcome::Applied,
+            UninstallOutcomeStatus::Removed | UninstallOutcomeStatus::Finalized => {
+                EffectOutcome::Applied
+            }
             UninstallOutcomeStatus::Refused => EffectOutcome::Blocked,
             UninstallOutcomeStatus::NotFound => EffectOutcome::Skipped,
         }
@@ -250,7 +252,10 @@ impl SkillUninstaller {
                     target_id,
                     skill_name,
                     Some(&install_path),
-                    format!("the installation is in state '{}' and is not uninstallable", other.as_str()),
+                    format!(
+                        "the installation is in state '{}' and is not uninstallable",
+                        other.as_str()
+                    ),
                 );
             }
         }
@@ -325,8 +330,10 @@ impl SkillUninstaller {
             );
         }
 
-        match repository.set_installation_state(&recorded.installation_id, SkillInstallationState::Quarantined)
-        {
+        match repository.set_installation_state(
+            &recorded.installation_id,
+            SkillInstallationState::Quarantined,
+        ) {
             Ok(_) => {}
             Err(error) => {
                 // The content moved but the row did not: restore the directory
@@ -360,14 +367,11 @@ impl SkillUninstaller {
         let target_root = install_path.parent().unwrap_or(install_path);
         let prefix = format!(".{}.cs-quarantine-", recorded.skill_name);
         let quarantine = std::fs::read_dir(target_root).ok().and_then(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .find(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().starts_with(&prefix))
-                        .unwrap_or(false)
-                })
+            entries.flatten().map(|entry| entry.path()).find(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().starts_with(&prefix))
+                    .unwrap_or(false)
+            })
         });
 
         let Some(quarantine) = quarantine else {
@@ -395,7 +399,9 @@ impl SkillUninstaller {
         if let Some(quarantine) = quarantine {
             let _ = std::fs::remove_dir_all(quarantine);
         }
-        match repository.set_installation_state(&recorded.installation_id, SkillInstallationState::Removed) {
+        match repository
+            .set_installation_state(&recorded.installation_id, SkillInstallationState::Removed)
+        {
             Ok(_) => UninstallOutcome {
                 target_id: recorded.target_id.clone(),
                 skill_name: recorded.skill_name.clone(),
@@ -432,12 +438,12 @@ pub fn install_parent(install_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::repository::CapabilityRepository;
     use crate::capability::skill::checker::check_directory;
     use crate::capability::skill::installer::SkillInstaller;
     use crate::capability::skill::plan::SkillInstallPlan;
     use crate::capability::skill::source::SkillSource;
     use crate::capability::types::{CapabilityKind, OperationBegin, OperationRequest};
-    use crate::capability::repository::CapabilityRepository;
     use crate::db::MainStore;
     use std::sync::Arc;
     use tempfile::TempDir;

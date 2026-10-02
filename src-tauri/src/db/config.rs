@@ -1,5 +1,7 @@
 use super::types::{AiSkill, ModelConfig};
-use crate::constants::{CFG_WINDOW_POSITION, HTTP_SERVER_DIR};
+#[cfg(feature = "desktop")]
+use crate::constants::CFG_WINDOW_POSITION;
+use crate::constants::HTTP_SERVER_DIR;
 use crate::db::api_key_crypto::{
     activate_key_file, encrypt_api_key, generate_key_file, inspect_encryption_status,
     is_sensitive_config_key, ApiKeyEncryptionStatus, API_KEY_ENCRYPTION_CONFIG_KEY,
@@ -7,7 +9,11 @@ use crate::db::api_key_crypto::{
 };
 use crate::db::error::StoreError;
 use crate::db::main_store::MainStore;
+// Window geometry is a desktop concept: the runtime process never owns a
+// window, so the shared config module only links these types on desktop.
+#[cfg(feature = "desktop")]
 use crate::window::WindowSize;
+#[cfg(feature = "desktop")]
 use crate::MainWindowPosition;
 
 use log::error;
@@ -529,6 +535,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    #[cfg(feature = "desktop")]
     pub fn set_window_size(&self, size: WindowSize, window_label: &str) -> Result<(), StoreError> {
         let key = if window_label == "main" {
             crate::constants::CFG_WINDOW_SIZE
@@ -553,6 +560,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    #[cfg(feature = "desktop")]
     pub fn save_window_position(&self, pos: MainWindowPosition) -> Result<(), StoreError> {
         self.set_config(CFG_WINDOW_POSITION, &serde_json::json!(pos))?;
         Ok(())
@@ -566,6 +574,7 @@ impl MainStore {
     /// # Errors
     ///
     /// Returns a `StoreError` if the database operation fails.
+    #[cfg(feature = "desktop")]
     pub fn save_workflow_window_position(&self, pos: MainWindowPosition) -> Result<(), StoreError> {
         self.set_config(
             crate::constants::CFG_WORKFLOW_WINDOW_POSITION,

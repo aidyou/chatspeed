@@ -60,7 +60,8 @@ impl CapabilityRepository {
     /// so a concurrent insert that loses the race is resolved by re-reading.
     pub fn begin(&self, request: &OperationRequest) -> Result<OperationBegin, CapabilityError> {
         let request_hash = canonical_request_hash(&request.request);
-        let redacted_request = redaction::bounded_redacted_json(&request.request, MAX_PAYLOAD_CHARS);
+        let redacted_request =
+            redaction::bounded_redacted_json(&request.request, MAX_PAYLOAD_CHARS);
         let capability = request.capability;
         let operation_kind = request.operation_kind.clone();
         let actor_scope = request.actor_scope.clone();
@@ -74,19 +75,17 @@ impl CapabilityRepository {
             actor_scope.clone(),
             idempotency_key.clone(),
         );
-        let insert_payload = (            operation_kind,
+        let insert_payload = (
+            operation_kind,
             request_hash.clone(),
             request_json,
             resource_key,
         );
 
         let outcome = runtime.write_blocking(move |connection| {
-            if let Some(existing) = find_operation_by_key(
-                connection,
-                &lookup_keys.0,
-                &lookup_keys.1,
-                &lookup_keys.2,
-            )? {
+            if let Some(existing) =
+                find_operation_by_key(connection, &lookup_keys.0, &lookup_keys.1, &lookup_keys.2)?
+            {
                 return Ok((Some(existing), false));
             }
 
@@ -184,7 +183,8 @@ impl CapabilityRepository {
                  ORDER BY created_at_ms"
             ))?;
             let rows = statement.query_map([], row_to_operation)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })?)
     }
 
@@ -197,7 +197,8 @@ impl CapabilityRepository {
                  WHERE state = 'needs_reconcile' ORDER BY created_at_ms"
             ))?;
             let rows = statement.query_map([], row_to_operation)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })?)
     }
 
@@ -217,8 +218,10 @@ impl CapabilityRepository {
                  WHERE capability = ?1 AND resource_key = ?2
                  ORDER BY created_at_ms DESC LIMIT ?3"
             ))?;
-            let rows = statement.query_map(params![capability, resource_key, limit], row_to_operation)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            let rows =
+                statement.query_map(params![capability, resource_key, limit], row_to_operation)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })?)
     }
 
@@ -263,12 +266,10 @@ impl CapabilityRepository {
         let runtime = self.store.db_runtime()?;
         let operation_id = operation_id.to_string();
         let result_json = match result {
-            Some(value) => {
-                Some(serde_json::to_string(&redaction::bounded_redacted_json(
-                    value,
-                    MAX_PAYLOAD_CHARS,
-                ))?)
-            }
+            Some(value) => Some(serde_json::to_string(&redaction::bounded_redacted_json(
+                value,
+                MAX_PAYLOAD_CHARS,
+            ))?),
             None => None,
         };
         let error_code = error.map(|value| value.code.clone());
@@ -374,7 +375,14 @@ impl CapabilityRepository {
                      outcome = 'pending',
                      detail_json = excluded.detail_json,
                      updated_at_ms = excluded.updated_at_ms",
-                params![effect_id, operation_id, effect_key, target, detail_json, now],
+                params![
+                    effect_id,
+                    operation_id,
+                    effect_key,
+                    target,
+                    detail_json,
+                    now
+                ],
             )?;
             find_effect(connection, &operation_id, &effect_key)
         })?;
@@ -412,7 +420,14 @@ impl CapabilityRepository {
                      outcome = excluded.outcome,
                      detail_json = excluded.detail_json,
                      updated_at_ms = excluded.updated_at_ms",
-                params![effect_id, operation_id, effect_key, outcome.as_str(), detail_json, now],
+                params![
+                    effect_id,
+                    operation_id,
+                    effect_key,
+                    outcome.as_str(),
+                    detail_json,
+                    now
+                ],
             )?;
             find_effect(connection, &operation_id, &effect_key)
         })?;
@@ -420,7 +435,10 @@ impl CapabilityRepository {
     }
 
     /// Every effect row of one operation, in creation order.
-    pub fn list_effects(&self, operation_id: &str) -> Result<Vec<OperationEffect>, CapabilityError> {
+    pub fn list_effects(
+        &self,
+        operation_id: &str,
+    ) -> Result<Vec<OperationEffect>, CapabilityError> {
         let runtime = self.store.db_runtime()?;
         let operation_id = operation_id.to_string();
         Ok(runtime.read_blocking(move |connection| {
@@ -429,7 +447,8 @@ impl CapabilityRepository {
                  WHERE operation_id = ?1 ORDER BY created_at_ms, effect_key"
             ))?;
             let rows = statement.query_map(params![operation_id], row_to_effect)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })?)
     }
 
@@ -547,7 +566,8 @@ impl CapabilityRepository {
                  ORDER BY updated_at_ms DESC, installation_id"
             ))?;
             let rows = statement.query_map([], row_to_installation)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::from)
         })?)
     }
 
@@ -594,11 +614,7 @@ fn row_to_operation(row: &rusqlite::Row<'_>) -> Result<CapabilityOperation, rusq
     let result_json: Option<String> = row.get(10)?;
 
     let capability = CapabilityKind::parse(&capability).ok_or_else(|| {
-        rusqlite::Error::InvalidColumnType(
-            1,
-            "capability".to_string(),
-            rusqlite::types::Type::Text,
-        )
+        rusqlite::Error::InvalidColumnType(1, "capability".to_string(), rusqlite::types::Type::Text)
     })?;
     let state = OperationState::parse(&state).ok_or_else(|| {
         rusqlite::Error::InvalidColumnType(8, "state".to_string(), rusqlite::types::Type::Text)
@@ -648,7 +664,9 @@ fn find_operation(
 ) -> Result<Option<CapabilityOperation>, StoreError> {
     connection
         .query_row(
-            &format!("SELECT {OPERATION_COLUMNS} FROM capability_operations WHERE operation_id = ?1"),
+            &format!(
+                "SELECT {OPERATION_COLUMNS} FROM capability_operations WHERE operation_id = ?1"
+            ),
             params![operation_id],
             row_to_operation,
         )
@@ -679,7 +697,8 @@ fn find_effect(
     connection: &Connection,
     operation_id: &str,
     effect_key: &str,
-) -> Result<Option<OperationEffect>, StoreError> {    connection
+) -> Result<Option<OperationEffect>, StoreError> {
+    connection
         .query_row(
             &format!(
                 "SELECT {EFFECT_COLUMNS} FROM capability_operation_effects
@@ -727,9 +746,7 @@ fn find_installation_by_id(
         .map_err(StoreError::from)
 }
 
-fn row_to_installation(
-    row: &rusqlite::Row<'_>,
-) -> Result<SkillInstallation, rusqlite::Error> {
+fn row_to_installation(row: &rusqlite::Row<'_>) -> Result<SkillInstallation, rusqlite::Error> {
     let file_manifest_json: String = row.get(9)?;
     let state: String = row.get(12)?;
     Ok(SkillInstallation {
@@ -778,7 +795,10 @@ mod tests {
     fn same_key_and_hash_replays_while_a_different_hash_conflicts() {
         let repository = CapabilityRepository::new(test_store());
         let first = repository
-            .begin(&operation_request("key-1", json!({ "name": "demo", "targets": ["chatspeed"] })))
+            .begin(&operation_request(
+                "key-1",
+                json!({ "name": "demo", "targets": ["chatspeed"] }),
+            ))
             .expect("first begin");
         assert!(!first.is_replay());
 
@@ -790,7 +810,10 @@ mod tests {
             ))
             .expect("replay begin");
         assert!(replay.is_replay());
-        assert_eq!(replay.operation().operation_id, first.operation().operation_id);
+        assert_eq!(
+            replay.operation().operation_id,
+            first.operation().operation_id
+        );
 
         let conflict = repository
             .begin(&operation_request("key-1", json!({ "name": "other" })))
@@ -822,7 +845,11 @@ mod tests {
             .into_operation();
 
         repository
-            .set_state(&operation.operation_id, OperationState::Checking, Some("checker"))
+            .set_state(
+                &operation.operation_id,
+                OperationState::Checking,
+                Some("checker"),
+            )
             .expect("set checking");
         let finished = repository
             .finish(
@@ -846,7 +873,12 @@ mod tests {
             .into_operation();
 
         repository
-            .record_effect_intent(&operation.operation_id, "target:chatspeed", Some("chatspeed"), None)
+            .record_effect_intent(
+                &operation.operation_id,
+                "target:chatspeed",
+                Some("chatspeed"),
+                None,
+            )
             .expect("intent");
         assert_eq!(
             repository
@@ -927,10 +959,7 @@ mod tests {
             .set_installation_state("skl-1", SkillInstallationState::Quarantined)
             .expect("state change");
         assert_eq!(
-            repository
-                .list_installations()
-                .expect("list installations")[0]
-                .state,
+            repository.list_installations().expect("list installations")[0].state,
             SkillInstallationState::Quarantined
         );
     }

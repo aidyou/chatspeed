@@ -220,10 +220,8 @@ mod tests {
         let repository = CapabilityRepository::new(Arc::new(
             MainStore::new(":memory:").expect("in-memory store"),
         ));
-        let environment = TargetEnvironment::injected(
-            temp.path().join("home"),
-            temp.path().join("chatspeed"),
-        );
+        let environment =
+            TargetEnvironment::injected(temp.path().join("home"), temp.path().join("chatspeed"));
         let scanner = SkillScanner::with_search_paths(Vec::new());
         let inventory = SkillInventoryService::new(app_data.clone(), environment)
             .build_with_scanner(&repository, &scanner)
@@ -231,7 +229,11 @@ mod tests {
 
         let report =
             build_doctor_report(&repository, &inventory, &[], &app_data).expect("doctor report");
-        assert!(report.is_clean(), "unexpected findings: {:?}", report.findings);
+        assert!(
+            report.is_clean(),
+            "unexpected findings: {:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -272,10 +274,8 @@ mod tests {
         let staging = crate::capability::staging_dir(&app_data);
         fs::create_dir_all(staging.join("leftover")).expect("staging entry");
 
-        let environment = TargetEnvironment::injected(
-            temp.path().join("home"),
-            temp.path().join("chatspeed"),
-        );
+        let environment =
+            TargetEnvironment::injected(temp.path().join("home"), temp.path().join("chatspeed"));
         let scanner = SkillScanner::with_search_paths(vec![skills_root]);
         let inventory = SkillInventoryService::new(app_data.clone(), environment)
             .build_with_scanner(&repository, &scanner)
@@ -283,8 +283,12 @@ mod tests {
 
         let report =
             build_doctor_report(&repository, &inventory, &[], &app_data).expect("doctor report");
-        assert!(report.findings.contains(&finding::SKILL_DIRECTORY_MISSING.to_string()));
-        assert!(report.findings.contains(&finding::STAGING_RESIDUE.to_string()));
+        assert!(report
+            .findings
+            .contains(&finding::SKILL_DIRECTORY_MISSING.to_string()));
+        assert!(report
+            .findings
+            .contains(&finding::STAGING_RESIDUE.to_string()));
         assert_eq!(report.skills.missing.len(), 1);
         assert_eq!(report.skills.orphan_ownership.len(), 1);
     }

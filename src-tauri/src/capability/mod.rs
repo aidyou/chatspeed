@@ -192,11 +192,26 @@ impl CapabilityApplicationService {
 
     /// The current global proxy configuration used by network-backed capability installs.
     pub fn proxy_type(&self) -> ProxyType {
-        match self.repository.store().get_config("proxy_type", "none".to_string()).as_str() {
+        match self
+            .repository
+            .store()
+            .get_config("proxy_type", "none".to_string())
+            .as_str()
+        {
             "http" => ProxyType::Http(
-                self.repository.store().get_config("proxy_server", String::new()),
-                Some(self.repository.store().get_config("proxy_username", String::new())),
-                Some(self.repository.store().get_config("proxy_password", String::new())),
+                self.repository
+                    .store()
+                    .get_config("proxy_server", String::new()),
+                Some(
+                    self.repository
+                        .store()
+                        .get_config("proxy_username", String::new()),
+                ),
+                Some(
+                    self.repository
+                        .store()
+                        .get_config("proxy_password", String::new()),
+                ),
             ),
             "system" => ProxyType::System,
             _ => ProxyType::None,
@@ -354,7 +369,9 @@ impl CapabilityApplicationService {
         let mut report = CapabilityRecoveryReport::default();
 
         for operation in interrupted {
-            let unproven = self.repository.count_unproven_effects(&operation.operation_id)?;
+            let unproven = self
+                .repository
+                .count_unproven_effects(&operation.operation_id)?;
             if unproven == 0 {
                 let error = CapabilityError::new(
                     code::INTERRUPTED_BEFORE_EFFECT,

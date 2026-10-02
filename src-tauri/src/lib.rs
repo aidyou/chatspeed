@@ -1,11 +1,11 @@
 mod ai;
+mod builtin_agents;
 /// The Phase 3 capability-management contract: one transport-neutral
 /// application service owns every Agent Skill and MCP mutation, backed by the
-/// shared desktop `MainStore` journal. It never opens its own database
-/// connection and never owns a runtime, so it stays inside the single desktop
-/// owner (INV-1) while the Tauri, HTTP and CLI adapters all delegate to it.
+/// runtime-owned journal. It never opens its own database connection and never
+/// owns a runtime, so the standalone runtime is its only owner while the Tauri,
+/// HTTP and CLI adapters delegate to it through the control plane.
 pub mod capability;
-mod builtin_agents;
 mod ccproxy;
 pub mod chat_hub;
 mod commands;
@@ -15,10 +15,34 @@ mod environment;
 pub mod error;
 #[cfg(target_os = "linux")]
 mod frame_edges;
+// `runtime_client` (not to be confused with the `chatspeed_runtime_client` crate)
+// is the desktop-side supervisor for the standalone runtime control plane.
+pub mod runtime_client;
+// `runtime_config` reads and writes the runtime-owned configuration the desktop
+// still needs for startup and window geometry. It owns no database and is the
+// only configuration access path the desktop has left.
+mod runtime_config;
+// `runtime_workflow` maps the Tauri workflow commands onto the runtime control
+// plane's typed HTTP routes; only the desktop adapters can reach it.
+#[cfg(feature = "desktop")]
+mod runtime_workflow;
+// `runtime_agent` maps the Tauri agent commands onto the runtime control
+// plane's typed HTTP routes; only the desktop adapters can reach it.
+#[cfg(feature = "desktop")]
+mod runtime_agent;
+// `runtime_data` contains the shared, allowlisted runtime-owned data command
+// cores and the desktop HTTP adapters. It is also included by the
+// desktop-free runtime backend, so it must remain transport-neutral.
+mod runtime_data;
+// `runtime_web_bridge` is the desktop-only dispatcher for the runtime's
+// client-pull WebView capability bridge. It is the only place that runs the
+// bridged web capabilities on the runtime's behalf.
 mod http;
 mod libs;
 mod logger;
 mod mcp;
+#[cfg(feature = "desktop")]
+mod runtime_web_bridge;
 mod scraper;
 mod search;
 mod sensitive;
@@ -51,7 +75,6 @@ use tauri_plugin_autostart::ManagerExt;
 
 // use commands::toolbar::*;
 use crate::error::AppError;
-use ai::interaction::chat_completion::ChatState;
 use ai::model_catalog_updater::ModelsDevCatalogService;
 use commands::agent::*;
 use commands::capability::*;
@@ -79,9 +102,7 @@ use commands::window::*;
 use commands::workflow::*;
 use commands::workflow_automation::*;
 use constants::*;
-use db::MainStore;
 use http::server::start_http_server;
-use libs::window_channels::WindowChannels;
 use logger::setup_logger;
 use shortcut::register_desktop_shortcut;
 // use tools::*;
@@ -89,7 +110,6 @@ use scraper::pool::ScraperPool;
 use tray::create_tray;
 use updater::*;
 use window::*;
-use workflow::automation::scheduler::spawn_workflow_automation_scheduler;
 
 // Initialize internationalization with the "i18n" directory
 // - Base directory is src-tauri/, so this will look for translations in src-tauri/i18n/
@@ -99,8 +119,10 @@ i18n!("i18n", fallback = "en");
 /// The entry point for the Tauri application.
 ///
 /// This function sets up the Tauri application by initializing plugins,
-/// setting up command handlers, and configuring global shortcuts.
-/// It also manages the application state using `MainStore`.
+/// setting up command handlers, and configuring global shortcuts. The desktop
+/// owns no runtime state: it connects to the standalone runtime through the
+/// `RuntimeSupervisor` and reads the configuration it needs through the control
+/// plane.
 ///
 /// # Example
 ///
@@ -221,7 +243,6 @@ pub async fn run() -> crate::error::Result<()> {
 
     builder
         .plugin(tauri_plugin_process::init())
-        // .manage(Arc::new(ChatState::new(Arc::new(WindowChannels::new())))) // move chat state register to setup scope
         // Initialize the shell plugin
         .plugin(tauri_plugin_shell::init())
         // Register command handlers that can be invoked from the frontend
@@ -579,18 +600,10 @@ pub async fn run() -> crate::error::Result<()> {
                 // platform, and there is nothing to do for it here.
                 if window.label() == "main" {
                     // Save the main window position when it is moved.
-                    schedule_window_position_save(
-                        window,
-                        get_saved_window_position,
-                        MainStore::save_window_position,
-                    );
+                    schedule_window_position_save(window, CFG_WINDOW_POSITION);
                 } else if window.label() == "workflow" {
                     // Save the workflow window position when it is moved.
-                    schedule_window_position_save(
-                        window,
-                        get_saved_workflow_window_position,
-                        MainStore::save_workflow_window_position,
-                    );
+                    schedule_window_position_save(window, CFG_WORKFLOW_WINDOW_POSITION);
                 } else if should_preserve_visibility_while_dragging(window.label()) {
                     let label = window.label().to_string();
 
@@ -688,157 +701,10 @@ pub async fn run() -> crate::error::Result<()> {
                 }
             }
 
-            // Initialize the main store
-            #[cfg(debug_assertions)]
-            let db_path = {
-                let dev_dir = &*crate::STORE_DIR.read();
-                dev_dir.join("chatspeed.db")
-            };
-
-            #[cfg(not(debug_assertions))]
-            let db_path = {
-                let app_local_data_dir = app.path().app_data_dir().unwrap_or_else(|e| {
-                    eprintln!("CRITICAL: Failed to get app data dir: {}", e);
-                    std::path::PathBuf::from("./") // Fallback to current dir
-                });
-                if let Err(e) = std::fs::create_dir_all(&app_local_data_dir) {
-                    eprintln!(
-                        "CRITICAL: Failed to create app data dir at {:?}: {}",
-                        app_local_data_dir, e
-                    );
-                }
-                app_local_data_dir.join("chatspeed.db")
-            };
-
-            println!("========================================");
-            println!("Initializing database at: {:?}", db_path);
-            println!("Platform: {}", std::env::consts::OS);
-            println!("========================================");
-
-            let main_store_res = MainStore::new(&db_path);
-
-            let main_store = match main_store_res {
-                Ok(store) => {
-                    println!("✓ Database initialized successfully");
-                    Arc::new(store)
-                },
-                Err(e) => {
-                    eprintln!("========================================");
-                    eprintln!("CRITICAL: Failed to create main store: {}", e);
-                    eprintln!("Database path: {:?}", db_path);
-                    eprintln!("Parent directory exists: {}", db_path.parent().map_or(false, |p| p.exists()));
-                    eprintln!("Attempting fallback to in-memory database...");
-                    eprintln!("========================================");
-
-                    // Create an in-memory database as fallback to prevent app from crashing immediately
-                    let fallback_res = MainStore::new(":memory:");
-                    match fallback_res {
-                        Ok(s) => {
-                            eprintln!("WARNING: Using in-memory database. All data will be lost on exit!");
-                            Arc::new(s)
-                        },
-                        Err(fe) => {
-                            eprintln!("========================================");
-                            eprintln!("FATAL: Even in-memory DB failed: {}", fe);
-                            eprintln!("The application cannot continue.");
-                            eprintln!("========================================");
-                            return Err(Box::new(AppError::Db(e))); // Last resort crash
-                        }
-                    }
-                }
-            };
-
-            // CRITICAL: Add MainStore to managed state IMMEDIATELY, before any other initialization
-            // This must be done first because windows may be created concurrently during setup,
-            // and frontend code may call commands that require MainStore state before setup completes.
-            // See: https://github.com/tauri-apps/tauri/issues/xxxx (race condition with window creation)
-            app.manage(main_store.clone());
-
-            // Load the Models.dev catalog off the startup critical path: it is only used by
-            // the model settings UI, so parsing the multi-MB snapshot must not block setup.
-            {
-                let app_handle = app.handle().clone();
-                let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-                let store_for_catalog = main_store.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let catalog_service = match ModelsDevCatalogService::load(&app_data_dir) {
-                        Ok(service) => service,
-                        Err(error) => {
-                            log::error!("Failed to initialize Models.dev catalog service: {}", error);
-                            return;
-                        }
-                    };
-                    app_handle.manage(catalog_service.clone());
-                    let catalog_for_refresh = catalog_service;
-                    tauri::async_runtime::spawn(async move {
-                        loop {
-                            let proxy_type = match store_for_catalog
-                                .get_config("proxy_type", "none".to_string())
-                                .as_str()
-                            {
-                                "http" => {
-                                    let server = store_for_catalog
-                                        .get_config("proxy_server", String::new());
-                                    let username = store_for_catalog
-                                        .get_config("proxy_username", String::new());
-                                    let password = store_for_catalog
-                                        .get_config("proxy_password", String::new());
-                                    crate::ai::network::ProxyType::Http(
-                                        server,
-                                        Some(username),
-                                        Some(password),
-                                    )
-                                }
-                                "system" => crate::ai::network::ProxyType::System,
-                                _ => crate::ai::network::ProxyType::None,
-                            };
-                            if let Err(error) = catalog_for_refresh.refresh(proxy_type).await {
-                                log::warn!("Models.dev catalog refresh failed; keeping last known snapshot: {}", error);
-                            }
-                            // Refresh failures are retried on a bounded hourly cadence; successful
-                            // refreshes are gated by the service's persisted 24-hour timestamp.
-                            tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
-                        }
-                    });
-                });
-            }
-
-            // Built-in agents are synchronized after the first window paint below.
-
-            // Setup language and reconcile OS-managed settings with persisted preferences.
-            {
-                let c = main_store.as_ref();
-                let stored_lang =
-                    c.get_config(CFG_INTERFACE_LANGUAGE, libs::lang::get_system_locale());
-                let user_lang = libs::lang::normalize_interface_locale(&stored_lang).to_string();
-                if stored_lang != user_lang {
-                    let normalized_value = serde_json::Value::String(user_lang.clone());
-                    if let Err(error) = c.set_config(CFG_INTERFACE_LANGUAGE, &normalized_value) {
-                        log::error!("Failed to persist normalized interface language: {}", error);
-                    }
-                }
-                set_locale(&user_lang);
-                log::info!("Set interface language to {}", user_lang);
-
-                let auto_start = c.get_config(CFG_AUTO_START, false);
-                let autolaunch = app.autolaunch();
-                match autolaunch.is_enabled() {
-                    Ok(is_enabled) if auto_start != is_enabled => {
-                        let result = if auto_start {
-                            autolaunch.enable()
-                        } else {
-                            autolaunch.disable()
-                        };
-                        if let Err(e) = result {
-                            log::error!("Failed to synchronize autostart registration: {}", e);
-                        } else {
-                            log::info!("Autostart registration synchronized: {}", auto_start);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to read autostart registration: {}", e),
-                }
-            }
+            // The runtime owns the canonical database. The desktop deliberately
+            // opens no local copy: the configuration it needs is read through the
+            // runtime supervisor and applied once the configuration snapshot
+            // arrives (see the startup task in the state registration section).
 
             // handle desktop shortcut
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -852,19 +718,14 @@ pub async fn run() -> crate::error::Result<()> {
             // IMPORTANT: The order of state registration matters!
             // States must be registered before any code (including event listeners) tries to access them.
             // See: docs/STATE_MANAGEMENT_REVIEW.md for the complete dependency graph
+            //
+            // The runtime owns the database, the chat/tool execution state, the
+            // workflow hub and manager, the sub-agent factory, the application
+            // services, the capability service and the control plane. The desktop
+            // registers none of them; it reaches them through the
+            // `RuntimeSupervisor` below.
 
-            // State 2: ChatState
-            // Depends on: MainStore (already registered above)
-            // Required by: workflow listeners, commands, HTTP server
-            let app_handle_for_chat_state = app.handle().clone();
-            let chat_state = ChatState::new(
-                Arc::new(WindowChannels::new()),
-                Some(app_handle_for_chat_state),
-                main_store.clone(),
-            );
-            app.manage(chat_state.clone());
-
-            // State 3: FilterManager
+            // FilterManager
             // Depends on: None (self-contained)
             // Required by: sensitive data filtering commands
             let filter_manager = crate::sensitive::manager::FilterManager::new();
@@ -875,161 +736,100 @@ pub async fn run() -> crate::error::Result<()> {
             }
             app.manage(filter_manager);
 
-            // State 4: ScraperPool
+            // ScraperPool
             // Depends on: AppHandle
             // Required by: web scraping commands
             let scraper_pool = ScraperPool::new(app.handle().clone());
             app.manage(scraper_pool);
 
-            // State 5: UpdateManager
+            // UpdateManager
             // Depends on: AppHandle
             // Required by: updater commands and background update task
             let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
             app.manage(update_manager.clone());
 
-            // State 6: TsidGenerator
-            let tsid_generator = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("Failed to init TSID generator"));
-            app.manage(tsid_generator.clone());
-
-            // State 7: WorkflowRuntimeHub (unique Gateway: Tauri output transport
-            // + single session input registry + live SSE event source)
-            let tauri_gateway = Arc::new(crate::workflow::react::client::tauri::gateway::TauriGateway::new(app.handle().clone()));
-            let server_instance_id: String = {
-                use rand::Rng;
-                let mut instance_bytes = [0u8; 16];
-                rand::rng().fill_bytes(&mut instance_bytes);
-                hex::encode(instance_bytes)
-            };
-            let gateway = Arc::new(crate::workflow::react::client::hub::WorkflowRuntimeHub::new(
-                tauri_gateway,
-                server_instance_id,
-            ));
-            app.manage(gateway.clone());
-
-            // State 8: WorkflowManager (Session lifecycle manager)
-            let workflow_prevent_idle_sleep =
-                main_store.get_config(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false);
-            crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
-                .set_enabled(workflow_prevent_idle_sleep);
-            let workflow_manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
-            app.manage(workflow_manager.clone());
-
-            // State 9: TerminalManager
+            // TerminalManager
             // Owns workflow-window PTYs independently from the ReAct workflow runtime.
             let terminal_manager = Arc::new(crate::terminal::TerminalManager::new(app.handle().clone()));
             app.manage(terminal_manager);
 
-            // State 10: SubAgentFactory
-            let factory: Arc<dyn crate::workflow::react::orchestrator::SubAgentFactory> = Arc::new(crate::workflow::react::orchestrator::DefaultSubAgentFactory {
-                main_store: main_store.clone(),
-                chat_state: chat_state.clone(),
-                gateway: gateway.clone(),
-                workflow_manager: workflow_manager.clone(),
-                app_data_dir: app.path().app_data_dir().unwrap_or_default(),
-                tsid_generator: tsid_generator.clone(),
-            });
-            app.manage(factory.clone());
-
-            // State 11: WorkflowApplicationService (transport-neutral canonical
-            // path shared by Tauri commands, automation and the control plane)
-            let application_service = Arc::new(
-                crate::workflow::react::application::WorkflowApplicationService::new(
-                    main_store.clone(),
-                    chat_state.clone(),
-                    tsid_generator.clone(),
-                    gateway.clone(),
-                    factory.clone(),
-                    workflow_manager.clone(),
-                    app.path().app_data_dir().unwrap_or_default(),
-                ),
-            );
-            app.manage(application_service.clone());
-
-            // State 12: CapabilityApplicationService (Agent Skills + MCP)
-            //
-            // Same instance the application service (and therefore the control
-            // plane) uses, so the durable journal and in-process single-flight
-            // locks cannot diverge between the Tauri and HTTP adapters.
-            //
-            // The startup recovery gate runs before the control plane starts
-            // accepting requests and before any capability mutation is
-            // admitted: operations a crash left in flight are classified as
-            // failed-before-effect (retryable) or needs_reconcile, never
-            // blindly retried (INV-8).
-            {
-                let capability = application_service.capability().clone();
-                match capability.recover_interrupted_operations() {
-                    Ok(report) if !report.is_empty() => {
-                        log::warn!(
-                            "[Capability][recovery] {} operation(s) failed before any effect, {} need reconcile",
-                            report.failed_before_effect.len(),
-                            report.needs_reconcile.len()
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(error) => log::error!(
-                        "[Capability][recovery] startup recovery failed: {}",
-                        error.redacted_message()
-                    ),
-                }
-                app.manage(capability.clone());
-
-                // Evidence-driven convergence runs once after boot, on the async
-                // runtime so it can observe MCP. It finalizes quarantined Skill
-                // moves, discards orphaned private staging, and rolls forward any
-                // needs_reconcile operation whose durable + runtime evidence now
-                // proves the effect; anything unproven is left as needs_reconcile
-                // rather than blind-retried (AC-2/AC-7/INV-8).
-                tokio::spawn(async move {
-                    match capability.reconcile().await {
-                        Ok(report) if !report.is_noop() => log::info!(
-                            "[Capability][reconcile] converged {} quarantine(s), {} install(s), {} mcp effect(s), removed {} staging residue, left {} needing reconcile",
-                            report.quarantines_finalized.len(),
-                            report.installs_recovered.len(),
-                            report.mcp_effects_recovered.len(),
-                            report.staging_residue_removed,
-                            report.still_needs_reconcile.len()
-                        ),
-                        Ok(_) => {}
-                        Err(error) => log::error!(
-                            "[Capability][reconcile] startup reconcile failed: {}",
-                            error.redacted_message()
-                        ),
-                    }
-                });
-            }
-
-            // Control plane: independent loopback HTTP/JSON + SSE server.
-            // Startup failures are logged (without secrets) and must not block
-            // the desktop app, static server or ccproxy.
-            {
-                let control_plane_svc = application_service.clone();
-                tokio::spawn(async move {
-                    match crate::workflow::react::client::http::server::start(control_plane_svc)
-                        .await
-                    {
-                        Ok(handle) => {
-                            log::info!(
-                                "[ControlPlane] Started on port {} (instance {})",
-                                handle.port,
-                                handle.server_instance_id
-                            );
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "[ControlPlane] Disabled: {}. Desktop workflows continue to work.",
-                                error
-                            );
-                        }
-                    }
-                });
-            }
-
-            // State 11: ChatHubPageState
+            // ChatHubPageState
             // Owns the single ChatHub page docked inside the Workflow window.
             app.manage(chat_hub::ChatHubPageState::new());
 
-            spawn_workflow_automation_scheduler(app.handle().clone());
+            // RuntimeSupervisor: the desktop's client relationship with the
+            // standalone `chatspeed-runtime` control plane (attach-or-start,
+            // readiness handshake, client lease and heartbeat). It owns no
+            // runtime state itself. `RuntimeConfigCache` holds the runtime
+            // configuration the desktop mirrors locally for startup and window
+            // geometry; it opens no database either. Connecting is spawned so
+            // `setup` never blocks the first paint; a runtime that is not running
+            // yet is reported through the supervisor's redacted status instead of
+            // failing startup.
+            let runtime_supervisor = Arc::new(crate::runtime_client::RuntimeSupervisor::new());
+            app.manage(runtime_supervisor.clone());
+            let runtime_config_cache = Arc::new(crate::runtime_config::RuntimeConfigCache::new());
+            app.manage(runtime_config_cache.clone());
+            {
+                let runtime_dir = crate::runtime_client::default_runtime_dir();
+                let app_handle = app.handle().clone();
+                let supervisor = runtime_supervisor.clone();
+                let cache = runtime_config_cache.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = supervisor
+                        .connect_or_start(
+                            &runtime_dir,
+                            crate::runtime_client::DESKTOP_CLIENT_ID,
+                        )
+                        .await
+                    {
+                        // The runtime owns the database and every startup value;
+                        // without it the desktop reports the redacted supervisor
+                        // status and leaves runtime-owned startup configuration
+                        // and window restore unavailable instead of falling back
+                        // to a local database.
+                        log::warn!("[RuntimeSupervisor] unavailable: {}", error);
+                        return;
+                    }
+                    log::info!(
+                        "[RuntimeSupervisor] connected to runtime at {:?}",
+                        runtime_dir
+                    );
+
+                    // Open the client WebView capability bridge. Only the desktop
+                    // owns the Tauri WebView, so the runtime reaches `web_fetch`
+                    // and `web_search` exclusively through this client-pull
+                    // session. A failure is reported and leaves web capabilities
+                    // unavailable; it never starts a second runtime or a local
+                    // fallback.
+                    match crate::runtime_web_bridge::start(app_handle.clone(), &supervisor).await {
+                        Ok(()) => log::info!("[RuntimeWebBridge] client capability bridge started"),
+                        Err(error) => {
+                            log::warn!("[RuntimeWebBridge] bridge unavailable: {}", error)
+                        }
+                    }
+
+                    match crate::runtime_config::load(supervisor.as_ref()).await {
+                        Ok(snapshot) => {
+                            // Cache before applying and restoring window geometry
+                            // so the geometry the restore writes back is compared
+                            // against the values it was read from.
+                            cache.store(snapshot.clone());
+                            if let Err(error) = crate::shortcut::register_desktop_shortcut(&app_handle) {
+                                log::error!("Failed to register desktop shortcuts: {:?}", error);
+                            }
+                            let _ = crate::tray::create_tray(&app_handle, None);
+                            apply_runtime_startup_config(&app_handle, supervisor.clone(), &snapshot)
+                                .await;
+                            restore_initial_windows(&app_handle, &snapshot);
+                        }
+                        Err(error) => log::error!(
+                            "[RuntimeSupervisor] failed to load the runtime configuration: {}",
+                            error
+                        ),
+                    }
+                });
+            }
 
             // === END STATE REGISTRATION SECTION ===
 
@@ -1045,87 +845,67 @@ pub async fn run() -> crate::error::Result<()> {
             // non-essential synchronization continues in the background.
             let app_handle = app.handle().clone();
             window::setup_window_creation_handlers(app_handle.clone());
-            match window::create_workflow_window(&app_handle, true) {
-                Ok(win) => restore_window_config(&win, main_store.clone()),
-                Err(error) => log::error!("Failed to create workflow window: {}", error),
+            if let Err(error) = window::create_workflow_window(&app_handle, true) {
+                log::error!("Failed to create workflow window: {}", error);
             }
-            match window::create_assistant_window(&app_handle, false) {
-                Ok(win) => restore_window_config(&win, main_store.clone()),
-                Err(error) => log::error!("Failed to create assistant window: {}", error),
+            if let Err(error) = window::create_assistant_window(&app_handle, false) {
+                log::error!("Failed to create assistant window: {}", error);
             }
             WINDOW_READY.store(true, Ordering::SeqCst);
 
             // === BACKGROUND TASKS SECTION ===
             // Non-essential startup work must not delay the first paint.
             let handle = app.handle().clone();
-            let main_store_clone = main_store.clone();
-            let chat_state_clone = chat_state.clone();
-            let update_manager_clone = update_manager.clone();
-            let environment_ready =
-                tauri::async_runtime::spawn_blocking(environment::init_environment);
+            tauri::async_runtime::spawn_blocking(environment::init_environment);
 
             {
+                // The runtime owns the agent table and the configured MCP
+                // servers, so synchronizing them is no longer a desktop task;
+                // only the local scraper-schema files stay here.
                 let handle_for_startup = handle.clone();
-                let store_for_startup = main_store.clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    if let Err(error) =
-                        builtin_agents::sync_builtin_agents_if_needed(store_for_startup)
-                    {
-                        log::error!("Failed to synchronize built-in agents: {}", error);
-                    }
-                    if let Err(error) =
-                        scraper::ensure_default_configs_exist(&handle_for_startup)
-                    {
+                    if let Err(error) = scraper::ensure_default_configs_exist(&handle_for_startup) {
                         log::error!("Failed to synchronize scraper schemas: {}", error);
                     }
                 });
             }
 
-            tauri::async_runtime::spawn(async move {
-                // 1. Register native tools first (fast, local-only)
-                let tm = chat_state_clone.tool_manager.clone();
-                let _ = tm.register_available_tools(handle.clone()).await;
-
-                // 2. Start the HTTP server without waiting for MCP startup
-                // The HTTP server includes:
-                // - Static file serving
-                // - CCProxy (OpenAI-compatible chat completion proxy)
-                // - MCP server management
+            // The static file server (theme/upload/tmp assets and `/save/png`) is
+            // desktop-only and touches no runtime-owned state. The runtime owns
+            // the OpenAI-compatible chat proxy, which is no longer started here.
+            {
                 let handle_for_server = handle.clone();
-                let main_store_for_server = main_store_clone.clone();
-                let chat_state_for_server = chat_state_clone.clone();
-
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = start_http_server(&handle_for_server, main_store_for_server, chat_state_for_server).await {
+                    if let Err(e) = start_http_server(&handle_for_server).await {
                         error!("Failed to start HTTP server: {}", e);
                     }
                 });
+            }
 
-                // 3. Start configured MCP servers in the background
-                let tm_for_mcp = chat_state_clone.tool_manager.clone();
-                let main_store_for_mcp = main_store_clone.clone();
+            // Update check (2 minutes later, non-critical).
+            {
+                let cache_for_update = runtime_config_cache.clone();
+                let update_manager_for_loop = update_manager.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) = environment_ready.await {
-                        log::warn!("Environment setup task failed before MCP startup: {}", error);
+                    let auto_update = cache_for_update
+                        .current()
+                        .map(|snapshot| snapshot.get_bool(CFG_AUTO_UPDATE, true))
+                        .unwrap_or(true);
+                    if !auto_update {
+                        return;
                     }
-                    let _ = tm_for_mcp.register_available_mcp_tools(main_store_for_mcp).await;
-                });
-
-                // 4. Update check (2 minutes later, non-critical)
-                let auto_update = main_store_clone.get_config(CFG_AUTO_UPDATE, true);
-
-                if auto_update {
                     tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                     loop {
-                        if let Err(e) = update_manager_clone.check_and_download_update().await {
+                        if let Err(e) = update_manager_for_loop.check_and_download_update().await {
                             log::error!("Failed to check for updates: {}", e);
                         }
                         tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
                     }
-                }
-            });
+                });
+            }
 
-            // create tray
+            // create tray after runtime config is loaded; the startup task
+            // recreates it with runtime-provided shortcut hints.
             let app_handle_clone = app.app_handle().clone();
             let _ = create_tray(&app_handle_clone, None);
 
@@ -1134,36 +914,143 @@ pub async fn run() -> crate::error::Result<()> {
         // Run the Tauri application with the generated context
         .build(tauri::generate_context!())
         .map_err(|e| AppError::General{message:e.to_string()})?
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                // Gracefully stop the control plane and remove its discovery
-                // document when it still belongs to this instance.
-                crate::workflow::react::client::http::server::request_shutdown();
+                // Hand the runtime lease back. Releasing is I/O and cannot be
+                // awaited on the event thread, so it is spawned best-effort; if
+                // the process exits first, the lease TTL and the runtime's idle
+                // grace end it. This never kills a runtime owned by another
+                // client, and the runtime owns its own control-plane discovery
+                // and shutdown.
+                if let Some(supervisor) =
+                    app_handle.try_state::<Arc<crate::runtime_client::RuntimeSupervisor>>()
+                {
+                    let supervisor = supervisor.inner().clone();
+                    tauri::async_runtime::spawn(async move { supervisor.shutdown().await });
+                }
             }
         });
     Ok(())
 }
 
-/// Get the saved window size from the configuration
+/// Applies the runtime-owned startup configuration to local desktop side effects.
 ///
-/// # Arguments
-/// - `config_store`: A reference to the configuration store.
+/// The values live in the runtime configuration; the desktop only mirrors the
+/// client-side consequences (interface locale, autostart registration, the
+/// idle-sleep inhibitor and the Models.dev catalog refresh) and never opens a
+/// database.
+async fn apply_runtime_startup_config(
+    app: &tauri::AppHandle,
+    supervisor: Arc<crate::runtime_client::RuntimeSupervisor>,
+    snapshot: &crate::runtime_config::RuntimeConfigSnapshot,
+) {
+    // Reconcile the interface language with the persisted preference, mirroring
+    // the runtime's own normalization and writing the normalized value back.
+    let stored_lang = snapshot.get_string(CFG_INTERFACE_LANGUAGE, &libs::lang::get_system_locale());
+    let user_lang = libs::lang::normalize_interface_locale(&stored_lang).to_string();
+    if stored_lang != user_lang {
+        let normalized_value = serde_json::Value::String(user_lang.clone());
+        if let Err(error) = crate::runtime_data::set_config(
+            supervisor.as_ref(),
+            CFG_INTERFACE_LANGUAGE.to_string(),
+            normalized_value,
+        )
+        .await
+        {
+            log::error!("Failed to persist normalized interface language: {}", error);
+        }
+    }
+    set_locale(&user_lang);
+    log::info!("Set interface language to {}", user_lang);
+
+    // Reconcile the OS-managed autostart registration with the stored preference.
+    let auto_start = snapshot.get_bool(CFG_AUTO_START, false);
+    let autolaunch = app.autolaunch();
+    match autolaunch.is_enabled() {
+        Ok(is_enabled) if auto_start != is_enabled => {
+            let result = if auto_start {
+                autolaunch.enable()
+            } else {
+                autolaunch.disable()
+            };
+            if let Err(e) = result {
+                log::error!("Failed to synchronize autostart registration: {}", e);
+            } else {
+                log::info!("Autostart registration synchronized: {}", auto_start);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => log::error!("Failed to read autostart registration: {}", e),
+    }
+
+    // Mirror the idle-sleep inhibitor preference.
+    let workflow_prevent_idle_sleep = snapshot.get_bool(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false);
+    crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+        .set_enabled(workflow_prevent_idle_sleep);
+
+    spawn_models_dev_catalog(app.clone(), supervisor, snapshot.proxy_type());
+}
+
+/// Starts the Models.dev catalog refresh off the startup critical path.
 ///
-/// # Returns
-/// A tuple containing the saved window width and height.
-fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Option<WindowSize> {
-    let key = if window_label == "main" {
-        CFG_WINDOW_SIZE
-    } else if window_label == "assistant" {
-        CFG_ASSISTANT_WINDOW_SIZE
-    } else if window_label == "workflow" {
-        CFG_WORKFLOW_WINDOW_SIZE
-    } else if window_label == "proxy_switcher" {
-        CFG_PROXY_SWITCHER_WINDOW_SIZE
-    } else {
-        return None;
-    };
-    config_store.get_config(key, Some(WindowSize::default()))
+/// The catalog snapshot is a desktop-side cache; only the outbound proxy it
+/// refreshes through comes from the runtime configuration, so the proxy is
+/// re-read on each cadence instead of being copied out of a local store.
+fn spawn_models_dev_catalog(
+    app: tauri::AppHandle,
+    supervisor: Arc<crate::runtime_client::RuntimeSupervisor>,
+    initial_proxy: crate::ai::network::ProxyType,
+) {
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let catalog_service = match ModelsDevCatalogService::load(&app_data_dir) {
+            Ok(service) => service,
+            Err(error) => {
+                log::error!("Failed to initialize Models.dev catalog service: {}", error);
+                return;
+            }
+        };
+        app.manage(catalog_service.clone());
+        tauri::async_runtime::spawn(async move {
+            let mut proxy_type = initial_proxy;
+            loop {
+                if let Err(error) = catalog_service.refresh(proxy_type.clone()).await {
+                    log::warn!(
+                        "Models.dev catalog refresh failed; keeping last known snapshot: {}",
+                        error
+                    );
+                }
+                // Refresh failures are retried on a bounded hourly cadence; successful
+                // refreshes are gated by the service's persisted 24-hour timestamp.
+                tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+                if let Ok(snapshot) = crate::runtime_config::load(supervisor.as_ref()).await {
+                    proxy_type = snapshot.proxy_type();
+                }
+            }
+        });
+    });
+}
+
+/// Restores the saved geometry of the windows created during setup.
+///
+/// Runs once the runtime configuration snapshot is available; a window that is
+/// absent keeps the geometry it was created with. Window creation itself stays
+/// synchronous, so the first paint is never blocked on the runtime.
+fn restore_initial_windows(
+    app: &tauri::AppHandle,
+    snapshot: &crate::runtime_config::RuntimeConfigSnapshot,
+) {
+    for label in ["workflow", "assistant"] {
+        match app.get_webview_window(label) {
+            Some(window) => {
+                restore_window_config(&window, snapshot.restore_config(label));
+            }
+            None => log::warn!(
+                "Window '{}' was not created; skipping geometry restore",
+                label
+            ),
+        }
+    }
 }
 
 /// Remembers the size the user left a window at.
@@ -1175,11 +1062,14 @@ fn get_saved_window_size(config_store: Arc<MainStore>, window_label: &str) -> Op
 /// loop afterwards: they can arrive once initialization has finished while still
 /// describing the default size, which would overwrite the size the user left behind.
 ///
-/// A window the user cannot see cannot be resized by the user, so nothing is written
+/// A window the user cannot see cannot be resized by the user, so nothing is returned
 /// while it is hidden.
-fn save_current_window_size(window: &tauri::Window, config_store: &Arc<MainStore>) {
+fn current_saved_window_size(
+    window: &tauri::Window,
+    snapshot: &crate::runtime_config::RuntimeConfigSnapshot,
+) -> Option<WindowSize> {
     if !window.is_visible().unwrap_or(false) {
-        return;
+        return None;
     }
 
     let (Ok(size), Ok(scale_factor)) = (window.inner_size(), window.scale_factor()) else {
@@ -1187,13 +1077,13 @@ fn save_current_window_size(window: &tauri::Window, config_store: &Arc<MainStore
             "Failed to read the current size of window '{}'",
             window.label()
         );
-        return;
+        return None;
     };
 
     // Convert the physical size to the logical size the configuration stores.
     let logical_size = size.to_logical::<f64>(scale_factor);
     if logical_size.width <= 0.0 || logical_size.height <= 0.0 {
-        return;
+        return None;
     }
 
     // The window may be holding the docked ChatHub page, which widened it by the width that
@@ -1202,21 +1092,15 @@ fn save_current_window_size(window: &tauri::Window, config_store: &Arc<MainStore
     // is wider than the workflow UI ever was.
     let width = width_without_docked_page(window, logical_size.width);
 
-    let saved_size =
-        get_saved_window_size(config_store.clone(), window.label()).unwrap_or_default();
+    let saved_size = snapshot.window_size(window.label()).unwrap_or_default();
     if saved_size.width == width && saved_size.height == logical_size.height {
-        return;
+        return None;
     }
 
-    if let Err(e) = config_store.set_window_size(
-        WindowSize {
-            width,
-            height: logical_size.height,
-        },
-        window.label(),
-    ) {
-        error!("Failed to set window size: {}", e);
-    }
+    Some(WindowSize {
+        width,
+        height: logical_size.height,
+    })
 }
 
 /// Width of a window without the space the docked ChatHub page is holding.
@@ -1280,8 +1164,27 @@ fn schedule_window_size_save(window: &tauri::Window) {
     let timer = spawn(async move {
         tokio::time::sleep(WINDOW_GEOMETRY_SAVE_DELAY).await;
 
-        if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
-            save_current_window_size(&window, config_store.inner());
+        let Some(snapshot) = window
+            .try_state::<Arc<crate::runtime_config::RuntimeConfigCache>>()
+            .and_then(|cache| cache.current())
+        else {
+            return;
+        };
+        let Some(size) = current_saved_window_size(&window, snapshot.as_ref()) else {
+            return;
+        };
+        let Some(supervisor) = window
+            .try_state::<Arc<crate::runtime_client::RuntimeSupervisor>>()
+            .map(|state| state.inner().clone())
+        else {
+            error!("Runtime supervisor is not registered; skipping window size save");
+            return;
+        };
+
+        if let Err(error) =
+            crate::runtime_config::save_window_size(supervisor.as_ref(), window.label(), size).await
+        {
+            error!("Failed to save window size: {}", error);
         }
     });
 
@@ -1292,11 +1195,7 @@ fn schedule_window_size_save(window: &tauri::Window) {
 ///
 /// A new move replaces the pending write, so dragging a window stores the position it
 /// ended at instead of every step along the way.
-fn schedule_window_position_save(
-    window: &tauri::Window,
-    get_saved_pos: fn(&Arc<MainStore>) -> Option<MainWindowPosition>,
-    save_pos: fn(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
-) {
+fn schedule_window_position_save(window: &tauri::Window, key: &'static str) {
     let label = window.label().to_string();
     let window = window.clone();
 
@@ -1312,72 +1211,64 @@ fn schedule_window_position_save(
     let timer = spawn(async move {
         tokio::time::sleep(WINDOW_GEOMETRY_SAVE_DELAY).await;
 
-        if let Some(config_store) = window.try_state::<Arc<MainStore>>() {
-            save_window_position(&window, config_store.inner(), get_saved_pos, save_pos);
+        let Some(snapshot) = window
+            .try_state::<Arc<crate::runtime_config::RuntimeConfigCache>>()
+            .and_then(|cache| cache.current())
+        else {
+            return;
+        };
+        let Some(position) = current_saved_window_position(&window, snapshot.as_ref(), key) else {
+            return;
+        };
+        let Some(supervisor) = window
+            .try_state::<Arc<crate::runtime_client::RuntimeSupervisor>>()
+            .map(|state| state.inner().clone())
+        else {
+            error!("Runtime supervisor is not registered; skipping window position save");
+            return;
+        };
+
+        if let Err(error) =
+            crate::runtime_config::save_window_position(supervisor.as_ref(), key, position).await
+        {
+            error!("Failed to save window position: {}", error);
         }
     });
 
     timers.insert(label, timer);
 }
 
-/// Get the saved window position from the configuration
-///
-/// # Arguments
-/// - `config_store`: A reference to the configuration store.
-///
-/// # Returns
-/// A tuple containing the saved window x and y positions.
-fn get_saved_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
-    config_store.get_config(CFG_WINDOW_POSITION, Some(MainWindowPosition::default()))
-}
-
-/// Get the saved workflow window position from the configuration
-///
-/// # Arguments
-/// - `config_store`: A reference to the configuration store.
-///
-/// # Returns
-/// A tuple containing the saved window x and y positions.
-fn get_saved_workflow_window_position(config_store: &Arc<MainStore>) -> Option<MainWindowPosition> {
-    config_store.get_config(
-        CFG_WORKFLOW_WINDOW_POSITION,
-        Some(MainWindowPosition::default()),
-    )
-}
-
-/// Helper function to save window position for main and workflow windows
+/// The position a window should be remembered at, if it differs from the stored one.
 ///
 /// The position is read from the window itself instead of the move event, because the
 /// event carries the position the window had when the platform reported the move: a
 /// window is created centered before its saved position is restored, while setup runs,
 /// and that early report only reaches the event loop afterwards, where it would store
 /// the default position over the one the user left behind.
-///
-/// # Arguments
-/// - `window`: The window whose position is being saved
-/// - `config_store`: The configuration store
-/// - `get_saved_pos`: Function to get the saved position for this window type
-/// - `save_pos`: Function to save the position for this window type
-fn save_window_position(
+fn current_saved_window_position(
     window: &tauri::Window,
-    config_store: &Arc<MainStore>,
-    get_saved_pos: fn(&Arc<MainStore>) -> Option<MainWindowPosition>,
-    save_pos: fn(&MainStore, MainWindowPosition) -> std::result::Result<(), db::StoreError>,
-) {
+    snapshot: &crate::runtime_config::RuntimeConfigSnapshot,
+    key: &str,
+) -> Option<MainWindowPosition> {
     let Ok(current_position) = window.outer_position() else {
         warn!(
             "Failed to read the current position of window '{}'",
             window.label()
         );
-        return;
+        return None;
     };
 
-    let old_pos = get_saved_pos(config_store);
+    let old_pos = if key == CFG_WORKFLOW_WINDOW_POSITION {
+        snapshot.workflow_window_position()
+    } else {
+        snapshot.main_window_position()
+    };
     let screen_name = get_screen_name(window);
 
-    if old_pos.map_or(true, |p| {
-        screen_name != p.screen_name || current_position.x != p.x || current_position.y != p.y
-    }) {
+    if old_pos.screen_name != screen_name
+        || old_pos.x != current_position.x
+        || old_pos.y != current_position.y
+    {
         let current_window_size = match window.outer_size() {
             Ok(size) => size,
             Err(e) => {
@@ -1386,7 +1277,7 @@ fn save_window_position(
                     window.label(),
                     e
                 );
-                return;
+                return None;
             }
         };
 
@@ -1402,18 +1293,17 @@ fn save_window_position(
                 current_position.x,
                 current_position.y
             );
-            return;
+            return None;
         }
 
-        let pos = MainWindowPosition {
+        return Some(MainWindowPosition {
             screen_name,
             x: current_position.x,
             y: current_position.y,
-        };
-        if let Err(e) = save_pos(config_store.as_ref(), pos) {
-            error!("Failed to save window position: {}", e);
-        }
+        });
     }
+
+    None
 }
 
 // fn setup_text_monitor(state: State<Arc<Mutex<TextMonitorManager>>>) -> Result<(), String> {

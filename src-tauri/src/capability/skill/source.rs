@@ -228,18 +228,25 @@ mod tests {
 
     #[test]
     fn a_local_source_requires_a_path_and_a_zip_extension() {
-        let directory = SkillSource::parse(&json!({ "kind": "local_directory", "path": "/tmp/demo" }))
-            .expect("directory source");
+        let directory =
+            SkillSource::parse(&json!({ "kind": "local_directory", "path": "/tmp/demo" }))
+                .expect("directory source");
         assert_eq!(directory.kind(), "local_directory");
 
         assert!(SkillSource::parse(&json!({ "kind": "local_directory", "path": " " })).is_err());
-        assert!(SkillSource::parse(&json!({ "kind": "local_zip", "path": "/tmp/demo.tar" })).is_err());
-        assert!(SkillSource::parse(&json!({ "kind": "local_zip", "path": "/tmp/demo.zip" })).is_ok());
+        assert!(
+            SkillSource::parse(&json!({ "kind": "local_zip", "path": "/tmp/demo.tar" })).is_err()
+        );
+        assert!(
+            SkillSource::parse(&json!({ "kind": "local_zip", "path": "/tmp/demo.zip" })).is_ok()
+        );
     }
 
     #[test]
     fn unknown_source_kinds_and_fields_are_rejected() {
-        assert!(SkillSource::parse(&json!({ "kind": "http", "url": "https://example.test" })).is_err());
+        assert!(
+            SkillSource::parse(&json!({ "kind": "http", "url": "https://example.test" })).is_err()
+        );
         assert!(SkillSource::parse(&json!({
             "kind": "local_directory",
             "path": "/tmp/demo",
@@ -282,8 +289,19 @@ mod tests {
     fn skill_names_follow_the_agent_skills_convention() {
         assert!(validate_skill_name("demo").is_ok());
         assert!(validate_skill_name("demo-skill-2").is_ok());
-        for invalid in ["", "Demo", "-demo", "demo-", "de mo", "demo_skill", "a".repeat(65).as_str()] {
-            assert!(validate_skill_name(invalid).is_err(), "{invalid} must be rejected");
+        for invalid in [
+            "",
+            "Demo",
+            "-demo",
+            "demo-",
+            "de mo",
+            "demo_skill",
+            "a".repeat(65).as_str(),
+        ] {
+            assert!(
+                validate_skill_name(invalid).is_err(),
+                "{invalid} must be rejected"
+            );
         }
     }
 

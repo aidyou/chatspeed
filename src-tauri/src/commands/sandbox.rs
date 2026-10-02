@@ -1,13 +1,18 @@
+//! Sandbox scheme Tauri commands.
+//!
+//! Sandbox scheme persistence is runtime-owned and reached through
+//! `/control/v1/data-commands/*`; the runtime generates scheme and item ids.
+//! Host runtime detection is a pure device probe and stays local, and the
+//! `cs://sync-state` notification remains a local desktop concern.
+
 use std::sync::Arc;
 
 use tauri::{command, Emitter, State};
 
-use crate::{
-    db::{MainStore, SandboxScheme},
-    tools::{
-        AgentSandboxConfig, SandboxDetectorOptions, SandboxRuntimeDetector,
-        SandboxRuntimeStatusSummary,
-    },
+use crate::db::SandboxScheme;
+use crate::runtime_client::RuntimeSupervisor;
+use crate::tools::{
+    AgentSandboxConfig, SandboxDetectorOptions, SandboxRuntimeDetector, SandboxRuntimeStatusSummary,
 };
 
 fn detect_sandbox_runtime_status(
@@ -57,34 +62,12 @@ pub async fn get_sandbox_scheme_runtime_status(
     Ok(detect_sandbox_runtime_status(Some(sandbox_config)))
 }
 
+/// Lists all sandbox schemes.
 #[command]
 pub async fn get_sandbox_schemes(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
 ) -> Result<Vec<SandboxScheme>, String> {
-    state
-        .get_all_sandbox_schemes()
-        .map_err(|error| error.to_string())
-}
-
-fn assign_missing_scheme_item_ids(
-    scheme: &mut SandboxScheme,
-    tsid_generator: &crate::libs::tsid::TsidGenerator,
-) -> Result<(), String> {
-    for profile in &mut scheme.config.profiles {
-        if profile.id.trim().is_empty() {
-            profile.id = tsid_generator
-                .generate()
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    for rule in &mut scheme.config.host_rules {
-        if rule.id.trim().is_empty() {
-            rule.id = tsid_generator
-                .generate()
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    Ok(())
+    crate::runtime_data::get_sandbox_schemes(supervisor.inner().as_ref()).await
 }
 
 fn emit_sandbox_schemes_changed(app: &tauri::AppHandle) {
@@ -94,104 +77,38 @@ fn emit_sandbox_schemes_changed(app: &tauri::AppHandle) {
     );
 }
 
+/// Adds a sandbox scheme; the runtime assigns the scheme and item ids.
 #[command]
 pub async fn add_sandbox_scheme(
     app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
-    mut scheme: SandboxScheme,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    scheme: SandboxScheme,
 ) -> Result<String, String> {
-    scheme.id = tsid_generator
-        .generate()
-        .map_err(|error| error.to_string())?;
-    assign_missing_scheme_item_ids(&mut scheme, &tsid_generator)?;
-    state
-        .add_sandbox_scheme(&scheme)
-        .map_err(|error| error.to_string())?;
+    let id = crate::runtime_data::add_sandbox_scheme(supervisor.inner().as_ref(), scheme).await?;
     emit_sandbox_schemes_changed(&app);
-    Ok(scheme.id)
+    Ok(id)
 }
 
+/// Updates a sandbox scheme.
 #[command]
 pub async fn update_sandbox_scheme(
     app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
-    tsid_generator: State<'_, Arc<crate::libs::tsid::TsidGenerator>>,
-    mut scheme: SandboxScheme,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    scheme: SandboxScheme,
 ) -> Result<(), String> {
-    assign_missing_scheme_item_ids(&mut scheme, &tsid_generator)?;
-    state
-        .update_sandbox_scheme(&scheme)
-        .map_err(|error| error.to_string())?;
+    crate::runtime_data::update_sandbox_scheme(supervisor.inner().as_ref(), scheme).await?;
     emit_sandbox_schemes_changed(&app);
     Ok(())
 }
 
+/// Deletes a sandbox scheme.
 #[command]
 pub async fn delete_sandbox_scheme(
     app: tauri::AppHandle,
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: String,
 ) -> Result<(), String> {
-    state
-        .delete_sandbox_scheme(&id)
-        .map_err(|error| error.to_string())?;
+    crate::runtime_data::delete_sandbox_scheme(supervisor.inner().as_ref(), id).await?;
     emit_sandbox_schemes_changed(&app);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tools::{
-        HostCommandRule, SandboxNetworkPolicy, SandboxProfileConfig, SandboxSchemeConfig,
-        WorkspaceAccess,
-    };
-
-    #[test]
-    fn assigns_tsid_to_new_scheme_items_without_client_supplied_ids() {
-        let generator = crate::libs::tsid::TsidGenerator::new(1).expect("create TSID generator");
-        let mut scheme = SandboxScheme {
-            id: "scheme".to_string(),
-            name: "Scheme".to_string(),
-            description: String::new(),
-            config: SandboxSchemeConfig {
-                runtime_preference: Default::default(),
-                profiles: vec![SandboxProfileConfig {
-                    id: String::new(),
-                    name: "Bash".to_string(),
-                    enabled: true,
-                    priority: 0,
-                    command_patterns: vec!["^bash(?:\\s|$)".to_string()],
-                    runtime_preference: Default::default(),
-                    image: "bash:latest".to_string(),
-                    instance_name: None,
-                    image_size_bytes: None,
-                    network: SandboxNetworkPolicy::default(),
-                    resources: Default::default(),
-                    workspace_access: WorkspaceAccess::ReadWrite,
-                }],
-                host_rules: vec![HostCommandRule {
-                    id: String::new(),
-                    name: "Tauri Host".to_string(),
-                    enabled: true,
-                    priority: 10,
-                    command_patterns: vec![
-                        "^(?:pnpm|npm|yarn|npx)(?:\\s+run)?\\s+tauri(?:\\s|$)".to_string()
-                    ],
-                }],
-            },
-            disabled: false,
-            created_at: None,
-            updated_at: None,
-        };
-
-        assign_missing_scheme_item_ids(&mut scheme, &generator).expect("assign scheme item IDs");
-
-        assert_eq!(scheme.config.profiles[0].id.len(), 13);
-        assert_eq!(scheme.config.host_rules[0].id.len(), 13);
-        scheme
-            .validate()
-            .expect("generated IDs satisfy scheme validation");
-    }
 }

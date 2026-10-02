@@ -25,6 +25,63 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
+/// The desktop client shares the bind helper with the legacy static HTTP server.
+#[cfg(feature = "desktop")]
+use crate::http::server::try_available_port;
+
+/// Binds the first available port at or after `preferred`.
+///
+/// The desktop client and a runtime owner serve the proxy on the same listen
+/// address convention. Desktop delegates to `crate::http::server`, which also
+/// owns the legacy static server; the desktop-free runtime cannot link that
+/// module, so it probes the same order locally: skip a port that answers on
+/// loopback, then require the wildcard bind to succeed before taking it.
+///
+/// On macOS, listeners bound to `0.0.0.0:PORT` and `127.0.0.1:PORT` can
+/// otherwise coexist, causing requests for the same loopback port to cross
+/// processes.
+#[cfg(not(feature = "desktop"))]
+async fn try_available_port(
+    listen: &str,
+    preferred: u16,
+) -> Result<tokio::net::TcpListener, String> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    let bind_ip: IpAddr = listen
+        .parse()
+        .map_err(|error| format!("failed to parse the proxy listen address {listen}: {error}"))?;
+    let (loopback_ip, wildcard_ip) = match bind_ip {
+        IpAddr::V4(_) => (
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        ),
+        IpAddr::V6(_) => (
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        ),
+    };
+
+    for port in preferred..=u16::MAX {
+        if std::net::TcpStream::connect_timeout(
+            &SocketAddr::new(loopback_ip, port),
+            Duration::from_millis(10),
+        )
+        .is_ok()
+        {
+            continue;
+        }
+        if std::net::TcpListener::bind(SocketAddr::new(wildcard_ip, port)).is_err() {
+            continue;
+        }
+        if let Ok(listener) = tokio::net::TcpListener::bind(SocketAddr::new(bind_ip, port)).await {
+            return Ok(listener);
+        }
+    }
+    Err(format!(
+        "no port at or after {preferred} is available for the chat completion proxy"
+    ))
+}
+
 /// How many times a bind is retried before the proxy reports failure.
 const MAX_ATTEMPTS: u32 = 5;
 
@@ -68,7 +125,7 @@ pub async fn start(
     let mut attempts = 0;
     loop {
         attempts += 1;
-        match crate::http::server::try_available_port(&listen, port).await {
+        match try_available_port(&listen, port).await {
             Ok(listener) => {
                 let addr = listener
                     .local_addr()
@@ -91,10 +148,7 @@ pub async fn start(
                         Err(error) => log::error!("CCProxy server error: {error}"),
                     }
                 });
-                return Ok(CcproxyServer {
-                    shutdown,
-                    task,
-                });
+                return Ok(CcproxyServer { shutdown, task });
             }
             Err(error) => {
                 log::error!("Failed to start ccproxy server (attempt {attempts}): {error}");

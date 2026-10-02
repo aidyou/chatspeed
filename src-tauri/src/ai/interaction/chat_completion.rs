@@ -3,13 +3,19 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::str::FromStr as _;
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{
     mpsc::{self, Receiver, Sender},
     Mutex,
 };
 
+use crate::ccproxy::CCProxyError;
 use crate::ccproxy::{decision, ChatProtocol};
+#[cfg(feature = "desktop")]
+use crate::constants::DEFAULT_WEB_SEARCH_TOOL;
+use crate::libs::window_channels::WindowChannels;
+#[cfg(feature = "desktop")]
 use crate::search::SearchResult;
 use crate::tools::ToolManager;
 use crate::{
@@ -28,9 +34,7 @@ use crate::{
     },
     db::MainStore,
     error::AppError,
-    libs::window_channels::WindowChannels,
 };
-use crate::{ccproxy::CCProxyError, constants::DEFAULT_WEB_SEARCH_TOOL};
 
 macro_rules! init_chats {
     () => {{
@@ -71,6 +75,15 @@ pub enum AiChatEnum {
     OpenAI(OpenAIChat),
 }
 
+/// Placeholder for the desktop host handle in a runtime build.
+///
+/// The shared `ChatState::new` keeps the same three-argument shape in both
+/// runtimes; a runtime process has no Tauri handle, so this type has no values
+/// and the only accepted argument is `None`.
+#[cfg(not(feature = "desktop"))]
+#[derive(Debug)]
+pub enum DesktopHostHandle {}
+
 pub struct ChatState {
     pub chats: Arc<Mutex<HashMap<ChatProtocol, HashMap<String, AiChatEnum>>>>,
     pub channels: Arc<WindowChannels>,
@@ -85,11 +98,9 @@ pub struct ChatState {
 }
 
 impl ChatState {
-    pub fn new(
-        channels: Arc<WindowChannels>,
-        app_handle_option: Option<AppHandle>,
-        main_store: Arc<MainStore>,
-    ) -> Arc<Self> {
+    /// Shared initialization every runtime needs: the chat map, one tool
+    /// manager, the message history and the dispatcher loop.
+    fn build(channels: Arc<WindowChannels>, main_store: Arc<MainStore>) -> Arc<Self> {
         let (dispatcher_input_tx, dispatcher_input_rx) = mpsc::channel(256);
 
         let chats = init_chats!();
@@ -99,7 +110,7 @@ impl ChatState {
         let state = Arc::new(Self {
             chats: Arc::new(Mutex::new(chats)),
             channels,
-            tool_manager: tool_manager.clone(),
+            tool_manager,
             messages_history: Arc::new(Mutex::new(HashMap::new())),
             dispatcher_input_tx,
             main_store,
@@ -113,7 +124,21 @@ impl ChatState {
             dispatcher_input_rx,
         ));
 
+        state
+    }
+
+    /// Desktop constructor: additionally forwards MCP status changes to the
+    /// Tauri event bus when an `AppHandle` is available.
+    #[cfg(feature = "desktop")]
+    pub fn new(
+        channels: Arc<WindowChannels>,
+        app_handle_option: Option<AppHandle>,
+        main_store: Arc<MainStore>,
+    ) -> Arc<Self> {
+        let state = Self::build(channels, main_store);
+
         if let Some(app_handle) = app_handle_option {
+            let tool_manager = state.tool_manager.clone();
             let mut mcp_status_receiver = tool_manager.subscribe_mcp_status_events();
             let app_handle_clone_for_spawn = app_handle.clone();
             tokio::spawn(async move {
@@ -165,6 +190,27 @@ impl ChatState {
             });
         }
         state
+    }
+
+    /// Runtime constructor mirroring the desktop three-argument shape, so
+    /// shared callers and tests are identical in both runtimes.
+    ///
+    /// A runtime process has no Tauri handle, so the host slot is inert and the
+    /// only accepted value is `None`.
+    #[cfg(not(feature = "desktop"))]
+    pub fn new(
+        channels: Arc<WindowChannels>,
+        _app_handle_option: Option<DesktopHostHandle>,
+        main_store: Arc<MainStore>,
+    ) -> Arc<Self> {
+        Self::build(channels, main_store)
+    }
+
+    /// Transport-neutral constructor for a process without a desktop host. It
+    /// owns the same chats, tool manager and dispatcher loop, and reports MCP
+    /// state through whatever client protocol the runtime exposes.
+    pub fn runtime_new(channels: Arc<WindowChannels>, main_store: Arc<MainStore>) -> Arc<Self> {
+        Self::build(channels, main_store)
     }
 }
 
@@ -369,7 +415,9 @@ fn is_decision_chat_provider(provider: &crate::db::AiModel) -> bool {
 }
 
 fn validate_chat_provider(store: &MainStore, provider_id: i64) -> crate::error::Result<()> {
-    if store.config.get_ai_model_by_id(provider_id)
+    if store
+        .config
+        .get_ai_model_by_id(provider_id)
         .is_ok_and(|provider| is_decision_chat_provider(&provider))
     {
         return Err(CCProxyError::InvalidProtocolError("decision".to_string()).into());
@@ -384,8 +432,14 @@ mod chat_provider_tests {
 
     #[test]
     fn decision_cannot_enter_chat_while_chat_provider_still_can() {
-        let decision = AiModel { api_protocol: "decision".into(), ..Default::default() };
-        let chat = AiModel { api_protocol: "openai".into(), ..Default::default() };
+        let decision = AiModel {
+            api_protocol: "decision".into(),
+            ..Default::default()
+        };
+        let chat = AiModel {
+            api_protocol: "openai".into(),
+            ..Default::default()
+        };
         assert!(is_decision_chat_provider(&decision));
         assert!(!is_decision_chat_provider(&chat));
     }
@@ -896,34 +950,48 @@ async fn global_message_processor_loop(
                                 }
                             };
 
-                            // Check if this is a web search result and extract reference information
-                            let mut reference_data: Option<Vec<Value>> = None;
-                            if t_name_clone == DEFAULT_WEB_SEARCH_TOOL {
-                                if let Some(structured_content) =
-                                    tool_execution_actual_result.get("structured_content")
+                            // Check if this is a web search result and extract reference information.
+                            //
+                            // Web search is a desktop-only tool; a runtime process receives web
+                            // results through a client capability bridge, so it has nothing to
+                            // parse here and must not link the search stack.
+                            let reference_data: Option<Vec<Value>> = {
+                                #[cfg(feature = "desktop")]
                                 {
-                                    if let Ok(search_results) =
-                                        serde_json::from_value::<Vec<SearchResult>>(
-                                            structured_content.clone(),
-                                        )
-                                    {
-                                        if !search_results.is_empty() {
-                                            reference_data = Some(
-                                                search_results
-                                                    .iter()
-                                                    .map(|result| {
-                                                        json!({
-                                                            "id": result.id,
-                                                            "title": result.title,
-                                                            "url": result.url
-                                                        })
-                                                    })
-                                                    .collect(),
-                                            );
+                                    let mut reference_data: Option<Vec<Value>> = None;
+                                    if t_name_clone == DEFAULT_WEB_SEARCH_TOOL {
+                                        if let Some(structured_content) =
+                                            tool_execution_actual_result.get("structured_content")
+                                        {
+                                            if let Ok(search_results) =
+                                                serde_json::from_value::<Vec<SearchResult>>(
+                                                    structured_content.clone(),
+                                                )
+                                            {
+                                                if !search_results.is_empty() {
+                                                    reference_data = Some(
+                                                        search_results
+                                                            .iter()
+                                                            .map(|result| {
+                                                                json!({
+                                                                    "id": result.id,
+                                                                    "title": result.title,
+                                                                    "url": result.url
+                                                                })
+                                                            })
+                                                            .collect(),
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
+                                    reference_data
                                 }
-                            }
+                                #[cfg(not(feature = "desktop"))]
+                                {
+                                    None
+                                }
+                            };
 
                             let mut tool_result_msg_for_history = json!({
                                 "role": "tool",

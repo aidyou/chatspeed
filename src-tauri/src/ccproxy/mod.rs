@@ -3,12 +3,16 @@
 //! This module provides HTTP endpoints to proxy chat completion requests
 //! to various AI models, offering a unified interface and centralized key management.
 pub(crate) mod adapter;
-pub(crate) mod decision;
 mod auth;
+pub(crate) mod decision;
 mod errors;
 mod handler;
 mod helper;
 pub mod launcher;
+// Runtime-only home for the chat proxy resolver: the desktop crate takes it
+// from `commands::chat`, which the runtime cannot link.
+#[cfg(not(feature = "desktop"))]
+pub mod proxy_settings;
 mod router;
 mod types;
 pub mod utils;

@@ -360,10 +360,7 @@ mod tests {
 
     #[test]
     fn a_generated_key_keeps_the_callers_key_when_one_was_given() {
-        assert_eq!(
-            generated_idempotency_key(&Some("mine".to_string())),
-            "mine"
-        );
+        assert_eq!(generated_idempotency_key(&Some("mine".to_string())), "mine");
         // A blank key would be refused by the server, so one is minted.
         let generated = generated_idempotency_key(&Some("   ".to_string()));
         assert!(generated.starts_with("cs-skill-"));

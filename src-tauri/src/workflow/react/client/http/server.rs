@@ -13,6 +13,9 @@ use super::auth;
 use super::discovery::{self, ControlPlaneDiscovery, CONTROL_PLANE_HOST, CONTROL_PROTOCOL_VERSION};
 use super::dto::{self, MetaResponse};
 use super::sse;
+use crate::capability::mcp_service::McpServerView;
+use crate::db::{Agent, Mcp};
+use crate::mcp::client::McpStatus;
 use crate::workflow::react::application::{
     ApplicationError, WorkflowApplicationService, WorkflowCreateRequest, WorkflowEventsQuery,
     WorkflowStartRequest,
@@ -23,11 +26,18 @@ use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::{
+    ClientCapabilityStatus, ClientLease, ClientLeaseRequest, ClientLeaseResponse,
+};
 use lru::LruCache;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+#[cfg(not(feature = "desktop"))]
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
@@ -36,6 +46,13 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Maximum number of completed idempotency results retained for replay.
 const IDEMPOTENCY_CACHE_SIZE: usize = 1024;
+
+/// Service name the desktop in-process control plane reports on `/meta`.
+///
+/// A standalone runtime reports its own identity through
+/// [`RuntimeControlPlane::service_name`], so a client can reject the desktop
+/// control plane as the wrong endpoint instead of silently speaking to it.
+pub const DESKTOP_SERVICE_NAME: &str = "chatspeed-workflow-control-plane";
 
 /// The durable journal scope of a mutation that arrived over `/control/v1`.
 ///
@@ -215,6 +232,85 @@ impl Drop for InFlightGuard {
     }
 }
 
+/// Runtime-only control-plane extension.
+///
+/// Compiled only for a desktop-free runtime build. The desktop in-process
+/// control plane serves exactly its previous routes and identity, so nothing in
+/// this module is linked into the desktop process.
+#[cfg(not(feature = "desktop"))]
+mod runtime_extension {
+    use super::*;
+
+    /// Lease lifecycle failure surfaced by a [`RuntimeControlPlane`].
+    ///
+    /// The canonical server maps these to the same stable status codes and error
+    /// envelope the rest of the control plane uses, so the runtime never needs
+    /// its own HTTP layer to expose the client lease routes.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum RuntimeLeaseError {
+        /// The lease request was malformed (e.g. an empty client id).
+        InvalidInput(String),
+        /// No active lease exists for the client.
+        NotFound(String),
+    }
+
+    /// Runtime-owned extension injected into the single canonical control
+    /// plane.
+    ///
+    /// A standalone runtime process supplies this so the same server that
+    /// serves the workflow/capability/automation routes also serves the
+    /// client-lease lifecycle the runtime owns, and reports the runtime's own
+    /// service identity on `/meta`.
+    pub trait RuntimeControlPlane: Send + Sync + 'static {
+        /// Service name reported by `GET /control/v1/meta`.
+        fn service_name(&self) -> &str;
+
+        /// Registers (or replaces) a client lease.
+        fn register_lease(
+            &self,
+            request: &ClientLeaseRequest,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError>;
+
+        /// Extends an existing, non-expired lease.
+        fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError>;
+
+        /// Resolves a live lease for a `(client_id, lease_id)` proof.
+        ///
+        /// The runtime resolves its own lease record, so a client bridge can
+        /// prove identity without ever trusting a body-supplied kind. An
+        /// expired or mismatched lease resolves to [`RuntimeLeaseError`].
+        fn validate_lease(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+        ) -> Result<ClientLease, RuntimeLeaseError>;
+
+        /// Releases a lease.
+        fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError>;
+    }
+
+    /// Options for starting the control plane as the standalone runtime.
+    pub struct RuntimeControlPlaneOptions {
+        /// Directory that receives this instance's discovery document.
+        pub discovery_dir: std::path::PathBuf,
+        /// Lease lifecycle the runtime owns.
+        pub leases: Arc<dyn RuntimeControlPlane>,
+        /// Runtime-owned chat/model executor.
+        ///
+        /// `None` keeps the server desktop-like and makes every chat/model route
+        /// answer a structured `runtime_unavailable` instead of pretending to run
+        /// a turn.
+        pub chat:
+            Option<Arc<dyn crate::workflow::react::client::http::chat_commands::RuntimeChatPlane>>,
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+pub use runtime_extension::{RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError};
+
+#[cfg(not(feature = "desktop"))]
+pub use crate::workflow::react::client::http::chat_commands::{ChatStreamBroker, RuntimeChatPlane};
+
 /// Shared router state.
 #[derive(Clone)]
 pub struct ControlPlaneState {
@@ -222,6 +318,21 @@ pub struct ControlPlaneState {
     pub token: Arc<String>,
     pub server_instance_id: Arc<String>,
     pub(crate) idempotency: Arc<IdempotencyTracker>,
+    /// Present only when this process is the standalone runtime owner.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) runtime: Option<Arc<dyn RuntimeControlPlane>>,
+    /// Present only when this process owns the runtime chat executor.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) chat: Option<Arc<dyn RuntimeChatPlane>>,
+    /// Per-chat SSE fan-out owned by this process.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) chat_streams: Arc<ChatStreamBroker>,
+    /// Live client WebView capability bridges owned by this process.
+    ///
+    /// The registry is the runtime half of the client-pull bridge: it is the
+    /// single authority for which client capabilities are currently available.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) bridge: Arc<super::client_bridge::ClientBridgeRegistry>,
 }
 
 /// Handle for a running control-plane server.
@@ -230,6 +341,10 @@ pub struct ControlPlaneHandle {
     pub port: u16,
     pub server_instance_id: String,
     shutdown: tokio::sync::watch::Sender<bool>,
+    /// Flips to `true` once the listener, the SSE streams and the owner-fenced
+    /// discovery cleanup have all finished.
+    #[cfg(not(feature = "desktop"))]
+    finished: tokio::sync::watch::Receiver<bool>,
 }
 
 /// The active control-plane handle, retained so the desktop app can request a
@@ -248,6 +363,21 @@ impl ControlPlaneHandle {
     /// still belongs to this instance.
     pub fn shutdown(&self) {
         let _ = self.shutdown.send(true);
+    }
+
+    /// Waits until the server has fully stopped and removed its own discovery
+    /// document.
+    ///
+    /// The runtime holds its runtime-directory lock across this await, so the
+    /// lock is only released after the canonical HTTP server is truly gone.
+    #[cfg(not(feature = "desktop"))]
+    pub async fn wait(&self) {
+        let mut finished = self.finished.clone();
+        while !*finished.borrow() {
+            if finished.changed().await.is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -274,13 +404,50 @@ pub async fn start(svc: Arc<WorkflowApplicationService>) -> Result<ControlPlaneH
 /// Starts the control plane and publishes its discovery document in an
 /// explicit runtime directory.
 ///
-/// `chatspeed-headless` passes its own `<data-dir>/runtime` so a headless
-/// instance and a desktop instance on the same machine publish independent
-/// endpoints and tokens (AC-1/AC-6). Passing `None` keeps the desktop default
+/// The standalone runtime passes its own `<runtime-dir>` so a runtime instance
+/// and a desktop instance on the same machine publish independent endpoints and
+/// tokens (AC-1/AC-6). Passing `None` keeps the desktop default
 /// (`${CHATSPEED_HOME:-~/.chatspeed}/runtime`).
 pub async fn start_with_discovery_dir(
     svc: Arc<WorkflowApplicationService>,
     discovery_dir: Option<std::path::PathBuf>,
+) -> Result<ControlPlaneHandle, String> {
+    #[cfg(feature = "desktop")]
+    {
+        start_inner(svc, discovery_dir).await
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        start_inner(svc, discovery_dir, None, None).await
+    }
+}
+
+/// Starts the control plane as the standalone runtime.
+///
+/// This is the single canonical server: it serves the same workflow,
+/// capability, automation and SSE routes, reports the runtime's service
+/// identity on `/meta`, and adds the bearer-protected client-lease lifecycle
+/// (`register`/`renew`/`release`). The runtime keeps its own runtime-directory
+/// lock and awaits [`ControlPlaneHandle::wait`] before releasing it.
+#[cfg(not(feature = "desktop"))]
+pub async fn start_runtime_control_plane(
+    svc: Arc<WorkflowApplicationService>,
+    options: RuntimeControlPlaneOptions,
+) -> Result<ControlPlaneHandle, String> {
+    start_inner(
+        svc,
+        Some(options.discovery_dir),
+        Some(options.leases),
+        options.chat,
+    )
+    .await
+}
+
+async fn start_inner(
+    svc: Arc<WorkflowApplicationService>,
+    discovery_dir: Option<std::path::PathBuf>,
+    #[cfg(not(feature = "desktop"))] runtime: Option<Arc<dyn RuntimeControlPlane>>,
+    #[cfg(not(feature = "desktop"))] chat: Option<Arc<dyn RuntimeChatPlane>>,
 ) -> Result<ControlPlaneHandle, String> {
     let token = Arc::new(generate_token());
     let server_instance_id = Arc::new(svc.gateway.broker().server_instance_id().to_string());
@@ -290,7 +457,22 @@ pub async fn start_with_discovery_dir(
         token: token.clone(),
         server_instance_id: server_instance_id.clone(),
         idempotency: Arc::new(IdempotencyTracker::new(IDEMPOTENCY_CACHE_SIZE)),
+        #[cfg(not(feature = "desktop"))]
+        runtime,
+        #[cfg(not(feature = "desktop"))]
+        chat,
+        #[cfg(not(feature = "desktop"))]
+        chat_streams: Arc::new(ChatStreamBroker::new()),
+        #[cfg(not(feature = "desktop"))]
+        bridge: Arc::new(super::client_bridge::ClientBridgeRegistry::with_defaults()),
     };
+
+    // The lease sweeper prunes bridge sessions whose client lease is gone or
+    // expired, so a dead bridge fails its pending invocations instead of
+    // leaving them to time out. It needs the registry and the runtime lease
+    // lifecycle, both of which the router state also owns.
+    #[cfg(not(feature = "desktop"))]
+    let (bridge_for_sweeper, runtime_for_sweeper) = (state.bridge.clone(), state.runtime.clone());
 
     let router = build_router(state);
 
@@ -319,6 +501,16 @@ pub async fn start_with_discovery_dir(
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    #[cfg(not(feature = "desktop"))]
+    spawn_bridge_sweeper(
+        bridge_for_sweeper,
+        runtime_for_sweeper,
+        shutdown_tx.subscribe(),
+    );
+    // Only a runtime owner needs to await full shutdown; the desktop app
+    // requests shutdown and exits.
+    #[cfg(not(feature = "desktop"))]
+    let (finished_tx, finished_rx) = tokio::sync::watch::channel(false);
     let cleanup_instance_id = (*server_instance_id).clone();
     let cleanup_dir = publish_dir.clone();
     tokio::spawn(async move {
@@ -330,6 +522,8 @@ pub async fn start_with_discovery_dir(
             log::warn!("[ControlPlane] Server terminated with error: {}", error);
         }
         discovery::remove_discovery_if_instance_in(&cleanup_dir, &cleanup_instance_id);
+        #[cfg(not(feature = "desktop"))]
+        let _ = finished_tx.send_replace(true);
         log::info!("[ControlPlane] Server stopped");
     });
 
@@ -345,6 +539,8 @@ pub async fn start_with_discovery_dir(
         port,
         server_instance_id: (*server_instance_id).clone(),
         shutdown: shutdown_tx,
+        #[cfg(not(feature = "desktop"))]
+        finished: finished_rx,
     };
     *ACTIVE_HANDLE.lock().unwrap() = Some(handle.clone());
     Ok(handle)
@@ -353,11 +549,62 @@ pub async fn start_with_discovery_dir(
 // (Token material is only cloned into the discovery document and the router
 // state; it never enters log paths.)
 
+/// Interval between bridge lease/expiry sweeps.
+#[cfg(not(feature = "desktop"))]
+const BRIDGE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Periodically drops bridge sessions whose lease is gone or whose session TTL
+/// elapsed, failing their pending invocations closed.
+///
+/// Without this, a pending invocation for a client that lost its lease (or
+/// vanished without unregistering) would only fail when its own deadline
+/// elapsed.
+#[cfg(not(feature = "desktop"))]
+fn spawn_bridge_sweeper(
+    bridge: Arc<super::client_bridge::ClientBridgeRegistry>,
+    runtime: Option<Arc<dyn RuntimeControlPlane>>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let Some(runtime) = runtime else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(BRIDGE_SWEEP_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    bridge.sweep_expired(Instant::now());
+                    bridge.sweep_invalid_leases(|client_id, lease_id| {
+                        runtime.validate_lease(client_id, lease_id).is_ok()
+                    });
+                }
+                _ = shutdown.changed() => return,
+            }
+        }
+    });
+}
+
 fn build_router(state: ControlPlaneState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/control/v1/meta", get(meta))
-        .route("/control/v1/agents", get(list_agents))
-        .route("/control/v1/agents/{agent_id}", get(get_agent))
+        // Agent reads and the canonical agent mutations. The collection POST
+        // creates; the item PUT/PATCH updates and DELETE removes. The POST
+        // `/update` and `/delete` aliases exist because the desktop's runtime
+        // client is deliberately POST-only (it exposes no PUT/DELETE verb), so
+        // the desktop adapter reaches the exact same typed handler as any other
+        // client instead of a second code path. Mutations require the bearer
+        // token and an `Idempotency-Key`.
+        .route("/control/v1/agents", get(list_agents).post(add_agent))
+        .route(
+            "/control/v1/agents/{agent_id}",
+            get(get_agent)
+                .put(update_agent)
+                .patch(update_agent)
+                .delete(delete_agent),
+        )
+        .route("/control/v1/agents/{agent_id}/update", post(update_agent))
+        .route("/control/v1/agents/{agent_id}/delete", post(delete_agent))
         .route(
             "/control/v1/workflows",
             get(list_workflows).post(create_workflow),
@@ -387,6 +634,8 @@ fn build_router(state: ControlPlaneState) -> Router {
         // Skill and MCP inventory/doctor facts are exposed from the same
         // CapabilityApplicationService the Tauri adapters use, so the CLI and
         // the desktop can never disagree about them (AC-1/AC-11).
+        .merge(crate::workflow::react::client::http::workflow_commands::workflow_command_router())
+        .merge(crate::workflow::react::client::http::data_commands::data_command_router())
         .route("/control/v1/skill-targets", get(list_skill_targets))
         .route("/control/v1/skills", get(list_capability_skills))
         .route("/control/v1/mcp-servers", get(list_capability_mcp_servers))
@@ -398,6 +647,15 @@ fn build_router(state: ControlPlaneState) -> Router {
         .route(
             "/control/v1/capability-doctor/reconcile",
             post(reconcile_capability),
+        )
+        // U-7 client WebView capability bridge. Additive and read-only: the
+        // fixed web capability registry plus a typed, allowlisted invocation
+        // that reports structured `unavailable`/`forbidden`. The runtime never
+        // links a WebView and exposes no generic RPC passthrough.
+        .route(CLIENT_CAPABILITIES_PATH, get(list_client_capabilities))
+        .route(
+            "/control/v1/client-capabilities/{capability}/invoke",
+            post(invoke_client_capability),
         )
         // Phase 3 capability mutations. These are the only Skill mutation
         // routes: each one delegates to the same CapabilityApplicationService
@@ -419,6 +677,24 @@ fn build_router(state: ControlPlaneState) -> Router {
         .route("/control/v1/mcp-refresh", post(refresh_capability_mcp))
         .route("/control/v1/mcp-tools", get(get_capability_mcp_tools))
         .route("/control/v1/mcp-status", get(get_capability_mcp_status))
+        // Phase 3 MCP compatibility reads/mutations. The desktop MCP page keeps
+        // its legacy config-shaped command wire (editable records, a single
+        // record, a whole-config update, typed tool declarations, one tool's
+        // enable/disable), which the descriptor routes above do not cover. Each
+        // handler delegates to the same `CapabilityApplicationService` and the
+        // same idempotency journal as every other route, so there is never a
+        // second installer or a second read path (AC-1/AC-11).
+        .route("/control/v1/mcp-records", get(list_capability_mcp_records))
+        .route("/control/v1/mcp-record", get(get_capability_mcp_record))
+        .route("/control/v1/mcp-update", post(update_capability_mcp))
+        .route(
+            "/control/v1/mcp-tool-declarations",
+            get(get_capability_mcp_tool_declarations),
+        )
+        .route(
+            "/control/v1/mcp-tool-status",
+            post(set_capability_mcp_tool_status),
+        )
         // Phase 3D local automation surface. Additive: every route resolves to
         // the same `AutomationApplicationService` the Tauri commands and the
         // scheduler use, so HTTP, the `cs` CLI and the desktop can never
@@ -450,11 +726,45 @@ fn build_router(state: ControlPlaneState) -> Router {
             "/control/v1/automations/{automation_id}/disable",
             post(disable_automation),
         )
-        .route("/control/v1/automations/{automation_id}/run", post(run_automation))
+        .route(
+            "/control/v1/automations/{automation_id}/run",
+            post(run_automation),
+        )
         .route(
             "/control/v1/automations/{automation_id}/delete",
             post(delete_automation),
-        )
+        );
+
+    // The standalone runtime owns the client-lease lifecycle, so those routes
+    // exist only when a runtime extension is present. They are added before the
+    // auth layer so they are bearer-protected and body-limited like every other
+    // mutation; the desktop server never mounts them.
+    #[cfg(not(feature = "desktop"))]
+    let router = if state.runtime.is_some() {
+        router
+            .route("/control/v1/clients/register", post(register_client))
+            .route("/control/v1/clients/{client_id}/renew", post(renew_client))
+            .route(
+                "/control/v1/clients/{client_id}/release",
+                post(release_client),
+            )
+            // The client WebView capability bridge is mounted only when a
+            // runtime lease lifecycle exists, because every bridge request must
+            // prove a live lease. It stays under the same bearer middleware and
+            // body limit as every other route.
+            .merge(super::client_bridge::client_bridge_router())
+    } else {
+        router
+    };
+
+    // The runtime chat/model surface is mounted unconditionally in the
+    // desktop-free build: a process without a chat owner answers a structured
+    // `runtime_unavailable` rather than publishing a route that silently lies.
+    // It is merged before the auth/body-limit layers like every other route.
+    #[cfg(not(feature = "desktop"))]
+    let router = router.merge(crate::workflow::react::client::http::chat_commands::chat_router());
+
+    router
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,
@@ -463,19 +773,114 @@ fn build_router(state: ControlPlaneState) -> Router {
         .with_state(state)
 }
 
+#[cfg(feature = "desktop")]
 async fn meta(State(state): State<ControlPlaneState>) -> Json<MetaResponse> {
     Json(MetaResponse {
-        service: "chatspeed-workflow-control-plane",
-        protocol_version: dto::PROTOCOL_VERSION,
+        service: DESKTOP_SERVICE_NAME.to_string(),
+        protocol_version: dto::PROTOCOL_VERSION.to_string(),
         schema_version: crate::workflow::react::client::hub::STREAM_SCHEMA_VERSION,
         server_instance_id: (*state.server_instance_id).clone(),
         pid: std::process::id(),
     })
 }
 
+#[cfg(not(feature = "desktop"))]
+async fn meta(State(state): State<ControlPlaneState>) -> Json<MetaResponse> {
+    let service = state
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.service_name().to_string())
+        .unwrap_or_else(|| DESKTOP_SERVICE_NAME.to_string());
+    Json(MetaResponse {
+        service,
+        protocol_version: dto::PROTOCOL_VERSION.to_string(),
+        schema_version: crate::workflow::react::client::hub::STREAM_SCHEMA_VERSION,
+        server_instance_id: (*state.server_instance_id).clone(),
+        pid: std::process::id(),
+    })
+}
+
+/// Lease routes are only mounted for a runtime owner; every handler still fails
+/// closed if the extension is somehow absent.
+#[cfg(not(feature = "desktop"))]
+fn runtime_missing_response() -> Response {
+    dto::error_response(
+        StatusCode::NOT_FOUND,
+        "not_found",
+        "This control plane does not own a client lease lifecycle".to_string(),
+    )
+}
+
+#[cfg(not(feature = "desktop"))]
+fn runtime_lease_error_response(error: &RuntimeLeaseError) -> Response {
+    match error {
+        RuntimeLeaseError::InvalidInput(message) => {
+            dto::error_response(StatusCode::BAD_REQUEST, "invalid_input", message.clone())
+        }
+        RuntimeLeaseError::NotFound(client_id) => dto::error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("No active lease for client `{client_id}`"),
+        ),
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+async fn register_client(State(state): State<ControlPlaneState>, body: String) -> Response {
+    let Some(runtime) = state.runtime.as_ref() else {
+        return runtime_missing_response();
+    };
+    let request: ClientLeaseRequest = match serde_json::from_str(&body) {
+        Ok(request) => request,
+        Err(_) => {
+            return dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                "Malformed JSON lease request".to_string(),
+            )
+        }
+    };
+    match runtime.register_lease(&request) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => runtime_lease_error_response(&error),
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+async fn renew_client(
+    State(state): State<ControlPlaneState>,
+    Path(client_id): Path<String>,
+) -> Response {
+    let Some(runtime) = state.runtime.as_ref() else {
+        return runtime_missing_response();
+    };
+    match runtime.renew_lease(&client_id) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => runtime_lease_error_response(&error),
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+async fn release_client(
+    State(state): State<ControlPlaneState>,
+    Path(client_id): Path<String>,
+) -> Response {
+    let Some(runtime) = state.runtime.as_ref() else {
+        return runtime_missing_response();
+    };
+    match runtime.release_lease(&client_id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => runtime_lease_error_response(&error),
+    }
+}
+
 async fn list_agents(State(state): State<ControlPlaneState>) -> Response {
     match state.svc.agent_list().await {
-        Ok(agents) => snake_json_response(serde_json::to_value(&agents)),
+        // `Agent` is already snake_case at the top level while its nested model
+        // configs are camelCase, so it is serialized as-is: the recursive
+        // `snake_json_response` re-casing would corrupt `models` for the
+        // desktop adapter that decodes the response back into `Agent`.
+        Ok(agents) => Json(agents).into_response(),
         Err(error) => dto::application_error_response(&error),
     }
 }
@@ -485,13 +890,84 @@ async fn get_agent(
     Path(agent_id): Path<String>,
 ) -> Response {
     match state.svc.agent_get(&agent_id).await {
-        Ok(Some(agent)) => snake_json_response(serde_json::to_value(&agent)),
+        Ok(Some(agent)) => Json(agent).into_response(),
         Ok(None) => dto::application_error_response(&ApplicationError::not_found(format!(
             "Agent {} not found",
             agent_id
         ))),
         Err(error) => dto::application_error_response(&error),
     }
+}
+
+/// `POST /control/v1/agents` — creates an agent. The runtime generates the
+/// stable id and applies the canonical sanitize/validation rules in the
+/// application service, so the desktop and any other client cannot create
+/// divergent agents. Idempotency-required for retry safety.
+async fn add_agent(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("agents:add");
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let agent: Agent = match parse_body_or_error(&body, "agent") {
+            Ok(agent) => agent,
+            Err(response) => return response,
+        };
+        match state.svc.agent_add(agent).await {
+            Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `PUT`/`PATCH /control/v1/agents/{agent_id}` (and the POST alias) — updates an
+/// agent. The path id is authoritative for the target row.
+async fn update_agent(
+    State(state): State<ControlPlaneState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("agents:update");
+    }
+    with_idempotency(&state, &headers, &body, move |state, body| async move {
+        let mut agent: Agent = match parse_body_or_error(&body, "agent") {
+            Ok(agent) => agent,
+            Err(response) => return response,
+        };
+        // The path parameter is authoritative for the target agent.
+        agent.id = agent_id.clone();
+        match state.svc.agent_update(agent).await {
+            Ok(()) => Json(serde_json::json!({ "id": agent_id })).into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `DELETE /control/v1/agents/{agent_id}` (and the POST alias) — deletes an
+/// agent. System agents are refused by the application service.
+async fn delete_agent(
+    State(state): State<ControlPlaneState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("agents:delete");
+    }
+    with_idempotency(&state, &headers, &body, move |state, _body| async move {
+        match state.svc.agent_delete(&agent_id).await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(error) => dto::application_error_response(&error),
+        }
+    })
+    .await
 }
 
 async fn list_workflows(State(state): State<ControlPlaneState>) -> Response {
@@ -538,7 +1014,6 @@ async fn get_workflow(
         Err(error) => dto::application_error_response(&error),
     }
 }
-
 
 /// Whether the request carries a non-empty `Idempotency-Key` header. Every
 /// mutating control-plane route requires one so a transport retry can never
@@ -681,6 +1156,397 @@ async fn list_events(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Client WebView capability bridge (U-7)
+// ---------------------------------------------------------------------------
+//
+// The desktop's `web_fetch`/`web_search` tools are backed by a Tauri WebView,
+// which the runtime must never link. The only sanctioned way for the runtime to
+// reach such a capability is an explicit client bridge. The runtime exposes a
+// closed, web-only allowlist and a typed invocation request; a live invocation
+// additionally requires the opaque bridge-session credential, so a bearer-only
+// client such as `cscli` cannot trigger a Tauri WebView.
+//
+// It is deliberately not a generic RPC: the capability set is allowlisted, the
+// request schema is typed and rejects undeclared arguments, and anything outside
+// the allowlist is refused with `forbidden`.
+
+/// Read-only route listing the fixed client WebView capability registry.
+pub const CLIENT_CAPABILITIES_PATH: &str = "/control/v1/client-capabilities";
+
+/// The closed allowlist of client capabilities the runtime may describe or
+/// invoke. A client bridge is web-only by contract, so it can never grow into a
+/// general-purpose execution surface.
+pub const CLIENT_CAPABILITY_ALLOWLIST: [&str; 2] = ["web_fetch", "web_search"];
+
+/// Stable error code for a web capability whose client bridge is not declared.
+pub const CLIENT_BRIDGE_UNAVAILABLE: &str = "unavailable";
+
+/// How long an accepted bridge invocation may wait for the client's result.
+#[cfg(not(feature = "desktop"))]
+const CLIENT_CAPABILITY_INVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One entry of the client WebView capability registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientCapabilityView {
+    /// Stable capability name (`web_fetch`, `web_search`).
+    pub name: String,
+    /// Capability family; always `web` for a client bridge.
+    pub kind: String,
+    /// Lifecycle status; `unavailable` until a client declares a live bridge.
+    pub status: String,
+    /// Whether executing the capability requires a client bridge.
+    pub requires_client_bridge: bool,
+    /// Whether a client has declared a live bridge for this instance.
+    pub bridge_declared: bool,
+    /// Stable, non-secret explanation of the status.
+    pub detail: String,
+}
+
+/// The `GET /control/v1/client-capabilities` response body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientCapabilitiesResponse {
+    /// The fixed capability registry.
+    pub capabilities: Vec<ClientCapabilityView>,
+}
+
+/// The static, all-unavailable client WebView capability registry.
+///
+/// Used when no live bridge registry exists: the desktop in-process control
+/// plane, and a desktop-free plane that owns no lease lifecycle (so it could
+/// never prove a bridge). A client learns the exact closed set, that each entry
+/// requires a client bridge, and why it is currently unavailable.
+pub fn client_capability_registry() -> Vec<ClientCapabilityView> {
+    CLIENT_CAPABILITY_ALLOWLIST
+        .iter()
+        .map(|name| ClientCapabilityView {
+            name: (*name).to_string(),
+            kind: "web".to_string(),
+            status: CLIENT_BRIDGE_UNAVAILABLE.to_string(),
+            requires_client_bridge: true,
+            bridge_declared: false,
+            detail: format!(
+                "`{name}` executes only through a client WebView bridge, and this runtime has no declared client bridge"
+            ),
+        })
+        .collect()
+}
+
+/// `GET /control/v1/client-capabilities` — read-only capability registry.
+///
+/// The desktop plane has no runtime-owned bridge registry, so it reports the
+/// static all-unavailable set; the standalone runtime reports its live
+/// lease-bound declaration instead.
+#[cfg(feature = "desktop")]
+async fn list_client_capabilities() -> Response {
+    snake_json_response(serde_json::to_value(ClientCapabilitiesResponse {
+        capabilities: client_capability_registry(),
+    }))
+}
+
+/// `GET /control/v1/client-capabilities` — the live capability registry.
+///
+/// A plane with no lease lifecycle cannot host a bridge, so it reports the
+/// static all-unavailable set; otherwise the registry reflects exactly what the
+/// live client bridge declares.
+#[cfg(not(feature = "desktop"))]
+async fn list_client_capabilities(State(state): State<ControlPlaneState>) -> Response {
+    let capabilities = if state.runtime.is_some() {
+        state.bridge.capability_registry()
+    } else {
+        client_capability_registry()
+    };
+    snake_json_response(serde_json::to_value(ClientCapabilitiesResponse {
+        capabilities,
+    }))
+}
+
+/// `POST /control/v1/client-capabilities/{capability}/invoke` — typed,
+/// allowlisted invocation of one client WebView capability.
+///
+/// The desktop plane owns no bridge, so a valid request still answers the
+/// structured `unavailable` that no client can execute here.
+#[cfg(feature = "desktop")]
+async fn invoke_client_capability(Path(capability): Path<String>, body: String) -> Response {
+    if let Err(response) = validate_client_capability_invoke(&capability, &body) {
+        return response;
+    }
+    unavailable_client_capability_response(&capability)
+}
+
+/// `POST /control/v1/client-capabilities/{capability}/invoke` — dispatch one
+/// typed invocation through the live client bridge.
+///
+/// Bearer-protected, and every accepted invocation must match the capability's
+/// declared schema. A capability outside the allowlist is refused with
+/// `403 forbidden`, a body that violates the typed schema with `400
+/// invalid_input`, and an accepted request with no live bridge answers `503
+/// unavailable`. A live bridge dispatches the request, waits for the typed
+/// result, and maps the client's terminal status onto the wire: `ok` returns the
+/// typed result, `error`/`cancelled` return a structured error, and a missing
+/// result before the deadline returns `504`.
+#[cfg(not(feature = "desktop"))]
+async fn invoke_client_capability(
+    State(state): State<ControlPlaneState>,
+    Path(capability): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let arguments = match validate_client_capability_invoke(&capability, &body) {
+        Ok(arguments) => arguments,
+        Err(response) => return response,
+    };
+    let Some(_runtime) = state.runtime.as_ref() else {
+        return unavailable_client_capability_response(&capability);
+    };
+    let session_token = match super::client_bridge::bridge_session_header(&headers) {
+        Ok(token) => token,
+        Err(error) => return error.into_http_response(),
+    };
+    let session_id = match state
+        .bridge
+        .session_for_capability_with_token(&capability, session_token)
+    {
+        Ok(session_id) => session_id,
+        Err(error) => return error.into_http_response(),
+    };
+    let receiver = match state.bridge.enqueue(
+        &session_id,
+        &capability,
+        chatspeed_contracts::BRIDGE_SCHEMA_VERSION,
+        arguments,
+        CLIENT_CAPABILITY_INVOKE_TIMEOUT,
+    ) {
+        Ok(receiver) => receiver,
+        Err(error) => return error.into_http_response(),
+    };
+    match tokio::time::timeout(CLIENT_CAPABILITY_INVOKE_TIMEOUT, receiver).await {
+        Ok(Ok(super::client_bridge::BridgeOutcome::Completed(result))) => match result.status {
+            ClientCapabilityStatus::Ok => (StatusCode::OK, Json(result)).into_response(),
+            ClientCapabilityStatus::Error => dto::error_response(
+                StatusCode::BAD_GATEWAY,
+                "capability_error",
+                result
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "the client capability failed".to_string()),
+            ),
+            ClientCapabilityStatus::Cancelled => dto::error_response(
+                StatusCode::CONFLICT,
+                "cancelled",
+                result
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "the client capability was cancelled".to_string()),
+            ),
+        },
+        // The bridge vanished (unregister, disconnect or lease expiry) before a
+        // result arrived: fail closed, never fabricate a result.
+        Ok(Ok(super::client_bridge::BridgeOutcome::Failed(error))) => dto::error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            error.message,
+        ),
+        Ok(Err(_cancelled)) => unavailable_client_capability_response(&capability),
+        Err(_elapsed) => dto::error_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            "capability_timeout",
+            format!("Client capability `{capability}` did not complete before its deadline"),
+        ),
+    }
+}
+
+/// The structured `unavailable` response for a capability with no live bridge.
+fn unavailable_client_capability_response(capability: &str) -> Response {
+    dto::error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        CLIENT_BRIDGE_UNAVAILABLE,
+        format!(
+            "Client capability `{capability}` is unavailable: no live client WebView bridge declares it for this runtime"
+        ),
+    )
+}
+
+/// Validates a typed invocation body against the capability's declared schema.
+///
+/// Returns the validated arguments object on success, or `Err(Response)` for a
+/// capability outside the allowlist (`forbidden`) or a body that violates the
+/// typed schema (`invalid_input`). Only the exact declared arguments are
+/// accepted, so the bridge can never become a generic RPC passthrough.
+fn validate_client_capability_invoke(
+    capability: &str,
+    body: &str,
+) -> Result<serde_json::Value, Response> {
+    if !CLIENT_CAPABILITY_ALLOWLIST.contains(&capability) {
+        return Err(dto::error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            format!(
+                "`{capability}` is not an allowlisted web client capability; the runtime bridges web capabilities only"
+            ),
+        ));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| invalid_invoke(format!("the request body is not valid JSON: {error}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_invoke("the request body must be a JSON object".to_string()))?;
+
+    match capability {
+        "web_fetch" => {
+            reject_unknown_arguments(object, &["url", "format", "keep_link", "keep_image"])?;
+            required_non_empty_string(object, "url")?;
+            optional_enum_string(object, "format", &["markdown", "text", "links"])?;
+            optional_bool(object, "keep_link")?;
+            optional_bool(object, "keep_image")?;
+        }
+        // `web_search` mirrors the tool's real schema, so every declared
+        // argument is accepted and nothing else is.
+        _ => {
+            reject_unknown_arguments(
+                object,
+                &[
+                    "query",
+                    "page",
+                    "number",
+                    "time_period",
+                    "response_format",
+                    "provider",
+                ],
+            )?;
+            required_search_query(object)?;
+            optional_bounded_integer(object, "page", 1, u64::MAX)?;
+            optional_bounded_integer(object, "number", 1, 30)?;
+            optional_enum_string(object, "time_period", &["day", "week", "month", "year"])?;
+            optional_enum_string(object, "response_format", &["json", "xml"])?;
+            optional_string(object, "provider")?;
+        }
+    }
+    Ok(value)
+}
+
+/// Builds the `invalid_input` response for a malformed invocation body.
+fn invalid_invoke(message: String) -> Response {
+    dto::error_response(
+        StatusCode::BAD_REQUEST,
+        "invalid_input",
+        format!("Invalid client capability request: {message}"),
+    )
+}
+
+/// Rejects any argument outside the capability's declared schema.
+fn reject_unknown_arguments(
+    object: &serde_json::Map<String, serde_json::Value>,
+    allowed: &[&str],
+) -> Result<(), Response> {
+    if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(invalid_invoke(format!("unexpected argument `{unknown}`")));
+    }
+    Ok(())
+}
+
+/// Requires a non-empty string argument.
+fn required_non_empty_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<(), Response> {
+    match object.get(key) {
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Ok(()),
+        _ => Err(invalid_invoke(format!(
+            "`{key}` must be a non-empty string"
+        ))),
+    }
+}
+
+/// Requires a non-empty search query: a string, or a non-empty array of strings.
+fn required_search_query(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), Response> {
+    match object.get("query") {
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Ok(()),
+        Some(serde_json::Value::Array(values)) if !values.is_empty() => {
+            if values
+                .iter()
+                .all(|value| value.as_str().is_some_and(|text| !text.trim().is_empty()))
+            {
+                Ok(())
+            } else {
+                Err(invalid_invoke(
+                    "`query` array entries must be non-empty strings".to_string(),
+                ))
+            }
+        }
+        _ => Err(invalid_invoke(
+            "`query` must be a non-empty string or a non-empty array of strings".to_string(),
+        )),
+    }
+}
+
+/// Validates an optional string argument when present.
+fn optional_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<(), Response> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(serde_json::Value::String(_)) => Ok(()),
+        Some(_) => Err(invalid_invoke(format!("`{key}` must be a string"))),
+    }
+}
+
+/// Validates an optional string argument against a closed enum when present.
+fn optional_enum_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    allowed: &[&str],
+) -> Result<(), Response> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(serde_json::Value::String(value)) if allowed.contains(&value.as_str()) => Ok(()),
+        Some(_) => Err(invalid_invoke(format!(
+            "`{key}` must be one of {}",
+            allowed.join(", ")
+        ))),
+    }
+}
+
+/// Validates an optional boolean argument when present.
+fn optional_bool(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<(), Response> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(serde_json::Value::Bool(_)) => Ok(()),
+        Some(_) => Err(invalid_invoke(format!("`{key}` must be a boolean"))),
+    }
+}
+
+/// Validates an optional integer argument within an inclusive range.
+fn optional_bounded_integer(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    min: u64,
+    max: u64,
+) -> Result<(), Response> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(value)
+            if value
+                .as_u64()
+                .is_some_and(|value| (min..=max).contains(&value)) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(invalid_invoke(format!(
+            "`{key}` must be an integer between {min} and {max}"
+        ))),
+    }
+}
+
 /// `GET /control/v1/skill-targets` — the closed Skill install-target registry.
 async fn list_skill_targets(State(state): State<ControlPlaneState>) -> Response {
     snake_json_response(serde_json::to_value(state.svc.capability().skill_targets()))
@@ -801,7 +1667,12 @@ async fn install_capability_skill(
         match state
             .svc
             .capability()
-            .skill_install(&request.source, &request.targets, &key, ACTOR_SCOPE_CONTROL_PLANE)
+            .skill_install(
+                &request.source,
+                &request.targets,
+                &key,
+                ACTOR_SCOPE_CONTROL_PLANE,
+            )
             .await
         {
             Ok(result) => snake_json_response(serde_json::to_value(&result)),
@@ -1080,6 +1951,216 @@ async fn get_capability_mcp_status(
     }
 }
 
+/// `GET /control/v1/mcp-records` — the legacy editable MCP records.
+///
+/// Returns the secret-free `Mcp` shape the desktop page edits (command/args/
+/// url/proxy/timeout/disabled_tools), with the live runtime status overlaid from
+/// the runtime's own observation instead of a client-local tool manager. A
+/// runtime that cannot answer leaves every status null rather than fabricating
+/// one (INV-7). This is the only list the desktop adapter may return.
+async fn list_capability_mcp_records(State(state): State<ControlPlaneState>) -> Response {
+    let mut records = match state.svc.capability().mcp_records_redacted().await {
+        Ok(records) => records,
+        Err(error) => return dto::capability_error_response(&error),
+    };
+    if let Ok(views) = state.svc.capability().mcp_servers().await {
+        overlay_runtime_status(&mut records, &views);
+    }
+    snake_json_response(serde_json::to_value(&records))
+}
+
+/// `GET /control/v1/mcp-record?id=` — one secret-free editable MCP record.
+///
+/// The desktop `add`/`update`/tool-state commands read the record back through
+/// this route so the page never sees a secret (AC-13).
+async fn get_capability_mcp_record(
+    State(state): State<ControlPlaneState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let id = match query_id(&params, "id") {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    match state.svc.capability().mcp_record_redacted(id).await {
+        Ok(Some(record)) => snake_json_response(serde_json::to_value(&record)),
+        Ok(None) => dto::error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("MCP server {id} does not exist"),
+        ),
+        Err(error) => dto::capability_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/mcp-update` — the config-shaped MCP update.
+///
+/// Bearer-protected and idempotency-required. It reaches the same `mcp_update`
+/// operation every adapter uses; because the desktop form edits a whole
+/// `McpServerConfig`, an omitted secret is preserved by the service rather than
+/// deleted (AC-13).
+async fn update_capability_mcp(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("mcp:update");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let request: McpUpdateRequest = match serde_json::from_str(&body) {
+            Ok(request) => request,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid MCP update request: {error}"),
+                );
+            }
+        };
+        match state
+            .svc
+            .capability()
+            .mcp_update(
+                request.id,
+                &request.name,
+                &request.description,
+                request.config,
+                request.disabled,
+                &key,
+                ACTOR_SCOPE_CONTROL_PLANE,
+            )
+            .await
+        {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::capability_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `GET /control/v1/mcp-tool-declarations?id=` — the typed cached declarations.
+///
+/// Unlike the JSON `mcp-tools` snapshot this returns the exact
+/// `MCPToolDeclaration` list (including `output_schema`), which is what the
+/// desktop command wire already exposes. The declaration type serializes with
+/// camelCase keys and an opaque schema `Value`, so the response is emitted in its
+/// own canonical serde shape instead of being re-cased by the snake_case wire
+/// normalizer, which would corrupt the embedded JSON Schema.
+async fn get_capability_mcp_tool_declarations(
+    State(state): State<ControlPlaneState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let id = match query_id(&params, "id") {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    match state.svc.capability().mcp_tool_declarations(id).await {
+        Ok(declarations) => match serde_json::to_value(&declarations) {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => dto::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Failed to serialize response: {error}"),
+            ),
+        },
+        Err(error) => dto::capability_error_response(&error),
+    }
+}
+
+/// `POST /control/v1/mcp-tool-status` — enable or disable one cached tool.
+async fn set_capability_mcp_tool_status(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("mcp:tool-status");
+    }
+    let key = idempotency_key(&headers);
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        let request: McpToolStatusRequest = match serde_json::from_str(&body) {
+            Ok(request) => request,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid MCP tool status request: {error}"),
+                );
+            }
+        };
+        match state
+            .svc
+            .capability()
+            .mcp_set_tool_disabled(
+                request.id,
+                &request.tool_name,
+                request.disabled,
+                &key,
+                ACTOR_SCOPE_CONTROL_PLANE,
+            )
+            .await
+        {
+            Ok(result) => snake_json_response(serde_json::to_value(&result)),
+            Err(error) => dto::capability_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// Overlays the runtime's observed status onto the secret-free records.
+///
+/// Only a server the runtime actually answered for gets a status; a server left
+/// `unknown` (the runtime did not answer) keeps a null status, so an unobserved
+/// runtime is never reported as stopped (INV-7).
+fn overlay_runtime_status(records: &mut [Mcp], views: &[McpServerView]) {
+    for record in records.iter_mut() {
+        let Some(view) = views.iter().find(|view| view.name == record.name) else {
+            continue;
+        };
+        if view.runtime.observed {
+            record.status = observed_status(&view.runtime.state);
+        }
+    }
+}
+
+/// Maps one observed runtime state name onto the public legacy status.
+///
+/// An `error` state carries no message: the runtime read model never keeps the
+/// free-text failure, so the legacy status cannot either (AC-13).
+fn observed_status(state: &str) -> Option<McpStatus> {
+    match state {
+        "starting" => Some(McpStatus::Starting),
+        "connected" => Some(McpStatus::Connected),
+        "running" => Some(McpStatus::Running),
+        "stopped" => Some(McpStatus::Stopped),
+        "error" => Some(McpStatus::Error(
+            crate::capability::redaction::REDACTED.to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// The explicit config-shaped MCP update request body.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpUpdateRequest {
+    id: i64,
+    name: String,
+    description: String,
+    config: crate::mcp::client::McpServerConfig,
+    disabled: bool,
+}
+
+/// The explicit MCP tool enable/disable request body.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpToolStatusRequest {
+    id: i64,
+    tool_name: String,
+    disabled: bool,
+}
+
 /// The `{"id": ...}` body shared by the MCP mutation routes.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1102,13 +2183,16 @@ fn parse_mcp_id(body: &str) -> Result<i64, Response> {
 
 /// Parses a required numeric query parameter.
 fn query_id(params: &HashMap<String, String>, key: &str) -> Result<i64, Response> {
-    params.get(key).and_then(|value| value.parse::<i64>().ok()).ok_or_else(|| {
-        dto::error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_input",
-            format!("A numeric `{key}` query parameter is required"),
-        )
-    })
+    params
+        .get(key)
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| {
+            dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                format!("A numeric `{key}` query parameter is required"),
+            )
+        })
 }
 
 /// Serializes a value and normalizes its keys to the HTTP snake_case wire.
@@ -1127,7 +2211,7 @@ fn snake_json_response(value: Result<serde_json::Value, serde_json::Error>) -> R
 /// - no `Idempotency-Key` header: execute directly;
 /// - same key + same body: replay the stored response (no double effect);
 /// - same key + different body: `409 conflict`.
-async fn with_idempotency<F, Fut, T>(
+pub(crate) async fn with_idempotency<F, Fut, T>(
     state: &ControlPlaneState,
     headers: &HeaderMap,
     body: &str,
@@ -1253,7 +2337,10 @@ struct AutomationDeleteBody {
     confirm: bool,
 }
 
-fn parse_body_or_error<T: serde::de::DeserializeOwned>(body: &str, what: &str) -> Result<T, Response> {
+fn parse_body_or_error<T: serde::de::DeserializeOwned>(
+    body: &str,
+    what: &str,
+) -> Result<T, Response> {
     serde_json::from_str(body).map_err(|error| {
         dto::error_response(
             StatusCode::BAD_REQUEST,
@@ -1469,11 +2556,15 @@ async fn run_automation(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, move |state, _body| async move {
-        match state.svc.automation_run_with_receipt(
-            &automation_id,
-            crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
-            Some(&key),
-        ).await {
+        match state
+            .svc
+            .automation_run_with_receipt(
+                &automation_id,
+                crate::workflow::automation::types::AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
+                Some(&key),
+            )
+            .await
+        {
             Ok(result) => snake_json_response(serde_json::to_value(&result)),
             Err(error) => dto::automation_error_response(&error),
         }
@@ -1494,10 +2585,11 @@ async fn delete_automation(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, move |state, body| async move {
-        let parsed: AutomationDeleteBody = match parse_body_or_error(body.trim(), "automation delete") {
-            Ok(parsed) => parsed,
-            Err(response) => return response,
-        };
+        let parsed: AutomationDeleteBody =
+            match parse_body_or_error(body.trim(), "automation delete") {
+                Ok(parsed) => parsed,
+                Err(response) => return response,
+            };
         match state.svc.automation().delete(
             &automation_id,
             parsed.confirm,
@@ -1511,7 +2603,7 @@ async fn delete_automation(
     .await
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
     use crate::ai::interaction::chat_completion::ChatState;
@@ -1681,8 +2773,11 @@ mod tests {
         );
         let source_dir = chatspeed_home.join("source/demo");
         std::fs::create_dir_all(&source_dir).expect("create source");
-        std::fs::write(source_dir.join("SKILL.md"), "---\nname: demo\n---\n\n# demo\n")
-            .expect("write skill");
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nname: demo\n---\n\n# demo\n",
+        )
+        .expect("write skill");
         let source = serde_json::json!({
             "kind": "local_directory",
             "path": source_dir.to_string_lossy(),
@@ -1725,7 +2820,10 @@ mod tests {
             .expect("install");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let installed: serde_json::Value = response.json().await.expect("install json");
-        assert_eq!(installed["result"]["install"]["outcomes"][0]["status"], "installed");
+        assert_eq!(
+            installed["result"]["install"]["outcomes"][0]["status"],
+            "installed"
+        );
         let operation_id = installed["operation_id"]
             .as_str()
             .expect("operation id")
@@ -1950,10 +3048,7 @@ mod tests {
         // A bounded status check reports desired and observed state separately,
         // and a disabled server reads as stopped rather than running (INV-7).
         let response = http
-            .get(auth_url(
-                &app,
-                &format!("/control/v1/mcp-status?id={id}"),
-            ))
+            .get(auth_url(&app, &format!("/control/v1/mcp-status?id={id}")))
             .header("Authorization", &auth)
             .send()
             .await
@@ -1962,7 +3057,10 @@ mod tests {
         assert_eq!(status["desired"]["enabled"], false);
         assert_eq!(status["desired"]["registered"], true);
         assert_ne!(status["runtime"]["state"], "running");
-        assert!(!text.contains("bearer_token"), "no secret field in the read");
+        assert!(
+            !text.contains("bearer_token"),
+            "no secret field in the read"
+        );
 
         // Listing tools of a disabled server is a stable empty result, not a
         // start attempt.
@@ -2100,8 +3198,8 @@ mod tests {
         let (app, _env) = spawn_test_app().await;
         let http = client();
         let auth = format!("Bearer {}", auth_token(&app));
-        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/mcp_stdio.py");
+        let fixture =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/mcp_stdio.py");
         let response = http
             .post(auth_url(&app, "/control/v1/mcp-install"))
             .header("Authorization", &auth)
@@ -2215,8 +3313,11 @@ mod tests {
         );
         let source_dir = chatspeed_home.join("source/stealer");
         std::fs::create_dir_all(&source_dir).expect("create source");
-        std::fs::write(source_dir.join("SKILL.md"), "---\nname: stealer\n---\n\n# stealer\n")
-            .expect("write skill");
+        std::fs::write(
+            source_dir.join("SKILL.md"),
+            "---\nname: stealer\n---\n\n# stealer\n",
+        )
+        .expect("write skill");
         std::fs::create_dir_all(source_dir.join("scripts")).expect("create scripts dir");
         std::fs::write(
             source_dir.join("scripts/steal.sh"),
@@ -2323,7 +3424,10 @@ mod tests {
             .expect("request missing operation");
         assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
         let body: serde_json::Value = response.json().await.expect("error json");
-        assert_eq!(body["error"]["code"], serde_json::json!("operation_not_found"));
+        assert_eq!(
+            body["error"]["code"],
+            serde_json::json!("operation_not_found")
+        );
     }
 
     /// The capability read routes sit behind the same bearer middleware as the
@@ -2476,6 +3580,221 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body: serde_json::Value = response.json().await.unwrap();
         assert_eq!(body["error"]["code"], "not_found");
+
+        app.handle.shutdown();
+    }
+
+    /// Builds the request body the desktop sends: an `Agent` in its own serde
+    /// shape (snake_case top level, camelCase nested model configs).
+    fn agent_body(name: &str, context_size: i32) -> serde_json::Value {
+        let mut agent = crate::db::Agent::new(
+            String::new(),
+            name.to_string(),
+            Some("desc".to_string()),
+            Some("primary".to_string()),
+            None,
+            "sp".to_string(),
+            None,
+            None,
+            Some(serde_json::json!([crate::tools::TOOL_READ_FILE]).to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        agent.models = Some(crate::db::agent::AgentModels {
+            plan: Some(crate::db::agent::ModelConfig {
+                id: 1,
+                model: "m".to_string(),
+                temperature: None,
+                thinking: None,
+                function_call: None,
+                context_size: Some(context_size),
+                max_tokens: Some(512),
+            }),
+            ..Default::default()
+        });
+        serde_json::to_value(&agent).expect("agent json")
+    }
+
+    /// The canonical agent mutations go through the same application service the
+    /// desktop uses (AC-1). The runtime assigns the id, the nested camelCase
+    /// model config survives the round trip, and a retry replays instead of
+    /// creating a second agent.
+    #[tokio::test]
+    async fn agent_mutation_routes_round_trip_and_are_idempotent() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let add_url = auth_url(&app, "/control/v1/agents");
+
+        // A mutation without an idempotency key is refused before any effect.
+        let response = http
+            .post(&add_url)
+            .header("Authorization", &auth)
+            .json(&agent_body("created", 4096))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "missing_idempotency_key");
+
+        // Create: the runtime assigns the id and echoes it.
+        let create = |key: &'static str| {
+            let http = http.clone();
+            let url = add_url.clone();
+            let auth = auth.clone();
+            async move {
+                http.post(&url)
+                    .header("Authorization", &auth)
+                    .header("Idempotency-Key", key)
+                    .json(&agent_body("created", 4096))
+                    .send()
+                    .await
+                    .unwrap()
+            }
+        };
+        let response = create("agent-add-1").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created: serde_json::Value = response.json().await.unwrap();
+        let created_id = created["id"].as_str().expect("created id").to_string();
+        assert!(!created_id.is_empty());
+
+        // Same key + same body: replayed, not a second agent.
+        let response = create("agent-add-1").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let replayed: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(replayed["id"], created["id"]);
+
+        // Read back: the nested camelCase model config survives the round trip so
+        // the desktop `Agent` decode is lossless.
+        let response = http
+            .get(auth_url(&app, &format!("/control/v1/agents/{created_id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let fetched: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(fetched["models"]["plan"]["contextSize"], 4096);
+        assert_eq!(fetched["models"]["plan"]["maxTokens"], 512);
+        assert_eq!(fetched["is_system"], false);
+        assert!(fetched["available_tools"]
+            .as_str()
+            .unwrap()
+            .contains(crate::tools::TOOL_READ_FILE));
+
+        // Update through the RESTful PUT route on the item path.
+        let mut updated = agent_body("created-renamed", 2048);
+        updated["id"] = serde_json::json!(created_id);
+        let response = http
+            .put(auth_url(&app, &format!("/control/v1/agents/{created_id}")))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "agent-update-1")
+            .json(&updated)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = http
+            .get(auth_url(&app, &format!("/control/v1/agents/{created_id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        let fetched: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(fetched["name"], "created-renamed");
+        assert_eq!(fetched["models"]["plan"]["contextSize"], 2048);
+
+        // Delete through the POST alias the desktop adapter uses.
+        let response = http
+            .post(auth_url(
+                &app,
+                &format!("/control/v1/agents/{created_id}/delete"),
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "agent-delete-1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        let response = http
+            .get(auth_url(&app, &format!("/control/v1/agents/{created_id}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        app.handle.shutdown();
+    }
+
+    /// System agents are protected on the canonical delete path, and deleting an
+    /// unknown agent is an idempotent no-op rather than an error.
+    #[tokio::test]
+    async fn agent_delete_refuses_system_agents() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let system = crate::db::Agent::new(
+            "sys-1".to_string(),
+            "System Agent".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            Some(false),
+            None,
+        );
+        app.store.add_agent(&system).expect("insert system agent");
+
+        let response = http
+            .delete(auth_url(&app, "/control/v1/agents/sys-1"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "sys-delete-1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "invalid_input");
+        assert!(app.store.get_agent("sys-1").expect("get").is_some());
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/agents/missing-agent/delete"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "missing-delete-1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         app.handle.shutdown();
     }
@@ -2973,7 +4292,6 @@ mod tests {
         assert!(!path.exists(), "discovery must be removed on shutdown");
     }
 
-
     /// The Phase 3D automation routes share the one facade the desktop and the
     /// scheduler use: `draft` is a side-effect-free plan needing no key, every
     /// mutation is idempotency-required, reads are canonical `snake_case`, and
@@ -3139,5 +4457,1150 @@ mod tests {
             .status(),
             reqwest::StatusCode::NOT_FOUND
         );
+    }
+}
+
+#[cfg(test)]
+mod mcp_route_overlay_tests {
+    //! Focused coverage for the desktop MCP compatibility read route: the live
+    //! status overlay must come from the runtime observation, must not fabricate
+    //! a status for an unobserved runtime, and must never resurrect a raw runtime
+    //! message that could embed a secret.
+
+    use super::{observed_status, overlay_runtime_status};
+    use crate::capability::mcp::runtime::ObservedMcpRuntime;
+    use crate::capability::mcp_service::project_mcp_servers;
+    use crate::db::Mcp;
+    use crate::mcp::client::{McpProtocolType, McpServerConfig, McpStatus};
+    use std::collections::BTreeMap;
+
+    fn record(name: &str) -> Mcp {
+        Mcp {
+            id: 1,
+            name: name.to_string(),
+            description: "test".to_string(),
+            config: McpServerConfig {
+                name: name.to_string(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("node".to_string()),
+                args: Some(vec!["server.js".to_string()]),
+                ..Default::default()
+            },
+            disabled: false,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn observed_status_maps_every_runtime_state_to_its_legacy_value() {
+        assert_eq!(observed_status("starting"), Some(McpStatus::Starting));
+        assert_eq!(observed_status("connected"), Some(McpStatus::Connected));
+        assert_eq!(observed_status("running"), Some(McpStatus::Running));
+        assert_eq!(observed_status("stopped"), Some(McpStatus::Stopped));
+        assert_eq!(observed_status("unknown"), None);
+    }
+
+    #[test]
+    fn an_error_state_is_reported_without_a_runtime_message() {
+        // The runtime read model keeps only the state name, so the legacy
+        // projection must not resurrect a free-text message that could embed a
+        // token or URL credential (AC-13).
+        let status = observed_status("error").expect("error maps to a status");
+        assert_eq!(
+            status,
+            McpStatus::Error(crate::capability::redaction::REDACTED.to_string())
+        );
+        assert_eq!(
+            serde_json::to_string(&status).expect("serialize"),
+            "{\"error\":\"[redacted]\"}"
+        );
+    }
+
+    #[test]
+    fn the_overlay_uses_the_runtime_observation() {
+        let mut records = vec![record("weather")];
+        let mut observation = BTreeMap::new();
+        observation.insert(
+            "weather".to_string(),
+            ObservedMcpRuntime {
+                state: "connected".to_string(),
+                cached_tool_count: 2,
+            },
+        );
+        let views = project_mcp_servers(&[record("weather")], Some(&observation));
+        overlay_runtime_status(&mut records, &views);
+        assert_eq!(records[0].status, Some(McpStatus::Connected));
+    }
+
+    #[test]
+    fn an_unobserved_runtime_leaves_the_status_null() {
+        let mut records = vec![record("weather")];
+        let views = project_mcp_servers(&[record("weather")], None);
+        overlay_runtime_status(&mut records, &views);
+        assert_eq!(records[0].status, None);
+    }
+}
+
+#[cfg(test)]
+mod client_capability_tests {
+    //! Focused coverage for the U-7 client WebView capability contract: the
+    //! registry declares the closed web allowlist as unavailable, and the typed
+    //! invocation refuses a non-web/unknown capability and a malformed body
+    //! before it ever reports the (always current) `unavailable` status.
+
+    use super::*;
+
+    #[test]
+    fn registry_declares_only_the_web_allowlist_as_unavailable() {
+        let registry = client_capability_registry();
+        let names: Vec<&str> = registry.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, CLIENT_CAPABILITY_ALLOWLIST);
+        for entry in &registry {
+            assert_eq!(entry.kind, "web");
+            assert_eq!(entry.status, CLIENT_BRIDGE_UNAVAILABLE);
+            assert!(entry.requires_client_bridge);
+            assert!(!entry.bridge_declared, "no client bridge is declared yet");
+        }
+    }
+
+    #[test]
+    fn a_non_web_or_unknown_capability_is_forbidden() {
+        let response = validate_client_capability_invoke("filesystem_read", "{}")
+            .expect_err("a non-web capability is refused");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn a_malformed_typed_request_is_invalid_input() {
+        let missing_url = validate_client_capability_invoke("web_fetch", "{}")
+            .expect_err("a missing url is refused");
+        assert_eq!(missing_url.status(), StatusCode::BAD_REQUEST);
+
+        let unknown_argument =
+            validate_client_capability_invoke("web_search", r#"{"query":"x","bogus":true}"#)
+                .expect_err("an undeclared argument is refused");
+        assert_eq!(unknown_argument.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_typed_web_request_passes_validation() {
+        assert!(validate_client_capability_invoke(
+            "web_fetch",
+            r#"{"url":"https://example.com","format":"markdown","keep_link":true}"#
+        )
+        .is_ok());
+        // The web_search schema mirrors the tool's real declared arguments.
+        assert!(validate_client_capability_invoke(
+            "web_search",
+            r#"{"query":["rust","async"],"number":5,"page":1,"time_period":"week","response_format":"json","provider":"bing"}"#
+        )
+        .is_ok());
+        // The old, narrower `limit` field is no longer accepted.
+        assert!(
+            validate_client_capability_invoke("web_search", r#"{"query":"rust","limit":5}"#)
+                .is_err()
+        );
+    }
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+mod client_capability_http_tests {
+    //! End-to-end coverage that the standalone runtime control plane (the
+    //! desktop-free build) serves the client WebView capability contract: an
+    //! unauthenticated request is rejected, the registry reports the web tools
+    //! as unavailable, a non-web capability is forbidden, a malformed typed body
+    //! is rejected, and a valid web request still answers unavailable instead of
+    //! pretending to execute.
+
+    use super::*;
+    use crate::ai::interaction::chat_completion::ChatState;
+    use crate::db::MainStore;
+    use crate::libs::tsid::TsidGenerator;
+    use crate::libs::window_channels::WindowChannels;
+    use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
+    use crate::workflow::react::manager::WorkflowManager;
+    use crate::workflow::react::orchestrator::{DefaultSubAgentFactory, SubAgentFactory};
+
+    struct TestPlane {
+        handle: ControlPlaneHandle,
+        token: String,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn start_test_plane() -> TestPlane {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store =
+            Arc::new(MainStore::new(dir.path().join("client_capability.db")).expect("store"));
+        let chat_state = ChatState::runtime_new(Arc::new(WindowChannels::new()), store.clone());
+        let tsid = Arc::new(TsidGenerator::new(1).expect("tsid"));
+        let hub = Arc::new(WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "client-capability-instance".to_string(),
+        ));
+        let manager = Arc::new(WorkflowManager::new());
+        let factory: Arc<dyn SubAgentFactory> = Arc::new(DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state: chat_state.clone(),
+            gateway: hub.clone(),
+            workflow_manager: manager.clone(),
+            app_data_dir: dir.path().to_path_buf(),
+            tsid_generator: tsid.clone(),
+        });
+        let svc = Arc::new(WorkflowApplicationService::new(
+            store,
+            chat_state,
+            tsid,
+            hub,
+            factory,
+            manager,
+            dir.path().to_path_buf(),
+        ));
+        let handle = start_with_discovery_dir(svc, Some(dir.path().to_path_buf()))
+            .await
+            .expect("start the runtime control plane");
+        let token = discovery::read_discovery_in(dir.path())
+            .expect("discovery document")
+            .token;
+        TestPlane {
+            handle,
+            token,
+            _dir: dir,
+        }
+    }
+
+    fn url(plane: &TestPlane, path: &str) -> String {
+        format!("http://127.0.0.1:{}{}", plane.handle.port, path)
+    }
+
+    #[tokio::test]
+    async fn the_runtime_reports_client_web_capabilities_as_unavailable() {
+        let plane = start_test_plane().await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // No bearer: the read is rejected before the handler runs.
+        let unauthorized = http
+            .get(url(&plane, CLIENT_CAPABILITIES_PATH))
+            .send()
+            .await
+            .expect("unauthenticated get");
+        assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        // Authenticated: the registry reports the web tools as unavailable.
+        let listed = http
+            .get(url(&plane, CLIENT_CAPABILITIES_PATH))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("authenticated get");
+        assert_eq!(listed.status(), reqwest::StatusCode::OK);
+        let body: ClientCapabilitiesResponse = listed.json().await.expect("registry json");
+        assert_eq!(body.capabilities.len(), 2);
+        for entry in &body.capabilities {
+            assert!(CLIENT_CAPABILITY_ALLOWLIST.contains(&entry.name.as_str()));
+            assert_eq!(entry.status, CLIENT_BRIDGE_UNAVAILABLE);
+            assert!(!entry.bridge_declared);
+        }
+
+        // A valid typed web request is accepted and still answers unavailable.
+        let invoked = http
+            .post(url(
+                &plane,
+                "/control/v1/client-capabilities/web_fetch/invoke",
+            ))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(r#"{"url":"https://example.com"}"#)
+            .send()
+            .await
+            .expect("invoke web_fetch");
+        assert_eq!(invoked.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let invoked_body: serde_json::Value = invoked.json().await.expect("error envelope");
+        assert_eq!(invoked_body["error"]["code"], CLIENT_BRIDGE_UNAVAILABLE);
+
+        // A non-web/unknown capability is forbidden.
+        let forbidden = http
+            .post(url(
+                &plane,
+                "/control/v1/client-capabilities/filesystem_read/invoke",
+            ))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .expect("invoke unknown capability");
+        assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+        let forbidden_body: serde_json::Value = forbidden.json().await.expect("error envelope");
+        assert_eq!(forbidden_body["error"]["code"], "forbidden");
+
+        // A malformed typed body is rejected as invalid input.
+        let malformed = http
+            .post(url(
+                &plane,
+                "/control/v1/client-capabilities/web_search/invoke",
+            ))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(r#"{"query":""}"#)
+            .send()
+            .await
+            .expect("invoke web_search");
+        assert_eq!(malformed.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        // An unauthenticated invoke never reaches the handler.
+        let invoke_unauthorized = http
+            .post(url(
+                &plane,
+                "/control/v1/client-capabilities/web_fetch/invoke",
+            ))
+            .header("Content-Type", "application/json")
+            .body(r#"{"url":"https://example.com"}"#)
+            .send()
+            .await
+            .expect("unauthenticated invoke");
+        assert_eq!(
+            invoke_unauthorized.status(),
+            reqwest::StatusCode::UNAUTHORIZED
+        );
+
+        plane.handle.shutdown();
+    }
+}
+
+/// End-to-end coverage that the desktop-free runtime control plane serves the
+/// typed chat/model surface: bearer-protected, a structured `runtime_unavailable`
+/// when the process owns no chat executor, canonical error mapping for a failed
+/// model listing, typed request validation, and a live SSE cancellation envelope.
+#[cfg(all(test, not(feature = "desktop")))]
+mod chat_route_tests {
+    use super::*;
+    use crate::ai::interaction::chat_completion::ChatState;
+    use crate::db::MainStore;
+    use crate::libs::tsid::TsidGenerator;
+    use crate::libs::window_channels::WindowChannels;
+    use crate::workflow::react::client::http::chat_commands::MODELS_LIST_PATH;
+    use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
+    use crate::workflow::react::manager::WorkflowManager;
+    use crate::workflow::react::orchestrator::{DefaultSubAgentFactory, SubAgentFactory};
+    use chatspeed_contracts::{
+        ChatStartRequest, ChatStartResponse, ChatStopRequest, ChatStopResponse, ListModelsRequest,
+    };
+    use serde_json::json;
+
+    /// Lease stub: a small in-memory registry so the bridge tests can prove a
+    /// live `tauri` lease without spinning up the whole runtime.
+    #[derive(Default)]
+    struct TestLeases {
+        leases: std::sync::Mutex<HashMap<String, (String, String)>>,
+    }
+
+    impl TestLeases {
+        /// Seeds one live lease for `client_id` of the given kind.
+        fn with_lease(client_id: &str, kind: &str) -> Self {
+            let mut leases = HashMap::new();
+            leases.insert(
+                client_id.to_string(),
+                (format!("lease-{client_id}"), kind.to_string()),
+            );
+            Self {
+                leases: std::sync::Mutex::new(leases),
+            }
+        }
+    }
+
+    impl RuntimeControlPlane for TestLeases {
+        fn service_name(&self) -> &str {
+            "chatspeed-runtime"
+        }
+
+        fn register_lease(
+            &self,
+            request: &ClientLeaseRequest,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+            let lease_id = format!("lease-{}", request.client_id);
+            self.leases.lock().unwrap().insert(
+                request.client_id.clone(),
+                (lease_id.clone(), request.client_kind.clone()),
+            );
+            Ok(ClientLeaseResponse {
+                client_id: request.client_id.clone(),
+                lease_id,
+                expires_at: "1970-01-01T00:00:00Z".to_string(),
+            })
+        }
+
+        fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+            Ok(ClientLeaseResponse {
+                client_id: client_id.to_string(),
+                lease_id: format!("lease-{client_id}"),
+                expires_at: "1970-01-01T00:00:00Z".to_string(),
+            })
+        }
+
+        fn validate_lease(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+        ) -> Result<ClientLease, RuntimeLeaseError> {
+            let leases = self.leases.lock().unwrap();
+            match leases.get(client_id) {
+                Some((stored, kind)) if stored == lease_id => Ok(ClientLease {
+                    client_id: client_id.to_string(),
+                    lease_id: lease_id.to_string(),
+                    client_kind: kind.clone(),
+                    expires_at: "1970-01-01T00:00:00Z".to_string(),
+                }),
+                _ => Err(RuntimeLeaseError::NotFound(client_id.to_string())),
+            }
+        }
+
+        fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError> {
+            self.leases.lock().unwrap().remove(client_id);
+            Ok(())
+        }
+    }
+
+    /// Exposes the test store/chat state as a chat plane.
+    struct TestChatPlane {
+        main_store: Arc<MainStore>,
+        chat_state: Arc<ChatState>,
+    }
+
+    impl RuntimeChatPlane for TestChatPlane {
+        fn main_store(&self) -> Arc<MainStore> {
+            self.main_store.clone()
+        }
+
+        fn chat_state(&self) -> Arc<ChatState> {
+            self.chat_state.clone()
+        }
+    }
+
+    struct TestPlane {
+        handle: ControlPlaneHandle,
+        token: String,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn start_plane(with_chat: bool) -> TestPlane {
+        start_plane_with_leases(Arc::new(TestLeases::default()), with_chat).await
+    }
+
+    /// Starts a runtime plane whose lease registry already holds `leases`.
+    async fn start_plane_with_leases(leases: Arc<TestLeases>, with_chat: bool) -> TestPlane {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(MainStore::new(dir.path().join("chat_routes.db")).expect("store"));
+        let chat_state = ChatState::runtime_new(Arc::new(WindowChannels::new()), store.clone());
+        let tsid = Arc::new(TsidGenerator::new(1).expect("tsid"));
+        let hub = Arc::new(WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "chat-route-instance".to_string(),
+        ));
+        let manager = Arc::new(WorkflowManager::new());
+        let factory: Arc<dyn SubAgentFactory> = Arc::new(DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state: chat_state.clone(),
+            gateway: hub.clone(),
+            workflow_manager: manager.clone(),
+            app_data_dir: dir.path().to_path_buf(),
+            tsid_generator: tsid.clone(),
+        });
+        let svc = Arc::new(WorkflowApplicationService::new(
+            store.clone(),
+            chat_state.clone(),
+            tsid,
+            hub,
+            factory,
+            manager,
+            dir.path().to_path_buf(),
+        ));
+        let chat: Option<Arc<dyn RuntimeChatPlane>> = with_chat.then(|| {
+            Arc::new(TestChatPlane {
+                main_store: store.clone(),
+                chat_state: chat_state.clone(),
+            }) as Arc<dyn RuntimeChatPlane>
+        });
+        let handle = start_runtime_control_plane(
+            svc,
+            RuntimeControlPlaneOptions {
+                discovery_dir: dir.path().to_path_buf(),
+                leases,
+                chat,
+            },
+        )
+        .await
+        .expect("start the runtime control plane");
+        let token = discovery::read_discovery_in(dir.path())
+            .expect("discovery document")
+            .token;
+        TestPlane {
+            handle,
+            token,
+            _dir: dir,
+        }
+    }
+
+    fn url(plane: &TestPlane, path: &str) -> String {
+        format!("http://127.0.0.1:{}{}", plane.handle.port, path)
+    }
+
+    fn start_body(chat_id: &str) -> String {
+        serde_json::to_string(&ChatStartRequest {
+            provider_id: 999_999,
+            model: "missing-model".to_string(),
+            chat_id: chat_id.to_string(),
+            messages: vec![json!({"role": "user", "content": "hello"})],
+            network_enabled: Some(false),
+            mcp_enabled: None,
+            metadata: Some(json!({"windowLabel": "main"})),
+        })
+        .expect("start body")
+    }
+
+    #[tokio::test]
+    async fn every_chat_route_requires_the_bearer_token() {
+        let plane = start_plane(true).await;
+        let http = reqwest::Client::new();
+
+        let unauthorized = [
+            http.post(url(&plane, MODELS_LIST_PATH))
+                .body(start_body("chat-1"))
+                .send(),
+            http.post(url(&plane, "/control/v1/chats/chat-1/start"))
+                .body(start_body("chat-1"))
+                .send(),
+            http.post(url(&plane, "/control/v1/chats/chat-1/stop"))
+                .body("{}")
+                .send(),
+            http.get(url(&plane, "/control/v1/chats/chat-1/events"))
+                .send(),
+        ];
+        for response in unauthorized {
+            assert_eq!(
+                response.await.expect("request").status(),
+                reqwest::StatusCode::UNAUTHORIZED
+            );
+        }
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_control_plane_without_a_chat_owner_answers_runtime_unavailable() {
+        let plane = start_plane(false).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        let requests = [
+            http.post(url(&plane, MODELS_LIST_PATH))
+                .header("Authorization", &auth)
+                .body(
+                    serde_json::to_string(&ListModelsRequest {
+                        api_protocol: "openai".to_string(),
+                        api_url: None,
+                        api_key: None,
+                        metadata: None,
+                    })
+                    .expect("model body"),
+                )
+                .send(),
+            http.post(url(&plane, "/control/v1/chats/chat-1/start"))
+                .header("Authorization", &auth)
+                .body(start_body("chat-1"))
+                .send(),
+            http.post(url(&plane, "/control/v1/chats/chat-1/stop"))
+                .header("Authorization", &auth)
+                .body(
+                    serde_json::to_string(&ChatStopRequest {
+                        chat_id: "chat-1".to_string(),
+                        api_protocol: None,
+                    })
+                    .expect("stop body"),
+                )
+                .send(),
+            http.get(url(&plane, "/control/v1/chats/chat-1/events"))
+                .header("Authorization", &auth)
+                .send(),
+        ];
+        for response in requests {
+            let response = response.await.expect("request");
+            assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+            let body: serde_json::Value = response.json().await.expect("error envelope");
+            assert_eq!(body["error"]["code"], "runtime_unavailable");
+        }
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn model_listing_reaches_the_canonical_executor_and_maps_the_failure() {
+        let plane = start_plane(true).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // A loopback endpoint that refuses the connection: the route reaches the
+        // canonical executor and maps its failure, it never reports the route as
+        // unavailable.
+        let body = serde_json::to_string(&ListModelsRequest {
+            api_protocol: "openai".to_string(),
+            api_url: Some("http://127.0.0.1:1/v1".to_string()),
+            api_key: Some("test-key".to_string()),
+            metadata: None,
+        })
+        .expect("model body");
+        let response = http
+            .post(url(&plane, MODELS_LIST_PATH))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .expect("model list request");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+        let envelope: serde_json::Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "model_list_failed");
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn chat_requests_are_typed_and_validated() {
+        let plane = start_plane(true).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // A body whose chat id disagrees with the route slot is rejected.
+        let mismatched = http
+            .post(url(&plane, "/control/v1/chats/chat-1/start"))
+            .header("Authorization", &auth)
+            .body(start_body("chat-2"))
+            .send()
+            .await
+            .expect("mismatched start");
+        assert_eq!(mismatched.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        // Empty messages are rejected before any turn starts.
+        let empty_messages = serde_json::to_string(&ChatStartRequest {
+            provider_id: 1,
+            model: "m".to_string(),
+            chat_id: "chat-1".to_string(),
+            messages: Vec::new(),
+            network_enabled: None,
+            mcp_enabled: None,
+            metadata: None,
+        })
+        .expect("empty body");
+        let response = http
+            .post(url(&plane, "/control/v1/chats/chat-1/start"))
+            .header("Authorization", &auth)
+            .body(empty_messages)
+            .send()
+            .await
+            .expect("empty messages");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        // A malformed body is rejected as invalid input.
+        let malformed = http
+            .post(url(&plane, "/control/v1/chats/chat-1/stop"))
+            .header("Authorization", &auth)
+            .body("{not json}")
+            .send()
+            .await
+            .expect("malformed stop");
+        assert_eq!(malformed.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn a_started_turn_is_accepted_and_stop_answers_a_typed_result() {
+        let plane = start_plane(true).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // The runtime accepts the turn onto its dispatcher; the provider is only
+        // resolved when the spawned turn runs, so no network is required here.
+        let started = http
+            .post(url(&plane, "/control/v1/chats/chat-1/start"))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(start_body("chat-1"))
+            .send()
+            .await
+            .expect("start turn");
+        assert_eq!(started.status(), reqwest::StatusCode::OK);
+        let started: ChatStartResponse = started.json().await.expect("start response");
+        assert_eq!(started.chat_id, "chat-1");
+        assert!(started.accepted);
+
+        let stopped = http
+            .post(url(&plane, "/control/v1/chats/chat-1/stop"))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::to_string(&ChatStopRequest {
+                    chat_id: "chat-1".to_string(),
+                    api_protocol: Some("openai".to_string()),
+                })
+                .expect("stop body"),
+            )
+            .send()
+            .await
+            .expect("stop turn");
+        assert_eq!(stopped.status(), reqwest::StatusCode::OK);
+        let stopped: ChatStopResponse = stopped.json().await.expect("stop response");
+        assert_eq!(stopped.chat_id, "chat-1");
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn the_events_stream_relays_a_typed_cancellation() {
+        let plane = start_plane(true).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // Subscribe first: the handler registers the per-chat broadcast before it
+        // returns the response head, so the later stop cannot race it.
+        let stream = http
+            .get(url(&plane, "/control/v1/chats/chat-9/events"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("open events stream");
+        assert_eq!(stream.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            stream
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let stop = http
+            .post(url(&plane, "/control/v1/chats/chat-9/stop"))
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .body(r#"{"chat_id":"chat-9"}"#)
+            .send()
+            .await
+            .expect("stop the observed chat");
+        assert_eq!(stop.status(), reqwest::StatusCode::OK);
+
+        // The stream terminates on the cancellation envelope, so the body is
+        // complete and machine-readable.
+        let body = stream.text().await.expect("read events stream");
+        assert!(body.contains(r#""kind":"cancelled""#), "body was {body}");
+        assert!(body.contains(r#""chat_id":"chat-9""#), "body was {body}");
+
+        plane.handle.shutdown();
+    }
+
+    /// End-to-end coverage of the client WebView capability bridge (U-7):
+    /// registration tied to a live `tauri` lease, a typed SSE work envelope, a
+    /// typed result mapped back onto the invoke response, and request/session
+    /// ownership plus disconnect cleanup that keep the bridge from becoming a
+    /// generic RPC.
+    #[cfg(all(test, not(feature = "desktop")))]
+    mod client_bridge_tests {
+        use super::*;
+        use crate::workflow::react::client::http::client_bridge::BRIDGE_SESSION_HEADER;
+        use chatspeed_contracts::{
+            ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
+            ClientCapabilityStatus, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
+        };
+
+        const REGISTER: &str = "/control/v1/client-bridge/register";
+
+        fn bridge_declaration() -> ClientBridgeDeclaration {
+            ClientBridgeDeclaration {
+                protocol_version: BRIDGE_PROTOCOL_VERSION.to_string(),
+                schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
+                capabilities: vec![
+                    ClientBridgeCapability {
+                        name: "web_fetch".to_string(),
+                        schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
+                    },
+                    ClientBridgeCapability {
+                        name: "web_search".to_string(),
+                        schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
+                    },
+                ],
+            }
+        }
+
+        fn registration_body(client_id: &str, lease_id: &str) -> String {
+            serde_json::to_string(&chatspeed_contracts::ClientBridgeRegistration {
+                client_id: client_id.to_string(),
+                lease_id: lease_id.to_string(),
+                declaration: bridge_declaration(),
+            })
+            .expect("serialize registration")
+        }
+
+        /// Reads one typed work envelope off a streaming SSE response.
+        async fn read_envelope(response: &mut reqwest::Response) -> ClientBridgeWorkEnvelope {
+            let mut buffer: Vec<u8> = Vec::new();
+            loop {
+                if let Some(position) = buffer.windows(2).position(|window| window == b"\n\n") {
+                    let frame = String::from_utf8_lossy(&buffer[..position]).to_string();
+                    buffer.drain(..position + 2);
+                    let mut data = String::new();
+                    for line in frame.lines() {
+                        if let Some(value) = line.trim_end_matches('\r').strip_prefix("data:") {
+                            if !data.is_empty() {
+                                data.push('\n');
+                            }
+                            data.push_str(value.strip_prefix(' ').unwrap_or(value));
+                        }
+                    }
+                    if !data.is_empty() {
+                        return serde_json::from_str(&data).expect("bridge work envelope");
+                    }
+                    continue;
+                }
+                match response.chunk().await.expect("read chunk") {
+                    Some(chunk) => buffer.extend_from_slice(&chunk),
+                    None => panic!("bridge stream ended before an envelope arrived"),
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn registration_requires_a_live_tauri_lease() {
+            let plane = start_plane_with_leases(
+                Arc::new(TestLeases::with_lease("tauri-main", "tauri")),
+                false,
+            )
+            .await;
+            let http = reqwest::Client::new();
+            let auth = format!("Bearer {}", plane.token);
+
+            // No bearer: rejected before the handler runs.
+            let unauthenticated = http
+                .post(url(&plane, REGISTER))
+                .header("Content-Type", "application/json")
+                .body(registration_body("tauri-main", "lease-tauri-main"))
+                .send()
+                .await
+                .expect("unauthenticated register");
+            assert_eq!(unauthenticated.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+            // A lease id that does not resolve is unknown.
+            let unknown_lease = http
+                .post(url(&plane, REGISTER))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(registration_body("tauri-main", "not-the-lease"))
+                .send()
+                .await
+                .expect("unknown lease register");
+            assert_eq!(unknown_lease.status(), reqwest::StatusCode::NOT_FOUND);
+
+            // A live lease of a non-tauri kind may not open a bridge.
+            let cli = Arc::new(TestLeases::with_lease("cscli-1", "cli"));
+            let cli_plane = start_plane_with_leases(cli, false).await;
+            let cli_rejected = http
+                .post(url(&cli_plane, REGISTER))
+                .header("Authorization", format!("Bearer {}", cli_plane.token))
+                .header("Content-Type", "application/json")
+                .body(registration_body("cscli-1", "lease-cscli-1"))
+                .send()
+                .await
+                .expect("cli register");
+            assert_eq!(cli_rejected.status(), reqwest::StatusCode::FORBIDDEN);
+
+            // A valid tauri lease opens a session with an opaque token.
+            let registered = http
+                .post(url(&plane, REGISTER))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(registration_body("tauri-main", "lease-tauri-main"))
+                .send()
+                .await
+                .expect("valid register");
+            assert_eq!(registered.status(), reqwest::StatusCode::OK);
+            let session: chatspeed_contracts::ClientBridgeRegistrationResponse =
+                registered.json().await.expect("session json");
+            assert!(!session.session_id.is_empty());
+            assert!(!session.session_token.is_empty());
+            assert_eq!(session.protocol_version, BRIDGE_PROTOCOL_VERSION);
+
+            // The live bridge now shows up in the capability registry.
+            let listed: serde_json::Value = http
+                .get(url(&plane, CLIENT_CAPABILITIES_PATH))
+                .header("Authorization", &auth)
+                .send()
+                .await
+                .expect("capability registry")
+                .json()
+                .await
+                .expect("registry json");
+            let available = listed["capabilities"]
+                .as_array()
+                .expect("capabilities")
+                .iter()
+                .filter(|entry| entry["bridge_declared"] == serde_json::Value::Bool(true))
+                .count();
+            assert_eq!(available, 2);
+
+            plane.handle.shutdown();
+            cli_plane.handle.shutdown();
+        }
+
+        #[tokio::test]
+        async fn an_unknown_declaration_capability_is_refused() {
+            let plane = start_plane_with_leases(
+                Arc::new(TestLeases::with_lease("tauri-main", "tauri")),
+                false,
+            )
+            .await;
+            let http = reqwest::Client::new();
+            let auth = format!("Bearer {}", plane.token);
+            let mut declaration = bridge_declaration();
+            declaration.capabilities[0].name = "filesystem_read".to_string();
+            let body = serde_json::to_string(&chatspeed_contracts::ClientBridgeRegistration {
+                client_id: "tauri-main".to_string(),
+                lease_id: "lease-tauri-main".to_string(),
+                declaration,
+            })
+            .expect("serialize");
+            let rejected = http
+                .post(url(&plane, REGISTER))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await
+                .expect("register with unknown capability");
+            assert_eq!(rejected.status(), reqwest::StatusCode::FORBIDDEN);
+            plane.handle.shutdown();
+        }
+
+        #[tokio::test]
+        async fn a_live_bridge_serves_a_typed_invocation_end_to_end() {
+            let plane = start_plane_with_leases(
+                Arc::new(TestLeases::with_lease("tauri-main", "tauri")),
+                false,
+            )
+            .await;
+            let http = reqwest::Client::new();
+            let auth = format!("Bearer {}", plane.token);
+
+            let session: chatspeed_contracts::ClientBridgeRegistrationResponse = http
+                .post(url(&plane, REGISTER))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(registration_body("tauri-main", "lease-tauri-main"))
+                .send()
+                .await
+                .expect("register")
+                .json()
+                .await
+                .expect("session json");
+
+            let mut stream = http
+                .get(url(
+                    &plane,
+                    &format!("/control/v1/client-bridge/{}/events", session.session_id),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, &session.session_token)
+                .send()
+                .await
+                .expect("events stream");
+            assert_eq!(stream.status(), reqwest::StatusCode::OK);
+
+            // Dispatch one invocation from another bearer holder; it waits for
+            // the bridge to answer.
+            let invoke_url = url(&plane, "/control/v1/client-capabilities/web_fetch/invoke");
+            let invoke_auth = auth.clone();
+            let invoke_token = session.session_token.clone();
+            let invoke = tokio::spawn(async move {
+                reqwest::Client::new()
+                    .post(invoke_url)
+                    .header("Authorization", invoke_auth)
+                    .header(BRIDGE_SESSION_HEADER, invoke_token)
+                    .header("Content-Type", "application/json")
+                    .body(r#"{"url":"https://example.com"}"#)
+                    .send()
+                    .await
+                    .expect("invoke web_fetch")
+            });
+
+            let envelope = read_envelope(&mut stream).await;
+            assert_eq!(envelope.invocation.capability, "web_fetch");
+            assert_eq!(envelope.invocation.schema_version, BRIDGE_SCHEMA_VERSION);
+            assert_eq!(
+                envelope.invocation.arguments["url"],
+                serde_json::Value::String("https://example.com".to_string())
+            );
+
+            // A result for an unknown request id is rejected.
+            let unknown = http
+                .post(url(
+                    &plane,
+                    &format!("/control/v1/client-bridge/{}/result", session.session_id),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, &session.session_token)
+                .header("Content-Type", "application/json")
+                .body(
+                    serde_json::json!({
+                        "request_id": "not-a-request",
+                        "status": "ok",
+                        "result": {}
+                    })
+                    .to_string(),
+                )
+                .send()
+                .await
+                .expect("unknown request id");
+            assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+
+            // A wrong session credential is rejected.
+            let wrong_token = http
+                .post(url(
+                    &plane,
+                    &format!("/control/v1/client-bridge/{}/result", session.session_id),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, "not-the-token")
+                .header("Content-Type", "application/json")
+                .body(
+                    serde_json::json!({
+                        "request_id": envelope.invocation.request_id,
+                        "status": "ok",
+                        "result": {}
+                    })
+                    .to_string(),
+                )
+                .send()
+                .await
+                .expect("wrong token result");
+            assert_eq!(wrong_token.status(), reqwest::StatusCode::FORBIDDEN);
+
+            // The owning session completes the request.
+            let delivered = http
+                .post(url(
+                    &plane,
+                    &format!("/control/v1/client-bridge/{}/result", session.session_id),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, &session.session_token)
+                .header("Content-Type", "application/json")
+                .body(
+                    serde_json::json!({
+                        "request_id": envelope.invocation.request_id,
+                        "status": ClientCapabilityStatus::Ok,
+                        "result": {"content": "hello"}
+                    })
+                    .to_string(),
+                )
+                .send()
+                .await
+                .expect("deliver result");
+            assert_eq!(delivered.status(), reqwest::StatusCode::NO_CONTENT);
+
+            let invoked = invoke.await.expect("invoke task");
+            assert_eq!(invoked.status(), reqwest::StatusCode::OK);
+            let invoked_body: serde_json::Value = invoked.json().await.expect("invoke json");
+            assert_eq!(invoked_body["status"], "ok");
+            assert_eq!(invoked_body["result"]["content"], "hello");
+
+            // Unregistering ends the session; a later events call is refused.
+            let unregistered = http
+                .post(url(
+                    &plane,
+                    &format!(
+                        "/control/v1/client-bridge/{}/unregister",
+                        session.session_id
+                    ),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, &session.session_token)
+                .header("Content-Type", "application/json")
+                .body("{}")
+                .send()
+                .await
+                .expect("unregister");
+            assert_eq!(unregistered.status(), reqwest::StatusCode::NO_CONTENT);
+
+            let after = http
+                .get(url(
+                    &plane,
+                    &format!("/control/v1/client-bridge/{}/events", session.session_id),
+                ))
+                .header("Authorization", &auth)
+                .header(BRIDGE_SESSION_HEADER, &session.session_token)
+                .send()
+                .await
+                .expect("events after unregister");
+            assert_eq!(after.status(), reqwest::StatusCode::FORBIDDEN);
+
+            plane.handle.shutdown();
+        }
+
+        #[tokio::test]
+        async fn invoking_a_live_bridge_rejects_unknown_arguments() {
+            let plane = start_plane_with_leases(
+                Arc::new(TestLeases::with_lease("tauri-main", "tauri")),
+                false,
+            )
+            .await;
+            let http = reqwest::Client::new();
+            let auth = format!("Bearer {}", plane.token);
+            http.post(url(&plane, REGISTER))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(registration_body("tauri-main", "lease-tauri-main"))
+                .send()
+                .await
+                .expect("register");
+            let missing_bridge_credential = http
+                .post(url(
+                    &plane,
+                    "/control/v1/client-capabilities/web_fetch/invoke",
+                ))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(r#"{"url":"https://example.com"}"#)
+                .send()
+                .await
+                .expect("invoke without bridge credential");
+            assert_eq!(
+                missing_bridge_credential.status(),
+                reqwest::StatusCode::FORBIDDEN
+            );
+
+            let rejected = http
+                .post(url(
+                    &plane,
+                    "/control/v1/client-capabilities/web_search/invoke",
+                ))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body(r#"{"query":"rust","limit":5}"#)
+                .send()
+                .await
+                .expect("invoke with unknown argument");
+            assert_eq!(rejected.status(), reqwest::StatusCode::BAD_REQUEST);
+
+            let forbidden = http
+                .post(url(
+                    &plane,
+                    "/control/v1/client-capabilities/filesystem_read/invoke",
+                ))
+                .header("Authorization", &auth)
+                .header("Content-Type", "application/json")
+                .body("{}")
+                .send()
+                .await
+                .expect("invoke non-web capability");
+            assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+
+            plane.handle.shutdown();
+        }
     }
 }

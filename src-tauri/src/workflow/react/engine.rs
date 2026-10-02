@@ -660,9 +660,13 @@ impl WorkflowExecutor {
             .map_or(true, |tools| tools.contains(crate::tools::TOOL_BASH));
         // Deliberate trade-off: help requires the CLI through bash; enabling skills
         // must not silently grant shell access to agents configured without bash.
-        let discovered_skills = discovered_skills.iter()
-            .filter(|(name, skill)| has_bash || (!name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)
-                && !skill.name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)))
+        let discovered_skills = discovered_skills
+            .iter()
+            .filter(|(name, skill)| {
+                has_bash
+                    || (!name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME)
+                        && !skill.name.eq_ignore_ascii_case(ALWAYS_ENABLED_SKILL_NAME))
+            })
             .map(|(name, skill)| (name.clone(), skill.clone()))
             .collect::<HashMap<_, _>>();
 
@@ -852,14 +856,14 @@ impl WorkflowExecutor {
             // Preserve all desktop/CLI MCP behavior as the fallback path.
             (canonical_name, &self.global_tool_manager)
         } else {
-                if crate::tools::is_mcp_tool_execute_tool(tool_name) {
-                    return Err(crate::tools::ToolError::InvalidParams(format!(
-                        "MCP tool '{}' was not found",
-                        requested_name
-                    )));
-                }
-                return Ok(None);
-            };
+            if crate::tools::is_mcp_tool_execute_tool(tool_name) {
+                return Err(crate::tools::ToolError::InvalidParams(format!(
+                    "MCP tool '{}' was not found",
+                    requested_name
+                )));
+            }
+            return Ok(None);
+        };
 
         if !self.is_mcp_tool_allowed(&canonical_name) {
             return Err(crate::tools::ToolError::Security(format!(
@@ -1075,7 +1079,8 @@ impl WorkflowExecutor {
         self.intelligence_manager.lite_model_name = lite_model
             .map(|model| model.model.clone())
             .unwrap_or_default();
-        self.intelligence_manager.decision_provider_id = decision_model.map(|model| model.id).unwrap_or(0);
+        self.intelligence_manager.decision_provider_id =
+            decision_model.map(|model| model.id).unwrap_or(0);
         self.intelligence_manager.decision_model_name = decision_model
             .map(|model| model.model.clone())
             .unwrap_or_default();
@@ -2519,12 +2524,12 @@ impl WorkflowExecutor {
                     Self::dedicated_lite_model(&self.agent_config)
                         .map(|model| (model.id, model.model.clone()))
                         .unwrap_or((0, String::new()));
-                    let decision_model = self
-                        .agent_config
-                        .models
-                        .as_ref()
-                        .filter(|models| models.decision_enabled)
-                        .and_then(|models| models.decision.as_ref());
+                let decision_model = self
+                    .agent_config
+                    .models
+                    .as_ref()
+                    .filter(|models| models.decision_enabled)
+                    .and_then(|models| models.decision.as_ref());
                 let im = IntelligenceManager::new(
                     self.session_id.clone(),
                     self.chat_state.clone(),
@@ -2533,7 +2538,9 @@ impl WorkflowExecutor {
                     lite_provider_id,
                     lite_model_name,
                     decision_model.map(|model| model.id).unwrap_or(0),
-                    decision_model.map(|model| model.model.clone()).unwrap_or_default(),
+                    decision_model
+                        .map(|model| model.model.clone())
+                        .unwrap_or_default(),
                     self.llm_processor.workflow_task_run_id.clone(),
                     self.llm_processor.root_session_id.clone(),
                     self.llm_processor.root_task_run_id.clone(),
@@ -6472,12 +6479,9 @@ impl WorkflowExecutor {
                     Some(canonical_name) => Some(canonical_name),
                     None => gtm.resolve_mcp_tool_name(&name).await,
                 };
-                let mcp_tool_allowed =
-                    canonical_mcp_tool_name
-                        .as_ref()
-                        .is_none_or(|canonical_name| {
-                            self.is_mcp_tool_allowed(canonical_name)
-                        });
+                let mcp_tool_allowed = canonical_mcp_tool_name
+                    .as_ref()
+                    .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
                 let tm_clone = tm.clone();
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
@@ -6513,37 +6517,32 @@ impl WorkflowExecutor {
             }
 
             loop {
-                let next_result = match await_with_stop(
-                    &self.session_id,
-                    signal_rx,
-                    tool_futures.next(),
-                )
-                .await
-                {
-                    Ok(next_result) => next_result,
-                    Err(error @ WorkflowEngineError::Cancelled(_)) => {
-                        let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
-                            "Tool execution interrupted because the workflow was cancelled"
-                                .to_string(),
-                        ));
-                        for (tool_call_id, tool_name) in &started_tools {
-                            self.append_tool_terminal_event(
-                                tool_call_id,
-                                tool_name,
-                                &cancelled_result,
-                            )
-                            .await;
-                            self.dispatch_tool_terminal_payload(
-                                tool_call_id,
-                                tool_name,
-                                &cancelled_result,
-                            )
-                            .await;
+                let next_result =
+                    match await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await {
+                        Ok(next_result) => next_result,
+                        Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                            let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                                "Tool execution interrupted because the workflow was cancelled"
+                                    .to_string(),
+                            ));
+                            for (tool_call_id, tool_name) in &started_tools {
+                                self.append_tool_terminal_event(
+                                    tool_call_id,
+                                    tool_name,
+                                    &cancelled_result,
+                                )
+                                .await;
+                                self.dispatch_tool_terminal_payload(
+                                    tool_call_id,
+                                    tool_name,
+                                    &cancelled_result,
+                                )
+                                .await;
+                            }
+                            return Err(error);
                         }
-                        return Err(error);
-                    }
-                    Err(error) => return Err(error),
-                };
+                        Err(error) => return Err(error),
+                    };
                 let Some((id, name, args, call, res, duration_ms)) = next_result else {
                     break;
                 };
@@ -6589,33 +6588,29 @@ impl WorkflowExecutor {
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
-            let final_res = match await_with_stop(
-                &self.session_id,
-                signal_rx,
-                async move {
-                    if canonical_mcp_tool_name.is_some() {
-                        if mcp_tool_allowed {
-                            let mcp_tool_manager = if mcp_uses_session_manager {
-                                tool_manager
-                            } else {
-                                global_tool_manager
-                            };
-                            mcp_tool_manager
-                                .tool_call(&tool_name_for_call, enriched_args)
-                                .await
+            let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
+                if canonical_mcp_tool_name.is_some() {
+                    if mcp_tool_allowed {
+                        let mcp_tool_manager = if mcp_uses_session_manager {
+                            tool_manager
                         } else {
-                            Err(crate::tools::ToolError::Security(format!(
-                                "MCP tool '{}' is not available in this workflow",
-                                tool_name_for_call
-                            )))
-                        }
-                    } else {
-                        tool_manager
+                            global_tool_manager
+                        };
+                        mcp_tool_manager
                             .tool_call(&tool_name_for_call, enriched_args)
                             .await
+                    } else {
+                        Err(crate::tools::ToolError::Security(format!(
+                            "MCP tool '{}' is not available in this workflow",
+                            tool_name_for_call
+                        )))
                     }
-                },
-            )
+                } else {
+                    tool_manager
+                        .tool_call(&tool_name_for_call, enriched_args)
+                        .await
+                }
+            })
             .await
             {
                 Ok(result) => result,
@@ -9523,13 +9518,24 @@ mod recovery_tests {
     fn builtin_cs_help_requires_bash_without_disabling_other_skills() {
         let mut agent = test_agent("help-policy");
         agent.skill_enabled = Some(true);
-        let skills = ["help", "commit"].into_iter().map(|name| {
-            (name.to_string(), SkillManifest {
-                name: name.into(), version: "1".into(), source: "builtin".into(),
-                description: String::new(), tools: vec![], instructions: String::new(),
-                skill_dir: None, references: vec![],
+        let skills = ["help", "commit"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    SkillManifest {
+                        name: name.into(),
+                        version: "1".into(),
+                        source: "builtin".into(),
+                        description: String::new(),
+                        tools: vec![],
+                        instructions: String::new(),
+                        skill_dir: None,
+                        references: vec![],
+                    },
+                )
             })
-        }).collect();
+            .collect();
         for selected in [None, Some("[\"help\",\"commit\"]".to_string())] {
             agent.selected_skills = selected;
             agent.available_tools = Some("[]".into());

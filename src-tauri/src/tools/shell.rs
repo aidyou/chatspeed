@@ -60,15 +60,16 @@ pub(crate) fn contains_builtin_cscli_command(command: &str) -> bool {
 }
 
 fn bundled_cscli_path() -> Result<std::path::PathBuf, ToolError> {
-    let executable = std::env::current_exe()
-        .map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+    let executable =
+        std::env::current_exe().map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
     let directory = executable.parent().ok_or_else(|| {
         ToolError::ExecutionFailed("Application executable has no parent directory".into())
     })?;
     let cli = directory.join(if cfg!(windows) { "cscli.exe" } else { "cscli" });
     if !cli.is_file() {
         return Err(ToolError::ExecutionFailed(format!(
-            "Bundled CLI not found: {}", cli.display()
+            "Bundled CLI not found: {}",
+            cli.display()
         )));
     }
     Ok(cli)
@@ -176,7 +177,9 @@ pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
             escaped = true;
             continue;
         }
-        if !single && !double && ch == '2'
+        if !single
+            && !double
+            && ch == '2'
             && command[..index].ends_with([' ', '\t'])
             && command[index..].trim_end_matches([' ', '\t']) == "2>&1"
         {
@@ -187,7 +190,26 @@ pub(crate) fn builtin_cs_args(command: &str) -> Option<Vec<String>> {
             single = !single;
         } else if ch == '"' && !single {
             double = !double;
-        } else if !single && (matches!(ch, '$' | '`') || (!double && matches!(ch, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '*' | '?' | '[' | ']' | '{' | '}' | '~'))) {
+        } else if !single
+            && (matches!(ch, '$' | '`')
+                || (!double
+                    && matches!(
+                        ch,
+                        ';' | '|'
+                            | '&'
+                            | '<'
+                            | '>'
+                            | '('
+                            | ')'
+                            | '*'
+                            | '?'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '~'
+                    )))
+        {
             return None;
         }
     }
@@ -209,8 +231,9 @@ fn host_process_command(command: &str) -> Result<Command, ToolError> {
     }
     let host_command = if contains_builtin_cscli_command(command) {
         let cli = bundled_cscli_path()?;
-        rewrite_builtin_cscli_commands(command, &cli)
-            .ok_or_else(|| ToolError::ExecutionFailed("Failed to parse cscli command segments".into()))?
+        rewrite_builtin_cscli_commands(command, &cli).ok_or_else(|| {
+            ToolError::ExecutionFailed("Failed to parse cscli command segments".into())
+        })?
     } else {
         crate::libs::ai_temp::map_ai_temp_paths_for_host_command(command)
     };
@@ -742,18 +765,26 @@ impl ShellPolicyEngine {
         if let Some(commands) = builtin_cscli_command_args(command_str) {
             if commands.iter().all(|args| {
                 matches!(args.first().map(String::as_str), Some("help"))
-                    || matches!((args.first().map(String::as_str), args.get(1).map(String::as_str)),
+                    || matches!(
+                        (
+                            args.first().map(String::as_str),
+                            args.get(1).map(String::as_str)
+                        ),
                         (Some("skill"), Some("targets" | "list" | "check"))
-                        | (Some("mcp"), Some("list" | "status" | "tools"))
-                        | (Some("doctor"), None | Some("capabilities")))
+                            | (Some("mcp"), Some("list" | "status" | "tools"))
+                            | (Some("doctor"), None | Some("capabilities"))
+                    )
             }) {
                 return ShellDecision::Allow;
             }
             if restrict_to_planning {
-                return ShellDecision::Review("CLI mutation requires review in planning mode".into());
+                return ShellDecision::Review(
+                    "CLI mutation requires review in planning mode".into(),
+                );
             }
-            return self.match_custom_rule(command_str).unwrap_or_else(||
-                ShellDecision::Review("CLI command requires review (not in allowed list)".into()));
+            return self.match_custom_rule(command_str).unwrap_or_else(|| {
+                ShellDecision::Review("CLI command requires review (not in allowed list)".into())
+            });
         }
         // 1. Initial Sanity Check: Block dangerous invisible characters
         for c in command_str.chars() {
@@ -1321,14 +1352,29 @@ impl ShellPolicyEngine {
     }
 
     /// Whether an explicit policy rule requires review or denial for any command segment.
-    pub fn has_explicit_review_or_deny(&self, command_str: &str, restrict_to_planning: bool) -> bool {
-        let Ok(segments) = self.extract_policy_match_segments(command_str, restrict_to_planning) else {
+    pub fn has_explicit_review_or_deny(
+        &self,
+        command_str: &str,
+        restrict_to_planning: bool,
+    ) -> bool {
+        let Ok(segments) = self.extract_policy_match_segments(command_str, restrict_to_planning)
+        else {
             return true;
         };
-        if segments.len() == 1 && matches!(self.match_custom_rule(command_str), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))) {
+        if segments.len() == 1
+            && matches!(
+                self.match_custom_rule(command_str),
+                Some(ShellDecision::Review(_) | ShellDecision::Deny(_))
+            )
+        {
             return true;
         }
-        segments.iter().any(|segment| matches!(self.match_custom_rule(segment), Some(ShellDecision::Review(_) | ShellDecision::Deny(_))))
+        segments.iter().any(|segment| {
+            matches!(
+                self.match_custom_rule(segment),
+                Some(ShellDecision::Review(_) | ShellDecision::Deny(_))
+            )
+        })
     }
 
     fn evaluate_custom_rules(
@@ -2774,7 +2820,10 @@ impl ShellExecute {
         command_str: &str,
     ) -> Result<crate::tools::ShellExecutionPlan, ToolError> {
         if contains_builtin_cscli_command(command_str) {
-            return Ok(crate::tools::ShellExecutionResolver::builtin_cs_plan(tool_call_id, command_str));
+            return Ok(crate::tools::ShellExecutionResolver::builtin_cs_plan(
+                tool_call_id,
+                command_str,
+            ));
         }
         let runtime_status = self.cached_runtime_status().await?;
         let primary_root = self.default_working_dir();
@@ -3062,13 +3111,17 @@ impl ShellExecute {
         // but AC-9 requires backend execution to preserve original shell semantics.
 
         let mut command = host_process_command(command_str)?;
-        command.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         if let Some(dir) = &working_dir {
             command.current_dir(dir);
         }
         #[cfg(not(target_os = "windows"))]
         configure_process_group(&mut command);
-        let mut child = command.spawn()
+        let mut child = command
+            .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?;
         let mut process_guard = StageProcessGuard::new(&child);
 
@@ -3390,18 +3443,49 @@ mod tests {
             rewrite_builtin_cscli_commands("FOO=cscli cscli mcp list && echo cscli", cli),
             Some("FOO=cscli '/Applications/Chatspeed.app/Contents/MacOS/cscli' mcp list && echo cscli".into())
         );
-
     }
     #[test]
     fn builtin_cs_only_accepts_literal_standalone_commands() {
-        assert_eq!(builtin_cs_args("cscli skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"),
-            Some(vec!["skill".into(), "install".into(), "--source-json".into(), "{\"url\":\"https://example.com/a?b=1\"}".into()]));
+        assert_eq!(
+            builtin_cs_args(
+                "cscli skill install --source-json '{\"url\":\"https://example.com/a?b=1\"}'"
+            ),
+            Some(vec![
+                "skill".into(),
+                "install".into(),
+                "--source-json".into(),
+                "{\"url\":\"https://example.com/a?b=1\"}".into()
+            ])
+        );
         for command in ["cscli skill list 2>&1", "cscli skill list\t2>&1  "] {
-            assert_eq!(builtin_cs_args(command), Some(vec!["skill".into(), "list".into()]));
+            assert_eq!(
+                builtin_cs_args(command),
+                Some(vec!["skill".into(), "list".into()])
+            );
         }
-        assert_eq!(builtin_cs_args("cscli mcp status '2>&1' 2>&1"),
-            Some(vec!["mcp".into(), "status".into(), "2>&1".into()]));
-        for command in ["cs skill list", "./cscli skill list", "cscli list && echo ok", "cscli list > file", "cscli list\necho ok", "cscli \"$(echo list)\"", "cscli `echo list`", "cscli *", "env cscli skill list", "cscli 'unterminated", "cscli list 2>&1 && echo ok", "cscli list 2>&1 > file", "cscli list 2>&1\n", "cscli list 2>&1 2>&1", "cscli list2>&1", "cscli list 1>&2", "cscli list 2>file"] {
+        assert_eq!(
+            builtin_cs_args("cscli mcp status '2>&1' 2>&1"),
+            Some(vec!["mcp".into(), "status".into(), "2>&1".into()])
+        );
+        for command in [
+            "cs skill list",
+            "./cscli skill list",
+            "cscli list && echo ok",
+            "cscli list > file",
+            "cscli list\necho ok",
+            "cscli \"$(echo list)\"",
+            "cscli `echo list`",
+            "cscli *",
+            "env cscli skill list",
+            "cscli 'unterminated",
+            "cscli list 2>&1 && echo ok",
+            "cscli list 2>&1 > file",
+            "cscli list 2>&1\n",
+            "cscli list 2>&1 2>&1",
+            "cscli list2>&1",
+            "cscli list 1>&2",
+            "cscli list 2>file",
+        ] {
             assert!(builtin_cs_args(command).is_none(), "{command}");
         }
     }
@@ -3410,26 +3494,59 @@ mod tests {
     fn builtin_cs_mutations_preserve_user_approval_rules() {
         let (_root, _, guard) = setup_test_context();
         let policy = ShellPolicyEngine::new(guard.clone(), vec![]);
-        assert_eq!(policy.check("cscli skill list", false), ShellDecision::Allow);
-        assert_eq!(policy.check("cscli mcp status demo", false), ShellDecision::Allow);
-        assert_eq!(policy.check("cscli skill list 2>&1", false), ShellDecision::Allow);
-        for command in ["cscli mcp install --descriptor-json '{}'", "cscli mcp install --descriptor-json '{}' 2>&1"] {
-            assert!(matches!(policy.check(command, false), ShellDecision::Review(_)), "{command}");
+        assert_eq!(
+            policy.check("cscli skill list", false),
+            ShellDecision::Allow
+        );
+        assert_eq!(
+            policy.check("cscli mcp status demo", false),
+            ShellDecision::Allow
+        );
+        assert_eq!(
+            policy.check("cscli skill list 2>&1", false),
+            ShellDecision::Allow
+        );
+        for command in [
+            "cscli mcp install --descriptor-json '{}'",
+            "cscli mcp install --descriptor-json '{}' 2>&1",
+        ] {
+            assert!(
+                matches!(policy.check(command, false), ShellDecision::Review(_)),
+                "{command}"
+            );
         }
-        let policy = ShellPolicyEngine::new(guard, vec![ShellPolicyRule {
-            pattern: "^cscli mcp enable demo$".into(), decision: ShellDecision::Allow, description: None,
-        }]);
-        assert_eq!(policy.check("cscli mcp enable demo", false), ShellDecision::Allow);
+        let policy = ShellPolicyEngine::new(
+            guard,
+            vec![ShellPolicyRule {
+                pattern: "^cscli mcp enable demo$".into(),
+                decision: ShellDecision::Allow,
+                description: None,
+            }],
+        );
+        assert_eq!(
+            policy.check("cscli mcp enable demo", false),
+            ShellDecision::Allow
+        );
     }
-
 
     #[test]
     fn explicit_policy_reviews_cannot_be_decision_approved() {
         let (_root, _, guard) = setup_test_context();
-        let policy = ShellPolicyEngine::new(guard, vec![
-            ShellPolicyRule { pattern: "^git status$".into(), decision: ShellDecision::Review("explicit review".into()), description: None },
-            ShellPolicyRule { pattern: "^rm ".into(), decision: ShellDecision::Deny("blocked".into()), description: None },
-        ]);
+        let policy = ShellPolicyEngine::new(
+            guard,
+            vec![
+                ShellPolicyRule {
+                    pattern: "^git status$".into(),
+                    decision: ShellDecision::Review("explicit review".into()),
+                    description: None,
+                },
+                ShellPolicyRule {
+                    pattern: "^rm ".into(),
+                    decision: ShellDecision::Deny("blocked".into()),
+                    description: None,
+                },
+            ],
+        );
         assert!(policy.has_explicit_review_or_deny("git status", false));
         assert!(policy.has_explicit_review_or_deny("rm -rf something", false));
         assert!(policy.has_explicit_review_or_deny("git status; echo ok", false));

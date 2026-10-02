@@ -7,15 +7,17 @@ use url::Url;
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     constants::{CFG_SEARCH_ENGINE, RESTRICTED_EXTENSIONS, VIDEO_AND_IMAGE_DOMAINS},
-    db::MainStore,
     scraper::url_helper::{decode_bing_url, get_meta_refresh_url},
     search::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
         SerperSearch, TavilySearch,
     },
-    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
+    tools::{
+        error::ToolError, web_config::WebToolConfig, NativeToolResult, ToolCallResult,
+        ToolCategory, ToolDefinition,
+    },
 };
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Wry};
 
 pub struct Auth {
     pub api_key: String,
@@ -32,26 +34,24 @@ impl Auth {
 
 pub struct WebSearch {
     app_handle: AppHandle<Wry>,
+    config: Arc<dyn WebToolConfig>,
 }
 
 impl WebSearch {
-    pub fn new(app_handle: AppHandle<Wry>) -> Arc<Self> {
-        Arc::new(Self { app_handle })
+    pub fn new(app_handle: AppHandle<Wry>, config: Arc<dyn WebToolConfig>) -> Arc<Self> {
+        Arc::new(Self { app_handle, config })
     }
 
     fn create_searcher(
         &self,
         provider: Option<String>,
     ) -> Result<(SearchFactory, SearchProviderName), ToolError> {
-        let main_store = self.app_handle.state::<Arc<MainStore>>().inner();
-        let store = main_store.as_ref();
-
         let search_engine =
-            provider.unwrap_or_else(|| store.get_config(CFG_SEARCH_ENGINE, "bing".to_string()));
+            provider.unwrap_or_else(|| self.config.get_string(CFG_SEARCH_ENGINE, "bing"));
 
-        let proxy_type = store.get_config("proxy_type", "".to_string());
+        let proxy_type = self.config.get_string("proxy_type", "");
         let proxy = if proxy_type == "http" {
-            let s = store.get_config("proxy_server", "".to_string());
+            let s = self.config.get_string("proxy_server", "");
             if s.is_empty() {
                 None
             } else {
@@ -66,21 +66,21 @@ impl WebSearch {
 
         let searcher = match provider_name.clone() {
             SearchProviderName::Google => {
-                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
                 SearchFactory::Google(
                     GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy)
                         .map_err(|e| ToolError::Initialization(e.to_string()))?,
                 )
             }
             SearchProviderName::Tavily => {
-                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
                 SearchFactory::Tavily(
                     TavilySearch::new(auth.api_key, proxy)
                         .map_err(|e| ToolError::Initialization(e.to_string()))?,
                 )
             }
             SearchProviderName::Serper => {
-                let auth = Self::get_and_check_auth(&search_engine, main_store.clone())?;
+                let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
                 SearchFactory::Serper(
                     SerperSearch::new(auth.api_key, proxy)
                         .map_err(|e| ToolError::Initialization(e.to_string()))?,
@@ -101,15 +101,14 @@ impl WebSearch {
     /// Get and check authentication for the search engine.
     pub fn get_and_check_auth(
         search_engine: &str,
-        main_store: Arc<MainStore>,
+        config: &dyn WebToolConfig,
     ) -> Result<Auth, ToolError> {
-        let store = main_store.as_ref();
         let provider_name = SearchProviderName::from_str(search_engine)
             .map_err(|e| ToolError::Initialization(e))?;
         let auth = match provider_name {
             SearchProviderName::Google => {
-                let api_key = store.get_config("google_api_key", "".to_string());
-                let cx = store.get_config("google_search_id", "".to_string());
+                let api_key = config.get_string("google_api_key", "");
+                let cx = config.get_string("google_search_id", "");
                 if api_key.is_empty() {
                     return Err(ToolError::Config(
                         t!("tools.search.google_api_key_empty").to_string(),
@@ -123,7 +122,7 @@ impl WebSearch {
                 Auth::new_with_cx(api_key, Some(cx))
             }
             SearchProviderName::Tavily => {
-                let api_key = store.get_config("tavily_api_key", "".to_string());
+                let api_key = config.get_string("tavily_api_key", "");
                 if api_key.is_empty() {
                     return Err(ToolError::Config(
                         t!("tools.search.tavily_api_key_empty").to_string(),
@@ -132,7 +131,7 @@ impl WebSearch {
                 Auth::new(api_key)
             }
             SearchProviderName::Serper => {
-                let api_key = store.get_config("serper_api_key", "".to_string());
+                let api_key = config.get_string("serper_api_key", "");
                 if api_key.is_empty() {
                     return Err(ToolError::Config(
                         t!("tools.search.serper_api_key_empty").to_string(),

@@ -15,18 +15,16 @@
 
 use crate::capability::operation::{canonical_request_hash, now_ms};
 use crate::db::automation::{CasOutcome, ClaimOutcome, DeleteAutomationOutcome, ReceiptOutcome};
-use crate::db::{
-    MainStore, WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert,
-};
+use crate::db::{MainStore, WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::automation::errors::{self, AutomationError};
 use crate::workflow::automation::service::request_to_upsert;
 use crate::workflow::automation::types::{
     AutomationApplyRequest, AutomationDispatchOutcome, AutomationDispatchResult,
-    AutomationDraftInput, AutomationMutationOutcome, AutomationMutationResult, AutomationPlanStatus,
-    AutomationPlanV1, AutomationRunView, AutomationSpec, AutomationView, AutomationWarning,
-    PermissionSummary, WorkflowAutomationRequest, WorkflowAutomationRunNowResult,
-    AUTOMATION_PLAN_VERSION,
+    AutomationDraftInput, AutomationMutationOutcome, AutomationMutationResult,
+    AutomationPlanStatus, AutomationPlanV1, AutomationRunView, AutomationSpec, AutomationView,
+    AutomationWarning, PermissionSummary, WorkflowAutomationRequest,
+    WorkflowAutomationRunNowResult, AUTOMATION_PLAN_VERSION,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -186,7 +184,8 @@ impl AutomationApplicationService {
             .map_err(|e| AutomationError::internal(e.to_string()))?
             .flatten();
 
-        let permission_summary = self.permission_summary(&spec, existing.as_ref(), &mut warnings)?;
+        let permission_summary =
+            self.permission_summary(&spec, existing.as_ref(), &mut warnings)?;
         // Validate the same way the write path will, but persist nothing.
         self.validate_spec(&spec)?;
         if let Some(existing) = &existing {
@@ -195,7 +194,9 @@ impl AutomationApplicationService {
             if existing.continuous_context && !spec.continuous_context {
                 warnings.push(AutomationWarning {
                     code: "continuous_context_disabled".to_string(),
-                    message: "plan disables continuous context; the current session will not be reused".to_string(),
+                    message:
+                        "plan disables continuous context; the current session will not be reused"
+                            .to_string(),
                 });
             }
         }
@@ -241,7 +242,9 @@ impl AutomationApplicationService {
             ));
         }
         if now_ms() > plan.expires_at_ms {
-            return Err(AutomationError::plan_expired("plan has expired, re-draft before applying"));
+            return Err(AutomationError::plan_expired(
+                "plan has expired, re-draft before applying",
+            ));
         }
         // Recompute the hash from the plan's own changes and cross-check the
         // caller's authorized hash. Any mismatch is a tamper/expiry guard.
@@ -256,9 +259,7 @@ impl AutomationApplicationService {
             ));
         }
 
-        if plan.permission_summary.permission_expansion
-            && !request.acknowledge_permission_changes
-        {
+        if plan.permission_summary.permission_expansion && !request.acknowledge_permission_changes {
             return Err(AutomationError::permission_expansion(
                 "plan expands permissions; acknowledge before applying",
             ));
@@ -408,7 +409,9 @@ impl AutomationApplicationService {
         execute: F,
     ) -> Result<AutomationMutationResult, AutomationError>
     where
-        F: FnOnce(&AutomationApplicationService) -> Result<AutomationMutationResult, AutomationError>,
+        F: FnOnce(
+            &AutomationApplicationService,
+        ) -> Result<AutomationMutationResult, AutomationError>,
     {
         let Some(key) = idempotency_key.map(str::trim).filter(|key| !key.is_empty()) else {
             return execute(self);
@@ -458,16 +461,21 @@ impl AutomationApplicationService {
                         .as_ref()
                         .map(view_ref)
                         .and_then(|value| serde_json::to_string(&value).ok());
-                    let _ = self
-                        .store()
-                        .complete_automation_mutation(actor_scope, key, redacted.as_deref());
+                    let _ = self.store().complete_automation_mutation(
+                        actor_scope,
+                        key,
+                        redacted.as_deref(),
+                    );
                 }
                 Ok(result)
             }
         }
     }
 
-    fn insert_new(&self, spec: &AutomationSpec) -> Result<AutomationMutationResult, AutomationError> {
+    fn insert_new(
+        &self,
+        spec: &AutomationSpec,
+    ) -> Result<AutomationMutationResult, AutomationError> {
         let id = self
             .tsid_generator
             .generate()
@@ -488,7 +496,10 @@ impl AutomationApplicationService {
             .store()
             .create_workflow_automation(&upsert)
             .map_err(map_store_write_error)?;
-        Ok(mutation_result(AutomationMutationOutcome::Applied, &created))
+        Ok(mutation_result(
+            AutomationMutationOutcome::Applied,
+            &created,
+        ))
     }
 
     /// Legacy editor save adapter. It creates when the id is absent or the row
@@ -550,9 +561,9 @@ impl AutomationApplicationService {
             CasOutcome::Updated(row) => {
                 Ok(mutation_result(AutomationMutationOutcome::Applied, &row))
             }
-            CasOutcome::NotFound => {
-                Err(AutomationError::not_found(format!("Automation {automation_id}")))
-            }
+            CasOutcome::NotFound => Err(AutomationError::not_found(format!(
+                "Automation {automation_id}"
+            ))),
             CasOutcome::RevisionConflict => Err(AutomationError::revision_conflict(
                 "the automation was modified concurrently; reload and retry",
             )),
@@ -587,10 +598,12 @@ impl AutomationApplicationService {
             .set_workflow_automation_enabled_cas(automation_id, enabled, next_run_at, expected)
             .map_err(map_store_write_error)?
         {
-            CasOutcome::Updated(row) => Ok(mutation_result(AutomationMutationOutcome::Enabled, &row)),
-            CasOutcome::NotFound => {
-                Err(AutomationError::not_found(format!("Automation {automation_id}")))
+            CasOutcome::Updated(row) => {
+                Ok(mutation_result(AutomationMutationOutcome::Enabled, &row))
             }
+            CasOutcome::NotFound => Err(AutomationError::not_found(format!(
+                "Automation {automation_id}"
+            ))),
             CasOutcome::RevisionConflict => Err(AutomationError::revision_conflict(
                 "the automation was modified concurrently; reload and retry",
             )),
@@ -656,11 +669,14 @@ impl AutomationApplicationService {
 
     fn validate_spec(&self, spec: &AutomationSpec) -> Result<(), AutomationError> {
         if spec.title.trim().is_empty() {
-            return Err(AutomationError::invalid_request("automation title is required"));
+            return Err(AutomationError::invalid_request(
+                "automation title is required",
+            ));
         }
         let request = spec_to_request(spec, None);
-        crate::workflow::automation::service::validate_automation_request(&request)
-            .map_err(|error| AutomationError::invalid_request(format!("invalid automation spec: {error}")))
+        crate::workflow::automation::service::validate_automation_request(&request).map_err(
+            |error| AutomationError::invalid_request(format!("invalid automation spec: {error}")),
+        )
     }
 
     fn build_upsert(
@@ -671,7 +687,10 @@ impl AutomationApplicationService {
     ) -> Result<WorkflowAutomationUpsert, AutomationError> {
         let request = spec_to_request(spec, Some(id.clone()));
         request_to_upsert(request, id, existing_session).map_err(|e| {
-            AutomationError::new(errors::code::INVALID_REQUEST, format!("invalid automation spec: {e}"))
+            AutomationError::new(
+                errors::code::INVALID_REQUEST,
+                format!("invalid automation spec: {e}"),
+            )
         })
     }
 
@@ -717,7 +736,8 @@ impl AutomationApplicationService {
         if agent_changed && existing.is_some() {
             warnings.push(AutomationWarning {
                 code: "agent_changed".to_string(),
-                message: "plan references a different agent than the current automation".to_string(),
+                message: "plan references a different agent than the current automation"
+                    .to_string(),
             });
         }
 
@@ -732,7 +752,10 @@ impl AutomationApplicationService {
 
     /// Projects one run against the durable snapshot state and persists a newly
     /// provable terminal transition. Returns the (possibly updated) run row.
-    fn project_run(&self, run: &WorkflowAutomationRun) -> Result<WorkflowAutomationRun, AutomationError> {
+    fn project_run(
+        &self,
+        run: &WorkflowAutomationRun,
+    ) -> Result<WorkflowAutomationRun, AutomationError> {
         if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
             return Ok(run.clone());
         }
@@ -875,8 +898,9 @@ impl WorkflowApplicationService {
             ReceiptOutcome::Conflict => Err(AutomationError::conflict(
                 "idempotency key was already used with a different request",
             )),
-            ReceiptOutcome::Replay(Some(raw)) => serde_json::from_str(&raw)
-                .map_err(|e| AutomationError::internal(e.to_string())),
+            ReceiptOutcome::Replay(Some(raw)) => {
+                serde_json::from_str(&raw).map_err(|e| AutomationError::internal(e.to_string()))
+            }
             ReceiptOutcome::Replay(None) => Err(AutomationError::internal(
                 "idempotent run has no replay result",
             )),
@@ -892,7 +916,6 @@ impl WorkflowApplicationService {
             }
         }
     }
-
 
     /// The mutation goes exclusively through the typed facade `automation_run`
     /// (AC-1/INV-2) — this method never calls the service kernel itself — and the
@@ -951,7 +974,10 @@ impl WorkflowApplicationService {
                 // Non-recurring schedule with nothing left: disable-safe no-op.
                 continue;
             };
-            let dispatch_key = automation.next_run_at.clone().unwrap_or_else(|| now.to_string());
+            let dispatch_key = automation
+                .next_run_at
+                .clone()
+                .unwrap_or_else(|| now.to_string());
             let run_id = self
                 .tsid_generator
                 .generate()
@@ -1011,8 +1037,11 @@ impl WorkflowApplicationService {
     ) -> Result<Option<String>, AutomationError> {
         let schedule_config: Value = serde_json::from_str(&automation.schedule_config)
             .map_err(|e| AutomationError::internal(e.to_string()))?;
-        crate::workflow::automation::service::compute_next_run_at(&automation.schedule_kind, &schedule_config)
-            .map_err(AutomationError::invalid_request)
+        crate::workflow::automation::service::compute_next_run_at(
+            &automation.schedule_kind,
+            &schedule_config,
+        )
+        .map_err(AutomationError::invalid_request)
     }
 }
 
@@ -1069,6 +1098,10 @@ fn to_view(row: &WorkflowAutomation) -> AutomationView {
         prompt: row.prompt.clone(),
         prompt_file_path: row.prompt_file_path.clone(),
         agent_id: row.agent_id.clone(),
+        agent_config: row
+            .agent_config
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok()),
         allowed_paths,
         shell_config,
         schedule_kind: row.schedule_kind.clone(),
@@ -1461,11 +1494,7 @@ mod tests {
 
         let mut different = spec();
         different.title = "Other".to_string();
-        let conflict = svc.create(
-            &different,
-            AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE,
-            Some("k1"),
-        );
+        let conflict = svc.create(&different, AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE, Some("k1"));
         assert_eq!(conflict.expect_err("conflict").code(), code::CONFLICT);
     }
 
@@ -1529,7 +1558,12 @@ mod tests {
                 dispatch_key: None,
             })
             .expect("insert running");
-        let done = svc.runs(&id).expect("runs").into_iter().find(|run| run.run_id == "run-done").expect("find run");
+        let done = svc
+            .runs(&id)
+            .expect("runs")
+            .into_iter()
+            .find(|run| run.run_id == "run-done")
+            .expect("find run");
         assert_eq!(done.status, "completed");
         assert_eq!(done.workflow_status.as_deref(), Some("completed"));
     }
@@ -1546,7 +1580,8 @@ mod tests {
             "run_now command must delegate to the compat facade"
         );
         assert!(
-            !command_src.contains("run_automation_now") && !command_src.contains("create_manual_run"),
+            !command_src.contains("run_automation_now")
+                && !command_src.contains("create_manual_run"),
             "run_now command must not reach the raw kernel helper"
         );
 

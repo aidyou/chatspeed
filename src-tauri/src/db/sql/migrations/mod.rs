@@ -1,6 +1,6 @@
+pub(crate) mod automation_schema;
 pub(crate) mod capability_schema;
 pub mod common;
-pub(crate) mod automation_schema;
 pub mod manager;
 pub(crate) mod tool_compatibility;
 pub mod v1;

@@ -906,6 +906,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chatspeed-contracts",
+ "chatspeed-runtime-client",
  "chrono",
  "clap",
  "dashmap",
@@ -984,6 +985,7 @@ name = "chatspeed-cli"
 version = "2.0.17"
 dependencies = [
  "chatspeed-contracts",
+ "chatspeed-runtime-client",
  "chrono",
  "clap",
  "futures-util",
@@ -1007,6 +1009,115 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "chatspeed-runtime"
+version = "2.0.17"
+dependencies = [
+ "chatspeed-contracts",
+ "chatspeed-runtime-backend",
+ "chrono",
+ "hex",
+ "libc",
+ "log",
+ "rand 0.10.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "chatspeed-runtime-backend"
+version = "2.0.17"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chatspeed-contracts",
+ "chrono",
+ "dashmap",
+ "dirs 6.0.0",
+ "futures",
+ "futures-util",
+ "glob",
+ "globset",
+ "hex",
+ "html-escape",
+ "http",
+ "ignore",
+ "image",
+ "indexmap 2.14.2",
+ "json_value_merge",
+ "lazy_static",
+ "libc",
+ "locale_config",
+ "log",
+ "lru",
+ "md5",
+ "memchr",
+ "parking_lot",
+ "phf",
+ "rand 0.10.3",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "rust-i18n",
+ "scraper",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "shellexpand",
+ "shlex 1.3.0",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tower-http",
+ "url",
+ "uuid",
+ "walkdir",
+ "whatlang",
+ "wildmatch",
+ "xxhash-rust",
+ "zip 8.6.0",
+]
+
+[[package]]
+name = "chatspeed-runtime-client"
+version = "2.0.17"
+dependencies = [
+ "chatspeed-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "chatspeed-runtime-core"
+version = "2.0.17"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chatspeed-contracts",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

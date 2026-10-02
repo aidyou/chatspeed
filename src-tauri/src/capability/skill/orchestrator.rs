@@ -23,9 +23,7 @@ use crate::capability::skill::source::{validate_skill_name, SkillSource};
 use crate::capability::skill::staging::StagingArea;
 use crate::capability::skill::uninstaller::SkillUninstaller;
 use crate::capability::targets::{self, SkillTargetId};
-use crate::capability::types::{
-    CapabilityKind, OperationBegin, OperationRequest, OperationState,
-};
+use crate::capability::types::{CapabilityKind, OperationBegin, OperationRequest, OperationState};
 use crate::capability::CapabilityApplicationService;
 
 /// A finished (or replayed) Skill mutation.
@@ -79,7 +77,8 @@ impl CapabilityApplicationService {
         source_value: &Value,
     ) -> Result<SkillCheckReport, CapabilityError> {
         let source = SkillSource::parse(source_value)?;
-        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
+        let resolver =
+            SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
         let staging_id = format!("skill-check-{}", now_ms());
         resolver
             .check(&source, self.environment(), &staging_id)
@@ -177,16 +176,19 @@ impl CapabilityApplicationService {
 
         // The plan freezes the checked bytes into its own private directory, so
         // the apply step can never copy content the checker did not see.
-        let plan_staging = match StagingArea::create(
-            self.app_data_dir(),
-            &format!("{operation_id}-plan"),
-        ) {
-            Ok(staging) => staging,
-            Err(error) => {
-                self.finish_operation(&operation_id, OperationState::Failed, None, Some(&error))?;
-                return Err(error);
-            }
-        };
+        let plan_staging =
+            match StagingArea::create(self.app_data_dir(), &format!("{operation_id}-plan")) {
+                Ok(staging) => staging,
+                Err(error) => {
+                    self.finish_operation(
+                        &operation_id,
+                        OperationState::Failed,
+                        None,
+                        Some(&error),
+                    )?;
+                    return Err(error);
+                }
+            };
         let plan = match SkillInstallPlan::build(
             &source,
             &report,
@@ -226,10 +228,7 @@ impl CapabilityApplicationService {
 
         let mut result = projection("applied");
         if let Some(object) = result.as_object_mut() {
-            object.insert(
-                "install".to_string(),
-                serde_json::to_value(&summary)?,
-            );
+            object.insert("install".to_string(), serde_json::to_value(&summary)?);
         }
         // A run where no target ended up installing anything is reported as
         // blocked rather than completed (INV-7: intent is not a fact).
@@ -322,8 +321,7 @@ impl CapabilityApplicationService {
             )
         });
         let refused = outcomes.iter().any(|outcome| {
-            outcome.status
-                == crate::capability::skill::uninstaller::UninstallOutcomeStatus::Refused
+            outcome.status == crate::capability::skill::uninstaller::UninstallOutcomeStatus::Refused
         });
         let result = serde_json::json!({
             "skill_name": skill_name,
@@ -349,7 +347,8 @@ impl CapabilityApplicationService {
         source: &SkillSource,
     ) -> Result<crate::capability::skill::checker::MaterializedSource, CapabilityError> {
         self.set_state(operation_id, OperationState::Staging, Some("materialize"))?;
-        let resolver = SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
+        let resolver =
+            SkillSourceResolver::new(self.app_data_dir().to_path_buf(), self.proxy_type());
         resolver
             .materialize(source, self.environment(), operation_id)
             .await
@@ -445,7 +444,10 @@ mod tests {
             .expect("install");
         assert!(!first.replayed);
         assert_eq!(first.result["verdict"], "pass");
-        assert_eq!(first.result["install"]["outcomes"][0]["status"], "installed");
+        assert_eq!(
+            first.result["install"]["outcomes"][0]["status"],
+            "installed"
+        );
 
         let installed = fixture
             .environment
@@ -522,7 +524,10 @@ mod tests {
             )
             .await
             .expect("install");
-        assert_eq!(result.result["install"]["outcomes"][0]["status"], "installed");
+        assert_eq!(
+            result.result["install"]["outcomes"][0]["status"],
+            "installed"
+        );
         assert_eq!(result.result["stage"], "applied");
     }
 
@@ -569,7 +574,12 @@ mod tests {
 
         let error = fixture
             .service
-            .skill_install(&fixture.source_json(), &["nope".to_string()], "key-1", "test")
+            .skill_install(
+                &fixture.source_json(),
+                &["nope".to_string()],
+                "key-1",
+                "test",
+            )
             .await
             .err()
             .expect("unknown target");

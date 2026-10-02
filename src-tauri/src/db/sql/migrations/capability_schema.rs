@@ -108,8 +108,9 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 /// Re-applies the idempotent capability journal schema on every startup.
 pub(crate) fn ensure_capability_journal(conn: &Connection) -> Result<(), StoreError> {
     for (name, sql) in MIGRATION_SQL {
-        conn.execute(sql, [])
-            .map_err(|e| StoreError::Query(format!("capability journal ensure {name} failed: {e}")))?;
+        conn.execute(sql, []).map_err(|e| {
+            StoreError::Query(format!("capability journal ensure {name} failed: {e}"))
+        })?;
     }
     Ok(())
 }

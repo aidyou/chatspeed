@@ -1,7 +1,24 @@
 use std::sync::Arc;
 use tauri::Manager;
 
-use crate::{commands::window::quit_window, db::MainStore};
+use crate::commands::window::quit_window;
+use crate::runtime_config::{RuntimeConfigCache, RuntimeConfigSnapshot};
+
+/// Resolves the accelerator shown next to a tray entry.
+///
+/// The shortcut hints are runtime-owned configuration. The tray itself is a
+/// pure Tauri side effect and is still built when the supervisor has not
+/// published a configuration snapshot yet; in that case the hint is left
+/// unavailable instead of guessed from a local source.
+fn shortcut_hint(snapshot: Option<&RuntimeConfigSnapshot>, key: &str) -> String {
+    match snapshot {
+        Some(snapshot) => snapshot.get_string(
+            key,
+            crate::shortcut::get_default_shortcut(key).unwrap_or(""),
+        ),
+        None => String::new(),
+    }
+}
 
 /// Create system tray menu
 ///
@@ -12,74 +29,34 @@ use crate::{commands::window::quit_window, db::MainStore};
 /// # Returns
 /// - `Result<(), String>`: A result indicating the success or failure of the operation
 pub fn create_tray(app: &tauri::AppHandle, tray_id: Option<String>) -> Result<(), String> {
-    let main_store = match app.try_state::<Arc<MainStore>>() {
-        Some(store) => store,
-        None => {
-            log::warn!("MainStore not available yet during tray creation");
-            return Err("MainStore not initialized".to_string());
-        }
-    };
-    let (
-        main_window_visible_shortcut,
-        assistant_window_visible_shortcut,
-        note_window_visible_shortcut,
-        proxy_switcher_window_visible_shortcut,
-        workflow_window_visible_shortcut,
-    ) = {
-        let c = main_store.inner().as_ref();
-        (
-            c.config
-                .get_setting(crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| {
-                    crate::shortcut::get_default_shortcut(
-                        crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
-                    )
-                    .unwrap_or_default()
-                    .to_string()
-                }),
-            c.config
-                .get_setting(crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| {
-                    crate::shortcut::get_default_shortcut(
-                        crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
-                    )
-                    .unwrap_or_default()
-                    .to_string()
-                }),
-            c.config
-                .get_setting(crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| {
-                    crate::shortcut::get_default_shortcut(
-                        crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
-                    )
-                    .unwrap_or_default()
-                    .to_string()
-                }),
-            c.config
-                .get_setting(crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| {
-                    crate::shortcut::get_default_shortcut(
-                        crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
-                    )
-                    .unwrap_or_default()
-                    .to_string()
-                }),
-            c.config
-                .get_setting(crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT)
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| {
-                    crate::shortcut::get_default_shortcut(
-                        crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
-                    )
-                    .unwrap_or_default()
-                    .to_string()
-                }),
-        )
-    };
+    let snapshot = app
+        .try_state::<Arc<RuntimeConfigCache>>()
+        .and_then(|cache| cache.current());
+    if snapshot.is_none() {
+        log::warn!(
+            "Runtime configuration is not available yet; tray shortcut hints are unavailable"
+        );
+    }
+    let main_window_visible_shortcut = shortcut_hint(
+        snapshot.as_deref(),
+        crate::constants::CFG_MAIN_WINDOW_VISIBLE_SHORTCUT,
+    );
+    let assistant_window_visible_shortcut = shortcut_hint(
+        snapshot.as_deref(),
+        crate::constants::CFG_ASSISTANT_WINDOW_VISIBLE_SHORTCUT,
+    );
+    let note_window_visible_shortcut = shortcut_hint(
+        snapshot.as_deref(),
+        crate::constants::CFG_NOTE_WINDOW_VISIBLE_SHORTCUT,
+    );
+    let proxy_switcher_window_visible_shortcut = shortcut_hint(
+        snapshot.as_deref(),
+        crate::constants::CFG_PROXY_SWITCHER_WINDOW_VISIBLE_SHORTCUT,
+    );
+    let workflow_window_visible_shortcut = shortcut_hint(
+        snapshot.as_deref(),
+        crate::constants::CFG_WORKFLOW_WINDOW_VISIBLE_SHORTCUT,
+    );
 
     let main_window_menu_item = tauri::menu::MenuItem::with_id(
         app,

@@ -50,7 +50,10 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+// The `#[tauri::command]` wrappers below are desktop-only; the transport-neutral
+// `*_core` helpers they delegate to stay available to the runtime.
+#[cfg(feature = "desktop")]
+use tauri::State;
 
 #[cfg(test)]
 use rusqlite::params;
@@ -1744,7 +1747,7 @@ fn normalize_workflow_agent_config_in_memory(
     normalize_workflow_agent_config_inner(store, workflow, false)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn create_workflow_core(
     svc: &WorkflowApplicationService,
     request: WorkflowCreateRequest,
@@ -1839,13 +1842,14 @@ fn build_resolved_workflow_config(
     Ok(config.to_json())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn create_workflow(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     request: CreateWorkflowRequest,
 ) -> Result<String, String> {
-    create_workflow_core(
-        &svc,
+    crate::runtime_workflow::create_workflow(
+        supervisor.inner().as_ref(),
         WorkflowCreateRequest {
             user_query: request.user_query,
             agent_id: request.agent_id,
@@ -1856,7 +1860,6 @@ pub async fn create_workflow(
         },
     )
     .await
-    .map_err(|e| e.message)
 }
 
 pub(crate) async fn list_workflows_core(
@@ -1868,11 +1871,12 @@ pub(crate) async fn list_workflows_core(
         .map_err(|e| ApplicationError::internal(e.to_string()))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn list_workflows(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
 ) -> Result<Vec<Workflow>, String> {
-    list_workflows_core(&svc).await.map_err(|e| e.message)
+    crate::runtime_workflow::list_workflows(supervisor.inner().as_ref()).await
 }
 
 fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
@@ -2507,54 +2511,26 @@ fn reconcile_child_workflows_for_parent(
     reconcile_child_workflows(store, child_workflows)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn delete_workflow(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<(), String> {
-    cleanup_workflow_resources(
-        &session_id,
-        chat_state.inner(),
-        gateway.inner(),
-        workflow_manager.inner(),
-    )
-    .await;
-
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::delete_workflow_with_runtime(runtime, session_id)
-        .await
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::delete_workflow(supervisor.inner().as_ref(), &session_id).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn delete_last_workflow_message(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<bool, String> {
-    cleanup_workflow_resources(
-        &session_id,
-        chat_state.inner(),
-        gateway.inner(),
-        workflow_manager.inner(),
-    )
-    .await;
-
-    let store = &*state;
-    store
-        .delete_last_message(&session_id)
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::delete_last_workflow_message(supervisor.inner().as_ref(), &session_id)
+        .await
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowContextFrameResult {
     pub noop: bool,
@@ -2794,250 +2770,25 @@ async fn finalize_manual_clear_context_state(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_begin_new_context_frame(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    tsid_generator: State<'_, Arc<TsidGenerator>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<WorkflowContextFrameResult, String> {
-    let main_store = state.inner().clone();
-    let chat_state = chat_state.inner().clone();
-    let workflow_manager = workflow_manager.inner().clone();
-    let gateway = gateway.inner().clone();
-    let tsid_generator = tsid_generator.inner().clone();
-
-    let snapshot = {
-        let store = &*main_store;
-        store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?
-    };
-
-    let execution_context = hydrate_execution_context_for_snapshot(
-        main_store.clone(),
+    crate::runtime_workflow::workflow_begin_new_context_frame(
+        supervisor.inner().as_ref(),
         &session_id,
-        Some(snapshot.workflow.status.as_str()),
-        restore_context_for_signal(main_store.clone(), &session_id),
     )
-    .await;
-    let effective_segment_id = effective_segment_id_from_snapshot(
-        &snapshot.messages,
-        execution_context.as_ref().map(|ctx| ctx.current_segment_id),
-    );
-    if snapshot
-        .messages
-        .last()
-        .is_some_and(ContextManager::is_manual_clear_context_message)
-    {
-        {
-            let store = &*main_store;
-            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
-            reset_workflow_phase_for_new_context(&store, &session_id)?;
-        }
-        cleanup_owned_background_resources(&session_id, &chat_state).await;
-        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
-            .await?;
-        return Ok(WorkflowContextFrameResult {
-            noop: true,
-            segment_id: effective_segment_id,
-            marker_message: snapshot.messages.last().cloned(),
-            current_context_tokens: execution_context
-                .as_ref()
-                .and_then(|ctx| ctx.current_context_tokens)
-                .unwrap_or(0),
-            max_context_tokens: execution_context
-                .as_ref()
-                .and_then(|ctx| ctx.max_context_tokens)
-                .unwrap_or(4096),
-            state: WorkflowState::Pending,
-            wait_reason: None,
-            has_live_session: false,
-        });
-    }
-
-    if wait_reason_blocks_manual_clear(
-        execution_context
-            .as_ref()
-            .and_then(|ctx| ctx.wait_reason.as_ref()),
-    ) {
-        return Err(
-            "Cannot clear context while workflow is waiting for user interaction".to_string(),
-        );
-    }
-    if execution_context
-        .as_ref()
-        .is_some_and(|ctx| !runtime_state_allows_manual_clear(&ctx.state))
-    {
-        return Err("Cannot clear context unless workflow is stopped".to_string());
-    }
-
-    if has_reconciled_live_session(&workflow_manager, &session_id, "begin_new_context_frame").await
-    {
-        let Some(executor) = workflow_manager.get_executor(&session_id) else {
-            return Err("Workflow session is live but executor is unavailable".to_string());
-        };
-
-        let state = {
-            let guard = executor.lock().await;
-            guard.state()
-        };
-        let live_wait_reason = match state {
-            WorkflowState::Paused => Some(WaitReason::Confirmation),
-            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
-            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
-                Some(WaitReason::Approval)
-            }
-            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
-            _ => None,
-        };
-        if wait_reason_blocks_manual_clear(live_wait_reason.as_ref()) {
-            return Err(
-                "Cannot clear context while workflow is waiting for user interaction".to_string(),
-            );
-        }
-        if !workflow_state_allows_manual_clear(&state) {
-            return Err("Cannot clear context unless workflow is stopped".to_string());
-        }
-
-        {
-            let mut guard = executor.lock().await;
-            guard
-                .begin_manual_clear_context_segment()
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        {
-            let store = &*main_store;
-            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
-            reset_workflow_phase_for_new_context(&store, &session_id)?;
-        }
-
-        let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
-            let store = &*main_store;
-            let marker_message = store
-                .get_workflow_snapshot(&session_id)
-                .map_err(|e| e.to_string())?
-                .messages
-                .last()
-                .cloned();
-            let current_context = store
-                .get_execution_context(&session_id)
-                .map_err(|e| e.to_string())?;
-            (
-                marker_message,
-                current_context
-                    .as_ref()
-                    .map(|ctx| ctx.current_segment_id)
-                    .unwrap_or(effective_segment_id.saturating_add(1)),
-                current_context
-                    .as_ref()
-                    .and_then(|ctx| ctx.current_context_tokens)
-                    .unwrap_or(0),
-                current_context
-                    .as_ref()
-                    .and_then(|ctx| ctx.max_context_tokens)
-                    .unwrap_or(4096),
-            )
-        };
-        cleanup_owned_background_resources(&session_id, &chat_state).await;
-        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
-            .await?;
-        return Ok(WorkflowContextFrameResult {
-            noop: false,
-            segment_id,
-            marker_message,
-            current_context_tokens,
-            max_context_tokens,
-            state: WorkflowState::Pending,
-            wait_reason: None,
-            has_live_session: false,
-        });
-    }
-
-    let (segment_id, marker_message) = begin_new_context_frame_for_cold_session(
-        main_store.clone(),
-        tsid_generator,
-        &session_id,
-        execution_context,
-    )
-    .await?;
-    {
-        let store = &*main_store;
-        sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
-        reset_workflow_phase_for_new_context(&store, &session_id)?;
-    }
-    let current_context = {
-        let store = &*state;
-        store
-            .get_execution_context(&session_id)
-            .map_err(|e| e.to_string())?
-    };
-    cleanup_owned_background_resources(&session_id, &chat_state).await;
-    finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
-        .await?;
-    Ok(WorkflowContextFrameResult {
-        noop: false,
-        segment_id,
-        marker_message,
-        current_context_tokens: current_context
-            .as_ref()
-            .and_then(|ctx| ctx.current_context_tokens)
-            .unwrap_or(0),
-        max_context_tokens: current_context
-            .as_ref()
-            .and_then(|ctx| ctx.max_context_tokens)
-            .unwrap_or(4096),
-        state: WorkflowState::Pending,
-        wait_reason: None,
-        has_live_session: false,
-    })
+    .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn list_pending_sub_agent_approvals(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
 ) -> Result<Vec<Value>, String> {
-    let store = state.inner().clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
-        let mut entries = Vec::new();
-        for child in store
-            .list_child_workflows_with_pending_approvals()
-            .map_err(|error| error.to_string())?
-        {
-            let Some(parent_session_id) = child.parent_session_id else {
-                continue;
-            };
-            let Some(child_session_id) = child.id.as_deref() else {
-                continue;
-            };
-            let Some(context) = store
-                .get_execution_context(child_session_id)
-                .map_err(|error| error.to_string())?
-            else {
-                continue;
-            };
-            for pending in context.pending_tools {
-                if pending.tool_call_id.trim().is_empty() {
-                    continue;
-                }
-                entries.push(json!({
-                    "parent_session_id": parent_session_id,
-                    "sub_agent_id": child_session_id,
-                    "tool_call_id": pending.tool_call_id,
-                    "tool_name": pending.tool_name,
-                    "arguments": pending.arguments,
-                    "details": pending.details,
-                    "display_type": pending.display_type,
-                }));
-            }
-        }
-        Ok(entries)
-    })
-    .await
-    .map_err(|error| format!("Failed to join pending sub-agent approval query: {error}"))?
+    crate::runtime_workflow::list_pending_sub_agent_approvals(supervisor.inner().as_ref()).await
 }
 
 pub(crate) async fn get_workflow_snapshot_core(
@@ -3167,176 +2918,120 @@ pub(crate) async fn get_workflow_snapshot_core(
     Ok(snapshot_json)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn get_workflow_snapshot(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<Value, String> {
-    get_workflow_snapshot_core(&svc, session_id)
-        .await
-        .map_err(|e| e.message)
+    crate::runtime_workflow::get_workflow_snapshot(supervisor.inner().as_ref(), &session_id).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn get_earlier_workflow_message_page(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     before_message_id: String,
 ) -> Result<Value, String> {
-    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
-    let page = {
-        let store = &*state;
-        store
-            .get_earlier_workflow_message_page(
-                &session_id,
-                before_message_id,
-                UI_WORKFLOW_MESSAGE_PAGE_SIZE,
-            )
-            .map_err(|e| e.to_string())?
-    };
-    let merged_messages = merge_ui_workflow_messages(&page.messages);
-
-    log::debug!(
-        "[Workflow][session={}][command=get_earlier_workflow_message_page] loaded_messages={} hidden_messages={}",
-        session_id,
-        merged_messages.len(),
-        page.hidden_message_count
-    );
-
-    Ok(json!({
-        "messages": merged_messages,
-        "beforeMessageId": serialize_workflow_message_page_cursor(page.before_message_id),
-        "hiddenEarlierMessageCount": page.hidden_message_count,
-        "hasMoreInCurrentTask": page.has_more_in_current_task,
-    }))
+    crate::runtime_workflow::get_earlier_workflow_message_page(
+        supervisor.inner().as_ref(),
+        &session_id,
+        &before_message_id,
+    )
+    .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn get_earlier_workflow_messages(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     before_message_id: String,
 ) -> Result<Value, String> {
-    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
-    let window = {
-        let store = &*state;
-        store
-            .get_workflow_message_window(&session_id, Some(before_message_id), 1)
-            .map_err(|e| e.to_string())?
-    };
-    let merged_messages = merge_ui_workflow_messages(&window.messages);
-
-    log::debug!(
-        "[Workflow][session={}][command=get_earlier_workflow_messages] loaded_messages={} hidden_completed_tasks={}",
-        session_id,
-        merged_messages.len(),
-        window.hidden_completed_task_count
-    );
-
-    Ok(json!({
-        "messages": merged_messages,
-        "beforeMessageId": serialize_workflow_message_page_cursor(window.before_message_id),
-        "hiddenCompletedTaskCount": window.hidden_completed_task_count,
-    }))
+    crate::runtime_workflow::get_earlier_workflow_messages(
+        supervisor.inner().as_ref(),
+        &session_id,
+        &before_message_id,
+    )
+    .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn get_workflow_agent_config(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<Value, String> {
-    let store = &*state;
-    let config_json = raw_workflow_agent_config_json(&store, &session_id)?;
-    serde_json::from_str::<Value>(&config_json).map_err(|e| e.to_string())
+    crate::runtime_workflow::get_workflow_agent_config(supervisor.inner().as_ref(), &session_id)
+        .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn add_workflow_message(
-    state: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     message: WorkflowMessage,
 ) -> Result<i64, String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    let res = MainStore::add_workflow_message_with_runtime(runtime, message.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if should_treat_as_title_source(&message) {
-        let _ = spawn_workflow_title_generation_if_missing(
-            message.session_id.clone(),
-            message.message.clone(),
-            state.inner().clone(),
-            chat_state.inner().clone(),
-            gateway.inner().clone(),
-        );
-    }
-
-    Ok(res.id.unwrap_or(0))
+    crate::runtime_workflow::add_workflow_message(supervisor.inner().as_ref(), &message).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_workflow_title(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     title: String,
 ) -> Result<(), String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::update_workflow_title_with_runtime(runtime, session_id, title)
+    crate::runtime_workflow::update_workflow_title(supervisor.inner().as_ref(), &session_id, title)
         .await
-        .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_workflow_title_and_query(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     title: String,
     user_query: String,
 ) -> Result<(), String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::update_workflow_title_and_query_with_runtime(runtime, session_id, title, user_query)
-        .await
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::update_workflow_title_and_query(
+        supervisor.inner().as_ref(),
+        &session_id,
+        title,
+        user_query,
+    )
+    .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_workflow_query(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     user_query: String,
 ) -> Result<(), String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::update_workflow_query_with_runtime(runtime, session_id, user_query)
-        .await
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::update_workflow_query(
+        supervisor.inner().as_ref(),
+        &session_id,
+        user_query,
+    )
+    .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_workflow_status(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     status: String,
 ) -> Result<(), String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::update_workflow_status_with_runtime(runtime, session_id, status)
-        .await
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::update_workflow_status(
+        supervisor.inner().as_ref(),
+        &session_id,
+        status,
+    )
+    .await
 }
 
 // ==========================================
@@ -4398,9 +4093,10 @@ pub(crate) async fn workflow_start_core(
     Ok(session_id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_start(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     agent_id: String,
     initial_prompt: Option<String>,
@@ -4408,17 +4104,18 @@ pub async fn workflow_start(
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
-    workflow_start_core(
-        &svc,
-        session_id,
-        agent_id,
-        initial_prompt,
-        initial_metadata,
-        initial_attached_context,
-        planning_mode,
+    crate::runtime_workflow::workflow_start(
+        supervisor.inner().as_ref(),
+        crate::workflow::react::application::WorkflowStartRequest {
+            session_id,
+            agent_id,
+            initial_prompt,
+            initial_metadata,
+            initial_attached_context,
+            planning_mode,
+        },
     )
     .await
-    .map_err(|e| e.message)
 }
 
 async fn run_terminal_manual_compression(
@@ -4503,50 +4200,21 @@ async fn run_terminal_manual_compression(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_approve_plan(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     agent_id: String,
     plan: String,
 ) -> Result<(), String> {
-    log::info!(
-        "[Workflow][session={}][phase=approve_plan] Legacy workflow_approve_plan called for agent_id={}; routing through workflow_signal approval",
-        session_id,
-        agent_id
-    );
-
-    let submit_plan_tool_call_id = restore_context_for_signal(svc.main_store.clone(), &session_id)
-        .and_then(|context| {
-            context
-                .pending_tools
-                .into_iter()
-                .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
-                .map(|tool| tool.tool_call_id)
-        })
-        .ok_or_else(|| {
-            format!(
-                "Cannot approve plan: no pending structured submit_plan approval for workflow {}",
-                session_id
-            )
-        })?;
-
-    let signal = json!({
-        "type": SignalType::Approval.as_str(),
-        "id": submit_plan_tool_call_id,
-        "approved": true,
-        "approve_all": false,
-        "metadata": {
-            "source": "workflow_approve_plan_compat",
-            "legacy_plan_length": plan.len()
-        }
-    })
-    .to_string();
-
-    workflow_signal_core(&svc, session_id, signal)
-        .await
-        .map(|_| ())
-        .map_err(|e| e.message)
+    crate::runtime_workflow::workflow_approve_plan(
+        supervisor.inner().as_ref(),
+        &session_id,
+        agent_id,
+        plan,
+    )
+    .await
 }
 
 pub(crate) async fn workflow_signal_core(
@@ -5184,15 +4852,14 @@ pub(crate) async fn workflow_signal_core(
     )))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_signal(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
-    workflow_signal_core(&svc, session_id, signal)
-        .await
-        .map_err(|e| e.message)
+    crate::runtime_workflow::workflow_signal(supervisor.inner().as_ref(), &session_id, signal).await
 }
 
 /// Terminal workflow statuses that no longer have a live executor to consume a
@@ -5319,43 +4986,40 @@ pub(crate) async fn workflow_stop_core(
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_stop(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<(), String> {
-    workflow_stop_core(&svc, session_id)
-        .await
-        .map_err(|e| e.message)
+    crate::runtime_workflow::workflow_stop(supervisor.inner().as_ref(), &session_id).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_get_tasks(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<Vec<Value>, String> {
-    let store = &*state;
-    store
-        .get_todo_list_for_workflow(&session_id)
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::workflow_get_tasks(supervisor.inner().as_ref(), &session_id).await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_workflow_todo_list(
-    state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     todo_list: String,
 ) -> Result<(), String> {
-    let runtime = {
-        let store = &*state;
-        store.db_runtime().map_err(|e| e.to_string())?
-    };
-    MainStore::update_workflow_todo_list_with_runtime(runtime, session_id, todo_list)
-        .await
-        .map_err(|e| e.to_string())
+    crate::runtime_workflow::update_workflow_todo_list(
+        supervisor.inner().as_ref(),
+        &session_id,
+        todo_list,
+    )
+    .await
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkspaceFile {
     pub name: String,
     pub relative_path: String,
@@ -5365,11 +5029,953 @@ pub struct WorkspaceFile {
     pub score: i32,
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn search_workspace_files(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     paths: Vec<String>,
     query: String,
 ) -> Result<Vec<WorkspaceFile>, String> {
+    crate::runtime_workflow::search_workspace_files(supervisor.inner().as_ref(), paths, query).await
+}
+
+use crate::workflow::react::skills::{SkillManifest, SkillScanner};
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_system_skills(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+) -> Result<Vec<SkillManifest>, String> {
+    crate::runtime_workflow::get_system_skills(supervisor.inner().as_ref()).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_allowed_paths(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    allowed_paths: Value,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_allowed_paths(
+        supervisor.inner().as_ref(),
+        &session_id,
+        allowed_paths,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_workflow_session_key(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    workflow_id: String,
+) -> Result<String, String> {
+    crate::runtime_workflow::get_workflow_session_key(supervisor.inner().as_ref(), &workflow_id)
+        .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_final_audit(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    final_audit: bool,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_final_audit(
+        supervisor.inner().as_ref(),
+        &session_id,
+        final_audit,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_auto_compress(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    auto_compress: bool,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_auto_compress(
+        supervisor.inner().as_ref(),
+        &session_id,
+        auto_compress,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_personality(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    personality: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_personality(
+        supervisor.inner().as_ref(),
+        &session_id,
+        personality,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_model_config(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    configs: Value,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_model_config(
+        supervisor.inner().as_ref(),
+        &session_id,
+        configs,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_skills_config(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    skill_enabled: bool,
+    selected_skills: Vec<String>,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_skills_config(
+        supervisor.inner().as_ref(),
+        &session_id,
+        skill_enabled,
+        selected_skills,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_approval_level(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    approval_level: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_approval_level(
+        supervisor.inner().as_ref(),
+        &session_id,
+        approval_level,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_phase(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    phase: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_phase(supervisor.inner().as_ref(), &session_id, phase)
+        .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_sandbox_config(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    execution_mode: crate::tools::ShellExecutionMode,
+    sandbox_scheme_id: Option<String>,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_sandbox_config(
+        supervisor.inner().as_ref(),
+        &session_id,
+        execution_mode,
+        sandbox_scheme_id,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_agent_config(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    agent_config: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::update_workflow_agent_config(
+        supervisor.inner().as_ref(),
+        &session_id,
+        agent_config,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn update_workflow_agent_id(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    agent_id: String,
+) -> Result<String, String> {
+    crate::runtime_workflow::update_workflow_agent_id(
+        supervisor.inner().as_ref(),
+        &session_id,
+        agent_id,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_auto_approved_tools(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+) -> Result<Vec<String>, String> {
+    crate::runtime_workflow::get_auto_approved_tools(supervisor.inner().as_ref(), &session_id).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn remove_auto_approved_tool(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    tool_name: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::remove_auto_approved_tool(
+        supervisor.inner().as_ref(),
+        &session_id,
+        tool_name,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn remove_shell_policy_item(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+    pattern: String,
+) -> Result<(), String> {
+    crate::runtime_workflow::remove_shell_policy_item(
+        supervisor.inner().as_ref(),
+        &session_id,
+        pattern,
+    )
+    .await
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn get_workflow_events_core(
+    svc: &WorkflowApplicationService,
+    query: WorkflowEventsQuery,
+) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, ApplicationError> {
+    svc.main_store
+        .list_workflow_events_after(&query.session_id, query.after, query.limit)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_workflow_events(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
+    // The Tauri wire keeps returning the full durable event list.
+    crate::runtime_workflow::get_workflow_events(supervisor.inner().as_ref(), &session_id).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_workflow_dispatcher_metrics(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+) -> Result<DispatcherMetricsSnapshot, String> {
+    crate::runtime_workflow::get_workflow_dispatcher_metrics(
+        supervisor.inner().as_ref(),
+        &session_id,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn get_workflow_efficiency_report(
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+) -> Result<WorkflowEfficiencyReport, String> {
+    crate::runtime_workflow::get_workflow_efficiency_report(
+        supervisor.inner().as_ref(),
+        &session_id,
+    )
+    .await
+}
+
+// ==========================================
+// 9. Canonical workflow command cores + allowlisted dispatch
+// ==========================================
+//
+// These are the single canonical implementations the runtime executes for the
+// workflow commands that previously lived inside the desktop wrappers. Every
+// command takes `&WorkflowApplicationService` and uses its `pub(crate)` fields,
+// so the runtime and the desktop run exactly one body per command. The desktop
+// wrappers now forward their Tauri wire to `/control/v1/workflow-commands` and
+// the runtime invokes `workflow_command_core`; there is no second
+// implementation and no local owner fallback.
+
+/// Allowlisted command names served by the compatibility route.
+///
+/// The daemon rejects any other name before executing a handler, so an
+/// arbitrary path segment can never select an unintended code path.
+pub(crate) const WORKFLOW_COMMANDS: [&str; 34] = [
+    "delete_workflow",
+    "delete_last_workflow_message",
+    "workflow_begin_new_context_frame",
+    "list_pending_sub_agent_approvals",
+    "get_earlier_workflow_message_page",
+    "get_earlier_workflow_messages",
+    "get_workflow_agent_config",
+    "add_workflow_message",
+    "update_workflow_title",
+    "update_workflow_title_and_query",
+    "update_workflow_query",
+    "update_workflow_status",
+    "workflow_get_tasks",
+    "update_workflow_todo_list",
+    "search_workspace_files",
+    "get_system_skills",
+    "update_workflow_allowed_paths",
+    "get_workflow_session_key",
+    "update_workflow_final_audit",
+    "update_workflow_auto_compress",
+    "update_workflow_personality",
+    "update_workflow_model_config",
+    "update_workflow_skills_config",
+    "update_workflow_approval_level",
+    "update_workflow_phase",
+    "update_workflow_sandbox_config",
+    "update_workflow_agent_config",
+    "update_workflow_agent_id",
+    "get_auto_approved_tools",
+    "remove_auto_approved_tool",
+    "remove_shell_policy_item",
+    "workflow_approve_plan",
+    "get_workflow_dispatcher_metrics",
+    "get_workflow_efficiency_report",
+];
+
+/// Whether `name` is one of the allowlisted compatibility commands.
+pub(crate) fn is_known_workflow_command(name: &str) -> bool {
+    WORKFLOW_COMMANDS.contains(&name)
+}
+
+/// Parses a command parameter object into a strongly-typed struct.
+fn parse_command_params<T: serde::de::DeserializeOwned>(
+    params: Value,
+) -> Result<T, ApplicationError> {
+    serde_json::from_value(params).map_err(|error| {
+        ApplicationError::invalid_input(format!("Invalid command parameters: {error}"))
+    })
+}
+
+#[derive(Deserialize)]
+struct SessionIdParams {
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+struct AddMessageParams {
+    message: WorkflowMessage,
+}
+
+#[derive(Deserialize)]
+struct TitleParams {
+    session_id: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct TitleAndQueryParams {
+    session_id: String,
+    title: String,
+    user_query: String,
+}
+
+#[derive(Deserialize)]
+struct QueryParams {
+    session_id: String,
+    user_query: String,
+}
+
+#[derive(Deserialize)]
+struct StatusParams {
+    session_id: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct TodoParams {
+    session_id: String,
+    todo_list: String,
+}
+
+#[derive(Deserialize)]
+struct AllowedPathsParams {
+    session_id: String,
+    allowed_paths: Value,
+}
+
+#[derive(Deserialize)]
+struct SessionKeyParams {
+    workflow_id: String,
+}
+
+#[derive(Deserialize)]
+struct FinalAuditParams {
+    session_id: String,
+    final_audit: bool,
+}
+
+#[derive(Deserialize)]
+struct AutoCompressParams {
+    session_id: String,
+    auto_compress: bool,
+}
+
+#[derive(Deserialize)]
+struct PersonalityParams {
+    session_id: String,
+    personality: String,
+}
+
+#[derive(Deserialize)]
+struct ModelConfigParams {
+    session_id: String,
+    configs: Value,
+}
+
+#[derive(Deserialize)]
+struct SkillsConfigParams {
+    session_id: String,
+    skill_enabled: bool,
+    selected_skills: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ApprovalLevelParams {
+    session_id: String,
+    approval_level: String,
+}
+
+#[derive(Deserialize)]
+struct PhaseParams {
+    session_id: String,
+    phase: String,
+}
+
+#[derive(Deserialize)]
+struct SandboxConfigParams {
+    session_id: String,
+    execution_mode: crate::tools::ShellExecutionMode,
+    sandbox_scheme_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentConfigParams {
+    session_id: String,
+    agent_config: String,
+}
+
+#[derive(Deserialize)]
+struct AgentIdParams {
+    session_id: String,
+    agent_id: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveToolParams {
+    session_id: String,
+    tool_name: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveShellPolicyParams {
+    session_id: String,
+    pattern: String,
+}
+
+#[derive(Deserialize)]
+struct ApprovePlanParams {
+    session_id: String,
+    agent_id: String,
+    plan: String,
+}
+
+#[derive(Deserialize)]
+struct MessagePageParams {
+    session_id: String,
+    before_message_id: String,
+}
+
+#[derive(Deserialize)]
+struct SearchFilesParams {
+    paths: Vec<String>,
+    query: String,
+}
+
+/// Deletes a workflow session after reclaiming its owned runtime resources.
+pub(crate) async fn delete_workflow_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<(), ApplicationError> {
+    cleanup_workflow_resources(
+        &session_id,
+        &svc.chat_state,
+        &svc.gateway,
+        &svc.workflow_manager,
+    )
+    .await;
+
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::delete_workflow_with_runtime(runtime, session_id)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Deletes the last workflow message after reclaiming owned runtime resources.
+pub(crate) async fn delete_last_workflow_message_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<bool, ApplicationError> {
+    cleanup_workflow_resources(
+        &session_id,
+        &svc.chat_state,
+        &svc.gateway,
+        &svc.workflow_manager,
+    )
+    .await;
+    svc.main_store
+        .delete_last_message(&session_id)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Starts a manual clear-context frame, or no-ops when the boundary already
+/// exists. This is the single canonical manual-clear path (CONSTITUTION §8.6).
+pub(crate) async fn begin_new_context_frame_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<WorkflowContextFrameResult, ApplicationError> {
+    let main_store = svc.main_store.clone();
+    let chat_state = svc.chat_state.clone();
+    let workflow_manager = svc.workflow_manager.clone();
+    let gateway = svc.gateway.clone();
+    let tsid_generator = svc.tsid_generator.clone();
+
+    let snapshot = {
+        let store = &*main_store;
+        store
+            .get_workflow_snapshot(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    let execution_context = hydrate_execution_context_for_snapshot(
+        main_store.clone(),
+        &session_id,
+        Some(snapshot.workflow.status.as_str()),
+        restore_context_for_signal(main_store.clone(), &session_id),
+    )
+    .await;
+    let effective_segment_id = effective_segment_id_from_snapshot(
+        &snapshot.messages,
+        execution_context.as_ref().map(|ctx| ctx.current_segment_id),
+    );
+    if snapshot
+        .messages
+        .last()
+        .is_some_and(ContextManager::is_manual_clear_context_message)
+    {
+        {
+            let store = &*main_store;
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+            reset_workflow_phase_for_new_context(&store, &session_id)?;
+        }
+        cleanup_owned_background_resources(&session_id, &chat_state).await;
+        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+            .await?;
+        return Ok(WorkflowContextFrameResult {
+            noop: true,
+            segment_id: effective_segment_id,
+            marker_message: snapshot.messages.last().cloned(),
+            current_context_tokens: execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.current_context_tokens)
+                .unwrap_or(0),
+            max_context_tokens: execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.max_context_tokens)
+                .unwrap_or(4096),
+            state: WorkflowState::Pending,
+            wait_reason: None,
+            has_live_session: false,
+        });
+    }
+
+    if wait_reason_blocks_manual_clear(
+        execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.wait_reason.as_ref()),
+    ) {
+        return Err("Cannot clear context while workflow is waiting for user interaction".into());
+    }
+    if execution_context
+        .as_ref()
+        .is_some_and(|ctx| !runtime_state_allows_manual_clear(&ctx.state))
+    {
+        return Err("Cannot clear context unless workflow is stopped".into());
+    }
+
+    if has_reconciled_live_session(&workflow_manager, &session_id, "begin_new_context_frame").await
+    {
+        let Some(executor) = workflow_manager.get_executor(&session_id) else {
+            return Err("Workflow session is live but executor is unavailable".into());
+        };
+
+        let state = {
+            let guard = executor.lock().await;
+            guard.state()
+        };
+        let live_wait_reason = match state {
+            WorkflowState::Paused => Some(WaitReason::Confirmation),
+            WorkflowState::AwaitingUser => Some(WaitReason::UserInput),
+            WorkflowState::AwaitingApproval | WorkflowState::AwaitingAutoApproval => {
+                Some(WaitReason::Approval)
+            }
+            WorkflowState::AwaitingSubAgent => Some(WaitReason::SubAgent),
+            _ => None,
+        };
+        if wait_reason_blocks_manual_clear(live_wait_reason.as_ref()) {
+            return Err(
+                "Cannot clear context while workflow is waiting for user interaction".into(),
+            );
+        }
+        if !workflow_state_allows_manual_clear(&state) {
+            return Err("Cannot clear context unless workflow is stopped".into());
+        }
+
+        {
+            let mut guard = executor.lock().await;
+            guard
+                .begin_manual_clear_context_segment()
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        {
+            let store = &*main_store;
+            sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+            reset_workflow_phase_for_new_context(&store, &session_id)?;
+        }
+
+        let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
+            let store = &*main_store;
+            let marker_message = store
+                .get_workflow_snapshot(&session_id)
+                .map_err(|e| e.to_string())?
+                .messages
+                .last()
+                .cloned();
+            let current_context = store
+                .get_execution_context(&session_id)
+                .map_err(|e| e.to_string())?;
+            (
+                marker_message,
+                current_context
+                    .as_ref()
+                    .map(|ctx| ctx.current_segment_id)
+                    .unwrap_or(effective_segment_id.saturating_add(1)),
+                current_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.current_context_tokens)
+                    .unwrap_or(0),
+                current_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.max_context_tokens)
+                    .unwrap_or(4096),
+            )
+        };
+        cleanup_owned_background_resources(&session_id, &chat_state).await;
+        finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+            .await?;
+        return Ok(WorkflowContextFrameResult {
+            noop: false,
+            segment_id,
+            marker_message,
+            current_context_tokens,
+            max_context_tokens,
+            state: WorkflowState::Pending,
+            wait_reason: None,
+            has_live_session: false,
+        });
+    }
+
+    let (segment_id, marker_message) = begin_new_context_frame_for_cold_session(
+        main_store.clone(),
+        tsid_generator,
+        &session_id,
+        execution_context,
+    )
+    .await?;
+    {
+        let store = &*main_store;
+        sync_workflow_agent_config_at_tool_boundary(&store, &session_id)?;
+        reset_workflow_phase_for_new_context(&store, &session_id)?;
+    }
+    let current_context = {
+        let store = &*main_store;
+        store
+            .get_execution_context(&session_id)
+            .map_err(|e| e.to_string())?
+    };
+    cleanup_owned_background_resources(&session_id, &chat_state).await;
+    finalize_manual_clear_context_state(&main_store, &workflow_manager, &gateway, &session_id)
+        .await?;
+    Ok(WorkflowContextFrameResult {
+        noop: false,
+        segment_id,
+        marker_message,
+        current_context_tokens: current_context
+            .as_ref()
+            .and_then(|ctx| ctx.current_context_tokens)
+            .unwrap_or(0),
+        max_context_tokens: current_context
+            .as_ref()
+            .and_then(|ctx| ctx.max_context_tokens)
+            .unwrap_or(4096),
+        state: WorkflowState::Pending,
+        wait_reason: None,
+        has_live_session: false,
+    })
+}
+
+/// Lists pending sub-agent approvals from the durable child execution contexts.
+pub(crate) async fn list_pending_sub_agent_approvals_core(
+    svc: &WorkflowApplicationService,
+) -> Result<Vec<Value>, ApplicationError> {
+    let store = svc.main_store.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
+        let mut entries = Vec::new();
+        for child in store
+            .list_child_workflows_with_pending_approvals()
+            .map_err(|error| error.to_string())?
+        {
+            let Some(parent_session_id) = child.parent_session_id else {
+                continue;
+            };
+            let Some(child_session_id) = child.id.as_deref() else {
+                continue;
+            };
+            let Some(context) = store
+                .get_execution_context(child_session_id)
+                .map_err(|error| error.to_string())?
+            else {
+                continue;
+            };
+            for pending in context.pending_tools {
+                if pending.tool_call_id.trim().is_empty() {
+                    continue;
+                }
+                entries.push(json!({
+                    "parent_session_id": parent_session_id,
+                    "sub_agent_id": child_session_id,
+                    "tool_call_id": pending.tool_call_id,
+                    "tool_name": pending.tool_name,
+                    "arguments": pending.arguments,
+                    "details": pending.details,
+                    "display_type": pending.display_type,
+                }));
+            }
+        }
+        Ok(entries)
+    })
+    .await
+    .map_err(|error| format!("Failed to join pending sub-agent approval query: {error}"))?
+    .map_err(ApplicationError::internal)
+}
+
+/// Loads an older UI message page.
+pub(crate) async fn get_earlier_workflow_message_page_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    before_message_id: String,
+) -> Result<Value, ApplicationError> {
+    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
+    let page = {
+        let store = &*svc.main_store;
+        store
+            .get_earlier_workflow_message_page(
+                &session_id,
+                before_message_id,
+                UI_WORKFLOW_MESSAGE_PAGE_SIZE,
+            )
+            .map_err(|e| e.to_string())?
+    };
+    let merged_messages = merge_ui_workflow_messages(&page.messages);
+    Ok(json!({
+        "messages": merged_messages,
+        "beforeMessageId": serialize_workflow_message_page_cursor(page.before_message_id),
+        "hiddenEarlierMessageCount": page.hidden_message_count,
+        "hasMoreInCurrentTask": page.has_more_in_current_task,
+    }))
+}
+
+/// Loads an older completed-task message window.
+pub(crate) async fn get_earlier_workflow_messages_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    before_message_id: String,
+) -> Result<Value, ApplicationError> {
+    let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
+    let window = {
+        let store = &*svc.main_store;
+        store
+            .get_workflow_message_window(&session_id, Some(before_message_id), 1)
+            .map_err(|e| e.to_string())?
+    };
+    let merged_messages = merge_ui_workflow_messages(&window.messages);
+    Ok(json!({
+        "messages": merged_messages,
+        "beforeMessageId": serialize_workflow_message_page_cursor(window.before_message_id),
+        "hiddenCompletedTaskCount": window.hidden_completed_task_count,
+    }))
+}
+
+/// Reads the persisted workflow agent config as JSON.
+pub(crate) async fn get_workflow_agent_config_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<Value, ApplicationError> {
+    let config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
+    serde_json::from_str::<Value>(&config_json)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Appends a workflow message, spawning title generation when required.
+pub(crate) async fn add_workflow_message_core(
+    svc: &WorkflowApplicationService,
+    message: WorkflowMessage,
+) -> Result<i64, ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    let res = MainStore::add_workflow_message_with_runtime(runtime, message.clone())
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+
+    if should_treat_as_title_source(&message) {
+        let _ = spawn_workflow_title_generation_if_missing(
+            message.session_id.clone(),
+            message.message.clone(),
+            svc.main_store.clone(),
+            svc.chat_state.clone(),
+            svc.gateway.clone(),
+        );
+    }
+
+    Ok(res.id.unwrap_or(0))
+}
+
+/// Updates a workflow title.
+pub(crate) async fn update_workflow_title_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    title: String,
+) -> Result<(), ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::update_workflow_title_with_runtime(runtime, session_id, title)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Updates a workflow title and user query together.
+pub(crate) async fn update_workflow_title_and_query_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    title: String,
+    user_query: String,
+) -> Result<(), ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::update_workflow_title_and_query_with_runtime(runtime, session_id, title, user_query)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Updates a workflow user query.
+pub(crate) async fn update_workflow_query_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    user_query: String,
+) -> Result<(), ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::update_workflow_query_with_runtime(runtime, session_id, user_query)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Updates a workflow status.
+pub(crate) async fn update_workflow_status_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    status: String,
+) -> Result<(), ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::update_workflow_status_with_runtime(runtime, session_id, status)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Reads the persisted todo list for a workflow.
+pub(crate) async fn workflow_get_tasks_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<Vec<Value>, ApplicationError> {
+    svc.main_store
+        .get_todo_list_for_workflow(&session_id)
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Persists a workflow todo list.
+pub(crate) async fn update_workflow_todo_list_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    todo_list: String,
+) -> Result<(), ApplicationError> {
+    let runtime = svc
+        .main_store
+        .db_runtime()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
+    MainStore::update_workflow_todo_list_with_runtime(runtime, session_id, todo_list)
+        .await
+        .map_err(|e| ApplicationError::internal(e.to_string()))
+}
+
+/// Searches the allowed workspace roots for files matching a query.
+pub(crate) fn search_workspace_files_core(
+    paths: Vec<String>,
+    query: String,
+) -> Result<Vec<WorkspaceFile>, ApplicationError> {
     let mut results = vec![];
     let query_lower = query.to_lowercase();
 
@@ -5422,14 +6028,12 @@ pub async fn search_workspace_files(
                 .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
             {
                 match ext.as_str() {
-                    // Common programming languages
                     "c" | "cpp" | "css" | "go" | "h" | "hpp" | "htm" | "html" | "java" | "js"
                     | "jsx" | "json" | "kotlin" | "less" | "lua" | "perl" | "php" | "py" | "rs"
                     | "ruby" | "scala" | "sass" | "scss" | "sh" | "sql" | "swift" | "toml"
                     | "ts" | "tsx" | "vue" | "xml" | "yaml" | "yml" => {
                         score += 5;
                     }
-                    // Less common programming languages
                     "bash" | "cc" | "cxx" | "groovy" | "hxx" | "ini" | "mjs" | "mm" | "plsql"
                     | "ps1" | "r" | "stylus" | "zsh" => {
                         score += 3;
@@ -5476,429 +6080,354 @@ pub async fn search_workspace_files(
     Ok(results)
 }
 
-use crate::workflow::react::skills::{SkillManifest, SkillScanner};
-
-#[tauri::command]
-pub async fn get_system_skills(app: AppHandle) -> Result<Vec<SkillManifest>, String> {
-    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    let scanner = SkillScanner::new(app_data_dir);
-    let skills_map = scanner.scan().map_err(|e| e.to_string())?;
+/// Lists the runtime's installed system skills.
+pub(crate) async fn get_system_skills_core(
+    svc: &WorkflowApplicationService,
+) -> Result<Vec<SkillManifest>, ApplicationError> {
+    let scanner = SkillScanner::new(svc.app_data_dir.clone());
+    let skills_map = scanner
+        .scan()
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     log::info!("get_system_skills returned {} skills", skills.len());
     Ok(skills)
 }
 
-#[tauri::command]
-pub async fn update_workflow_allowed_paths(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the allowed paths of a workflow's effective config and signals the
+/// live session.
+pub(crate) async fn update_workflow_allowed_paths_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     allowed_paths: Value,
-) -> Result<(), String> {
-    let runtime_paths: Vec<String> =
-        serde_json::from_value(allowed_paths.clone()).map_err(|e| e.to_string())?;
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let runtime_paths: Vec<String> = serde_json::from_value(allowed_paths.clone())
+        .map_err(|e| ApplicationError::invalid_input(e.to_string()))?;
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
 
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.allowed_paths = Some(runtime_paths.clone());
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_allowed_paths",
-            "paths": runtime_paths
-        }),
+        json!({ "type": "update_allowed_paths", "paths": runtime_paths }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn get_workflow_session_key(
-    chat_state: State<'_, Arc<ChatState>>,
+/// Reads the per-session proxy key.
+///
+/// This is a credential: it is only served to a loopback bearer client of the
+/// owning runtime and is never logged.
+pub(crate) async fn get_workflow_session_key_core(
+    svc: &WorkflowApplicationService,
     workflow_id: String,
-) -> Result<String, String> {
-    chat_state
+) -> Result<String, ApplicationError> {
+    svc.chat_state
         .workflow_keys
         .get(&workflow_id)
         .map(|v| v.clone())
-        .ok_or_else(|| format!("Session key for workflow {} not found", workflow_id))
+        .ok_or_else(|| {
+            ApplicationError::not_found(format!("Session key for workflow {workflow_id} not found"))
+        })
 }
 
-#[tauri::command]
-pub async fn update_workflow_final_audit(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the final-audit flag.
+pub(crate) async fn update_workflow_final_audit_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     final_audit: bool,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.final_audit = Some(final_audit);
         config.final_review_mode = Some(if final_audit {
             "sub_agent_review".to_string()
         } else {
             "off".to_string()
         });
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_final_audit",
-            "final_audit": final_audit
-        }),
+        json!({ "type": "update_final_audit", "final_audit": final_audit }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_auto_compress(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the auto-compress flag.
+pub(crate) async fn update_workflow_auto_compress_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     auto_compress: bool,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.auto_compress = Some(auto_compress);
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_auto_compress",
-            "auto_compress": auto_compress
-        }),
+        json!({ "type": "update_auto_compress", "auto_compress": auto_compress }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_personality(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the execution-style (personality) selection with Agent validation.
+pub(crate) async fn update_workflow_personality_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     personality: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     let personality = personality.trim().to_string();
 
     {
-        let store = &*state;
-        let workflow = store
+        let workflow = svc
+            .main_store
             .get_workflow(&session_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
-        let agent = store
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Workflow {session_id} not found"))
+            })?;
+        let agent = svc
+            .main_store
             .get_agent(&workflow.agent_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", workflow.agent_id))
+            })?;
 
         let is_custom_personality =
             !personality.is_empty() && !personality.starts_with(AGENT_PERSONALITY_PRESET_PREFIX);
         if personality.starts_with(AGENT_PERSONALITY_PRESET_PREFIX)
             && !is_agent_personality_preset(&personality)
         {
-            return Err("Unknown execution style preset".to_string());
+            return Err(ApplicationError::invalid_input(
+                "Unknown execution style preset",
+            ));
         }
         if is_custom_personality
             && agent.personality.as_deref().map(str::trim) != Some(&personality)
         {
-            return Err(
-                "The selected custom execution style is no longer available for this Agent"
-                    .to_string(),
-            );
+            return Err(ApplicationError::invalid_input(
+                "The selected custom execution style is no longer available for this Agent",
+            ));
         }
 
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.personality = (!personality.is_empty()).then_some(personality.clone());
-        store
+        svc.main_store
             .update_workflow_agent_config(&session_id, &config.to_json())
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
+        json!({
             "type": "update_personality",
             "personality": (!personality.is_empty()).then_some(personality)
         }),
     )
     .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_model_config(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the workflow model config.
+pub(crate) async fn update_workflow_model_config_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     configs: Value,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut agent_config =
-            serde_json::from_str::<Value>(&raw_workflow_agent_config_json(&store, &session_id)?)
-                .unwrap_or(json!({}));
-
+        let mut agent_config = serde_json::from_str::<Value>(&raw_workflow_agent_config_json(
+            &svc.main_store,
+            &session_id,
+        )?)
+        .unwrap_or(json!({}));
         agent_config["models"] = configs.clone();
-
-        let config_str = serde_json::to_string(&agent_config).map_err(|e| e.to_string())?;
-        store
+        let config_str = serde_json::to_string(&agent_config)
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
+        svc.main_store
             .update_workflow_agent_config(&session_id, &config_str)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_model_config",
-            "configs": configs
-        }),
+        json!({ "type": "update_model_config", "configs": configs }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_skills_config(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the workflow skill config.
+pub(crate) async fn update_workflow_skills_config_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     skill_enabled: bool,
     selected_skills: Vec<String>,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.skill_enabled = Some(skill_enabled);
         config.selected_skills = Some(selected_skills.clone());
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
+        json!({
             "type": "update_skills_config",
             "skill_enabled": skill_enabled,
             "selected_skills": selected_skills
         }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_approval_level(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the workflow approval level.
+pub(crate) async fn update_workflow_approval_level_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     approval_level: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.approval_level = Some(approval_level.clone());
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_approval_level",
-            "approval_level": approval_level
-        }),
+        json!({ "type": "update_approval_level", "approval_level": approval_level }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_phase(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the execution phase.
+pub(crate) async fn update_workflow_phase_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     phase: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.phase = Some(phase.clone());
-
-        let new_config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &new_config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "update_phase",
-            "phase": phase
-        }),
+        json!({ "type": "update_phase", "phase": phase }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_sandbox_config(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Updates the workflow sandbox override.
+pub(crate) async fn update_workflow_sandbox_config_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     execution_mode: crate::tools::ShellExecutionMode,
     sandbox_scheme_id: Option<String>,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
 
     let sandbox_config = {
-        let store = &*state;
-        let workflow = store
+        let workflow = svc
+            .main_store
             .get_workflow(&session_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
-        let agent = store
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Workflow {session_id} not found"))
+            })?;
+        let agent = svc
+            .main_store
             .get_agent(&workflow.agent_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", workflow.agent_id))
+            })?;
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         config.sandbox_override = Some(true);
         config.sandbox_execution_mode = Some(execution_mode.clone());
         config.sandbox_scheme_id = sandbox_scheme_id;
-        resolve_agent_sandbox_snapshot(&store, &agent, &mut config)?;
+        resolve_agent_sandbox_snapshot(&svc.main_store, &agent, &mut config)?;
         let sandbox_config = config.sandbox_config.clone();
-        store
+        svc.main_store
             .update_workflow_agent_config(&session_id, &config.to_json())
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
         sandbox_config
     };
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
+        json!({
             "type": "update_sandbox_config",
             "execution_mode": execution_mode,
             "sandbox_scheme_id": sandbox_config
@@ -5908,139 +6437,136 @@ pub async fn update_workflow_sandbox_config(
         }),
     )
     .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn update_workflow_agent_config(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Replaces the workflow agent config after normalization.
+pub(crate) async fn update_workflow_agent_config_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     agent_config: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
 
     let mut normalized_config = AgentConfig::from_json(&agent_config)
-        .ok_or_else(|| "Invalid agent config JSON".to_string())?;
+        .ok_or_else(|| ApplicationError::invalid_input("Invalid agent config JSON"))?;
     {
-        let store = &*state;
-        let workflow = store
+        let workflow = svc
+            .main_store
             .get_workflow(&session_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Workflow {session_id} not found"))?;
-        let agent = store
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Workflow {session_id} not found"))
+            })?;
+        let agent = svc
+            .main_store
             .get_agent(&workflow.agent_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found(format!("Agent {} not found", workflow.agent_id))
+            })?;
 
         if let (Some(selected_tools), Some(agent_tools_json)) = (
             normalized_config.available_tools.as_mut(),
             agent.available_tools.as_deref(),
         ) {
-            let agent_tools = serde_json::from_str::<Vec<String>>(agent_tools_json)
-                .map_err(|error| format!("Invalid Agent available tools: {error}"))?;
+            let agent_tools =
+                serde_json::from_str::<Vec<String>>(agent_tools_json).map_err(|error| {
+                    ApplicationError::invalid_input(format!(
+                        "Invalid Agent available tools: {error}"
+                    ))
+                })?;
             selected_tools.retain(|tool| agent_tools.contains(tool));
         }
 
         if let Some(selected_mcp) = normalized_config.mcp_tool_exposure.as_mut() {
-            // MCP availability is supplied by the live ToolManager capability
-            // layer. Agent MCP fields are workflow preferences, so a task may
-            // enable any currently discovered MCP tool without first editing
-            // the Agent form.
             selected_mcp.normalize();
         }
     }
     enforce_auto_approve_tool_visibility(&mut normalized_config);
     let normalized_config_json = normalized_config.to_json();
-    let signal_agent_config =
-        serde_json::to_value(&normalized_config).map_err(|e| e.to_string())?;
+    let signal_agent_config = serde_json::to_value(&normalized_config)
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
 
-    {
-        let store = &*state;
-        store
-            .update_workflow_agent_config(&session_id, &normalized_config_json)
-            .map_err(|e| e.to_string())?;
-    }
+    svc.main_store
+        .update_workflow_agent_config(&session_id, &normalized_config_json)
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
 
     if let Some(available_tools) = signal_agent_config.get("availableTools").cloned() {
         inject_runtime_config_signal(
-            gateway.inner(),
-            workflow_manager.inner(),
-            state.inner(),
+            &svc.gateway,
+            &svc.workflow_manager,
+            &svc.main_store,
             &session_id,
             &previous_config_json,
-            serde_json::json!({
-                "type": "update_available_tools",
-                "available_tools": available_tools
-            }),
+            json!({ "type": "update_available_tools", "available_tools": available_tools }),
         )
-        .await?;
+        .await
+        .map_err(ApplicationError::internal)?;
     }
 
     if let Some(auto_approve) = signal_agent_config.get("autoApprove").cloned() {
         inject_runtime_config_signal(
-            gateway.inner(),
-            workflow_manager.inner(),
-            state.inner(),
+            &svc.gateway,
+            &svc.workflow_manager,
+            &svc.main_store,
             &session_id,
             &previous_config_json,
-            serde_json::json!({
-                "type": "update_auto_approved_tools",
-                "auto_approve": auto_approve
-            }),
+            json!({ "type": "update_auto_approved_tools", "auto_approve": auto_approve }),
         )
-        .await?;
+        .await
+        .map_err(ApplicationError::internal)?;
     }
 
     if let Some(mcp_tools) = signal_agent_config.get("mcpTools").cloned() {
         inject_runtime_config_signal(
-            gateway.inner(),
-            workflow_manager.inner(),
-            state.inner(),
+            &svc.gateway,
+            &svc.workflow_manager,
+            &svc.main_store,
             &session_id,
             &previous_config_json,
-            serde_json::json!({
-                "type": "update_mcp_tools",
-                "mcp_tools": mcp_tools
-            }),
+            json!({ "type": "update_mcp_tools", "mcp_tools": mcp_tools }),
         )
-        .await?;
+        .await
+        .map_err(ApplicationError::internal)?;
     }
 
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_workflow_agent_id(
-    state: State<'_, Arc<MainStore>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Rebinds a not-yet-started workflow to another primary agent.
+pub(crate) async fn update_workflow_agent_id_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     agent_id: String,
-) -> Result<String, String> {
-    let store = &*state;
-
-    let agent = store
+) -> Result<String, ApplicationError> {
+    let agent = svc
+        .main_store
         .get_agent(&agent_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+        .map_err(|e| ApplicationError::internal(e.to_string()))?
+        .ok_or_else(|| ApplicationError::not_found(format!("Agent {agent_id} not found")))?;
 
     if agent.role.as_deref() == Some("child") {
-        return Err("Child agents cannot be used as top-level workflow agents".to_string());
+        return Err(ApplicationError::invalid_input(
+            "Child agents cannot be used as top-level workflow agents",
+        ));
     }
 
-    let snapshot = store
+    let snapshot = svc
+        .main_store
         .get_workflow_snapshot(&session_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
 
-    if workflow_manager.has_session(&session_id) {
-        return Err("Cannot change workflow agent after the session has started".to_string());
+    if svc.workflow_manager.has_session(&session_id) {
+        return Err(ApplicationError::state(
+            "Cannot change workflow agent after the session has started",
+        ));
     }
 
     if !snapshot.messages.is_empty() || !snapshot.workflow.user_query.trim().is_empty() {
-        return Err("Cannot change workflow agent after the workflow has user input".to_string());
+        return Err(ApplicationError::state(
+            "Cannot change workflow agent after the workflow has user input",
+        ));
     }
 
     log::info!(
@@ -6049,9 +6575,9 @@ pub async fn update_workflow_agent_id(
         agent_id
     );
 
-    store
+    svc.main_store
         .update_workflow_agent_id(&session_id, &agent_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
 
     let current_config = snapshot
         .workflow
@@ -6070,22 +6596,22 @@ pub async fn update_workflow_agent_id(
     });
     agent_config.phase = current_config.phase;
     let agent_config_json = agent_config_to_json_with_agent_shell_policy(&agent_config, &agent)?;
-    store
+    svc.main_store
         .update_workflow_agent_config(&session_id, &agent_config_json)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApplicationError::internal(e.to_string()))?;
 
     Ok(agent_config_json)
 }
 
-#[tauri::command]
-pub async fn get_auto_approved_tools(
-    state: State<'_, Arc<MainStore>>,
+/// Lists the workflow's effective auto-approved tools.
+pub(crate) async fn get_auto_approved_tools_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
-) -> Result<Vec<String>, String> {
-    let store = &*state;
-    let mut config = store
+) -> Result<Vec<String>, ApplicationError> {
+    let mut config = svc
+        .main_store
         .get_workflow(&session_id)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| ApplicationError::internal(e.to_string()))?
         .and_then(|workflow| workflow.agent_config)
         .and_then(|s| AgentConfig::from_json(&s))
         .unwrap_or_default();
@@ -6094,145 +6620,345 @@ pub async fn get_auto_approved_tools(
     Ok(config.auto_approve.unwrap_or_default())
 }
 
-#[tauri::command]
-pub async fn remove_auto_approved_tool(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Removes one tool from the auto-approved set.
+pub(crate) async fn remove_auto_approved_tool_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     tool_name: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
-
-    // Update database first
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
-        // Remove tool from auto_approve list
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         if let Some(ref mut tools) = config.auto_approve {
             tools.retain(|t| t != &tool_name);
         }
-
-        // Save updated config to database
-        let config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "remove_auto_approved_tool",
-            "tool_name": tool_name
-        }),
+        json!({ "type": "remove_auto_approved_tool", "tool_name": tool_name }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub async fn remove_shell_policy_item(
-    state: State<'_, Arc<MainStore>>,
-    gateway: State<'_, Arc<WorkflowRuntimeHub>>,
-    workflow_manager: State<'_, Arc<WorkflowManager>>,
+/// Removes one entry from the shell policy.
+pub(crate) async fn remove_shell_policy_item_core(
+    svc: &WorkflowApplicationService,
     session_id: String,
     pattern: String,
-) -> Result<(), String> {
-    let previous_config_json = {
-        let store = &*state;
-        raw_workflow_agent_config_json(&store, &session_id)?
-    };
-
-    // Update database first
+) -> Result<(), ApplicationError> {
+    let previous_config_json = raw_workflow_agent_config_json(&svc.main_store, &session_id)?;
     {
-        let store = &*state;
-
-        let mut config = raw_workflow_agent_config(&store, &session_id)?;
-
-        // Remove item from shell_policy list
+        let mut config = raw_workflow_agent_config(&svc.main_store, &session_id)?;
         if let Some(ref mut policy) = config.shell_policy {
             policy.retain(|item| item.pattern != pattern);
         }
-
-        // Save updated config to database
-        let config_str = config.to_json();
-        store
-            .update_workflow_agent_config(&session_id, &config_str)
-            .map_err(|e| e.to_string())?;
+        svc.main_store
+            .update_workflow_agent_config(&session_id, &config.to_json())
+            .map_err(|e| ApplicationError::internal(e.to_string()))?;
     }
 
     inject_runtime_config_signal(
-        gateway.inner(),
-        workflow_manager.inner(),
-        state.inner(),
+        &svc.gateway,
+        &svc.workflow_manager,
+        &svc.main_store,
         &session_id,
         &previous_config_json,
-        serde_json::json!({
-            "type": "remove_shell_policy_item",
-            "pattern": pattern
-        }),
+        json!({ "type": "remove_shell_policy_item", "pattern": pattern }),
     )
-    .await?;
-
-    Ok(())
+    .await
+    .map_err(ApplicationError::internal)
 }
 
-#[tauri::command]
-pub(crate) async fn get_workflow_events_core(
+/// Approves the pending plan through the canonical signal path.
+pub(crate) async fn workflow_approve_plan_core(
     svc: &WorkflowApplicationService,
-    query: WorkflowEventsQuery,
-) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, ApplicationError> {
+    session_id: String,
+    agent_id: String,
+    plan: String,
+) -> Result<(), ApplicationError> {
+    log::info!(
+        "[Workflow][session={}][phase=approve_plan] Legacy workflow_approve_plan called for agent_id={}; routing through workflow_signal approval",
+        session_id,
+        agent_id
+    );
+
+    let submit_plan_tool_call_id = restore_context_for_signal(svc.main_store.clone(), &session_id)
+        .and_then(|context| {
+            context
+                .pending_tools
+                .into_iter()
+                .find(|tool| tool.tool_name == crate::tools::TOOL_SUBMIT_PLAN)
+                .map(|tool| tool.tool_call_id)
+        })
+        .ok_or_else(|| {
+            ApplicationError::state(format!(
+                "Cannot approve plan: no pending structured submit_plan approval for workflow {session_id}"
+            ))
+        })?;
+
+    let signal = json!({
+        "type": SignalType::Approval.as_str(),
+        "id": submit_plan_tool_call_id,
+        "approved": true,
+        "approve_all": false,
+        "metadata": {
+            "source": "workflow_approve_plan_compat",
+            "legacy_plan_length": plan.len()
+        }
+    })
+    .to_string();
+
+    workflow_signal_core(svc, session_id, signal)
+        .await
+        .map(|_| ())
+}
+
+/// Reads the in-memory dispatcher metrics for one session.
+pub(crate) fn get_workflow_dispatcher_metrics_core(
+    session_id: &str,
+) -> Result<DispatcherMetricsSnapshot, ApplicationError> {
+    Dispatcher::metrics_for_session(session_id).ok_or_else(|| {
+        ApplicationError::not_found(format!(
+            "No dispatcher metrics found for session {session_id}"
+        ))
+    })
+}
+
+/// Reads the workflow efficiency report.
+pub(crate) async fn get_workflow_efficiency_report_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+) -> Result<WorkflowEfficiencyReport, ApplicationError> {
     svc.main_store
-        .list_workflow_events_after(&query.session_id, query.after, query.limit)
+        .get_workflow_efficiency_report(&session_id)
         .map_err(|e| ApplicationError::internal(e.to_string()))
 }
 
-#[tauri::command]
-pub async fn get_workflow_events(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
-    session_id: String,
-) -> Result<Vec<crate::workflow::react::events::WorkflowEventRecord>, String> {
-    // The Tauri wire keeps returning the full durable event list.
-    get_workflow_events_core(
-        &svc,
-        WorkflowEventsQuery {
-            session_id,
-            after: None,
-            limit: None,
-        },
-    )
-    .await
-    .map_err(|e| e.message)
-}
-
-#[tauri::command]
-pub async fn get_workflow_dispatcher_metrics(
-    session_id: String,
-) -> Result<DispatcherMetricsSnapshot, String> {
-    Dispatcher::metrics_for_session(&session_id)
-        .ok_or_else(|| format!("No dispatcher metrics found for session {}", session_id))
-}
-
-#[tauri::command]
-pub async fn get_workflow_efficiency_report(
-    state: State<'_, Arc<MainStore>>,
-    session_id: String,
-) -> Result<WorkflowEfficiencyReport, String> {
-    let store = &*state;
-    store
-        .get_workflow_efficiency_report(&session_id)
-        .map_err(|e| e.to_string())
+/// Canonical, allowlisted dispatch for the workflow compatibility commands.
+///
+/// Every parameter set is parsed into a strongly-typed struct at this boundary,
+/// then each command calls the same canonical core any other transport would.
+/// The command name must already be allowlisted by the HTTP handler; an unknown
+/// name here is still rejected so no caller can select an unintended path.
+pub(crate) async fn workflow_command_core(
+    svc: &WorkflowApplicationService,
+    command: &str,
+    params: Value,
+) -> Result<Value, ApplicationError> {
+    match command {
+        "delete_workflow" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            delete_workflow_core(svc, p.session_id)
+                .await
+                .map(|_| json!({}))
+        }
+        "delete_last_workflow_message" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            delete_last_workflow_message_core(svc, p.session_id)
+                .await
+                .map(|deleted| json!({ "deleted": deleted }))
+        }
+        "workflow_begin_new_context_frame" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            let frame = begin_new_context_frame_core(svc, p.session_id).await?;
+            serde_json::to_value(frame).map_err(|e| ApplicationError::internal(e.to_string()))
+        }
+        "list_pending_sub_agent_approvals" => {
+            let approvals = list_pending_sub_agent_approvals_core(svc).await?;
+            Ok(Value::Array(approvals))
+        }
+        "get_earlier_workflow_message_page" => {
+            let p: MessagePageParams = parse_command_params(params)?;
+            get_earlier_workflow_message_page_core(svc, p.session_id, p.before_message_id).await
+        }
+        "get_earlier_workflow_messages" => {
+            let p: MessagePageParams = parse_command_params(params)?;
+            get_earlier_workflow_messages_core(svc, p.session_id, p.before_message_id).await
+        }
+        "get_workflow_agent_config" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            get_workflow_agent_config_core(svc, p.session_id).await
+        }
+        "add_workflow_message" => {
+            let p: AddMessageParams = parse_command_params(params)?;
+            add_workflow_message_core(svc, p.message)
+                .await
+                .map(|id| json!({ "id": id }))
+        }
+        "update_workflow_title" => {
+            let p: TitleParams = parse_command_params(params)?;
+            update_workflow_title_core(svc, p.session_id, p.title)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_title_and_query" => {
+            let p: TitleAndQueryParams = parse_command_params(params)?;
+            update_workflow_title_and_query_core(svc, p.session_id, p.title, p.user_query)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_query" => {
+            let p: QueryParams = parse_command_params(params)?;
+            update_workflow_query_core(svc, p.session_id, p.user_query)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_status" => {
+            let p: StatusParams = parse_command_params(params)?;
+            update_workflow_status_core(svc, p.session_id, p.status)
+                .await
+                .map(|_| json!({}))
+        }
+        "workflow_get_tasks" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            workflow_get_tasks_core(svc, p.session_id)
+                .await
+                .map(Value::Array)
+        }
+        "update_workflow_todo_list" => {
+            let p: TodoParams = parse_command_params(params)?;
+            update_workflow_todo_list_core(svc, p.session_id, p.todo_list)
+                .await
+                .map(|_| json!({}))
+        }
+        "search_workspace_files" => {
+            let p: SearchFilesParams = parse_command_params(params)?;
+            let files = search_workspace_files_core(p.paths, p.query)?;
+            serde_json::to_value(files).map_err(|e| ApplicationError::internal(e.to_string()))
+        }
+        "get_system_skills" => {
+            let skills = get_system_skills_core(svc).await?;
+            serde_json::to_value(skills).map_err(|e| ApplicationError::internal(e.to_string()))
+        }
+        "update_workflow_allowed_paths" => {
+            let p: AllowedPathsParams = parse_command_params(params)?;
+            update_workflow_allowed_paths_core(svc, p.session_id, p.allowed_paths)
+                .await
+                .map(|_| json!({}))
+        }
+        "get_workflow_session_key" => {
+            let p: SessionKeyParams = parse_command_params(params)?;
+            get_workflow_session_key_core(svc, p.workflow_id)
+                .await
+                .map(|key| json!({ "session_key": key }))
+        }
+        "update_workflow_final_audit" => {
+            let p: FinalAuditParams = parse_command_params(params)?;
+            update_workflow_final_audit_core(svc, p.session_id, p.final_audit)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_auto_compress" => {
+            let p: AutoCompressParams = parse_command_params(params)?;
+            update_workflow_auto_compress_core(svc, p.session_id, p.auto_compress)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_personality" => {
+            let p: PersonalityParams = parse_command_params(params)?;
+            update_workflow_personality_core(svc, p.session_id, p.personality)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_model_config" => {
+            let p: ModelConfigParams = parse_command_params(params)?;
+            update_workflow_model_config_core(svc, p.session_id, p.configs)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_skills_config" => {
+            let p: SkillsConfigParams = parse_command_params(params)?;
+            update_workflow_skills_config_core(
+                svc,
+                p.session_id,
+                p.skill_enabled,
+                p.selected_skills,
+            )
+            .await
+            .map(|_| json!({}))
+        }
+        "update_workflow_approval_level" => {
+            let p: ApprovalLevelParams = parse_command_params(params)?;
+            update_workflow_approval_level_core(svc, p.session_id, p.approval_level)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_phase" => {
+            let p: PhaseParams = parse_command_params(params)?;
+            update_workflow_phase_core(svc, p.session_id, p.phase)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_sandbox_config" => {
+            let p: SandboxConfigParams = parse_command_params(params)?;
+            update_workflow_sandbox_config_core(
+                svc,
+                p.session_id,
+                p.execution_mode,
+                p.sandbox_scheme_id,
+            )
+            .await
+            .map(|_| json!({}))
+        }
+        "update_workflow_agent_config" => {
+            let p: AgentConfigParams = parse_command_params(params)?;
+            update_workflow_agent_config_core(svc, p.session_id, p.agent_config)
+                .await
+                .map(|_| json!({}))
+        }
+        "update_workflow_agent_id" => {
+            let p: AgentIdParams = parse_command_params(params)?;
+            update_workflow_agent_id_core(svc, p.session_id, p.agent_id)
+                .await
+                .map(|agent_config| json!({ "agent_config": agent_config }))
+        }
+        "get_auto_approved_tools" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            get_auto_approved_tools_core(svc, p.session_id)
+                .await
+                .map(|tools| json!(tools))
+        }
+        "remove_auto_approved_tool" => {
+            let p: RemoveToolParams = parse_command_params(params)?;
+            remove_auto_approved_tool_core(svc, p.session_id, p.tool_name)
+                .await
+                .map(|_| json!({}))
+        }
+        "remove_shell_policy_item" => {
+            let p: RemoveShellPolicyParams = parse_command_params(params)?;
+            remove_shell_policy_item_core(svc, p.session_id, p.pattern)
+                .await
+                .map(|_| json!({}))
+        }
+        "workflow_approve_plan" => {
+            let p: ApprovePlanParams = parse_command_params(params)?;
+            workflow_approve_plan_core(svc, p.session_id, p.agent_id, p.plan)
+                .await
+                .map(|_| json!({}))
+        }
+        "get_workflow_dispatcher_metrics" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            let metrics = get_workflow_dispatcher_metrics_core(&p.session_id)?;
+            serde_json::to_value(metrics).map_err(|e| ApplicationError::internal(e.to_string()))
+        }
+        "get_workflow_efficiency_report" => {
+            let p: SessionIdParams = parse_command_params(params)?;
+            let report = get_workflow_efficiency_report_core(svc, p.session_id).await?;
+            serde_json::to_value(report).map_err(|e| ApplicationError::internal(e.to_string()))
+        }
+        other => Err(ApplicationError::not_found(format!(
+            "Unknown workflow command: {other}"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -6457,11 +7183,10 @@ mod tests {
         .expect("failed to write .csignore");
         std::fs::write(dev_data.join("fixture.txt"), "fixture").expect("failed to write fixture");
 
-        let results = search_workspace_files(
+        let results = search_workspace_files_core(
             vec![root_path.to_string_lossy().to_string()],
             "dev_data".to_string(),
         )
-        .await
         .expect("search should succeed");
 
         assert!(
@@ -6499,11 +7224,10 @@ mod tests {
         std::fs::write(target.join("artifact.txt"), "artifact")
             .expect("failed to write ignored artifact");
 
-        let results = search_workspace_files(
+        let results = search_workspace_files_core(
             vec![root_path.to_string_lossy().to_string()],
             "target".to_string(),
         )
-        .await
         .expect("search should succeed");
 
         assert!(

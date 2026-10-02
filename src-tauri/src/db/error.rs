@@ -52,6 +52,9 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// Desktop-only bridge: only Tauri commands can produce a `tauri::Error`, and
+/// the desktop-free runtime closure must not link Tauri at all.
+#[cfg(feature = "desktop")]
 impl From<tauri::Error> for StoreError {
     fn from(err: tauri::Error) -> Self {
         StoreError::TauriError(err.to_string())

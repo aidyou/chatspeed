@@ -1,6 +1,6 @@
 use crate::db::sql::migrations::{
-    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2,
-    v3, v4, v5, v6, v7, v8, v9,
+    common::MigrationDefinition, v1, v10, v11, v12, v13, v14, v15, v16, v17, v18, v2, v3, v4, v5,
+    v6, v7, v8, v9,
 };
 use crate::db::StoreError;
 use rusqlite::Connection;
@@ -458,16 +458,22 @@ mod tests {
             "v18 upgrades to the current head"
         );
         let name: String = conn
-            .query_row("SELECT name FROM agents WHERE id = 'agent-v19'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT name FROM agents WHERE id = 'agent-v19'",
+                [],
+                |row| row.get(0),
+            )
             .expect("existing row survives");
         assert_eq!(name, "kept");
         assert!(table_exists(&conn, "capability_operations"));
         assert!(table_exists(&conn, "capability_operation_effects"));
         assert!(table_exists(&conn, "skill_installations"));
         assert!(has_column(&conn, "capability_operations", "request_hash"));
-        assert!(has_column(&conn, "capability_operations", "reconcile_reason"));
+        assert!(has_column(
+            &conn,
+            "capability_operations",
+            "reconcile_reason"
+        ));
         assert!(has_column(&conn, "skill_installations", "marker_nonce"));
     }
 
@@ -530,8 +536,7 @@ mod tests {
         );
         assert!(!table_exists(&conn, "capability_operations"));
 
-        run_migrations(&mut conn)
-            .expect("an ahead-of-latest database stays usable");
+        run_migrations(&mut conn).expect("an ahead-of-latest database stays usable");
 
         assert_eq!(
             get_db_version(&conn).expect("version"),
@@ -557,7 +562,9 @@ mod tests {
         .expect("seed an ownership row");
         run_migrations(&mut conn).expect("a second startup still succeeds");
         let kept: i64 = conn
-            .query_row("SELECT COUNT(1) FROM skill_installations", [], |row| row.get(0))
+            .query_row("SELECT COUNT(1) FROM skill_installations", [], |row| {
+                row.get(0)
+            })
             .expect("count ownership rows");
         assert_eq!(kept, 1, "the ensure hook never rewrites existing rows");
     }

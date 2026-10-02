@@ -5,10 +5,12 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
+#[cfg(feature = "desktop")]
 use crate::constants::CFG_SEARCH_ENGINE;
 use crate::db::MainStore;
 use crate::mcp::client::{
@@ -382,6 +384,11 @@ impl ToolManager {
     ///
     /// # Returns
     /// * `Result<(), ToolError>` - The result of the registration.
+    ///
+    /// Desktop-only: the web tools it adds need a Tauri webview. A desktop-free
+    /// runtime registers [`ToolManager::register_core_tools`] directly and
+    /// receives web access through a client capability bridge instead.
+    #[cfg(feature = "desktop")]
     pub async fn register_available_tools(
         self: Arc<Self>, // Changed to take Arc<Self>
         app_handle: AppHandle,
@@ -395,13 +402,23 @@ impl ToolManager {
         // Register search tool
         let search_engine = main_store.get_config(CFG_SEARCH_ENGINE, "bing".to_string());
         if !search_engine.is_empty() {
-            let ws = crate::tools::WebSearch::new(app_handle.clone());
+            let ws = crate::tools::WebSearch::new(
+                app_handle.clone(),
+                std::sync::Arc::new(crate::tools::web_config::MainStoreWebToolConfig::new(
+                    main_store.clone(),
+                )),
+            );
             self.register_tool(ws).await?;
         }
 
         // Register web fetch tool
-        self.register_tool(Arc::new(crate::tools::WebFetch::new(app_handle.clone())))
-            .await?;
+        self.register_tool(Arc::new(crate::tools::WebFetch::new(
+            app_handle.clone(),
+            std::sync::Arc::new(crate::tools::web_config::MainStoreWebToolConfig::new(
+                main_store.clone(),
+            )),
+        )))
+        .await?;
 
         self.register_core_tools(main_store.clone()).await
     }

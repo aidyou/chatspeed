@@ -247,7 +247,10 @@ impl IntelligenceManager {
 
     fn parse_completion_choice(response: &str, count: usize) -> Option<usize> {
         let value: serde_json::Value = serde_json::from_str(response).ok()?;
-        let content = value.get("content").and_then(|value| value.as_str()).unwrap_or(response);
+        let content = value
+            .get("content")
+            .and_then(|value| value.as_str())
+            .unwrap_or(response);
         let result: serde_json::Value = serde_json::from_str(content).ok()?;
         let choice = result.get("selected_candidate")?.as_str()?;
         let index = choice.strip_prefix("report_")?.parse::<usize>().ok()?;
@@ -335,7 +338,19 @@ impl IntelligenceManager {
         decision_may_approve: bool,
     ) -> Result<ToolApprovalReview, WorkflowEngineError> {
         if decision_may_approve {
-            if let Some(review) = self.try_decision_approval(context, workspace_context, tool_name, tool_category, tool_scope, tool_description, tool_args, assistant_text).await {
+            if let Some(review) = self
+                .try_decision_approval(
+                    context,
+                    workspace_context,
+                    tool_name,
+                    tool_category,
+                    tool_scope,
+                    tool_description,
+                    tool_args,
+                    assistant_text,
+                )
+                .await
+            {
                 return Ok(review);
             }
         }
@@ -471,9 +486,16 @@ impl IntelligenceManager {
                     (Some(provider_id), Some(model_name))
                         if provider_id > 0 && !model_name.trim().is_empty() =>
                     {
-                        store.config.get_ai_model_by_id(provider_id).ok()
-                            .filter(|provider| !provider.disabled && provider.api_protocol != "decision")
-                            .filter(|provider| provider.models.iter().any(|model| model.id == model_name))
+                        store
+                            .config
+                            .get_ai_model_by_id(provider_id)
+                            .ok()
+                            .filter(|provider| {
+                                !provider.disabled && provider.api_protocol != "decision"
+                            })
+                            .filter(|provider| {
+                                provider.models.iter().any(|model| model.id == model_name)
+                            })
                             .map(|_| (provider_id, model_name.to_string()))
                     }
                     _ => None,
@@ -617,7 +639,10 @@ impl IntelligenceManager {
             self.session_id,
             Self::language_detection_input_profile(user_input)
         );
-        if let Some(language) = self.try_decision_language(user_input, max_input_tokens).await {
+        if let Some(language) = self
+            .try_decision_language(user_input, max_input_tokens)
+            .await
+        {
             return Some(language);
         }
         self.detect_input_language_with_lite(user_input, max_input_tokens, segment_id)
@@ -943,7 +968,10 @@ mod tests {
             r#"{"selected_candidate":null,"report_meets_requirement":true}"#,
             "COMPLETE",
         ] {
-            assert_eq!(IntelligenceManager::parse_completion_choice(invalid, 2), None);
+            assert_eq!(
+                IntelligenceManager::parse_completion_choice(invalid, 2),
+                None
+            );
         }
     }
 }

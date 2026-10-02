@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target; fi",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && touch src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cargo build --release --manifest-path src-tauri/runtime/Cargo.toml --bin chatspeed-runtime && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && cp src-tauri/target/release/chatspeed-runtime src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi",
     "frontendDist": "../dist"
   },
   "app": {
@@ -121,7 +121,8 @@
     ],
     "resources": ["assets"],
     "externalBin": [
-      "target/release/cscli"
+      "target/release/cscli",
+      "target/release/chatspeed-runtime"
     ],
     "copyright": "",
     "category": "DeveloperTool",

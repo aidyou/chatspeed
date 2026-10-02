@@ -3,7 +3,13 @@
 //! how local clients find and authenticate against it.
 
 pub mod auth;
+#[cfg(not(feature = "desktop"))]
+pub mod chat_commands;
+#[cfg(not(feature = "desktop"))]
+pub mod client_bridge;
+pub mod data_commands;
 pub mod discovery;
 pub mod dto;
 pub mod server;
 pub mod sse;
+pub mod workflow_commands;

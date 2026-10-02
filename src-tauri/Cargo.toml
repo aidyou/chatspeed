@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "contracts", "cli"]
+members = [".", "contracts", "cli", "runtime", "runtime-core", "runtime-backend", "runtime-client"]
 resolver = "2"
 
 [profile.release]
@@ -37,6 +37,11 @@ path = "src/main.rs"
 # Tauri scans `src/bin` even when Cargo's `autobins` is false. Keep the
 # legacy source name explicitly disabled so it is not bundled alongside cscli.
 [features]
+# `desktop` marks the code paths in the shared sources that need Tauri, Wry or
+# GTK. The desktop crate enables it by default; `chatspeed-runtime-backend` must
+# never enable it, which is how the runtime closure stays desktop-free.
+default          = ["desktop"]
+desktop          = []
 legacy-cli-binary = []
 
 [[bin]]
@@ -54,6 +59,7 @@ walkdir     = "2"
 
 [dependencies]
 chatspeed-contracts = { path = "contracts" }
+chatspeed-runtime-client = { path = "runtime-client" }
 anyhow           = "1.0.102"
 aes-gcm          = "0.10"
 arboard          = "3.6"

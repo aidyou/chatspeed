@@ -138,7 +138,6 @@ pub enum ReceiptOutcome {
     Conflict,
 }
 
-
 impl From<&Row<'_>> for WorkflowAutomation {
     fn from(row: &Row<'_>) -> Self {
         Self {
@@ -493,9 +492,7 @@ impl MainStore {
                 .optional()?;
             match current {
                 None => Ok(CasOutcome::NotFound),
-                Some(revision) if revision != expected_revision => {
-                    Ok(CasOutcome::RevisionConflict)
-                }
+                Some(revision) if revision != expected_revision => Ok(CasOutcome::RevisionConflict),
                 Some(_) => {
                     conn.execute(
                         "UPDATE workflow_automations SET
@@ -556,9 +553,7 @@ impl MainStore {
                 .optional()?;
             match current {
                 None => Ok(CasOutcome::NotFound),
-                Some(revision) if revision != expected_revision => {
-                    Ok(CasOutcome::RevisionConflict)
-                }
+                Some(revision) if revision != expected_revision => Ok(CasOutcome::RevisionConflict),
                 Some(_) => {
                     conn.execute(
                         "UPDATE workflow_automations
@@ -606,7 +601,12 @@ impl MainStore {
                 "UPDATE workflow_automations
                  SET next_run_at = ?2, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
                  WHERE id = ?1 AND enabled = 1 AND revision = ?3 AND next_run_at = ?4",
-                params![automation_id, new_next_run_at, expected_revision, expected_next_run_at],
+                params![
+                    automation_id,
+                    new_next_run_at,
+                    expected_revision,
+                    expected_next_run_at
+                ],
             )?;
             if advanced != 1 {
                 // The slot no longer belongs to this caller; drop the tx (no
@@ -762,7 +762,12 @@ impl MainStore {
                 "UPDATE automation_operations
                  SET status = 'completed', result_json = ?3, updated_at_ms = ?4
                  WHERE actor_scope = ?1 AND idempotency_key = ?2",
-                params![actor_scope, idempotency_key, result_json, crate::capability::operation::now_ms()],
+                params![
+                    actor_scope,
+                    idempotency_key,
+                    result_json,
+                    crate::capability::operation::now_ms()
+                ],
             )?;
             Ok(())
         })
@@ -798,7 +803,8 @@ impl MainStore {
                  WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
                  ORDER BY next_run_at ASC",
             )?;
-            let rows = statement.query_map(params![now], |row| Ok(WorkflowAutomation::from(row)))?;
+            let rows =
+                statement.query_map(params![now], |row| Ok(WorkflowAutomation::from(row)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
@@ -825,10 +831,7 @@ impl MainStore {
     /// the automation run projection reads (INV-7): a snapshot row records
     /// `RuntimeState` as a snake_case string, and only `completed`/`failed`/
     /// `cancelled` are provably terminal. Transcript text is never consulted.
-    pub fn workflow_snapshot_state(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<String>, StoreError> {
+    pub fn workflow_snapshot_state(&self, session_id: &str) -> Result<Option<String>, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
             conn.query_row(
@@ -858,15 +861,16 @@ impl MainStore {
 
     /// All not-yet-terminal runs, used for bounded reconciliation at startup
     /// and on read.
-    pub fn list_unreconciled_automation_runs(&self) -> Result<Vec<WorkflowAutomationRun>, StoreError> {
+    pub fn list_unreconciled_automation_runs(
+        &self,
+    ) -> Result<Vec<WorkflowAutomationRun>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
                 "SELECT * FROM workflow_automation_runs
                  WHERE status IN ('pending','starting','running')
                  ORDER BY created_at ASC",
             )?;
-            let rows =
-                statement.query_map([], |row| Ok(WorkflowAutomationRun::from(row)))?;
+            let rows = statement.query_map([], |row| Ok(WorkflowAutomationRun::from(row)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
@@ -1140,7 +1144,11 @@ mod tests {
             store.reserve_automation_mutation("control-plane", "key-1", "create", "hash-a")?,
             ReceiptOutcome::Proceed
         ));
-        store.complete_automation_mutation("control-plane", "key-1", Some("{\"automation_id\":\"x\",\"revision\":1}"))?;
+        store.complete_automation_mutation(
+            "control-plane",
+            "key-1",
+            Some("{\"automation_id\":\"x\",\"revision\":1}"),
+        )?;
         assert!(matches!(
             store.reserve_automation_mutation("control-plane", "key-1", "create", "hash-a")?,
             ReceiptOutcome::Replay(_)
@@ -1294,7 +1302,10 @@ mod tests {
         let automation = store
             .get_workflow_automation("a-race")?
             .expect("automation exists");
-        assert_eq!(automation.next_run_at.as_deref(), Some("2026-06-25 09:00:00"));
+        assert_eq!(
+            automation.next_run_at.as_deref(),
+            Some("2026-06-25 09:00:00")
+        );
         assert_eq!(automation.revision, 1);
         Ok(())
     }

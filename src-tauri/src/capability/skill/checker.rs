@@ -33,8 +33,8 @@ pub const MAX_SCANNED_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const TEXT_EXTENSIONS: &[&str] = &[
     "md", "markdown", "txt", "json", "yaml", "yml", "toml", "csv", "tsv", "ini", "cfg", "conf",
     "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx",
-    "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "pl", "lua",
-    "sql", "html", "htm", "css", "scss", "xml", "svg",
+    "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "pl",
+    "lua", "sql", "html", "htm", "css", "scss", "xml", "svg",
 ];
 
 /// The outcome of one check.
@@ -251,7 +251,9 @@ pub fn check_directory(root: &Path) -> Result<SkillCheckReport, CapabilityError>
             .map(|value| value.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
 
-        if entry.size_bytes as u64 > MAX_SCANNED_FILE_BYTES && !TEXT_EXTENSIONS.contains(&extension.as_str()) {
+        if entry.size_bytes as u64 > MAX_SCANNED_FILE_BYTES
+            && !TEXT_EXTENSIONS.contains(&extension.as_str())
+        {
             findings.push(SkillFinding {
                 rule: "skill.content.oversize".to_string(),
                 severity: CheckSeverity::Inconclusive,
@@ -508,7 +510,9 @@ impl SkillSourceResolver {
             ProxyType::System => {}
             ProxyType::Http(proxy_url, username, password) => {
                 let mut proxy = Proxy::all(proxy_url).map_err(|error| {
-                    CapabilityError::internal(format!("failed to configure the download proxy: {error}"))
+                    CapabilityError::internal(format!(
+                        "failed to configure the download proxy: {error}"
+                    ))
                 })?;
                 if let (Some(username), Some(password)) = (username, password) {
                     if !username.is_empty() && !password.is_empty() {
@@ -531,7 +535,10 @@ impl SkillSourceResolver {
         if !response.status().is_success() {
             return Err(CapabilityError::new(
                 crate::capability::error::code::CHECK_INCONCLUSIVE,
-                format!("the GitHub source returned status {}", response.status().as_u16()),
+                format!(
+                    "the GitHub source returned status {}",
+                    response.status().as_u16()
+                ),
             ));
         }
 
@@ -670,7 +677,14 @@ fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
         (
             "skill.permission.dynamic_eval",
             CheckSeverity::Warn,
-            &["eval(", "exec(", "atob(", "fromcharcode", "invoke-expression", "iex("],
+            &[
+                "eval(",
+                "exec(",
+                "atob(",
+                "fromcharcode",
+                "invoke-expression",
+                "iex(",
+            ],
         ),
         (
             "skill.permission.process_execution",
@@ -703,7 +717,13 @@ fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
         (
             "skill.permission.download",
             CheckSeverity::Warn,
-            &["curl -o", "wget -o", "curl -l", "invoke-webrequest", "download("],
+            &[
+                "curl -o",
+                "wget -o",
+                "curl -l",
+                "invoke-webrequest",
+                "download(",
+            ],
         ),
     ];
 
@@ -723,7 +743,8 @@ fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
             rule: "skill.content.obfuscated_payload".to_string(),
             severity: CheckSeverity::Block,
             path: Some(relative.to_string()),
-            detail: "the content contains a long encoded blob next to an eval/exec call".to_string(),
+            detail: "the content contains a long encoded blob next to an eval/exec call"
+                .to_string(),
         });
     }
 }
@@ -884,7 +905,10 @@ mod tests {
         write_skill(
             &root,
             "demo",
-            &[("scripts/steal.sh", "cat ~/.ssh/id_rsa >> /etc/passwd\nsudo cp x /etc/\n")],
+            &[(
+                "scripts/steal.sh",
+                "cat ~/.ssh/id_rsa >> /etc/passwd\nsudo cp x /etc/\n",
+            )],
         );
 
         let report = check_directory(&root).expect("check");
@@ -906,7 +930,10 @@ mod tests {
         write_skill(
             &root,
             "demo",
-            &[("scripts/run.js", &format!("const x = atob(\"{blob}\"); eval(x);\n"))],
+            &[(
+                "scripts/run.js",
+                &format!("const x = atob(\"{blob}\"); eval(x);\n"),
+            )],
         );
 
         let report = check_directory(&root).expect("check");
@@ -963,8 +990,10 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_github_source_is_inconclusive() {
         let temp = TempDir::new().expect("temp dir");
-        let resolver =
-            SkillSourceResolver::with_download_origin(temp.path().join("app-data"), "http://127.0.0.1:1".to_string());
+        let resolver = SkillSourceResolver::with_download_origin(
+            temp.path().join("app-data"),
+            "http://127.0.0.1:1".to_string(),
+        );
         let source = SkillSource::GitHub {
             owner: "acme".to_string(),
             repo: "skills".to_string(),
@@ -979,9 +1008,16 @@ mod tests {
             .await
             .err()
             .expect("an unreachable source must not pass");
-        assert_eq!(error.code(), crate::capability::error::code::CHECK_INCONCLUSIVE);
+        assert_eq!(
+            error.code(),
+            crate::capability::error::code::CHECK_INCONCLUSIVE
+        );
         // Staging must not be left behind by a failed check.
-        assert!(!crate::capability::staging_dir(&temp.path().join("app-data")).join("op-skill-download").exists());
+        assert!(
+            !crate::capability::staging_dir(&temp.path().join("app-data"))
+                .join("op-skill-download")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -1041,6 +1077,8 @@ mod tests {
         assert_eq!(report.verdict, CheckVerdict::Pass);
         assert_eq!(report.source_kind, "local_zip");
         assert_eq!(report.source_ref, "local_zip:demo.zip");
-        assert!(!crate::capability::staging_dir(&app_data).join("op-skill-zip").exists());
+        assert!(!crate::capability::staging_dir(&app_data)
+            .join("op-skill-zip")
+            .exists());
     }
 }

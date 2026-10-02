@@ -204,7 +204,14 @@ impl SkillInstaller {
             }
         }
 
-        match self.commit(plan, target_id, &resolved, &install_path, repository, operation_id) {
+        match self.commit(
+            plan,
+            target_id,
+            &resolved,
+            &install_path,
+            repository,
+            operation_id,
+        ) {
             Ok(installation_id) => TargetOutcome {
                 target_id: target_id.to_string(),
                 status: TargetOutcomeStatus::Installed,
@@ -308,7 +315,15 @@ impl SkillInstaller {
 
         let nonce = uuid::Uuid::now_v7().simple().to_string();
         let temp = target_root.join(format!(".{}.cs-install-{}", plan.skill_name, nonce));
-        let result = self.copy_into(&temp, plan, target_id, install_path, repository, operation_id, &nonce);
+        let result = self.copy_into(
+            &temp,
+            plan,
+            target_id,
+            install_path,
+            repository,
+            operation_id,
+            &nonce,
+        );
         match result {
             Ok(installation_id) => Ok(installation_id),
             Err(error) => {
@@ -357,9 +372,8 @@ impl SkillInstaller {
         }
 
         let created_at_ms = now_ms();
-        let manifest_digest = manifest_digest(&plan.files).ok_or_else(|| {
-            CapabilityError::refused("the plan has no content to install")
-        })?;
+        let manifest_digest = manifest_digest(&plan.files)
+            .ok_or_else(|| CapabilityError::refused("the plan has no content to install"))?;
         let installation = SkillInstallation {
             installation_id: format!("ins-{}", uuid::Uuid::now_v7()),
             skill_name: plan.skill_name.clone(),
@@ -385,7 +399,9 @@ impl SkillInstaller {
 
         // The durable intent is written before the rename: a crash after this
         // point is recoverable, a crash before it changed nothing.
-        let installation_id = repository.upsert_installation(&installation)?.installation_id;
+        let installation_id = repository
+            .upsert_installation(&installation)?
+            .installation_id;
 
         std::fs::rename(temp, install_path).map_err(|error| {
             CapabilityError::internal(format!("failed to publish the installed skill: {error}"))
@@ -547,7 +563,10 @@ mod tests {
         let again = installer
             .apply(&plan, &fixture.repository, &operation(&fixture, "key-2"))
             .expect("apply again");
-        assert_eq!(again.outcomes[0].status, TargetOutcomeStatus::AlreadyInstalled);
+        assert_eq!(
+            again.outcomes[0].status,
+            TargetOutcomeStatus::AlreadyInstalled
+        );
 
         // A different skill with the same name in the same target is skipped.
         let mut other = plan.clone();

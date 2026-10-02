@@ -18,23 +18,32 @@ use tauri::WebviewWindowBuilder;
 use tauri::Window;
 use tauri::{AppHandle, Manager};
 
-use crate::constants::CFG_PROXY_SWITCHER_WINDOW_SIZE;
-use crate::constants::CFG_WINDOW_POSITION;
-use crate::constants::CFG_WINDOW_SIZE;
 use crate::constants::{
     ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP, WORKFLOW_WINDOW_ALWAYS_ON_TOP,
 };
-use crate::db::MainStore;
+use crate::runtime_config::RuntimeConfigCache;
 
 fn restore_managed_window_config(app: &AppHandle, window: &WebviewWindow) {
-    if let Some(main_store) = app.try_state::<Arc<MainStore>>() {
-        restore_window_config(window, main_store.inner().clone());
-    } else {
+    let Some(cache) = app.try_state::<Arc<RuntimeConfigCache>>() else {
         warn!(
-            "MainStore state not found when restoring window config for '{}'",
+            "Runtime config cache not found when restoring window config for '{}'",
             window.label()
         );
-    }
+        return;
+    };
+
+    let Some(snapshot) = cache.current() else {
+        // The runtime owns the configuration; until the supervisor has published
+        // a snapshot the window keeps the geometry it was created with instead
+        // of reading a local database.
+        warn!(
+            "Runtime configuration is not available yet; skipping window restore for '{}'",
+            window.label()
+        );
+        return;
+    };
+
+    restore_window_config(window, snapshot.restore_config(window.label()));
 }
 
 fn ensure_window(app: &tauri::AppHandle, label: &str, visible: bool) -> Option<WebviewWindow> {
@@ -95,6 +104,19 @@ impl Default for MainWindowPosition {
             y: 0,
         }
     }
+}
+
+/// The geometry a window is restored from.
+///
+/// The values come from the runtime configuration snapshot
+/// ([`crate::runtime_config::RuntimeConfigSnapshot`]); a `None` field means the
+/// window keeps the geometry it was created with.
+#[derive(Debug, Default)]
+pub struct WindowRestoreConfig {
+    /// Saved size, when one is stored for this window.
+    pub size: Option<WindowSize>,
+    /// Saved position, when this window remembers one.
+    pub position: Option<MainWindowPosition>,
 }
 
 /// Represents a rectangle for intersection checks.
@@ -707,8 +729,8 @@ pub fn setup_window_creation_handlers(app_handle: tauri::AppHandle) {
 ///
 /// # Arguments
 /// * `window` - The window to apply configuration to
-/// * `main_store` - The main store
-pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>) {
+/// * `config` - The geometry read from the runtime configuration snapshot
+pub fn restore_window_config(window: &WebviewWindow, config: WindowRestoreConfig) {
     let window_label = window.label();
 
     let mut current_window_size = window.outer_size().unwrap_or_else(|e| {
@@ -731,32 +753,8 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
     });
 
     {
-        let c = main_store.as_ref();
         // restore window size
-        // For the main window, use the existing CFG_WINDOW_SIZE
-        // For the assistant window, use the new CFG_ASSISTANT_WINDOW_SIZE
-        let saved_size = if window_label == "main" {
-            c.get_config(CFG_WINDOW_SIZE, Some(WindowSize::default()))
-                .unwrap_or_default()
-        } else if window_label == "assistant" {
-            c.get_config(
-                crate::constants::CFG_ASSISTANT_WINDOW_SIZE,
-                Some(WindowSize::default()),
-            )
-            .unwrap_or_default()
-        } else if window_label == "workflow" {
-            c.get_config(
-                crate::constants::CFG_WORKFLOW_WINDOW_SIZE,
-                Some(WindowSize::default()),
-            )
-            .unwrap_or_default()
-        } else if window_label == "proxy_switcher" {
-            c.get_config(CFG_PROXY_SWITCHER_WINDOW_SIZE, Some(WindowSize::default()))
-                .unwrap_or_default()
-        } else {
-            // For other windows, use the default size
-            WindowSize::default()
-        };
+        let saved_size = config.size.unwrap_or_default();
 
         if saved_size.width > 0.0 && saved_size.height > 0.0 {
             let new_logical_size = LogicalSize::new(saved_size.width, saved_size.height);
@@ -781,21 +779,11 @@ pub fn restore_window_config(window: &WebviewWindow, main_store: Arc<MainStore>)
             }
         }
 
-        // Restore window position for main and workflow windows
-        if window_label != "main" && window_label != "workflow" {
+        // Restore window position for main and workflow windows; the other
+        // windows only remember a size.
+        let Some(saved_pos) = config.position else {
             return;
-        }
-
-        // restore window position
-        let window_position_config = if window_label == "main" {
-            c.get_config(CFG_WINDOW_POSITION, MainWindowPosition::default())
-        } else {
-            c.get_config(
-                crate::constants::CFG_WORKFLOW_WINDOW_POSITION,
-                MainWindowPosition::default(),
-            )
         };
-        let saved_pos = window_position_config;
 
         #[cfg(debug_assertions)]
         log::debug!(

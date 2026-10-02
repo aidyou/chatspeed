@@ -19,6 +19,7 @@
 //! instance-local replay handles. They are distinct from durable DB event IDs
 //! and must never be mixed with them.
 
+#[cfg(feature = "desktop")]
 use crate::workflow::react::client::tauri::gateway::TauriGateway;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
@@ -52,6 +53,7 @@ pub trait WorkflowEventTransport: Send + Sync + 'static {
     async fn remove_event_channel(&self, session_id: &str) -> bool;
 }
 
+#[cfg(feature = "desktop")]
 #[async_trait]
 impl WorkflowEventTransport for TauriGateway {
     async fn send(
@@ -67,16 +69,20 @@ impl WorkflowEventTransport for TauriGateway {
     }
 }
 
-/// The no-window output transport used by `chatspeed-headless`.
+/// The no-window output transport used by the standalone runtime.
 ///
 /// It deliberately has no sink of its own: the hub's SSE broker is the single
-/// observation path for a headless process, so a payload is never written to a
-/// transcript, a log line or a file (INV-6). Delivery therefore always
-/// succeeds, and there is never per-session transport state to drop.
-#[cfg(test)]
+/// observation path for a process without a desktop host, so a payload is never
+/// written to a transcript, a log line or a file (INV-6). Delivery therefore
+/// always succeeds, and there is never per-session transport state to drop.
+///
+/// The desktop build keeps this type only for its own tests; the runtime build
+/// (`not(feature = "desktop")`) uses it as the production transport, so the
+/// runtime never links Tauri/Wry/GTK just to construct the hub.
+#[cfg(any(test, not(feature = "desktop")))]
 pub struct NoWindowTransport;
 
-#[cfg(test)]
+#[cfg(any(test, not(feature = "desktop")))]
 #[async_trait]
 impl WorkflowEventTransport for NoWindowTransport {
     async fn send(
@@ -92,8 +98,8 @@ impl WorkflowEventTransport for NoWindowTransport {
     }
 }
 
-/// Schema version of the live stream envelope.
-pub const STREAM_SCHEMA_VERSION: u32 = 1;
+/// Schema version of the live stream envelope, shared by the wire contracts.
+pub const STREAM_SCHEMA_VERSION: u32 = chatspeed_contracts::STREAM_SCHEMA_VERSION;
 
 /// Maximum number of envelopes retained per session for in-window replay.
 const RING_CAPACITY: usize = 1024;
@@ -350,6 +356,7 @@ pub struct WorkflowRuntimeHub {
 
 impl WorkflowRuntimeHub {
     /// Desktop constructor: the Tauri batching gateway is the output transport.
+    #[cfg(feature = "desktop")]
     pub fn new(tauri: Arc<TauriGateway>, server_instance_id: String) -> Self {
         Self::with_transport(tauri, server_instance_id)
     }

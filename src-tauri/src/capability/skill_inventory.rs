@@ -122,7 +122,10 @@ impl SkillInventoryService {
     }
 
     /// Builds the inventory using the default scanner for this data directory.
-    pub fn build(&self, repository: &CapabilityRepository) -> Result<SkillInventory, CapabilityError> {
+    pub fn build(
+        &self,
+        repository: &CapabilityRepository,
+    ) -> Result<SkillInventory, CapabilityError> {
         let scanner = SkillScanner::new(self.app_data_dir.clone());
         self.build_with_scanner(repository, &scanner)
     }
@@ -138,9 +141,9 @@ impl SkillInventoryService {
     ) -> Result<SkillInventory, CapabilityError> {
         let targets = resolve_targets(&self.environment);
         let installations = repository.list_installations()?;
-        let scanned = scanner.scan_detailed().map_err(|error| {
-            CapabilityError::internal(format!("skill scan failed: {error}"))
-        })?;
+        let scanned = scanner
+            .scan_detailed()
+            .map_err(|error| CapabilityError::internal(format!("skill scan failed: {error}")))?;
 
         let mut skills = Vec::new();
         let mut claimed: HashSet<String> = HashSet::new();
@@ -159,14 +162,11 @@ impl SkillInventoryService {
                 claimed.insert(found.installation_id.clone());
             }
 
-            let protected = skill.builtin
-                || RESERVED_SKILL_NAMES.contains(&skill.manifest.name.as_str());
+            let protected =
+                skill.builtin || RESERVED_SKILL_NAMES.contains(&skill.manifest.name.as_str());
 
-            let (source, drifted) = classify(
-                skill.builtin,
-                installation.as_ref(),
-                &skill.directory,
-            );
+            let (source, drifted) =
+                classify(skill.builtin, installation.as_ref(), &skill.directory);
 
             let installation_state = installation
                 .as_ref()
@@ -447,8 +447,8 @@ mod tests {
     fn a_reserved_name_is_protected_and_a_missing_directory_is_still_reported() {
         let fixture = fixture();
         let reserved = write_skill(&fixture.chatspeed_skills, "chatspeed-cli", "body");
-        let manifest = crate::capability::skill::manifest::compute_file_manifest(&reserved)
-            .expect("manifest");
+        let manifest =
+            crate::capability::skill::manifest::compute_file_manifest(&reserved).expect("manifest");
         fixture
             .repository
             .upsert_installation(&installation_for("chatspeed-cli", &reserved, manifest))

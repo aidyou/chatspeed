@@ -7,47 +7,25 @@
 use crate::workflow::react::application::{ApplicationError, ApplicationErrorKind};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use chatspeed_contracts::{ErrorDetail, ErrorEnvelope};
 use serde_json::{Map, Value};
 
-/// Control-plane protocol version (v1).
-pub const PROTOCOL_VERSION: &str = "1";
-
-/// `GET /control/v1/meta` response.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct MetaResponse {
-    pub service: &'static str,
-    pub protocol_version: &'static str,
-    pub schema_version: u32,
-    pub server_instance_id: String,
-    pub pid: u32,
-}
-
-/// Stable error envelope: `{"error": {"code": "...", "message": "..."}}`.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ErrorEnvelope {
-    pub error: ErrorDetail,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ErrorDetail {
-    pub code: &'static str,
-    pub message: String,
-}
+pub use chatspeed_contracts::{MetaResponse, PROTOCOL_VERSION};
 
 /// Builds a stable error response from a domain error.
 pub fn error_response(status: StatusCode, code: &'static str, message: String) -> Response {
     let body = ErrorEnvelope {
-        error: ErrorDetail { code, message },
+        error: ErrorDetail {
+            code: code.to_string(),
+            message,
+        },
     };
     (status, axum::Json(body)).into_response()
 }
 
 /// Maps a domain [`ApplicationError`] to a stable HTTP status and code.
-pub fn application_error_response(error: &ApplicationError) -> Response {    let (status, code) = match error.kind {
+pub fn application_error_response(error: &ApplicationError) -> Response {
+    let (status, code) = match error.kind {
         ApplicationErrorKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
         ApplicationErrorKind::InvalidInput => (StatusCode::BAD_REQUEST, "invalid_input"),
         ApplicationErrorKind::Conflict => (StatusCode::CONFLICT, "conflict"),
@@ -89,9 +67,7 @@ pub fn automation_error_response(
 /// so a client branches on the same value the service produced. The message is
 /// the redacted one: a capability error can quote an upstream failure and must
 /// never be able to leak a secret through the HTTP plane (AC-13).
-pub fn capability_error_response(
-    error: &crate::capability::error::CapabilityError,
-) -> Response {
+pub fn capability_error_response(error: &crate::capability::error::CapabilityError) -> Response {
     let (status, code) = match error.code() {
         crate::capability::error::code::INVALID_REQUEST => {
             (StatusCode::BAD_REQUEST, "invalid_request")
@@ -125,10 +101,9 @@ pub fn capability_error_response(
         }
         // An interrupted operation is a recoverable answer about the operation,
         // not a server fault: reporting it as 500 would hide the retry path.
-        crate::capability::error::code::INTERRUPTED_BEFORE_EFFECT => (
-            StatusCode::CONFLICT,
-            "interrupted_before_effect",
-        ),
+        crate::capability::error::code::INTERRUPTED_BEFORE_EFFECT => {
+            (StatusCode::CONFLICT, "interrupted_before_effect")
+        }
         crate::capability::error::code::EFFECT_STATE_UNKNOWN => {
             (StatusCode::CONFLICT, "effect_state_unknown")
         }

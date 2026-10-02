@@ -155,9 +155,9 @@ impl CapabilityApplicationService {
             .collect();
 
         for installation in &installations {
-            let is_quarantined =
-                matches!(installation.state, SkillInstallationState::Quarantined);
-            if !is_quarantined && !matches!(installation.state, SkillInstallationState::Installing) {
+            let is_quarantined = matches!(installation.state, SkillInstallationState::Quarantined);
+            if !is_quarantined && !matches!(installation.state, SkillInstallationState::Installing)
+            {
                 continue;
             }
             if !supported.contains(&installation.target_id) {
@@ -309,21 +309,25 @@ impl CapabilityApplicationService {
     }
 
     /// Records proven outcomes for the Skill effects of one uninstall operation.
-    fn prove_skill_effects(&self, operation: &CapabilityOperation) -> Result<bool, CapabilityError> {
+    fn prove_skill_effects(
+        &self,
+        operation: &CapabilityOperation,
+    ) -> Result<bool, CapabilityError> {
         let Some(skill_name) = operation.resource_key.strip_prefix("skill:") else {
             return Ok(false);
         };
         let mut all_proven = true;
         for effect in self.repository().list_effects(&operation.operation_id)? {
             let Some(target_id) = effect.effect_key.strip_prefix("skill.uninstall:") else {
-                if matches!(effect.outcome, EffectOutcome::Unknown | EffectOutcome::Pending) {
+                if matches!(
+                    effect.outcome,
+                    EffectOutcome::Unknown | EffectOutcome::Pending
+                ) {
                     all_proven = false;
                 }
                 continue;
             };
-            let installation = self
-                .repository()
-                .get_installation(target_id, skill_name)?;
+            let installation = self.repository().get_installation(target_id, skill_name)?;
             let converged = matches!(
                 installation.as_ref().map(|row| row.state),
                 Some(SkillInstallationState::Removed)
@@ -493,10 +497,9 @@ impl CapabilityApplicationService {
             report.still_needs_reconcile.push(id);
             return Ok(());
         }
-        if effects
-            .iter()
-            .any(|effect| effect.effect_key == EFFECT_START && effect.outcome == EffectOutcome::Failed)
-        {
+        if effects.iter().any(|effect| {
+            effect.effect_key == EFFECT_START && effect.outcome == EffectOutcome::Failed
+        }) {
             let error = CapabilityError::new(
                 crate::capability::error::code::INTERNAL,
                 "the updated MCP server failed to start during reconciliation",
@@ -511,12 +514,8 @@ impl CapabilityApplicationService {
             return Ok(());
         }
 
-        self.repository().record_effect_intent(
-            &id,
-            EFFECT_START,
-            Some(&record.name),
-            None,
-        )?;
+        self.repository()
+            .record_effect_intent(&id, EFFECT_START, Some(&record.name), None)?;
         let timing = self.mcp_timing();
         let started = tokio::time::timeout(
             timing.effect_timeout,
@@ -531,8 +530,11 @@ impl CapabilityApplicationService {
                     EffectOutcome::Unknown,
                     None,
                 )?;
-                self.repository()
-                    .mark_needs_reconcile(&id, "update_reconcile_start_unconfirmed", None)?;
+                self.repository().mark_needs_reconcile(
+                    &id,
+                    "update_reconcile_start_unconfirmed",
+                    None,
+                )?;
                 report.still_needs_reconcile.push(id);
             }
             Ok(Err(error)) => {
@@ -569,8 +571,11 @@ impl CapabilityApplicationService {
                         EffectOutcome::Unknown,
                         None,
                     )?;
-                    self.repository()
-                        .mark_needs_reconcile(&id, "update_reconcile_start_not_observable", None)?;
+                    self.repository().mark_needs_reconcile(
+                        &id,
+                        "update_reconcile_start_not_observable",
+                        None,
+                    )?;
                     report.still_needs_reconcile.push(id);
                 }
             }
@@ -699,8 +704,11 @@ impl CapabilityApplicationService {
                     EffectOutcome::Unknown,
                     None,
                 )?;
-                self.repository()
-                    .mark_needs_reconcile(&id, "refresh_reconcile_unconfirmed", None)?;
+                self.repository().mark_needs_reconcile(
+                    &id,
+                    "refresh_reconcile_unconfirmed",
+                    None,
+                )?;
                 report.still_needs_reconcile.push(id);
             }
         }
@@ -729,7 +737,10 @@ impl CapabilityApplicationService {
 fn is_terminal_outcome(outcome: EffectOutcome) -> bool {
     matches!(
         outcome,
-        EffectOutcome::Applied | EffectOutcome::Skipped | EffectOutcome::Blocked | EffectOutcome::Failed
+        EffectOutcome::Applied
+            | EffectOutcome::Skipped
+            | EffectOutcome::Blocked
+            | EffectOutcome::Failed
     )
 }
 
@@ -885,8 +896,14 @@ mod tests {
 
         let report = fixture.service.reconcile().await.expect("reconcile");
 
-        assert_eq!(report.quarantines_finalized, vec!["chatspeed:demo".to_string()]);
-        assert!(report.still_needs_reconcile.is_empty(), "operation must converge");
+        assert_eq!(
+            report.quarantines_finalized,
+            vec!["chatspeed:demo".to_string()]
+        );
+        assert!(
+            report.still_needs_reconcile.is_empty(),
+            "operation must converge"
+        );
         assert!(!quarantine.exists(), "the moved-aside directory is deleted");
         assert_eq!(
             row(&fixture).state,
@@ -913,7 +930,10 @@ mod tests {
 
         let report = fixture.service.reconcile().await.expect("reconcile");
 
-        assert_eq!(report.installs_recovered, vec!["chatspeed:demo".to_string()]);
+        assert_eq!(
+            report.installs_recovered,
+            vec!["chatspeed:demo".to_string()]
+        );
         assert!(install_path.exists(), "committed content is never deleted");
         assert_eq!(
             row(&fixture).state,
@@ -965,7 +985,10 @@ mod tests {
 
         assert_eq!(report.staging_residue_removed, 1);
         assert!(!stale.exists(), "an orphaned, aged staging tree is removed");
-        assert!(fresh.exists(), "a recent staging tree may still be live and is kept");
+        assert!(
+            fresh.exists(),
+            "a recent staging tree may still be live and is kept"
+        );
     }
 
     #[test]
@@ -975,7 +998,9 @@ mod tests {
             .build()
             .expect("runtime");
         let fixture = fixture();
-        let report = runtime.block_on(fixture.service.reconcile()).expect("reconcile");
+        let report = runtime
+            .block_on(fixture.service.reconcile())
+            .expect("reconcile");
         assert!(report.is_noop(), "an idle journal converges nothing");
     }
 
@@ -995,14 +1020,7 @@ mod tests {
         let times = [zero, zero];
         // Set the access and modification times to the epoch, well past the
         // grace window, using the directory file descriptor.
-        let result = unsafe {
-            libc::utimensat(
-                libc::AT_FDCWD,
-                c_path.as_ptr(),
-                times.as_ptr(),
-                0,
-            )
-        };
+        let result = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
         assert_eq!(result, 0, "utimensat must age the staging directory");
     }
 

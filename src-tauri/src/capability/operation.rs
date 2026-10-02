@@ -45,9 +45,7 @@ pub fn canonical_json(value: &serde_json::Value) -> String {
 fn write_canonical(value: &serde_json::Value, output: &mut String) {
     match value {
         serde_json::Value::Null => output.push_str("null"),
-        serde_json::Value::Bool(flag) => {
-            output.push_str(if *flag { "true" } else { "false" })
-        }
+        serde_json::Value::Bool(flag) => output.push_str(if *flag { "true" } else { "false" }),
         serde_json::Value::Number(number) => output.push_str(&number.to_string()),
         serde_json::Value::String(text) => {
             // `to_string` on a Value::String always yields a JSON string literal.

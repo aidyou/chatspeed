@@ -1,48 +1,42 @@
-//! HTTP client for the control plane.
-//!
-//! The CLI is a pure client: it reads the discovery document, sends bearer
-//! tokens via the `Authorization` header only, and never touches the database
-//! or workflow runtime.
-
 use crate::discovery::ControlPlaneDiscovery;
 use crate::error::CliError;
+use chatspeed_runtime_client::{ClientError, RuntimeClient};
 use serde_json::Value;
-use std::time::Duration;
 
-/// HTTP client bound to one control-plane instance.
+/// HTTP client bound to one authenticated runtime instance.
+///
+/// This is a thin adapter: it adds only the CLI error categories on top of the
+/// shared runtime client, so the exit-code mapping lives in exactly one place.
 pub struct ControlPlaneClient {
-    base_url: String,
-    token: String,
-    http: reqwest::Client,
+    inner: RuntimeClient,
 }
 
 impl ControlPlaneClient {
+    /// Builds a client without contacting the runtime.
+    ///
+    /// Prefer [`ControlPlaneClient::connect`]: readiness must be verified before
+    /// any lease is registered.
     pub fn new(discovery: &ControlPlaneDiscovery) -> Result<Self, CliError> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| CliError::transport(format!("Failed to build HTTP client: {}", e)))?;
-        Ok(Self {
-            base_url: format!("http://{}:{}", discovery.host, discovery.port),
-            token: discovery.token.clone(),
-            http,
-        })
+        RuntimeClient::new(discovery)
+            .map(|inner| Self { inner })
+            .map_err(map_client_error)
     }
 
-    fn auth_header(&self) -> String {
-        format!("Bearer {}", self.token)
+    /// Builds a client and completes the readiness handshake against `/meta`.
+    ///
+    /// Every command reaches the control plane only after this succeeds, so a
+    /// stale discovery document or the desktop in-process control plane fails
+    /// here instead of after a lease has been registered.
+    pub async fn connect(discovery: &ControlPlaneDiscovery) -> Result<Self, CliError> {
+        RuntimeClient::connect(discovery)
+            .await
+            .map(|inner| Self { inner })
+            .map_err(map_client_error)
     }
 
     /// Performs a GET request and decodes the JSON response.
     pub async fn get(&self, path: &str) -> Result<Value, CliError> {
-        let response = self
-            .http
-            .get(format!("{}{}", self.base_url, path))
-            .header("Authorization", self.auth_header())
-            .send()
-            .await
-            .map_err(|e| CliError::transport(format!("Request failed: {}", e)))?;
-        self.decode(response).await
+        self.inner.get(path).await.map_err(map_client_error)
     }
 
     /// Performs a POST mutation. When `idempotency_key` is provided, a single
@@ -53,30 +47,24 @@ impl ControlPlaneClient {
         body: Value,
         idempotency_key: Option<&str>,
     ) -> Result<Value, CliError> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut attempt = 0;
-        loop {
-            let request = self
-                .http
-                .post(&url)
-                .header("Authorization", self.auth_header())
-                .json(&body);
-            let request = match idempotency_key {
-                Some(key) => request.header("Idempotency-Key", key),
-                None => request,
-            };
-            match request.send().await {
-                Ok(response) => return self.decode(response).await,
-                Err(error) => {
-                    attempt += 1;
-                    if idempotency_key.is_some() && attempt == 1 {
-                        // One retry with the same idempotency key.
-                        continue;
-                    }
-                    return Err(CliError::transport(format!("Request failed: {}", error)));
-                }
-            }
+        match idempotency_key {
+            Some(key) => self
+                .inner
+                .post_with_idempotency(path, &body, key)
+                .await
+                .map_err(map_client_error),
+            None => self.inner.post(path, &body).await.map_err(map_client_error),
         }
+    }
+
+    pub async fn register_lease(
+        &self,
+        client_id: &str,
+        client_kind: &str,
+    ) -> Result<chatspeed_runtime_client::LeaseGuard, CliError> {
+        chatspeed_runtime_client::LeaseGuard::register(&self.inner, client_id, client_kind)
+            .await
+            .map_err(map_client_error)
     }
 
     /// Opens an SSE stream; the caller consumes raw bytes incrementally.
@@ -85,71 +73,37 @@ impl ControlPlaneClient {
         path: &str,
         last_event_id: Option<&str>,
     ) -> Result<reqwest::Response, CliError> {
-        let mut request = self
-            .http
-            .get(format!("{}{}", self.base_url, path))
-            .header("Authorization", self.auth_header());
-        if let Some(cursor) = last_event_id {
-            request = request.header("Last-Event-ID", cursor);
-        }
-        let response = request
-            .send()
+        self.inner
+            .stream(path, last_event_id)
             .await
-            .map_err(|e| CliError::transport(format!("Stream request failed: {}", e)))?;
-        if !response.status().is_success() {
-            // decode() always returns Err for non-2xx responses.
-            return match self.decode(response).await {
-                Err(error) => Err(error),
-                Ok(_) => Err(CliError::transport("Unexpected stream response")),
-            };
-        }
-        Ok(response)
+            .map_err(map_client_error)
     }
+}
 
-    async fn decode(&self, response: reqwest::Response) -> Result<Value, CliError> {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| CliError::transport(format!("Failed to read response: {}", e)))?;
-
-        let value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-        if status.is_success() {
-            return Ok(value);
+/// The single mapping from shared client errors to CLI exit categories.
+///
+/// Budget admission codes become exit 9, auth exit 4, protocol exit 5,
+/// transport exit 3 and every other structured server error stays exit 1.
+pub(crate) fn map_client_error(error: ClientError) -> CliError {
+    match error {
+        ClientError::Discovery(message) => CliError::discovery(message),
+        ClientError::Protocol(message) => CliError::protocol(message),
+        ClientError::Transport(message) => CliError::transport(message),
+        ClientError::Auth(message) => CliError::auth(message),
+        ClientError::Server { code, message, .. } if is_budget_code(&code) => {
+            CliError::budget(format!("budget admission rejected ({}): {}", code, message))
         }
-
-        // Stable error envelope: {"error": {"code", "message"}}.
-        let code = value["error"]["code"]
-            .as_str()
-            .unwrap_or("unknown_error")
-            .to_string();
-        let message = value["error"]["message"]
-            .as_str()
-            .unwrap_or(&body)
-            .to_string();
-
-        match status.as_u16() {
-            401 => Err(CliError::auth(format!(
-                "Authentication failed ({}): {}",
-                code, message
-            ))),
-            _ => {
-                // A budget admission rejection is machine-distinguishable and
-                // exits 9 so callers can branch without parsing prose.
-                if is_budget_code(&code) {
-                    Err(CliError::budget(format!(
-                        "budget admission rejected ({}): {}",
-                        code, message
-                    )))
-                } else {
-                    Err(CliError::Server {
-                        status: status.as_u16(),
-                        code,
-                        message,
-                    })
-                }
-            }
-        }
+        ClientError::Server {
+            status,
+            code,
+            message,
+        } => CliError::Server {
+            status,
+            code,
+            message,
+        },
+        ClientError::InvalidRequest(message) => CliError::usage(message),
+        ClientError::Serialization(message) => CliError::protocol(message),
     }
 }
 
@@ -169,7 +123,8 @@ fn is_budget_code(code: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_budget_code;
+    use super::{is_budget_code, map_client_error};
+    use chatspeed_runtime_client::ClientError;
 
     #[test]
     fn budget_machine_codes_are_recognized() {
@@ -198,5 +153,43 @@ mod tests {
         ] {
             assert!(!is_budget_code(code), "{code} must not map to exit 9");
         }
+    }
+
+    #[test]
+    fn shared_client_errors_keep_cli_exit_categories() {
+        assert_eq!(
+            map_client_error(ClientError::Auth("denied".to_string())).exit_code(),
+            4
+        );
+        assert_eq!(
+            map_client_error(ClientError::Protocol("major".to_string())).exit_code(),
+            5
+        );
+        assert_eq!(
+            map_client_error(ClientError::Transport("down".to_string())).exit_code(),
+            3
+        );
+        assert_eq!(
+            map_client_error(ClientError::Server {
+                status: 500,
+                code: "internal_error".to_string(),
+                message: "boom".to_string(),
+            })
+            .exit_code(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_budget_code_maps_to_exit_nine_through_the_single_mapper() {
+        assert_eq!(
+            map_client_error(ClientError::Server {
+                status: 409,
+                code: "budget_exceeded".to_string(),
+                message: "over budget".to_string(),
+            })
+            .exit_code(),
+            9
+        );
     }
 }

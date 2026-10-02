@@ -30,7 +30,9 @@ pub struct ObservedMcpRuntime {
 #[async_trait::async_trait]
 pub trait McpRuntimePort: Send + Sync {
     /// The observed runtime state of every registered MCP server, by name.
-    async fn observed_runtime(&self) -> Result<BTreeMap<String, ObservedMcpRuntime>, CapabilityError>;
+    async fn observed_runtime(
+        &self,
+    ) -> Result<BTreeMap<String, ObservedMcpRuntime>, CapabilityError>;
 }
 
 /// The shared refusal of a process that owns no MCP runtime.
@@ -80,9 +82,12 @@ impl McpRuntimePort for ToolManagerRuntimePort {
         &self,
     ) -> Result<BTreeMap<String, ObservedMcpRuntime>, CapabilityError> {
         let tool_manager = self.chat_state.tool_manager.clone();
-        let statuses = tool_manager.get_mcp_serves_status().await.map_err(|error| {
-            CapabilityError::internal(redaction::redact_text(&error.to_string()))
-        })?;
+        let statuses = tool_manager
+            .get_mcp_serves_status()
+            .await
+            .map_err(|error| {
+                CapabilityError::internal(redaction::redact_text(&error.to_string()))
+            })?;
 
         let mut observed = BTreeMap::new();
         for (name, status) in statuses {
@@ -267,9 +272,12 @@ impl McpRuntimeEffects for ToolManagerRuntimeEffects {
 
     async fn observe(&self, name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError> {
         let tool_manager = self.chat_state.tool_manager.clone();
-        let statuses = tool_manager.get_mcp_serves_status().await.map_err(|error| {
-            CapabilityError::internal(redaction::redact_text(&error.to_string()))
-        })?;
+        let statuses = tool_manager
+            .get_mcp_serves_status()
+            .await
+            .map_err(|error| {
+                CapabilityError::internal(redaction::redact_text(&error.to_string()))
+            })?;
         let Some(status) = statuses.get(name) else {
             return Ok(None);
         };

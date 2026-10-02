@@ -660,9 +660,23 @@ mod tests {
             msb: ready_status(SandboxRuntime::Msb, vec![]),
             docker: ready_status(SandboxRuntime::Docker, vec![]),
         };
-        for mode in [ShellExecutionMode::Auto, ShellExecutionMode::SandboxOnly, ShellExecutionMode::HostOnly] {
-            for command in ["cscli skill list", "cscli skill list 2>&1", "cscli mcp install --descriptor-json '{}' 2>&1"] {
-                let plan = ShellExecutionResolver::resolve("test", command, Some(&config(mode.clone())), &unavailable, None);
+        for mode in [
+            ShellExecutionMode::Auto,
+            ShellExecutionMode::SandboxOnly,
+            ShellExecutionMode::HostOnly,
+        ] {
+            for command in [
+                "cscli skill list",
+                "cscli skill list 2>&1",
+                "cscli mcp install --descriptor-json '{}' 2>&1",
+            ] {
+                let plan = ShellExecutionResolver::resolve(
+                    "test",
+                    command,
+                    Some(&config(mode.clone())),
+                    &unavailable,
+                    None,
+                );
                 assert_eq!(plan.backend, ShellExecutionBackendKind::Host);
                 assert_eq!(plan.status, ShellExecutionPlanStatus::Ready);
                 assert_eq!(plan.profile.as_deref(), Some("builtin_cs"));

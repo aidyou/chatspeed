@@ -1,113 +1,61 @@
-//
-//! This module contains Tauri commands for managing MCP (Model Context Protocol) servers.
-//! It provides functionalities to list, add, update, delete, and connect/disconnect MCP servers,
-//! as well as to retrieve the tools provided by each server.
+//! Tauri commands for managing MCP (Model Context Protocol) servers.
 //!
-//! ## Overview
+//! Every command here is a thin transport over the standalone runtime control
+//! plane. The runtime process owns the MCP records, the capability journal and
+//! the MCP runtime itself, so these commands reach it through the typed
+//! [`crate::runtime_client::RuntimeSupervisor`] and the explicit
+//! `/control/v1` MCP routes; they never touch `MainStore`, `ChatState` or a
+//! `ToolManager`, and there is no local fallback (INV-1/INV-7).
 //!
-//! - **MCP Servers**: Functions to manage MCP servers, including adding, updating,
-//!   deleting, and retrieving servers.
-//! - **Connection Management**: Functions to connect and disconnect from MCP servers.
-//! - **Tools**: Functions to retrieve the tools provided by each MCP server.
+//! The legacy Tauri wire is preserved: command names, parameters, the
+//! secret-free editable `Mcp` responses and the error classification are all
+//! unchanged, and the live status now comes from the runtime's own observation
+//! rather than a client-local tool manager.
 //!
-//! ## Usage
-//!
-//! The commands can be invoked from the frontend using Tauri's `invoke` function.
-//! Each command is annotated with detailed documentation, including parameters,
-//! return types, and examples of usage.
-//!
+//! The one command that cannot be served this way is `run_mcp_tool`: the runtime
+//! capability facade deliberately never invokes MCP tools (AC-11), so there is
+//! no typed route for a manual invocation. It fails closed with an explicit
+//! "unavailable" error instead of silently reaching a second owner (see the
+//! command docs below).
 
-use crate::{
-    ai::{interaction::chat_completion::ChatState, traits::chat::MCPToolDeclaration},
-    db::{MainStore, Mcp},
-    error::{AppError, Result},
-    mcp::client::{McpProtocolType, McpServerConfig, McpStatus},
-    mcp::McpError,
-};
+use crate::ai::traits::chat::MCPToolDeclaration;
+use crate::capability::error::{code, CapabilityError};
+use crate::commands::capability::runtime_capability;
+use crate::db::Mcp;
+use crate::error::{AppError, Result};
+use crate::mcp::client::{McpProtocolType, McpServerConfig};
+use crate::mcp::McpError;
+use crate::runtime_client::RuntimeSupervisor;
 use rust_i18n::t;
-use std::collections::HashMap;
+use serde_json::Value;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::capability::error::code;
-use crate::capability::error::CapabilityError;
-use crate::capability::mcp_service::public_runtime_status;
-use crate::capability::CapabilityApplicationService;
-
-/// Get all MCP servers
+/// Get all MCP servers.
 ///
-/// Retrieves a list of all MCP servers from the database.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store, automatically injected by Tauri.
-/// - `chat_state` - The state of the chat system, automatically injected by Tauri.
-///
-/// # Returns
-/// * `Result<Vec<Mcp>, String>` - A vector of MCP servers with their current status, or an error message.
-///   The `config` of each record is secret-free: the bearer token and every
-///   environment value are removed by the shared capability projection, so the
-///   page can edit the non-sensitive fields without a credential crossing the
-///   IPC boundary (AC-13). Presence is reported by `capability_mcp_servers`.
+/// Returns the secret-free editable `Mcp` records (`command`/`args`/`url`/
+/// `proxy`/`timeout`/`disabled_tools`) with the live runtime status already
+/// overlaid by the runtime, so the page can edit the non-sensitive fields
+/// without a credential crossing the IPC boundary and without a second status
+/// source (AC-13/INV-7).
 ///
 /// # Example
 ///
 /// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
 /// const servers = await invoke('list_mcp_servers');
-/// console.log(servers);
 /// ```
 #[tauri::command]
-pub async fn list_mcp_servers(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
-    chat_state: State<'_, Arc<ChatState>>,
-) -> Result<Vec<Mcp>> {
-    // The single capability service owns the records; it hands back the legacy
-    // editable `Mcp` shape with secrets already stripped (INV-1/AC-13). The old
-    // command name and non-sensitive wire fields are unchanged for the page.
-    let mut mcps = capability
-        .mcp_records_redacted()
+pub async fn list_mcp_servers(supervisor: State<'_, Arc<RuntimeSupervisor>>) -> Result<Vec<Mcp>> {
+    runtime_capability::mcp_list_records(supervisor.inner().as_ref())
         .await
-        .map_err(legacy_error)?;
-
-    // Get the status of each MCP server and update the status field. A live
-    // error status is projected through `public_runtime_status` so a runtime
-    // message that interpolates a token / env value / URL credential can never
-    // cross the IPC boundary (AC-13).
-    if let Ok(status_map) = chat_state
-        .tool_manager
-        .clone()
-        .get_mcp_serves_status()
-        .await
-    {
-        overlay_redacted_status(&mut mcps, &status_map);
-    }
-    Ok(mcps)
-}
-
-/// Overlays the live runtime status onto the already-redacted records, routing
-/// every status through [`public_runtime_status`].
-///
-/// This is the exact transform `list_mcp_servers` applies to build the desktop
-/// response, so the secret-canary regression test can exercise it directly
-/// without a live Tauri runtime (AC-13).
-fn overlay_redacted_status(mcps: &mut [Mcp], status_map: &HashMap<String, McpStatus>) {
-    for mcp in mcps.iter_mut() {
-        if let Some(status) = status_map.get(&mcp.name) {
-            mcp.status = Some(public_runtime_status(status));
-        }
-    }
+        .map_err(legacy_error)
 }
 
 /// check the form of the MCP server config
 ///
-/// # Arguments
-/// - `name` - The name of the MCP server.
-/// - `config` - The configuration of the MCP server.
-///
-/// # Returns
-/// * `Result<(), String>` - An error message if the form is invalid, or `Ok(())` if the form is valid.
+/// The desktop form is still validated before the round trip so an obvious
+/// mistake (empty name, removed `sse` transport, stdio without command/args) is
+/// reported without a failure the runtime would have to journal.
 fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
     if name.is_empty() || config.name.is_empty() {
         return Err(AppError::Mcp(McpError::ClientConfigError(
@@ -137,63 +85,11 @@ fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Adds a new MCP server to the database.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `name` - The name of the new MCP server.
-/// - `description` - A description for the new MCP server.
-/// - `config` - The `McpServerConfig` for the new server.
-/// - `disabled` - A boolean indicating whether the server should be initially disabled.
-///
-/// # Returns
-/// * `Result<Mcp, String>` - The added MCP server data or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const server = await invoke('add_mcp_server', {
-///     name: 'weather-server',
-///     description: 'Provides weather information',
-///     config: { // McpServerConfig object
-///         name: 'weather-server', // Ensure this name matches the outer name
-///         description: 'Weather data server',
-///         config: {
-///             type: 'stdio',
-///             command: 'node',
-///             args: ['weather-server.js'],
-///             env: [['API_KEY', '12345']]
-///         },
-///     },
-///     disabled: false
-/// });
-/// console.log('Added MCP server:', server);
-/// ```
-/// The journal actor scope for mutations started from the desktop window.
-const ACTOR_DESKTOP: &str = "desktop";
-
-/// One idempotency key per user action.
-///
-/// The legacy MCP wire has no key parameter and each invocation of these
-/// commands *is* one deliberate user action, so a fresh key is the faithful
-/// mapping: the durable operation still records what happened, while the
-/// service's per-resource lock and its already-in-state short-circuits keep a
-/// double click from producing a second process.
-fn fresh_key(action: &str) -> String {
-    format!("tauri-{action}-{}", uuid::Uuid::now_v7())
-}
-
 /// Maps a capability failure onto the `McpError` shapes the page already handles.
 fn legacy_error(error: CapabilityError) -> AppError {
     let message = error.redacted_message();
     match error.code() {
-        code::NOT_FOUND | code::OPERATION_NOT_FOUND => {
-            AppError::Mcp(McpError::NotFound(message))
-        }
+        code::NOT_FOUND | code::OPERATION_NOT_FOUND => AppError::Mcp(McpError::NotFound(message)),
         code::INVALID_REQUEST | code::UNSUPPORTED_ADAPTER | code::IDEMPOTENCY_KEY_REQUIRED => {
             AppError::Mcp(McpError::ClientConfigError(message))
         }
@@ -208,30 +104,28 @@ fn legacy_error(error: CapabilityError) -> AppError {
     }
 }
 
-/// Reads back the stored record for a command whose wire returns `Mcp`.
+/// Adds a new MCP server to the runtime, always disabled, then optionally
+/// connects it.
 ///
-/// The returned record is secret-redacted, so `add`/`update`/`update_tool_status`
-/// responses never echo a token or env value back over IPC (AC-13).
-async fn stored_record(capability: &CapabilityApplicationService, id: i64) -> Result<Mcp> {
-    capability
-        .mcp_record_redacted(id)
-        .await
-        .map_err(legacy_error)?
-        .ok_or_else(|| AppError::Mcp(McpError::NotFound("the MCP record vanished".into())))
-}
-
-/// The stored id a mutation reported, for the commands that must return `Mcp`.
-fn mutated_id(result: &serde_json::Value) -> Result<i64> {
-    result
-        .get("id")
-        .and_then(|value| value.as_i64())
-        .ok_or_else(|| AppError::Mcp(McpError::General("capability result lost the id".into())))
-}
-
-
+/// One durable operation registers the server; starting it is a second,
+/// separately auditable effect (AC-9), so a server that persists but fails to
+/// start is visible as drift rather than a half-added record. The record is
+/// intentionally kept when the start fails, so the user can see it disabled and
+/// retry.
+///
+/// # Example
+///
+/// ```js
+/// const server = await invoke('add_mcp_server', {
+///   name: 'weather-server',
+///   description: 'Provides weather information',
+///   config: { name: 'weather-server', type: 'stdio', command: 'node', args: ['weather-server.js'] },
+///   disabled: false,
+/// });
+/// ```
 #[tauri::command]
 pub async fn add_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     name: String,
     description: String,
     mut config: McpServerConfig,
@@ -241,81 +135,27 @@ pub async fn add_mcp_server(
     // The stored name is authoritative, exactly as before.
     config.name = name.clone();
 
-    // One durable operation registers the server, always disabled. Starting it is
-    // a second, separately auditable effect (AC-9), so a server that persists but
-    // fails to start is visible as drift rather than a half-added record.
-    let installed = capability
-        .mcp_install_config(
-            &name,
-            &description,
-            config,
-            &fresh_key("install"),
-            ACTOR_DESKTOP,
-        )
-        .await
-        .map_err(legacy_error)?;
-    let id = mutated_id(&installed.result)?;
-
-    if !disabled {
-        if let Err(error) = capability
-            .mcp_enable(id, &fresh_key("enable"), ACTOR_DESKTOP)
-            .await
-        {
-            // The record is intentionally kept: the user can see it disabled and
-            // retry, which is safer than deleting a config they just typed.
-            return Err(legacy_error(error));
-        }
-    }
-
-    stored_record(&capability, id).await
+    runtime_capability::mcp_add_server(
+        supervisor.inner().as_ref(),
+        &name,
+        &description,
+        &config,
+        disabled,
+    )
+    .await
+    .map_err(legacy_error)
 }
 
-/// Update an existing MCP server
-///
-/// Updates the configuration of an existing MCP server in the database.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to update.
-/// - `name` - The new name for the MCP server.
-/// - `description` - The new description for the MCP server.
-/// - `config` - The new `McpServerConfig`.
-/// - `disabled` - The new disabled status.
-/// - `disabled_tools` - An optional list of tool names to disable for this server.
-///
-/// # Returns
-/// * `Result<Mcp, String>` - The updated MCP server data or an error message.
+/// Update an existing MCP server.
 ///
 /// # Example
 ///
 /// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const server = await invoke('update_mcp_server', {
-///     id: 1,
-///     name: 'weather-server-updated',
-///     description: 'Updated weather data server',
-///     config: { // McpServerConfig object
-///         name: 'weather-server-updated', // Ensure this name matches the outer name
-///         description: 'Updated weather data server', // This field in McpServerConfig might be redundant if also top-level
-///         config: {
-///             type: 'stdio',
-///             command: 'node',
-///             args: ['updated-server.js'],
-///             env: [['API_KEY', '67890']]
-///         },
-///         disabled: false
-///     },
-///     disabled_tools: ['old_tool']
-/// });
-/// console.log('Updated MCP server:', server);
+/// const server = await invoke('update_mcp_server', { id: 1, name, description, config, disabled: false });
 /// ```
-
 #[tauri::command]
 pub async fn update_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
     name: String,
     description: String,
@@ -325,142 +165,73 @@ pub async fn update_mcp_server(
     check_form(&name, &config)?;
     config.name = name.clone();
 
-    capability
-        .mcp_update(
-            id,
-            &name,
-            &description,
-            config,
-            disabled,
-            &fresh_key("update"),
-            ACTOR_DESKTOP,
-        )
-        .await
-        .map_err(legacy_error)?;
-
-    stored_record(&capability, id).await
+    runtime_capability::mcp_update_server(
+        supervisor.inner().as_ref(),
+        id,
+        &name,
+        &description,
+        &config,
+        disabled,
+    )
+    .await
+    .map_err(legacy_error)
 }
 
-/// Delete an MCP server
+/// Delete an MCP server.
 ///
-/// Removes an MCP server from the database by its ID.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to delete.
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful, or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// await invoke('delete_mcp_server', { name: 'weather-server' });
-/// await invoke('delete_mcp_server', { id: 1 });
-/// ```
-
+/// Uninstall is ordered desired-disabled, confirmed stop, then delete. When the
+/// stop cannot be confirmed the record is kept and the operation asks for
+/// reconciliation, so no child process is ever orphaned by a successful-looking
+/// delete (AC-10).
 #[tauri::command]
 pub async fn delete_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<()> {
-    // Uninstall is ordered desired-disabled, confirmed stop, then delete. When the
-    // stop cannot be confirmed the record is kept and the operation asks for
-    // reconciliation, so no child process is ever orphaned by a successful-looking
-    // delete (AC-10).
-    capability
-        .mcp_uninstall(id, &fresh_key("uninstall"), ACTOR_DESKTOP)
+    runtime_capability::mcp_delete_server(supervisor.inner().as_ref(), id)
         .await
-        .map_err(legacy_error)?;
-    Ok(())
+        .map_err(legacy_error)
 }
 
-/// Connect to an MCP server
-/// Establishes a connection to the specified MCP server.
+/// Connect to an MCP server.
 ///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to connect to.
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful, or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// await invoke('enable_mcp_server', { id: 1 });
-/// ```
-
+/// Desired state and runtime observation are one durable operation with a
+/// bounded wait: the caller is told the truth about whether the server is
+/// actually up, instead of an untracked background task deciding later (INV-7).
 #[tauri::command]
 pub async fn enable_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<()> {
-    // Desired state and runtime observation are one durable operation with a
-    // bounded wait: the caller is told the truth about whether the server is
-    // actually up, instead of an untracked background task deciding later
-    // (INV-7).
-    capability
-        .mcp_enable(id, &fresh_key("enable"), ACTOR_DESKTOP)
+    runtime_capability::mcp_enable_server(supervisor.inner().as_ref(), id)
         .await
-        .map_err(legacy_error)?;
-    Ok(())
+        .map_err(legacy_error)
 }
 
-/// Disconnect from an MCP server
-/// Closes the connection to the specified MCP server.
+/// Disconnect from an MCP server.
 ///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to disconnect from.
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful, or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// await invoke('disabled_mcp_server', { id: 1 });
-/// ```
-
+/// The stop is confirmed by observation before the command reports success. An
+/// unconfirmed stop keeps the disabled record and asks for reconciliation, so a
+/// later uninstall cannot be told "gone" while a child is still alive (AC-10).
 #[tauri::command]
 pub async fn disable_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<()> {
-    // The stop is confirmed by observation before the command reports success. An
-    // unconfirmed stop keeps the disabled record and asks for reconciliation, so a
-    // later uninstall cannot be told "gone" while a child is still alive (AC-10).
-    capability
-        .mcp_disable(id, &fresh_key("disable"), ACTOR_DESKTOP)
+    runtime_capability::mcp_disable_server(supervisor.inner().as_ref(), id)
         .await
-        .map_err(legacy_error)?;
-    Ok(())
+        .map_err(legacy_error)
 }
 
-
+/// Restart an MCP server.
 #[tauri::command]
 pub async fn restart_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<()> {
-    let error = match capability
-        .mcp_restart(id, &fresh_key("restart"), ACTOR_DESKTOP)
-        .await
+    let error = match runtime_capability::mcp_restart_server(supervisor.inner().as_ref(), id).await
     {
-        Ok(_) => return Ok(()),
+        Ok(()) => return Ok(()),
         Err(error) => error,
     };
     // The page's existing copy for this case is a localized message, so the
@@ -475,27 +246,16 @@ pub async fn restart_mcp_server(
 
 /// Refresh the tool list for an MCP server.
 ///
-/// This command fetches the latest tool list from the specified MCP server
-/// and updates the application's in-memory state.
-///
-/// # Arguments
-/// - `chat_state` - The state of the chat system.
-/// - `main_store` - The state of the main application store.
-/// - `id` - The ID of the MCP server to refresh.
-///
-/// # Returns
-/// * `Result<(), String>` - Ok if successful, or an error message.
-
+/// Listing never invokes a tool; it re-reads what the runtime already holds
+/// (AC-11).
 #[tauri::command]
 pub async fn refresh_mcp_server(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<()> {
-    let error = match capability
-        .mcp_refresh_tools(id, &fresh_key("refresh"), ACTOR_DESKTOP)
-        .await
+    let error = match runtime_capability::mcp_refresh_server(supervisor.inner().as_ref(), id).await
     {
-        Ok(_) => return Ok(()),
+        Ok(()) => return Ok(()),
         Err(error) => error,
     };
     if error.code() == code::REFUSED {
@@ -506,146 +266,66 @@ pub async fn refresh_mcp_server(
     Err(legacy_error(error))
 }
 
-/// Get tools from an MCP server
+/// Get tools from an MCP server.
 ///
-/// Retrieves the list of tools provided by the specified MCP server.
-///
-/// # Arguments
-/// - `main_store` - The state of the main application store.
-/// - `chat_state` - The state of the chat system.
-/// - `id` - The ID of the MCP server to get tools from.
-///
-/// # Returns
-/// * `Result<Vec<MCPToolDeclaration>, String>` - A vector of tool declarations or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const tools = await invoke('get_mcp_server_tools', { id: 1 });
-/// console.log('MCP server tools:', tools);
-/// ```
-
+/// Listing is a read of what the runtime already holds. It never starts a server
+/// and never invokes a tool (AC-11).
 #[tauri::command]
 pub async fn get_mcp_server_tools(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
 ) -> Result<Vec<MCPToolDeclaration>> {
-    // Listing is a read of what the runtime already holds. It never starts a
-    // server and never invokes a tool (AC-11).
-    capability
-        .mcp_tool_declarations(id)
+    runtime_capability::mcp_server_tools(supervisor.inner().as_ref(), id)
         .await
         .map_err(|error| AppError::Mcp(McpError::NotFound(error.redacted_message())))
 }
 
-
+/// Enable or disable one tool of an MCP server.
 #[tauri::command]
 pub async fn update_mcp_tool_status(
-    capability: State<'_, Arc<CapabilityApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: i64,
     tool_name: String,
     disabled: bool,
 ) -> Result<Mcp> {
-    capability
-        .mcp_set_tool_disabled(
-            id,
-            &tool_name,
-            disabled,
-            &fresh_key("tool-state"),
-            ACTOR_DESKTOP,
-        )
-        .await
-        .map_err(legacy_error)?;
-    stored_record(&capability, id).await
+    runtime_capability::mcp_update_tool_status(
+        supervisor.inner().as_ref(),
+        id,
+        &tool_name,
+        disabled,
+    )
+    .await
+    .map_err(legacy_error)
 }
 
-/// Invoke an MCP tool with the given arguments (manual execution / testing).
+/// Manually invoke an MCP tool (manual execution / testing).
 ///
-/// # Arguments
-/// - `main_store` - The state of the main application store, automatically injected by Tauri.
-/// - `chat_state` - The state of the chat system, automatically injected by Tauri.
-/// - `id` - The ID of the MCP server.
-/// - `tool_name` - The name of the tool to invoke on the MCP server.
-/// - `arguments` - A JSON object of arguments to pass to the tool.
-///
-/// # Returns
-/// * `Result<serde_json::Value, String>` - The raw result returned by the MCP server,
-///   or an error message.
-///
-/// # Example
-///
-/// ```js
-/// // Call from frontend:
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const result = await invoke('run_mcp_tool', {
-///   id: 1,
-///   toolName: 'read_file',
-///   arguments: { path: '/tmp/test.txt' }
-/// });
-/// console.log('MCP tool result:', result);
-/// ```
+/// This is deliberately unavailable: the runtime capability facade never
+/// invokes MCP tools (AC-11), so there is no typed control-plane route for a
+/// manual invocation, and the desktop no longer owns an MCP runtime to call one
+/// locally. The command fails closed with a stable error instead of silently
+/// reaching a second owner; a future approved `mcp-call` route can restore it.
 #[tauri::command]
-pub async fn run_mcp_tool(
-    main_store: State<'_, Arc<MainStore>>,
-    chat_state: State<'_, Arc<ChatState>>,
-    id: i64,
-    tool_name: &str,
-    arguments: serde_json::Value,
-) -> Result<serde_json::Value> {
-    let mcp_name = {
-        let store_guard = &*main_store;
-        let mcp = store_guard.config.get_mcp_by_id(id)?;
-        mcp.name.clone()
-    };
-
-    let tool_manager = chat_state.tool_manager.clone();
-
-    // The server must be registered (running) to be callable.
-    let client = tool_manager
-        .get_mcp_server(&mcp_name)
-        .await
-        .map_err(|e| AppError::Mcp(McpError::NotFound(e.to_string())))?;
-
-    // Verify the tool exists and is not disabled before invoking it.
-    let tools = tool_manager
-        .get_mcp_server_tools(&mcp_name)
-        .await
-        .map_err(|e| AppError::Mcp(McpError::NotFound(e.to_string())))?;
-    let declaration = tools
-        .iter()
-        .find(|declaration| declaration.name == tool_name)
-        .ok_or_else(|| AppError::Mcp(McpError::ServerToolNotFound(tool_name.to_string())))?;
-    if declaration.disabled {
-        return Err(AppError::Mcp(McpError::General(format!(
-            "MCP tool '{}' on server '{}' is disabled",
-            tool_name, mcp_name
-        ))));
-    }
-
-    let result = client
-        .call(tool_name, arguments)
-        .await
-        .map_err(AppError::Mcp)?;
-
-    Ok(result)
+pub async fn run_mcp_tool(id: i64, tool_name: &str, arguments: Value) -> Result<Value> {
+    // The arguments are part of the preserved command contract but are not
+    // evaluated: there is no route to send them to.
+    let _ = arguments;
+    Err(AppError::Mcp(McpError::General(format!(
+        "manual MCP tool invocation is unavailable: the runtime control plane does not expose an \
+         `mcp-call` route (server {id}, tool '{tool_name}')"
+    ))))
 }
 
 #[cfg(test)]
 mod characterization {
-    //! These tests pin the *existing* MCP command contract before the command
-    //! bodies are migrated onto the shared capability service (U-8 -> U-9). They
-    //! are characterization, not aspiration: if a migration changes any of these
+    //! These tests pin the *existing* MCP command contract. They are
+    //! characterization, not aspiration: if a migration changes any of these
     //! shapes, the legacy desktop wire compatibility guarantee (INV-2) is broken
     //! and these tests must fail.
 
     use super::*;
     use crate::capability::mcp_service::redact_record_secrets;
     use crate::mcp::client::{McpProtocolType, McpStatus};
-    use serde_json::Value;
 
     fn config_with(
         protocol_type: McpProtocolType,
@@ -683,12 +363,12 @@ mod characterization {
     fn sse_is_rejected_by_the_form_gate() {
         // SSE was removed in rmcp v1; add/update must keep refusing it so a
         // migrated command cannot quietly start accepting it.
-        let error = check_form(
-            "weather",
-            &config_with(McpProtocolType::Sse, None, None),
-        )
-        .expect_err("sse must be refused");
-        assert!(matches!(error, AppError::Mcp(McpError::ClientConfigError(_))));
+        let error = check_form("weather", &config_with(McpProtocolType::Sse, None, None))
+            .expect_err("sse must be refused");
+        assert!(matches!(
+            error,
+            AppError::Mcp(McpError::ClientConfigError(_))
+        ));
     }
 
     #[test]
@@ -736,7 +416,10 @@ mod characterization {
         let config = &value["config"];
         assert_eq!(config["type"], "stdio");
         assert_eq!(config["command"], "node");
-        assert!(config.get("bearer_token").is_none(), "absent secrets stay absent");
+        assert!(
+            config.get("bearer_token").is_none(),
+            "absent secrets stay absent"
+        );
         assert!(config.get("env").is_none());
 
         let with_secret = Mcp {
@@ -803,69 +486,12 @@ mod characterization {
     #[test]
     fn a_raw_mcp_status_type_still_serializes_its_message() {
         // This documents WHY the desktop read path must project the status: the
-        // raw `McpStatus` enum itself keeps the full error message, which the
-        // MCP client builds from config values. The capability projection (state
-        // name only) and `list_mcp_servers` (via `public_runtime_status`) are the
-        // secret-free surfaces; the raw type is never handed to the page directly
-        // (INV-7/AC-13).
+        // raw `McpStatus` enum itself keeps the full error message, which the MCP
+        // client builds from config values. The runtime projection (state name
+        // only) is the secret-free surface; the raw type is never handed to the
+        // page directly (INV-7/AC-13).
         let status = McpStatus::Error("handshake failed with token=canary".to_string());
         let value = serde_json::to_value(&status).expect("serialize status");
         assert_eq!(value["error"], "handshake failed with token=canary");
-    }
-
-    #[test]
-    fn the_desktop_list_response_carries_no_secret_in_the_overlaid_status() {
-        // Exercises the exact `list_mcp_servers` transform: redact the stored
-        // config, then overlay a live runtime error whose message embeds a URL
-        // credential, an inline token and a bare bearer value. The serialized
-        // `Vec<Mcp>` the command actually returns to the desktop must contain
-        // none of them (AC-13).
-        let stored = Mcp {
-            id: 1,
-            name: "weather".to_string(),
-            description: String::new(),
-            config: McpServerConfig {
-                bearer_token: Some("CONFIG-BEARER-CANARY".to_string()),
-                env: Some(vec![(
-                    "API_TOKEN".to_string(),
-                    "CONFIG-ENV-CANARY".to_string(),
-                )]),
-                ..stdio_config()
-            },
-            disabled: false,
-            status: None,
-        };
-        let mut records = vec![redact_record_secrets(&stored)];
-
-        let mut status_map = HashMap::new();
-        status_map.insert(
-            "weather".to_string(),
-            McpStatus::Error(
-                "connect https://user:URL-USERINFO-CANARY@host.test failed token=INLINE-TOKEN-CANARY raw-BEARER-CANARY"
-                    .to_string(),
-            ),
-        );
-        overlay_redacted_status(&mut records, &status_map);
-
-        let serialized = serde_json::to_string(&records).expect("serialize desktop response");
-        for canary in [
-            "CONFIG-BEARER-CANARY",
-            "CONFIG-ENV-CANARY",
-            "URL-USERINFO-CANARY",
-            "INLINE-TOKEN-CANARY",
-            "raw-BEARER-CANARY",
-        ] {
-            assert!(
-                !serialized.contains(canary),
-                "{canary} leaked into the desktop list response: {serialized}"
-            );
-        }
-        // The page still sees an error status with its object wire shape (INV-2).
-        assert!(matches!(
-            records[0].status,
-            Some(McpStatus::Error(_))
-        ));
-        // The editable non-sensitive config survives the redaction.
-        assert_eq!(records[0].config.command.as_deref(), Some("node"));
     }
 }

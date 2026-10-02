@@ -1,0 +1,28 @@
+[package]
+name = "chatspeed-runtime-core"
+version = "2.0.17"
+edition = "2021"
+publish = false
+description = "Transport-neutral runtime ports and the single runtime boundary (no Tauri/Wry/GTK)."
+
+# This package holds the ports-first half of the U-3 extraction: the runtime's
+# inbound, outbound and durability seams plus the one composition point, so the
+# routing contract can be reviewed and tested before any owner moves. It
+# deliberately does not depend on the `chatspeed` desktop crate, `tauri`, `wry`,
+# `gtk` or any Tauri plugin: the production dependency graph must stay
+# desktop-free. Wire types are reused from `chatspeed-contracts` instead of
+# being redeclared here.
+[lib]
+name = "chatspeed_runtime_core"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1.89"
+bytes = "1.11.1"
+chatspeed-contracts = { path = "../contracts", features = ["contracts-crate"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tokio = { version = "1.52.2", features = ["macros", "rt"] }

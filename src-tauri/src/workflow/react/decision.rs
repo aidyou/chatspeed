@@ -113,7 +113,10 @@ fn completion_candidate_limits(texts: &[&str]) -> Vec<usize> {
             .iter()
             .enumerate()
             .map(|(index, text)| {
-                estimate_tokens(truncate_decision_text(text, limit_at(index, scale_permille)))
+                estimate_tokens(truncate_decision_text(
+                    text,
+                    limit_at(index, scale_permille),
+                ))
             })
             .sum()
     };
@@ -189,7 +192,7 @@ fn confident_choice(
     (allowed.contains(&choice.as_str())
         && *confidence >= min_confidence
         && selected >= min_probability)
-    .then(|| choice.clone())
+        .then(|| choice.clone())
 }
 
 fn language_criteria() -> BTreeMap<String, String> {
@@ -314,11 +317,19 @@ impl IntelligenceManager {
         let provider_id = config
             .get("providerId")
             .and_then(serde_json::Value::as_i64)?;
-        let model = config.get("model").and_then(serde_json::Value::as_str)?.trim();
+        let model = config
+            .get("model")
+            .and_then(serde_json::Value::as_str)?
+            .trim();
         if provider_id <= 0 || model.is_empty() {
             return None;
         }
-        let provider = self.chat_state.main_store.config.get_ai_model_by_id(provider_id).ok()?;
+        let provider = self
+            .chat_state
+            .main_store
+            .config
+            .get_ai_model_by_id(provider_id)
+            .ok()?;
         if provider.disabled || provider.api_protocol != "decision" {
             return None;
         }
@@ -330,7 +341,8 @@ impl IntelligenceManager {
     }
 
     fn decision_model(&self) -> Option<(i64, String)> {
-        self.configured_decision_model().or_else(|| self.global_decision_model())
+        self.configured_decision_model()
+            .or_else(|| self.global_decision_model())
     }
 
     pub(crate) async fn try_decision_approval(
@@ -469,10 +481,21 @@ impl IntelligenceManager {
         };
         match decision::evaluate(self.chat_state.main_store.clone(), provider_id, request).await {
             Ok(response) => {
-                let allowed = (0..candidates.len()).map(|index| format!("report_{index}")).collect::<Vec<_>>();
+                let allowed = (0..candidates.len())
+                    .map(|index| format!("report_{index}"))
+                    .collect::<Vec<_>>();
                 let allowed_refs = allowed.iter().map(String::as_str).collect::<Vec<_>>();
-                response.answers.get("report_selection")
-                    .and_then(|answer| confident_choice(answer, &allowed_refs, COMPLETION_DECISION_CONFIDENCE, COMPLETION_DECISION_PROBABILITY))
+                response
+                    .answers
+                    .get("report_selection")
+                    .and_then(|answer| {
+                        confident_choice(
+                            answer,
+                            &allowed_refs,
+                            COMPLETION_DECISION_CONFIDENCE,
+                            COMPLETION_DECISION_PROBABILITY,
+                        )
+                    })
                     .and_then(|choice| choice.strip_prefix("report_")?.parse::<usize>().ok())
                     .filter(|index| *index < candidates.len())
             }
@@ -539,7 +562,7 @@ mod tests {
         parse_tool_approval_review, selected_language, truncate_decision_text,
         CompletionReportOrigin, APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY,
         COMPLETION_CANDIDATE_CHAR_FLOOR, COMPLETION_DECISION_TOKEN_BUDGET,
-        TOP_LANGUAGES, LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY,
+        LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY, TOP_LANGUAGES,
     };
     use crate::ccproxy::decision::Answer;
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
@@ -609,7 +632,9 @@ mod tests {
         assert_eq!(criteria.len(), 16);
         assert!(criteria.contains_key("other"));
         for (code, name) in TOP_LANGUAGES {
-            assert!(criteria.get(code).is_some_and(|description| description.contains(name)));
+            assert!(criteria
+                .get(code)
+                .is_some_and(|description| description.contains(name)));
             let answer = Answer::Choice {
                 choice: code.into(),
                 probabilities: BTreeMap::from([(code.into(), 0.62), ("other".into(), 0.30)]),
@@ -622,7 +647,10 @@ mod tests {
             probabilities: BTreeMap::from([(choice.into(), selected), ("other".into(), rival)]),
             confidence,
         };
-        assert_eq!(selected_language(&answer("ja", 0.60, 0.29, 0.50)).as_deref(), Some("日本語"));
+        assert_eq!(
+            selected_language(&answer("ja", 0.60, 0.29, 0.50)).as_deref(),
+            Some("日本語")
+        );
         for (choice, selected, rival, confidence) in [
             ("en", 0.62, 0.32, 0.50),
             ("other", 0.99, 0.01, 0.99),
@@ -661,19 +689,63 @@ mod tests {
     fn decision_choice_requires_conservative_probability_and_known_option() {
         let answer = |choice: &str, selected: f64, confidence: f64| Answer::Choice {
             choice: choice.into(),
-            probabilities: BTreeMap::from([(choice.into(), selected), ("other".into(), 1.0 - selected)]),
+            probabilities: BTreeMap::from([
+                (choice.into(), selected),
+                ("other".into(), 1.0 - selected),
+            ]),
             confidence,
         };
         assert_eq!(
-            confident_choice(&answer("zh", 0.85, 0.70), &["zh"], LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY),
+            confident_choice(
+                &answer("zh", 0.85, 0.70),
+                &["zh"],
+                LANGUAGE_DECISION_CONFIDENCE,
+                LANGUAGE_DECISION_PROBABILITY
+            ),
             Some("zh".into())
         );
-        assert!(confident_choice(&answer("other", 0.99, 0.99), &["zh"], LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY).is_none());
-        assert!(confident_choice(&answer("zh", 0.54, 0.99), &["zh"], LANGUAGE_DECISION_CONFIDENCE, LANGUAGE_DECISION_PROBABILITY).is_none());
-        assert!(confident_choice(&answer("approve_low_risk", 0.95, 0.88), &["approve_low_risk"], APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY).is_some());
-        assert!(confident_choice(&answer("approve_low_risk", 0.85, 0.99), &["approve_low_risk"], APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY).is_none());
-        assert!(confident_choice(&answer("approve_low_risk", 0.99, 0.80), &["approve_low_risk"], APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY).is_none());
-        assert!(confident_choice(&answer("review_required", 0.999, 0.999), &["approve_low_risk"], APPROVAL_DECISION_CONFIDENCE, APPROVAL_DECISION_PROBABILITY).is_none());
+        assert!(confident_choice(
+            &answer("other", 0.99, 0.99),
+            &["zh"],
+            LANGUAGE_DECISION_CONFIDENCE,
+            LANGUAGE_DECISION_PROBABILITY
+        )
+        .is_none());
+        assert!(confident_choice(
+            &answer("zh", 0.54, 0.99),
+            &["zh"],
+            LANGUAGE_DECISION_CONFIDENCE,
+            LANGUAGE_DECISION_PROBABILITY
+        )
+        .is_none());
+        assert!(confident_choice(
+            &answer("approve_low_risk", 0.95, 0.88),
+            &["approve_low_risk"],
+            APPROVAL_DECISION_CONFIDENCE,
+            APPROVAL_DECISION_PROBABILITY
+        )
+        .is_some());
+        assert!(confident_choice(
+            &answer("approve_low_risk", 0.85, 0.99),
+            &["approve_low_risk"],
+            APPROVAL_DECISION_CONFIDENCE,
+            APPROVAL_DECISION_PROBABILITY
+        )
+        .is_none());
+        assert!(confident_choice(
+            &answer("approve_low_risk", 0.99, 0.80),
+            &["approve_low_risk"],
+            APPROVAL_DECISION_CONFIDENCE,
+            APPROVAL_DECISION_PROBABILITY
+        )
+        .is_none());
+        assert!(confident_choice(
+            &answer("review_required", 0.999, 0.999),
+            &["approve_low_risk"],
+            APPROVAL_DECISION_CONFIDENCE,
+            APPROVAL_DECISION_PROBABILITY
+        )
+        .is_none());
     }
 
     #[test]

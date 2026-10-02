@@ -7,7 +7,9 @@ use reqwest::{
 use rust_i18n::t;
 use serde_json::Value;
 use std::time::Duration;
-use tauri::http::HeaderName;
+// `tauri::http` is only a re-export of the `http` crate; naming the crate
+// directly keeps this module linkable by the desktop-free runtime.
+use http::HeaderName;
 
 use super::stream::StreamParser;
 use super::{types::*, StreamChunk};

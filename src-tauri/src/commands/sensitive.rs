@@ -1,33 +1,32 @@
-use crate::db::MainStore;
-use crate::error::{AppError, Result};
-use crate::sensitive::manager::{FilterManager, SensitiveConfig};
+//! Sensitive-filter Tauri commands.
+//!
+//! The sensitive-filter *configuration* is runtime-owned data and is reached
+//! through `/control/v1/data-commands/*`. The `FilterManager` status commands
+//! stay local: the manager is a desktop process object the UI inspects, and the
+//! authoritative filtering itself runs inside the runtime message core.
+
 use std::sync::Arc;
+
 use tauri::{AppHandle, Manager, State};
 
+use crate::runtime_client::RuntimeSupervisor;
+use crate::sensitive::manager::{FilterManager, SensitiveConfig};
+
+/// Returns the sensitive-filter configuration from the runtime.
 #[tauri::command]
-pub fn get_sensitive_config(main_store: State<'_, Arc<MainStore>>) -> Result<SensitiveConfig> {
-    let store = main_store.inner().as_ref();
-    Ok(store.get_config("sensitive_config", SensitiveConfig::default()))
+pub async fn get_sensitive_config(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<SensitiveConfig, String> {
+    crate::runtime_data::get_sensitive_config(supervisor.inner().as_ref()).await
 }
 
+/// Replaces the sensitive-filter configuration in the runtime.
 #[tauri::command]
-pub fn update_sensitive_config(
-    main_store: State<'_, Arc<MainStore>>,
+pub async fn update_sensitive_config(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     config: SensitiveConfig,
-) -> Result<()> {
-    let store = main_store.inner().as_ref();
-
-    // Convert config to Value for storage
-    let config_value = serde_json::to_value(&config).map_err(|e| AppError::General {
-        message: format!("Failed to serialize config: {}", e),
-    })?;
-
-    // Use set_config to save to database and update memory
-    store
-        .set_config("sensitive_config", &config_value)
-        .map_err(|e| AppError::Db(e))?;
-
-    Ok(())
+) -> Result<(), String> {
+    crate::runtime_data::update_sensitive_config(supervisor.inner().as_ref(), config).await
 }
 
 #[derive(serde::Serialize)]
@@ -36,8 +35,9 @@ pub struct FilterStatus {
     pub error: Option<String>,
 }
 
-/// Get the status of the sensitive information filter.
-/// Uses try_state to gracefully handle race conditions during app startup
+/// Returns the status of the local sensitive information filter.
+///
+/// Uses `try_state` to gracefully handle race conditions during app startup
 /// when the FilterManager might not be registered yet.
 #[tauri::command]
 pub fn get_sensitive_status(app: AppHandle) -> FilterStatus {
@@ -47,7 +47,6 @@ pub fn get_sensitive_status(app: AppHandle) -> FilterStatus {
             error: filter_manager.error_message.clone(),
         },
         None => {
-            // FilterManager not yet registered - likely a race condition during startup
             log::warn!("FilterManager state not yet available, returning unhealthy status");
             FilterStatus {
                 healthy: false,
@@ -57,10 +56,9 @@ pub fn get_sensitive_status(app: AppHandle) -> FilterStatus {
     }
 }
 
-/// Get the list of supported filter types.
-/// Uses try_state to gracefully handle race conditions during app startup.
+/// Returns the list of supported local filter types.
 #[tauri::command]
-pub fn get_supported_filters(app: AppHandle) -> Result<Vec<String>> {
+pub fn get_supported_filters(app: AppHandle) -> Result<Vec<String>, String> {
     match app.try_state::<FilterManager>() {
         Some(filter_manager) => {
             if !filter_manager.is_healthy {
@@ -69,7 +67,6 @@ pub fn get_supported_filters(app: AppHandle) -> Result<Vec<String>> {
             Ok(filter_manager.supported_filter_types())
         }
         None => {
-            // FilterManager not yet registered
             log::warn!("FilterManager state not yet available for get_supported_filters");
             Ok(Vec::new())
         }

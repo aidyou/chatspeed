@@ -1177,18 +1177,23 @@ mod tests {
             .expect("failed to count remaining records");
 
         assert_eq!(remaining_agents, 0, "agent tree should be deleted");
-        assert_eq!(remaining_workflows, 0, "workflows bound to the deleted agents should be removed first");
+        assert_eq!(
+            remaining_workflows, 0,
+            "workflows bound to the deleted agents should be removed first"
+        );
     }
 
     #[test]
     fn decision_models_are_ignored_by_runtime_configuration() {
         use super::AgentModels;
-        let legacy: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null,"decisionEnabled":true}"#).unwrap();
+        let legacy: AgentModels =
+            serde_json::from_str(r#"{"act":null,"lite":null,"decisionEnabled":true}"#).unwrap();
         assert!(legacy.decision_enabled);
         assert!(legacy.decision.is_none());
 
         // The agent editor no longer owns decision configuration, so its payload omits both fields.
-        let editor_payload: AgentModels = serde_json::from_str(r#"{"act":null,"lite":null}"#).unwrap();
+        let editor_payload: AgentModels =
+            serde_json::from_str(r#"{"act":null,"lite":null}"#).unwrap();
         assert!(!editor_payload.decision_enabled);
         assert!(editor_payload.decision.is_none());
     }

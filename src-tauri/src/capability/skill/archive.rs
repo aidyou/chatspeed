@@ -41,7 +41,10 @@ pub struct ArchiveReport {
 }
 
 /// Extracts a ZIP archive into `destination`, validating every entry first.
-pub fn extract_zip(archive_path: &Path, destination: &Path) -> Result<ArchiveReport, CapabilityError> {
+pub fn extract_zip(
+    archive_path: &Path,
+    destination: &Path,
+) -> Result<ArchiveReport, CapabilityError> {
     extract_zip_with_limits(archive_path, destination, DEFAULT_LIMITS)
 }
 
@@ -67,7 +70,9 @@ pub fn extract_zip_with_limits(
     }
 
     std::fs::create_dir_all(destination).map_err(|error| {
-        CapabilityError::internal(format!("failed to create the extraction directory: {error}"))
+        CapabilityError::internal(format!(
+            "failed to create the extraction directory: {error}"
+        ))
     })?;
 
     // Two entries that normalize to the same path (or differ only by case)
@@ -78,7 +83,9 @@ pub fn extract_zip_with_limits(
 
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| {
-            CapabilityError::invalid_request(format!("failed to read archive entry {index}: {error}"))
+            CapabilityError::invalid_request(format!(
+                "failed to read archive entry {index}: {error}"
+            ))
         })?;
 
         let raw_name = entry.name().to_string();
@@ -178,7 +185,9 @@ pub fn extract_zip_with_limits(
 /// filesystems.
 pub fn safe_relative_path(raw_name: &str) -> Result<PathBuf, CapabilityError> {
     if raw_name.is_empty() {
-        return Err(CapabilityError::refused("an archive entry has an empty name"));
+        return Err(CapabilityError::refused(
+            "an archive entry has an empty name",
+        ));
     }
     if raw_name.contains('\0') {
         return Err(CapabilityError::refused(
@@ -268,7 +277,8 @@ pub fn classify_entry_kind(mode: u32) -> EntryKind {
     }
 }
 
-fn is_windows_reserved(segment: &str) -> bool {    let stem = segment
+fn is_windows_reserved(segment: &str) -> bool {
+    let stem = segment
         .split('.')
         .next()
         .unwrap_or(segment)
@@ -276,7 +286,9 @@ fn is_windows_reserved(segment: &str) -> bool {    let stem = segment
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
         || (stem.len() == 4
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem[3..].chars().all(|character| character.is_ascii_digit()))
+            && stem[3..]
+                .chars()
+                .all(|character| character.is_ascii_digit()))
 }
 
 /// Returns the single top-level directory of an extraction, when the archive
@@ -336,7 +348,10 @@ mod tests {
         assert!(destination.join("demo/SKILL.md").is_file());
         assert!(destination.join("demo/references/guide.md").is_file());
         assert_eq!(
-            single_root_child(&destination).expect("single root").file_name().unwrap(),
+            single_root_child(&destination)
+                .expect("single root")
+                .file_name()
+                .unwrap(),
             "demo"
         );
     }
@@ -364,7 +379,10 @@ mod tests {
     fn a_traversal_entry_refuses_the_whole_archive() {
         let temp = TempDir::new().expect("temp dir");
         let archive = temp.path().join("evil.zip");
-        write_archive(&archive, &[("demo/SKILL.md", b"body"), ("../escape.md", b"x")]);
+        write_archive(
+            &archive,
+            &[("demo/SKILL.md", b"body"), ("../escape.md", b"x")],
+        );
 
         let destination = temp.path().join("out");
         let error = extract_zip(&archive, &destination).expect_err("must refuse");
@@ -450,8 +468,8 @@ mod tests {
             max_total_bytes: 8_192,
             max_compression_ratio: 200,
         };
-        let error = extract_zip_with_limits(&archive, &destination, limits)
-            .expect_err("must refuse");
+        let error =
+            extract_zip_with_limits(&archive, &destination, limits).expect_err("must refuse");
         assert_eq!(error.code(), crate::capability::error::code::REFUSED);
 
         let ratio_limits = ArchiveLimits {
@@ -460,8 +478,8 @@ mod tests {
             max_total_bytes: 64 * 1024,
             max_compression_ratio: 1,
         };
-        let error = extract_zip_with_limits(&archive, &destination, ratio_limits)
-            .expect_err("must refuse");
+        let error =
+            extract_zip_with_limits(&archive, &destination, ratio_limits).expect_err("must refuse");
         assert_eq!(error.code(), crate::capability::error::code::REFUSED);
     }
 
@@ -483,8 +501,8 @@ mod tests {
             max_entries: 2,
             ..DEFAULT_LIMITS
         };
-        let error = extract_zip_with_limits(&archive, &destination, limits)
-            .expect_err("must refuse");
+        let error =
+            extract_zip_with_limits(&archive, &destination, limits).expect_err("must refuse");
         assert_eq!(error.code(), crate::capability::error::code::REFUSED);
     }
 }

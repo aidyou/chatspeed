@@ -251,9 +251,7 @@ impl TargetEnvironment {
 
     /// The ChatSpeed-managed skills directory.
     pub fn chatspeed_skills_dir(&self) -> Option<PathBuf> {
-        self.chatspeed_home
-            .as_ref()
-            .map(|root| root.join("skills"))
+        self.chatspeed_home.as_ref().map(|root| root.join("skills"))
     }
 }
 
@@ -298,10 +296,7 @@ pub fn resolve_targets(environment: &TargetEnvironment) -> Vec<ResolvedSkillTarg
         .collect()
 }
 
-fn resolve_target(
-    spec: &SkillTargetSpec,
-    environment: &TargetEnvironment,
-) -> ResolvedSkillTarget {
+fn resolve_target(spec: &SkillTargetSpec, environment: &TargetEnvironment) -> ResolvedSkillTarget {
     let mut resolved = ResolvedSkillTarget {
         id: spec.id.as_str().to_string(),
         default_selected: spec.default_selected,
@@ -338,8 +333,11 @@ fn resolve_target(
             resolved.path = Some(path.to_string_lossy().to_string());
         }
         None => {
-            resolved.unsupported_reason =
-                Some(TargetUnsupportedReason::PathNotVerified.as_str().to_string());
+            resolved.unsupported_reason = Some(
+                TargetUnsupportedReason::PathNotVerified
+                    .as_str()
+                    .to_string(),
+            );
         }
     }
 
@@ -419,7 +417,9 @@ mod tests {
         assert_eq!(selection.len(), 1);
         assert_eq!(selection[0].0, SkillTargetId::Chatspeed);
         assert!(selection[0].1.ends_with("skills"));
-        assert!(selection[0].1.starts_with(&environment.chatspeed_home.clone().unwrap()));
+        assert!(selection[0]
+            .1
+            .starts_with(&environment.chatspeed_home.clone().unwrap()));
     }
 
     #[test]
@@ -460,7 +460,11 @@ mod tests {
             .iter()
             .find(|entry| entry.id == "claude-code")
             .expect("claude-code entry");
-        assert!(claude.path.as_deref().unwrap_or_default().contains(".claude"));
+        assert!(claude
+            .path
+            .as_deref()
+            .unwrap_or_default()
+            .contains(".claude"));
     }
 
     #[test]
@@ -474,7 +478,10 @@ mod tests {
             ("cline", ".cline/skills"),
             ("trae", ".agents/skills"),
         ] {
-            let target = resolved.iter().find(|entry| entry.id == id).expect("target");
+            let target = resolved
+                .iter()
+                .find(|entry| entry.id == id)
+                .expect("target");
             assert!(target.supported);
             assert!(target.path.as_deref().unwrap_or_default().ends_with(suffix));
             assert!(target.verified_against.is_some());

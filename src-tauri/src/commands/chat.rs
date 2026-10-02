@@ -1,214 +1,65 @@
 //! # AI Commands
 //!
-//! This module provides Tauri commands for interacting with AI chat interfaces.
-//! It allows sending messages to different AI providers, receiving responses,
-//! and stopping ongoing chats.
+//! Tauri adapters for the runtime-owned chat and model surface.
+//!
+//! The desktop no longer owns chat execution. `list_models`, `chat_completion`
+//! and `stop_chat` are thin adapters over the standalone runtime's typed
+//! `/control/v1` chat/model routes: the runtime holds the chat/tool state and the
+//! provider proxy, and its sessions resolve every model call against that owner.
+//! The command wrappers therefore never inject `MainStore`, `ChatState` or a
+//! `ToolManager`, and they never open the runtime database.
+//!
+//! `chat_completion` preserves its Tauri-only `window` boundary: the runtime's
+//! SSE chunks are forwarded onto the same `chat_stream` window event the frontend
+//! already listens on. See `runtime_chat.rs` for the adapter.
+//!
+//! `detect_language` is a pure, desktop-local utility and stays in the client.
+//! `setup_chat_proxy` also stays: it is a plain helper the desktop ccproxy
+//! modules import, not a second chat owner.
 //!
 //! ## Usage
-//! To use the AI commands, you need to call the `chat_completion` and `stop_chat` functions.
-//!
-//! ### Example
-//!
-//! #### Chat with AI
 //! ```js
 //! import { invoke } from '@tauri-apps/api/core'
 //!
-//! const result = await invoke('chat_completion', {
-//!     apiProtocol: 'openai',
-//!     apiUrl: 'https://api.openai.com/v1/chat/completions',
+//! // The turn runs on the standalone runtime; its chunks arrive on the
+//! // window's `chat_stream` event exactly as before.
+//! await invoke('chat_completion', {
+//!     providerId: 1,
 //!     model: 'gpt-3.5-turbo',
-//!     apiKey: 'your-api-key',
-//!     messages: [
-//!         { role: 'system', content: 'your prompt here' },
-//!         { role: 'user', content: 'Hello, how are you?' }
-//!     ],
-//!     maxTokens: 100
-//! })
-//! window.addEventListener('chat_stream', (event) => {
-//!   console.log('chat_stream', event)
+//!     chatId: 'chat-1',
+//!     messages: [{ role: 'user', content: 'Hello' }]
 //! })
 //! ```
 //!
-//! #### Stop Chat
-//! ```js
-//! import { invoke } from '@tauri-apps/api/core'
+//! ## Module wiring
 //!
-//! const result = await invoke('stop_chat', { apiProtocol: 'openai' })
-//! ```
-//!
-//! ## How to add new AI providers
-//!
-//! - To add a new AI provider, you need to implement the `AiChatTrait` and `Stoppable` traits for the provider.
-//!   You can use the existing providers as examples.
-//! - Add new methods to the `AiChatEnum` enum.
-//! - Then add new states to the `ChatState`::new method.
-//! - Finally, add the new AI provider to the `init_chats!` macro.
+//! `runtime_chat` is included from here with an explicit `#[path]` so this unit
+//! does not have to edit `lib.rs` (several sibling units touch the module list
+//! there). When that concurrency is done the parent may hoist the declaration to
+//! `lib.rs` as `#[cfg(feature = "desktop")] mod runtime_chat;`.
 
-use crate::ai::error::AiError;
-use crate::ai::interaction::chat_completion::{
-    list_models_async, start_new_chat_interaction, ChatState,
-};
-use crate::ai::interaction::constants::{SYSTEM_PROMPT, TOOL_USAGE_GUIDANCE};
-use crate::ai::traits::chat::{ChatMetadata, MCPToolDeclaration, ModelDetails};
-use crate::ccproxy::ChatProtocol;
-use crate::constants::{CFG_INTERFACE_LANGUAGE, DEFAULT_WEB_FETCH_TOOL, DEFAULT_WEB_SEARCH_TOOL};
+use crate::ai::traits::chat::ModelDetails;
 use crate::db::MainStore;
-use crate::error::{AppError, Result};
+use crate::error::AppError;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
-use crate::sensitive::manager::{FilterManager, SensitiveConfig};
-
-use chrono::{DateTime, Local};
+use crate::runtime_client::RuntimeSupervisor;
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::env;
 use std::sync::Arc;
 use tauri::State;
 use whatlang::detect;
 
-/// Generates environment information for the AI assistant
-fn generate_environment_info() -> String {
-    let os = env::consts::OS;
-    let arch = env::consts::ARCH;
-    let family = env::consts::FAMILY;
+#[path = "../runtime_chat.rs"]
+mod runtime_chat;
 
-    // Get current time in both UTC and local timezone
-    // let utc_now: DateTime<Utc> = Utc::now();
-    let local_now: DateTime<Local> = Local::now();
-
-    // Get shell information
-    let shell = env::var("SHELL")
-        .or_else(|_| env::var("COMSPEC"))
-        .unwrap_or_else(|_| "unknown".to_string());
-
-    // Get additional useful environment variables
-    // let user = env::var("USER")
-    //     .or_else(|_| env::var("USERNAME"))
-    //     .unwrap_or_else(|_| "unknown".to_string());
-
-    let home = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "unknown".to_string());
-
-    format!(
-        r#"<environment>
-Operating System: {} ({})
-Architecture: {}
-Current Local Time: {}
-Shell: {}
-Home Directory: {}
-</environment>"#,
-        os,
-        family,
-        arch,
-        local_now.format("%Y-%m-%d %H:%M:%S %Z"),
-        shell,
-        home
-    )
-}
-
-/// Prepares messages with system prompts and environment information
-fn prepare_messages_with_system_context(
-    mut messages: Vec<Value>,
-    has_tools: bool,
-    mcp_summaries: Vec<crate::ai::traits::chat::MCPToolDeclaration>,
-) -> Vec<Value> {
-    let mut system_content = SYSTEM_PROMPT.to_string();
-
-    // Add tool usage guidance if tools are available
-    if has_tools {
-        system_content.push_str(TOOL_USAGE_GUIDANCE);
-    }
-
-    // Add MCP tool summaries (descriptions only)
-    if !mcp_summaries.is_empty() {
-        system_content.push_str("\n\n## AVAILABLE MCP TOOLS\n");
-        system_content.push_str("The following MCP tools are folded discovery entries, similar to skills: only their names and descriptions are shown, so they are not callable until loaded. When you need one, call `mcp_tool_expand` exactly once with its listed public name. This only loads the definition; it does not execute the MCP tool or satisfy the request. After it returns, call `mcp_tool_execute` as your very next tool action with the same `tool_name` and an `arguments` object matching the returned authoritative schema. Do not load the same tool again while its definition is still visible in the current context. If a new work segment starts, context is manually cleared or compressed, or the definition is no longer visible, load it again.\n\n");
-        for tool in mcp_summaries {
-            system_content.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-        }
-    }
-
-    // Find existing system message from user
-    let mut user_system_content = String::new();
-    let mut user_system_index = None;
-
-    for (i, message) in messages.iter().enumerate() {
-        if message.get("role").and_then(|r| r.as_str()) == Some("system") {
-            if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
-                user_system_content = content.to_string();
-                user_system_index = Some(i);
-                break;
-            }
-        }
-    }
-
-    // Remove user's system message if found
-    if let Some(index) = user_system_index {
-        messages.remove(index);
-    }
-
-    // Combine system prompts: our system prompt + tool guidance + user's system prompt
-    if !user_system_content.is_empty() {
-        system_content.push_str("\n\n");
-        system_content.push_str(&user_system_content);
-    }
-
-    // Add environment information
-    system_content.push_str("\n\n");
-    system_content.push_str(&generate_environment_info());
-
-    // Create the final system message
-    let system_message = json!({
-        "role": "system",
-        "content": system_content
-    });
-
-    // Insert at the beginning
-    messages.insert(0, system_message);
-
-    messages
-}
-
-/// Helper function to filter a single piece of text for sensitive information
-fn filter_single_text(
-    text: &str,
-    filter_manager: &FilterManager,
-    sensitive_config: &SensitiveConfig,
-    interface_lang: &String,
-) -> String {
-    let lang_info = detect(text);
-    let detected_code = if let Some(ref info) = lang_info {
-        lang_to_iso_639_1(&info.lang().code()).unwrap_or("en")
-    } else {
-        "en"
-    };
-
-    let langs = vec![detected_code, interface_lang.as_str()];
-
-    #[cfg(debug_assertions)]
-    log::debug!(
-        "Detect language: {:?} -> {}. Interface lang: {}",
-        lang_info,
-        detected_code,
-        interface_lang
-    );
-
-    let sanitized = filter_manager.filter_text(text, &langs, sensitive_config);
-
-    #[cfg(debug_assertions)]
-    if text != sanitized {
-        log::debug!(
-            "Filtered content. Original len: {}, Sanitized len: {}",
-            text.len(),
-            sanitized.len()
-        );
-    } else {
-        log::debug!("No sensitive data found in message.");
-    }
-
-    sanitized
-}
-
+/// Fills a chat request's `metadata` with the proxy configuration the store
+/// holds, so model calls honour the user's proxy settings.
+///
+/// This is a plain helper argument, not a Tauri state injection: the desktop
+/// `ccproxy` modules import it at its historical
+/// `crate::commands::chat::setup_chat_proxy` path. The desktop-free runtime
+/// builds the same helper from `crate::ccproxy::proxy_settings` (which is gated
+/// to the non-desktop build), so the two copies cannot diverge.
 pub fn setup_chat_proxy(
     main_state: Arc<MainStore>,
     metadata: &mut Option<Value>,
@@ -266,24 +117,21 @@ pub fn setup_chat_proxy(
     Ok(())
 }
 
+/// Lists the models a provider exposes.
+///
+/// The read needs the runtime's proxy configuration and network owner, so it is
+/// served by the runtime owner over `POST /control/v1/models/list`. The declared
+/// wire is preserved so the frontend keeps calling the same command.
 #[tauri::command]
 pub async fn list_models(
-    main_state: State<'_, Arc<MainStore>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     api_protocol: String,
     api_url: Option<&str>,
     api_key: Option<&str>,
     metadata: Option<Value>,
-) -> Result<Vec<ModelDetails>> {
-    let mut metadata_val = metadata.unwrap_or_else(|| json!({}));
-    if metadata_val["proxyType"].is_null() {
-        metadata_val["proxyType"] = json!("bySetting");
-    }
-    let mut metadata = Some(metadata_val);
-
-    setup_chat_proxy(main_state.inner().clone(), &mut metadata)?;
-
-    list_models_async(
-        main_state.inner().clone(),
+) -> Result<Vec<ModelDetails>, String> {
+    runtime_chat::list_models(
+        supervisor.inner().as_ref(),
         api_protocol,
         api_url,
         api_key,
@@ -292,300 +140,48 @@ pub async fn list_models(
     .await
 }
 
-/// Tauri command to interact with the AI chat system.
-/// This command handles sending messages to the AI and receiving responses.
+/// Starts one AI chat turn and streams the reply to the requesting window.
 ///
-/// # Arguments
-/// - `window` - The Tauri window instance, automatically injected by Tauri
-/// - `chat_state` - The state of the chat system, automatically injected by Tauri
-/// - `main_state` - The main application state, automatically injected by Tauri
-/// - `filter_manager` - The sensitive data filter manager, automatically injected by Tauri
-/// - `api_protocol` - The API provider to use for the chat.
-/// - `api_url` - The API URL to use for the chat.
-/// - `model` - The model to use for the chat.
-/// - `api_key` - The API key to use for the chat.
-/// - `chat_id` - Unique identifier for this chat session
-/// - `messages` - The messages to send to the chat.
-/// - `network_enabled` - Whether to enable network search for URLs in the user message
-/// - `metadata` - Optional extra parameters for the chat.
-///
-/// # Returns
-/// A `Result` containing () or an error message.
+/// The background model execution belongs to the runtime; this command only asks
+/// the runtime to start the turn and then forwards its stream onto the window's
+/// `chat_stream` event.
 #[tauri::command]
 pub async fn chat_completion(
     window: tauri::Window,
-    chat_state: State<'_, Arc<ChatState>>,
-    filter_manager: State<'_, FilterManager>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     provider_id: i64,
     model: String,
     chat_id: String,
     messages: Vec<Value>,
     network_enabled: Option<bool>,
     mcp_enabled: Option<bool>,
-    metadata: Option<Value>, // This comes from frontend, contains model params & UI flags
-) -> Result<()> {
-    if provider_id < 1 {
-        return Err(AppError::Ai(AiError::InitFailed(
-            t!("chat.empty_provider_id").to_string(),
-        )));
-    }
-    if model.is_empty() {
-        return Err(AppError::Ai(AiError::InitFailed(
-            t!("chat.empty_model").to_string(),
-        )));
-    }
-    if chat_id.is_empty() {
-        return Err(AppError::Ai(AiError::InitFailed(
-            t!("chat.empty_chat_id").to_string(),
-        )));
-    }
-    if messages.is_empty() {
-        return Err(AppError::Ai(AiError::InitFailed(
-            t!("chat.empty_messages").to_string(),
-        )));
-    }
-
-    // Ensure the channel for this window is created/retrieved.
-    // This is crucial for global_message_processor_loop to send UI updates.
-    //
-    // !!! DO NOT remove the following line !!!
-    let _ = chat_state
-        .channels
-        .get_or_create_channel(window.clone())
-        .await
-        .map_err(|e| AiError::FailedToGetOrCreateWindowChannel(e.to_string()))?;
-
-    // Prepare final_metadata: ensure windowLabel is present.
-    let mut final_metadata: ChatMetadata = ChatMetadata::from_value(metadata);
-    final_metadata.retry_on_transient_error = true;
-
-    // Ensure window label exists for UI updates
-    if final_metadata.window_label.is_none() && final_metadata.label.is_none() {
-        final_metadata.window_label = Some(window.label().to_string());
-    }
-
-    // Sensitive Data Filtering
-    let (sensitive_config, interface_lang): (SensitiveConfig, String) = {
-        let store = chat_state.main_store.as_ref();
-        (
-            store.get_config("sensitive_config", SensitiveConfig::default()),
-            store.get_config(CFG_INTERFACE_LANGUAGE, "en".to_string()),
-        )
-    };
-
-    let mut filtered_messages = messages;
-    if sensitive_config.enabled {
-        #[cfg(debug_assertions)]
-        log::debug!(
-            "Sensitive data filtering enabled. Config: {:?}",
-            sensitive_config
-        );
-
-        for message in filtered_messages.iter_mut() {
-            if message.get("role").and_then(|r| r.as_str()) == Some("user") {
-                if let Some(content_val) = message.get_mut("content") {
-                    if let Some(content_str) = content_val.as_str() {
-                        if !content_str.is_empty() {
-                            let sanitized = filter_single_text(
-                                content_str,
-                                &filter_manager,
-                                &sensitive_config,
-                                &interface_lang,
-                            );
-                            *content_val = json!(sanitized);
-                        }
-                    } else if let Some(content_array) = content_val.as_array_mut() {
-                        for block in content_array {
-                            if let Some(block_obj) = block.as_object_mut() {
-                                if block_obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    if let Some(text_val) = block_obj.get_mut("text") {
-                                        if let Some(text_str) = text_val.as_str() {
-                                            if !text_str.is_empty() {
-                                                let sanitized = filter_single_text(
-                                                    text_str,
-                                                    &filter_manager,
-                                                    &sensitive_config,
-                                                    &interface_lang,
-                                                );
-                                                *text_val = json!(sanitized);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        #[cfg(debug_assertions)]
-        log::debug!("Sensitive data filtering disabled.");
-    }
-
-    let tools_enabled_in_metadata = final_metadata.tools_enabled.unwrap_or(true);
-
-    // Register stable MCP control tools if MCP is enabled. Folded target tools are executed
-    // through mcp_tool_execute; the dispatcher itself has no target permission semantics.
-    if mcp_enabled.unwrap_or(false) {
-        if !chat_state
-            .tool_manager
-            .has_tool(crate::tools::TOOL_MCP_TOOL_EXECUTE)
-            .await
-        {
-            chat_state
-                .tool_manager
-                .register_tool(Arc::new(crate::tools::McpToolExecute {
-                    tool_manager: chat_state.tool_manager.clone(),
-                    allowed_tools: None,
-                }))
-                .await?;
-        }
-        if !chat_state
-            .tool_manager
-            .has_tool(crate::tools::TOOL_MCP_TOOL_EXPAND)
-            .await
-        {
-            chat_state
-                .tool_manager
-                .register_tool(Arc::new(crate::tools::McpToolExpand {
-                    tool_manager: chat_state.tool_manager.clone(),
-                    allowed_tools: None,
-                }))
-                .await?;
-        }
-    }
-
-    let tools: Option<Vec<MCPToolDeclaration>> = if tools_enabled_in_metadata {
-        let mut available_tools = chat_state
-            .tool_manager
-            .get_tool_calling_spec(Some(crate::tools::ToolScope::Chat), None)
-            .await?;
-        if !network_enabled.unwrap_or(false) {
-            available_tools.retain(|tool| {
-                tool.name != DEFAULT_WEB_SEARCH_TOOL && tool.name != DEFAULT_WEB_FETCH_TOOL
-            });
-        }
-        let mcp_tool_names = chat_state
-            .tool_manager
-            .get_mcp_tool_specs(Some(crate::tools::ToolScope::Chat))
-            .await
-            .into_iter()
-            .map(|tool| tool.declaration.name)
-            .collect::<std::collections::HashSet<_>>();
-        // When MCP is enabled, fold target schemas into summaries but retain the stable control
-        // tools needed to expand and execute them.
-        if mcp_enabled.unwrap_or(false) {
-            available_tools.retain(|tool| {
-                !mcp_tool_names.contains(&tool.name)
-                    || tool.name == crate::tools::TOOL_MCP_TOOL_EXPAND
-                    || tool.name == crate::tools::TOOL_MCP_TOOL_EXECUTE
-            });
-        }
-        // When MCP is disabled, remove MCP declarations using structured ToolManager metadata.
-        if !mcp_enabled.unwrap_or(false) {
-            available_tools.retain(|tool| {
-                !mcp_tool_names.contains(&tool.name)
-                    && tool.name != crate::tools::TOOL_MCP_TOOL_EXPAND
-                    && tool.name != crate::tools::TOOL_MCP_TOOL_EXECUTE
-            });
-        }
-        Some(available_tools)
-    } else {
-        None
-    };
-
-    // Get MCP tool summaries for system prompt (descriptions only)
-    let mcp_summaries = if mcp_enabled.unwrap_or(false) {
-        chat_state
-            .tool_manager
-            .get_mcp_tool_specs(Some(crate::tools::ToolScope::Chat))
-            .await
-            .into_iter()
-            .map(|tool| {
-                let mut declaration = tool.declaration;
-                // Clear input_schema, only keep public alias and description.
-                declaration.input_schema = serde_json::json!({});
-                declaration
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // Prepare messages with system context
-    let has_tools = tools.as_ref().map_or(false, |t| !t.is_empty());
-    let prepared_messages =
-        prepare_messages_with_system_context(filtered_messages, has_tools, mcp_summaries);
-
-    #[cfg(debug_assertions)]
-    log::debug!("Processed messages count: {}", prepared_messages.len());
-
-    start_new_chat_interaction(
-        chat_state.inner().clone(),
+    metadata: Option<Value>,
+) -> Result<(), String> {
+    runtime_chat::chat_completion(
+        window,
+        supervisor.inner().as_ref(),
         provider_id,
         model,
         chat_id,
-        prepared_messages,
-        tools,
-        Some(final_metadata),
-        None,
+        messages,
+        network_enabled,
+        mcp_enabled,
+        metadata,
     )
     .await
 }
 
-/// Tauri command to stop the ongoing chat for a specific API provider.
-/// This command sets the stop flag for the selected chat interface.
+/// Stops the ongoing chat for one provider/chat id.
 ///
-/// # Arguments
-/// - `state` - The state of the chat system, automatically injected by Tauri
-/// - `api_protocol` - The API provider for which to stop the chat.
-///
-/// # Returns
-/// A `Result` indicating success or an error message.
-///
-/// # Example
-/// ```js
-/// import { invoke } from '@tauri-apps/api/core'
-///
-/// const result = await invoke('stop_chat', { apiProtocol: 'openai' })
-/// ```
+/// Stopping mutates the runtime-owned chat state, so it is served by the runtime
+/// over `POST /control/v1/chats/{chat_id}/stop`.
 #[tauri::command]
 pub async fn stop_chat(
-    state: State<'_, Arc<ChatState>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     api_protocol: String,
     chat_id: &str,
-) -> Result<()> {
-    let protocol: ChatProtocol = api_protocol.clone().try_into().map_err(|_| {
-        AiError::InitFailed(
-            t!("chat.invalid_api_protocol", protocll = api_protocol.clone()).to_string(),
-        )
-    })?;
-    let mut chats = state.chats.lock().await;
-
-    // Find the specific chat instance
-    if let Some(protocol_chats) = chats.get_mut(&protocol) {
-        if let Some(chat) = protocol_chats.get_mut(chat_id) {
-            // Use get_mut to avoid removing
-            chat.set_stop_flag(true).await;
-            // Remove the chat instance from the map
-            protocol_chats.remove(chat_id);
-
-            #[cfg(debug_assertions)]
-            {
-                log::debug!(
-                    "Removed chat instance for chat_id: {} on stop command under protocol: {}.",
-                    chat_id,
-                    protocol
-                );
-            }
-
-            return Ok(());
-        }
-    }
-    Err(AppError::Ai(AiError::InitFailed(
-        t!("chat.chat_not_found").to_string(),
-    )))
+) -> Result<(), String> {
+    runtime_chat::stop_chat(supervisor.inner().as_ref(), api_protocol, chat_id).await
 }
 
 /// Detects the language of a given text and returns the corresponding language code.
@@ -596,7 +192,7 @@ pub async fn stop_chat(
 /// # Returns
 /// A `Result` containing the language code or an error message.
 #[tauri::command]
-pub fn detect_language(text: &str) -> Result<Value> {
+pub fn detect_language(text: &str) -> crate::error::Result<Value> {
     let detected_lang = detect(text);
 
     if let Some(info) = detected_lang {
@@ -625,32 +221,7 @@ pub fn detect_language(text: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_messages_with_system_context;
-    use crate::ai::traits::chat::MCPToolDeclaration;
     use crate::commands::constants::URL_REGEX;
-    use serde_json::json;
-
-    #[test]
-    fn folded_mcp_prompt_uses_stable_executor_after_expand() {
-        let messages = prepare_messages_with_system_context(
-            vec![json!({ "role": "user", "content": "test" })],
-            true,
-            vec![MCPToolDeclaration {
-                name: "browser_click".to_string(),
-                description: "Click an element".to_string(),
-                input_schema: json!({}),
-                output_schema: None,
-                disabled: false,
-                scope: None,
-            }],
-        );
-        let system_prompt = messages[0]["content"]
-            .as_str()
-            .expect("system prompt must be text");
-
-        assert!(system_prompt.contains("call `mcp_tool_execute` as your very next tool action"));
-        assert!(!system_prompt.contains("call the returned MCP tool directly"));
-    }
 
     #[test]
     fn test_url_regex() {

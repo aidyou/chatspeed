@@ -14,15 +14,13 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
+use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::capability::error::{code, CapabilityError};
 use crate::capability::mcp::orchestrator::McpTiming;
 use crate::capability::mcp::repository::{McpRepositoryPort, NewMcpRecord};
 use crate::capability::mcp::runtime::{McpRuntimeEffects, McpRuntimePort, ObservedMcpRuntime};
-use crate::capability::types::{
-    CapabilityKind, EffectOutcome, OperationRequest, OperationState,
-};
+use crate::capability::types::{CapabilityKind, EffectOutcome, OperationRequest, OperationState};
 use crate::capability::CapabilityApplicationService;
-use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 use crate::db::Mcp;
 use crate::mcp::client::{McpProtocolType, McpServerConfig, McpStatus};
@@ -60,10 +58,7 @@ impl McpRepositoryPort for FakeRepository {
     }
 
     fn get(&self, id: i64) -> Result<Option<Mcp>, CapabilityError> {
-        Ok(self
-            .snapshot()
-            .into_iter()
-            .find(|record| record.id == id))
+        Ok(self.snapshot().into_iter().find(|record| record.id == id))
     }
 
     fn find_by_name(&self, name: &str) -> Result<Option<Mcp>, CapabilityError> {
@@ -92,10 +87,7 @@ impl McpRepositoryPort for FakeRepository {
             disabled: record.disabled,
             status: None,
         };
-        self.records
-            .lock()
-            .expect("records")
-            .push(stored.clone());
+        self.records.lock().expect("records").push(stored.clone());
         Ok(stored)
     }
 
@@ -190,10 +182,7 @@ impl FakeRuntime {
     }
 
     fn record_call(&self, call: &str) {
-        self.calls
-            .lock()
-            .expect("calls")
-            .push(call.to_string());
+        self.calls.lock().expect("calls").push(call.to_string());
     }
 
     /// Models one effect, with the concurrency instrumentation.
@@ -215,7 +204,9 @@ impl FakeRuntime {
 
 #[async_trait::async_trait]
 impl McpRuntimePort for FakeRuntime {
-    async fn observed_runtime(&self) -> Result<BTreeMap<String, ObservedMcpRuntime>, CapabilityError> {
+    async fn observed_runtime(
+        &self,
+    ) -> Result<BTreeMap<String, ObservedMcpRuntime>, CapabilityError> {
         let mut observed = BTreeMap::new();
         for (name, state) in self.states.lock().expect("states").iter() {
             observed.insert(
@@ -240,8 +231,7 @@ impl McpRuntimePort for FakeRuntime {
 impl McpRuntimeEffects for FakeRuntime {
     async fn start(&self, config: McpServerConfig) -> Result<(), CapabilityError> {
         self.record_call(&format!("start:{}", config.name));
-        let hang = *self.hang.lock().expect("hang")
-            || *self.start_hang.lock().expect("start_hang");
+        let hang = *self.hang.lock().expect("hang") || *self.start_hang.lock().expect("start_hang");
         self.effect(hang).await;
         if hang {
             return Ok(());
@@ -286,7 +276,12 @@ impl McpRuntimeEffects for FakeRuntime {
         if hang {
             return Ok(());
         }
-        match self.refresh_result.lock().expect("refresh_result").as_deref() {
+        match self
+            .refresh_result
+            .lock()
+            .expect("refresh_result")
+            .as_deref()
+        {
             Some(message) => Err(CapabilityError::new(code::INTERNAL, message.to_string())),
             None => {
                 self.tools.lock().expect("tools").insert(
@@ -300,13 +295,7 @@ impl McpRuntimeEffects for FakeRuntime {
 
     async fn list_tools(&self, name: &str) -> Result<Vec<MCPToolDeclaration>, CapabilityError> {
         self.record_call(&format!("list_tools:{name}"));
-        let Some(tools) = self
-            .tools
-            .lock()
-            .expect("tools")
-            .get(name)
-            .cloned()
-        else {
+        let Some(tools) = self.tools.lock().expect("tools").get(name).cloned() else {
             return Err(CapabilityError::new(
                 code::NOT_FOUND,
                 format!("no cached tools for '{name}'"),
@@ -438,10 +427,7 @@ async fn the_desktop_read_path_serializes_no_secret_canary() {
     let fixture = fixture();
     let mut secret = record("weather", 1, false);
     secret.config.bearer_token = Some("CANARY-BEARER".to_string());
-    secret.config.env = Some(vec![(
-        "API_TOKEN".to_string(),
-        "CANARY-ENV".to_string(),
-    )]);
+    secret.config.env = Some(vec![("API_TOKEN".to_string(), "CANARY-ENV".to_string())]);
     fixture.repository.seed(secret);
 
     let records = fixture
@@ -593,7 +579,10 @@ async fn the_journal_never_stores_a_descriptor_secret() {
         "the journal leaked the bearer token: {stored}"
     );
     // The presence bit is still reported, which is what the UI needs.
-    assert_eq!(operation.result.expect("result")["server"]["secret_present"], json!(true));
+    assert_eq!(
+        operation.result.expect("result")["server"]["secret_present"],
+        json!(true)
+    );
 }
 
 // ------------------------------------------------------------------- update
@@ -680,15 +669,7 @@ async fn an_update_that_supplies_secrets_replaces_them() {
     replacement.env = Some(vec![("OTHER".to_string(), "new-env".to_string())]);
     fixture
         .service
-        .mcp_update(
-            id,
-            "weather",
-            "updated",
-            replacement,
-            true,
-            "key-1",
-            "test",
-        )
+        .mcp_update(id, "weather", "updated", replacement, true, "key-1", "test")
         .await
         .expect("update");
 
@@ -746,7 +727,10 @@ async fn an_update_does_not_start_the_new_config_when_the_old_stop_is_unconfirme
         .expect("reconcile list")[0]
         .clone();
     assert_eq!(op.state, OperationState::NeedsReconcile);
-    assert_eq!(op.reconcile_reason.as_deref(), Some("update_stop_unconfirmed"));
+    assert_eq!(
+        op.reconcile_reason.as_deref(),
+        Some("update_stop_unconfirmed")
+    );
     // The unproven stop is preserved so recovery can converge it, not lose it.
     assert_eq!(
         fixture
@@ -817,7 +801,10 @@ async fn reconcile_converges_an_update_once_the_old_runtime_is_proven_stopped() 
         OperationState::Completed
     );
     // The convergence actually brought the desired runtime up.
-    assert_eq!(fixture.runtime.state_of("weather").as_deref(), Some("running"));
+    assert_eq!(
+        fixture.runtime.state_of("weather").as_deref(),
+        Some("running")
+    );
 }
 
 /// A cold child only becomes observable after a couple of polls, so one reconcile
@@ -854,8 +841,7 @@ async fn reconcile_polls_until_the_updated_config_is_proven_running() {
     // answers "accepted" but only connects after a couple of observations.
     *fixture.runtime.stubborn_stop.lock().expect("stubborn_stop") = false;
     fixture.runtime.set_state("weather", "stopped");
-    *fixture.runtime.start_state.lock().expect("start_state") =
-        Some("starting".to_string());
+    *fixture.runtime.start_state.lock().expect("start_state") = Some("starting".to_string());
     *fixture
         .runtime
         .running_after_observations
@@ -882,7 +868,10 @@ async fn reconcile_polls_until_the_updated_config_is_proven_running() {
         .calls()
         .iter()
         .any(|call| call == "start:weather"));
-    assert_eq!(fixture.runtime.state_of("weather").as_deref(), Some("running"));
+    assert_eq!(
+        fixture.runtime.state_of("weather").as_deref(),
+        Some("running")
+    );
 }
 
 /// A desired-disabled update that bailed at the stop gate converges to a
@@ -1025,7 +1014,6 @@ async fn reconcile_keeps_an_update_needs_reconcile_when_the_start_is_unobservabl
     );
 }
 
-
 /// The happy path still swaps: the old runtime is confirmed stopped before the
 /// new configuration starts, in that order.
 #[tokio::test]
@@ -1152,7 +1140,10 @@ async fn an_update_start_that_never_answers_needs_reconcile() {
         .repository()
         .list_needing_reconcile()
         .expect("reconcile list")[0];
-    assert_eq!(op.reconcile_reason.as_deref(), Some("update_start_timed_out"));
+    assert_eq!(
+        op.reconcile_reason.as_deref(),
+        Some("update_start_timed_out")
+    );
     assert_eq!(
         fixture
             .service
@@ -1174,11 +1165,8 @@ async fn an_update_start_that_fails_is_reported_failed_not_complete() {
     let fixture = fixture();
     let id = fixture.repository.seed(record("weather", 1, false));
     fixture.runtime.set_state("weather", "running");
-    *fixture
-        .runtime
-        .start_result
-        .lock()
-        .expect("start_result") = Some("handshake refused".to_string());
+    *fixture.runtime.start_result.lock().expect("start_result") =
+        Some("handshake refused".to_string());
 
     let error = fixture
         .service
@@ -1268,9 +1256,12 @@ async fn a_cold_start_that_becomes_running_is_proven_by_polling() {
     let id = fixture.repository.seed(record("weather", 1, true));
     // `start` is accepted but leaves the server `starting`; it reaches
     // `running` only after a few observations, like a slow npx handshake.
-    *fixture.runtime.start_state.lock().expect("start_state") =
-        Some("starting".to_string());
-    *fixture.runtime.running_after_observations.lock().expect("running_after") = 3;
+    *fixture.runtime.start_state.lock().expect("start_state") = Some("starting".to_string());
+    *fixture
+        .runtime
+        .running_after_observations
+        .lock()
+        .expect("running_after") = 3;
 
     let result = fixture
         .service
@@ -1319,8 +1310,7 @@ async fn a_start_that_never_becomes_running_in_the_window_needs_reconcile() {
     let fixture = fixture();
     let id = fixture.repository.seed(record("weather", 1, true));
     // Accepted, stuck in `starting`, and never flips to running.
-    *fixture.runtime.start_state.lock().expect("start_state") =
-        Some("starting".to_string());
+    *fixture.runtime.start_state.lock().expect("start_state") = Some("starting".to_string());
 
     let error = fixture
         .service
@@ -1524,7 +1514,10 @@ async fn uninstall_disables_then_stops_and_only_then_deletes() {
         .repository()
         .list_effects(&result.operation_id)
         .expect("effects");
-    let keys: Vec<&str> = effects.iter().map(|effect| effect.effect_key.as_str()).collect();
+    let keys: Vec<&str> = effects
+        .iter()
+        .map(|effect| effect.effect_key.as_str())
+        .collect();
     assert!(keys.contains(&"mcp.stop"), "got {keys:?}");
     assert!(keys.contains(&"mcp.delete"), "got {keys:?}");
     assert!(effects
@@ -1606,7 +1599,11 @@ async fn listing_tools_never_starts_or_invokes_anything() {
 async fn a_server_the_runtime_does_not_know_reports_a_stable_empty_result() {
     let fixture = fixture();
     let id = fixture.repository.seed(record("weather", 1, true));
-    let snapshot = fixture.service.mcp_tools(id).await.expect("tools read succeeds");
+    let snapshot = fixture
+        .service
+        .mcp_tools(id)
+        .await
+        .expect("tools read succeeds");
     assert_eq!(snapshot.source, "unavailable");
     assert!(snapshot.tools.is_empty());
     assert_eq!(snapshot.freshness, "unknown");
@@ -1641,8 +1638,11 @@ async fn a_failed_refresh_is_refused_and_keeps_the_last_known_snapshot() {
         .lock()
         .expect("tools")
         .insert("weather".to_string(), vec!["cached_tool".to_string()]);
-    *fixture.runtime.refresh_result.lock().expect("refresh_result") =
-        Some("connection reset".to_string());
+    *fixture
+        .runtime
+        .refresh_result
+        .lock()
+        .expect("refresh_result") = Some("connection reset".to_string());
 
     let error = fixture
         .service
@@ -1909,7 +1909,10 @@ async fn reconcile_completes_an_mcp_operation_whose_start_is_proven_running() {
 
     let report = fixture.service.reconcile().await.expect("reconcile");
 
-    assert_eq!(report.mcp_effects_recovered, vec!["mcp:weather:mcp.start".to_string()]);
+    assert_eq!(
+        report.mcp_effects_recovered,
+        vec!["mcp:weather:mcp.start".to_string()]
+    );
     assert!(report.still_needs_reconcile.is_empty());
     assert_eq!(
         fixture.service.operation(&op).expect("op").state,
@@ -1926,7 +1929,10 @@ async fn reconcile_completes_an_mcp_operation_whose_stop_is_proven() {
 
     let report = fixture.service.reconcile().await.expect("reconcile");
 
-    assert_eq!(report.mcp_effects_recovered, vec!["mcp:weather:mcp.stop".to_string()]);
+    assert_eq!(
+        report.mcp_effects_recovered,
+        vec!["mcp:weather:mcp.stop".to_string()]
+    );
     assert_eq!(
         fixture.service.operation(&op).expect("op").state,
         OperationState::Completed
@@ -1939,8 +1945,7 @@ async fn reconcile_keeps_an_mcp_delete_needs_reconcile_while_the_record_remains(
     // The delete effect crashed, but persistence still holds the record, so the
     // effect is unproven and must not be rolled forward or re-deleted.
     fixture.repository.seed(record("weather", 1, false));
-    let op =
-        crashed_mcp_operation(&fixture, "mcp.uninstall", "mcp.delete", "reconcile-del").await;
+    let op = crashed_mcp_operation(&fixture, "mcp.uninstall", "mcp.delete", "reconcile-del").await;
 
     let report = fixture.service.reconcile().await.expect("reconcile");
 
@@ -1957,7 +1962,11 @@ async fn reconcile_keeps_an_mcp_delete_needs_reconcile_while_the_record_remains(
         "reconcile never deletes persistence it cannot prove"
     );
     assert!(
-        fixture.repository.find_by_name("weather").expect("lookup").is_some(),
+        fixture
+            .repository
+            .find_by_name("weather")
+            .expect("lookup")
+            .is_some(),
         "the record survives until proven"
     );
 }
@@ -1965,8 +1974,7 @@ async fn reconcile_keeps_an_mcp_delete_needs_reconcile_while_the_record_remains(
 #[tokio::test]
 async fn reconcile_keeps_an_mcp_stop_needs_reconcile_when_the_runtime_still_runs() {
     let fixture = fixture();
-    let op =
-        crashed_mcp_operation(&fixture, "mcp.disable", "mcp.stop", "reconcile-running").await;
+    let op = crashed_mcp_operation(&fixture, "mcp.disable", "mcp.stop", "reconcile-running").await;
     // The server is still running, so a stop is not proven.
     fixture.runtime.set_state("weather", "running");
 
@@ -2005,7 +2013,10 @@ async fn reconcile_converges_a_refresh_once_the_runtime_proves_the_server_runnin
         vec!["mcp:weather:mcp.tools.refresh".to_string()]
     );
     assert!(report.still_needs_reconcile.is_empty());
-    assert!(fixture.runtime.calls().contains(&"refresh:weather".to_string()));
+    assert!(fixture
+        .runtime
+        .calls()
+        .contains(&"refresh:weather".to_string()));
     assert_eq!(
         fixture.service.operation(&op).expect("op").state,
         OperationState::Completed
@@ -2164,12 +2175,7 @@ fn adapters_never_call_an_mcp_mutation_primitive_directly() {
     // the store, the database or the runtime, because it does not depend on them.
     // Path strings do appear in its fixtures, so the ban is on the owners, not on
     // any mention of a directory.
-    const CLI_FORBIDDEN: [&str; 4] = [
-        "MainStore",
-        "ToolManager",
-        "rusqlite",
-        "chatspeed_lib::db",
-    ];
+    const CLI_FORBIDDEN: [&str; 4] = ["MainStore", "ToolManager", "rusqlite", "chatspeed_lib::db"];
     for path in [
         "src/bin/cs/mcp.rs",
         "src/bin/cs/skill.rs",
@@ -2196,7 +2202,13 @@ fn the_capability_surface_does_not_grow_an_export_or_automation_path() {
         assert!(
             present(
                 &text,
-                ["export", "import_all", "automation", "benchmark", "marketplace"]
+                [
+                    "export",
+                    "import_all",
+                    "automation",
+                    "benchmark",
+                    "marketplace"
+                ]
             )
             .is_empty(),
             "{path} must not introduce an excluded capability"

@@ -147,10 +147,7 @@ pub fn verify_file_manifest(
 ) -> Result<ManifestVerdict, CapabilityError> {
     if !root.exists() {
         return Ok(ManifestVerdict::Drifted {
-            missing: expected
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect(),
+            missing: expected.iter().map(|entry| entry.path.clone()).collect(),
             added: Vec::new(),
             changed: Vec::new(),
         });
@@ -234,7 +231,9 @@ mod tests {
         fs::write(root.join("SKILL.md"), "---\nname: demo\n---\nCHANGED").expect("edit skill");
         let verdict = verify_file_manifest(&root, &manifest).expect("verify");
         match verdict {
-            ManifestVerdict::Drifted { changed, .. } => assert_eq!(changed, vec!["SKILL.md".to_string()]),
+            ManifestVerdict::Drifted { changed, .. } => {
+                assert_eq!(changed, vec!["SKILL.md".to_string()])
+            }
             ManifestVerdict::Match => panic!("edited content must be reported as drift"),
         }
     }

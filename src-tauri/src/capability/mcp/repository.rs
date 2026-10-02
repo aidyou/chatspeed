@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use crate::capability::error::{code, CapabilityError};
-use crate::db::{MainStore, Mcp};
 use crate::db::StoreError;
+use crate::db::{MainStore, Mcp};
 use crate::mcp::client::McpServerConfig;
 
 /// Maps a storage failure onto the stable capability error contract.
@@ -53,9 +53,7 @@ fn storage_error(error: StoreError) -> CapabilityError {
 /// The store reports "no such row" as an error, but for a capability mutation
 /// absence is a normal answer that must stay distinguishable from a storage
 /// failure, so it becomes `Ok(None)` here.
-fn to_record_option(
-    result: Result<Mcp, StoreError>,
-) -> Result<Option<Mcp>, CapabilityError> {
+fn to_record_option(result: Result<Mcp, StoreError>) -> Result<Option<Mcp>, CapabilityError> {
     match result {
         Ok(mcp) => Ok(Some(mcp)),
         Err(StoreError::NotFound(_)) => Ok(None),
@@ -65,7 +63,8 @@ fn to_record_option(
 
 /// A request to register a new MCP server.
 #[derive(Debug, Clone)]
-pub struct NewMcpRecord {    pub name: String,
+pub struct NewMcpRecord {
+    pub name: String,
     pub description: String,
     pub config: McpServerConfig,
     /// A new registration is disabled until the user explicitly enables it, so
@@ -156,7 +155,10 @@ impl McpRepositoryPort for MainStoreMcpRepository {
         config: McpServerConfig,
         disabled: bool,
     ) -> Result<Option<Mcp>, CapabilityError> {
-        to_record_option(self.store.update_mcp(id, name, description, config, disabled))
+        to_record_option(
+            self.store
+                .update_mcp(id, name, description, config, disabled),
+        )
     }
 
     fn set_disabled(&self, id: i64, disabled: bool) -> Result<Option<Mcp>, CapabilityError> {
@@ -164,9 +166,7 @@ impl McpRepositoryPort for MainStoreMcpRepository {
     }
 
     fn delete(&self, id: i64) -> Result<(), CapabilityError> {
-        self.store
-            .delete_mcp(id)
-            .map_err(storage_error)
+        self.store.delete_mcp(id).map_err(storage_error)
     }
 }
 

@@ -1,46 +1,20 @@
 //! Current-user discovery for the loopback workflow control plane.
 //!
-//! The running desktop app publishes a discovery document so local clients
-//! (the `cs` CLI today, future chat clients later) can find the endpoint and
-//! authenticate. The document contains a random per-instance bearer token and
-//! is only readable by the current user (Unix `0700`/`0600`; on Windows the
-//! file lives under the current-user profile and inherits its ACL).
-//!
-//! The token must never be logged or embedded in URLs.
+//! File I/O stays in the application crate; the discovery document schema is
+//! defined by `chatspeed-contracts` and re-exported here for compatibility.
 
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Discovery document file name inside the runtime directory.
-pub const DISCOVERY_FILE_NAME: &str = "control-plane-v1.json";
+pub use chatspeed_contracts::{ControlPlaneDiscovery, CONTROL_PLANE_HOST, DISCOVERY_FILE_NAME};
 
 /// Protocol major version advertised by the control plane.
-pub const CONTROL_PROTOCOL_VERSION: &str = "1";
-
-/// Loopback host the control plane binds to.
-pub const CONTROL_PLANE_HOST: &str = "127.0.0.1";
-
-/// A published control-plane discovery document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ControlPlaneDiscovery {
-    pub protocol_version: String,
-    pub server_instance_id: String,
-    pub pid: u32,
-    pub host: String,
-    pub port: u16,
-    pub token: String,
-    pub started_at: String,
-}
+pub const CONTROL_PROTOCOL_VERSION: &str = chatspeed_contracts::PROTOCOL_VERSION;
 
 /// Root of the discovery runtime directory:
 /// `${CHATSPEED_HOME:-~/.chatspeed}/runtime`.
 pub fn discovery_dir() -> PathBuf {
-    if let Some(home) = std::env::var_os("CHATSPEED_HOME") {
-        return PathBuf::from(home).join("runtime");
-    }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

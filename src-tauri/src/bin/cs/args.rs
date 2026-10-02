@@ -581,7 +581,8 @@ mod tests {
             _ => panic!("expected the doctor command"),
         }
 
-        let capabilities = parse(&["cscli", "doctor", "capabilities"]).expect("doctor capabilities");
+        let capabilities =
+            parse(&["cscli", "doctor", "capabilities"]).expect("doctor capabilities");
         match capabilities.command {
             Command::Doctor {
                 command: Some(DoctorCommand::Capabilities),
@@ -598,14 +599,8 @@ mod tests {
             } => assert!(idempotency_key.is_none()),
             _ => panic!("expected doctor reconcile"),
         }
-        let keyed = parse(&[
-            "cscli",
-            "doctor",
-            "reconcile",
-            "--idempotency-key",
-            "k-1",
-        ])
-        .expect("doctor reconcile with key");
+        let keyed = parse(&["cscli", "doctor", "reconcile", "--idempotency-key", "k-1"])
+            .expect("doctor reconcile with key");
         match keyed.command {
             Command::Doctor {
                 command: Some(DoctorCommand::Reconcile { idempotency_key }),
@@ -616,13 +611,19 @@ mod tests {
 
     #[test]
     fn skill_and_mcp_read_commands_parse() {
-        match parse(&["cscli", "skill", "targets"]).expect("skill targets").command {
+        match parse(&["cscli", "skill", "targets"])
+            .expect("skill targets")
+            .command
+        {
             Command::Skill {
                 command: SkillCommand::Targets,
             } => {}
             _ => panic!("expected skill targets"),
         }
-        match parse(&["cscli", "skill", "list"]).expect("skill list").command {
+        match parse(&["cscli", "skill", "list"])
+            .expect("skill list")
+            .command
+        {
             Command::Skill {
                 command: SkillCommand::List,
             } => {}

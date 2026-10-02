@@ -116,10 +116,7 @@ pub fn redact_json(value: &Value) -> Value {
 
 /// Whether a value is the kind of thing a secret can be stored in.
 fn can_hold_secret(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::String(_) | Value::Array(_) | Value::Object(_)
-    )
+    matches!(value, Value::String(_) | Value::Array(_) | Value::Object(_))
 }
 
 /// Redacts every value of an `env`/`headers`-style container while keeping its

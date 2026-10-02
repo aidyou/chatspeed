@@ -1,31 +1,49 @@
-use crate::db::{MainStore, ProxyGroup};
-use serde_json::Value;
+//! Proxy-group Tauri commands.
+//!
+//! Proxy groups and the active-group setting are owned by the runtime store.
+//! These wrappers only translate the Tauri wire into
+//! `/control/v1/data-commands/*` calls through the [`RuntimeSupervisor`].
+
 use std::sync::Arc;
+
+use serde_json::Value;
 use tauri::{command, State};
 
-use crate::error::{AppError, Result};
+use crate::db::ProxyGroup;
+use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_data::ProxyGroupBatchUpdateBody;
 
+/// Lists all proxy groups.
 #[command]
-pub fn proxy_group_list(state: State<Arc<MainStore>>) -> Result<Vec<ProxyGroup>> {
-    let store = &*state;
-    Ok(store.config.get_proxy_groups())
+pub async fn proxy_group_list(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<Vec<ProxyGroup>, String> {
+    crate::runtime_data::proxy_group_list(supervisor.inner().as_ref()).await
 }
 
+/// Adds a proxy group and returns its id.
 #[command]
-pub fn proxy_group_add(state: State<Arc<MainStore>>, item: ProxyGroup) -> Result<i64> {
-    let store = &*state;
-    store.proxy_group_add(&item).map_err(AppError::Db)
+pub async fn proxy_group_add(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    item: ProxyGroup,
+) -> Result<i64, String> {
+    crate::runtime_data::proxy_group_add(supervisor.inner().as_ref(), item).await
 }
 
+/// Updates a proxy group.
 #[command]
-pub fn proxy_group_update(state: State<Arc<MainStore>>, item: ProxyGroup) -> Result<()> {
-    let store = &*state;
-    store.proxy_group_update(&item).map_err(AppError::Db)
+pub async fn proxy_group_update(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    item: ProxyGroup,
+) -> Result<(), String> {
+    crate::runtime_data::proxy_group_update(supervisor.inner().as_ref(), item).await
 }
 
+/// Applies prompt-injection edits to many proxy groups.
 #[command]
-pub fn proxy_group_batch_update(
-    state: State<Arc<MainStore>>,
+#[allow(clippy::too_many_arguments)]
+pub async fn proxy_group_batch_update(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     ids: Vec<i64>,
     prompt_injection: Option<String>,
     prompt_text: Option<String>,
@@ -33,10 +51,10 @@ pub fn proxy_group_batch_update(
     injection_position: Option<String>,
     injection_condition: Option<String>,
     prompt_replace: Option<Value>,
-) -> Result<()> {
-    let store = &*state;
-    store
-        .proxy_group_batch_update(
+) -> Result<(), String> {
+    crate::runtime_data::proxy_group_batch_update(
+        supervisor.inner().as_ref(),
+        ProxyGroupBatchUpdateBody {
             ids,
             prompt_injection,
             prompt_text,
@@ -44,33 +62,33 @@ pub fn proxy_group_batch_update(
             injection_position,
             injection_condition,
             prompt_replace,
-        )
-        .map_err(AppError::Db)
+        },
+    )
+    .await
 }
 
+/// Deletes a proxy group.
 #[command]
-pub fn proxy_group_delete(state: State<Arc<MainStore>>, id: i64) -> Result<()> {
-    let store = &*state;
-    store.proxy_group_delete(id).map_err(AppError::Db)
+pub async fn proxy_group_delete(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+) -> Result<(), String> {
+    crate::runtime_data::proxy_group_delete(supervisor.inner().as_ref(), id).await
 }
 
+/// Sets the active proxy group name.
 #[command]
-pub fn set_active_proxy_group(state: State<Arc<MainStore>>, name: String) -> Result<()> {
-    let store = &*state;
-    store
-        .set_config(
-            crate::constants::CFG_ACTIVE_PROXY_GROUP,
-            &serde_json::json!(name),
-        )
-        .map_err(AppError::Db)
+pub async fn set_active_proxy_group(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    name: String,
+) -> Result<(), String> {
+    crate::runtime_data::set_active_proxy_group(supervisor.inner().as_ref(), name).await
 }
 
+/// Returns the active proxy group name.
 #[command]
-pub fn get_active_proxy_group(state: State<Arc<MainStore>>) -> Result<String> {
-    let store = &*state;
-    Ok(store
-        .config
-        .get_setting(crate::constants::CFG_ACTIVE_PROXY_GROUP)
-        .and_then(|value| value.as_str().map(ToString::to_string))
-        .unwrap_or_else(|| "default".to_string()))
+pub async fn get_active_proxy_group(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<String, String> {
+    crate::runtime_data::get_active_proxy_group(supervisor.inner().as_ref()).await
 }

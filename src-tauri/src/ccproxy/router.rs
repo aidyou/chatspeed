@@ -855,9 +855,7 @@ fn decision_routes(mode: GroupMode) -> Router<Arc<SharedState>> {
         }
         GroupMode::None => {
             let decision_handler = post(
-                move |State(state): State<Arc<SharedState>>,
-                      headers: HeaderMap,
-                      body: Bytes| async move {
+                move |State(state): State<Arc<SharedState>>, headers: HeaderMap, body: Bytes| async move {
                     decision_logic(state, headers, body, None)
                         .await
                         .map_err(|e| e.into_response())

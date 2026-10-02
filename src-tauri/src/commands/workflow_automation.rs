@@ -1,110 +1,107 @@
 //! Tauri adapters for local workflow automation.
 //!
-//! These are thin wire-conversion shims. Every read and mutation resolves to the
-//! single `AutomationApplicationService` facade (reached through the workflow
-//! runtime owner), so the desktop editor can never diverge from the control plane
+//! These are thin transport shims over the standalone runtime control plane.
+//! Every read and mutation resolves to the one automation owner the runtime
+//! process holds, so the desktop editor can never diverge from the control plane
 //! or the scheduler about validation, errors, revision or status (AC-1/INV-2).
 //! Command names and the historical camelCase return shapes are preserved; the
 //! only additive change is `delete`'s optional `confirm` flag (AC-10).
+//!
+//! The commands never inject `WorkflowApplicationService`, `MainStore` or a
+//! scheduler: [`runtime_automation`] maps each wire onto the documented
+//! `/control/v1` automation routes through the [`RuntimeSupervisor`].
+//!
+//! ## Module wiring
+//!
+//! `runtime_automation` is included from here with an explicit `#[path]` so this
+//! unit does not have to edit `lib.rs` (several sibling units touch the module
+//! list there). When that concurrency is done the parent may hoist the
+//! declaration to `lib.rs` as `#[cfg(feature = "desktop")] mod runtime_automation;`.
 
 use crate::db::{WorkflowAutomation, WorkflowAutomationRun};
+use crate::runtime_client::RuntimeSupervisor;
 use crate::workflow::automation::types::{
     AutomationApplyRequest, AutomationDraftInput, AutomationMutationResult, AutomationPlanV1,
     AutomationRunView, WorkflowAutomationRequest, WorkflowAutomationRunNowResult,
-    AUTOMATION_ACTOR_SCOPE_DESKTOP,
 };
-use crate::workflow::react::application::WorkflowApplicationService;
 use std::sync::Arc;
 use tauri::State;
 
+#[path = "../runtime_automation.rs"]
+mod runtime_automation;
+
 #[tauri::command]
 pub async fn workflow_automation_list(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
 ) -> Result<Vec<WorkflowAutomation>, String> {
-    svc.automation()
-        .list_rows()
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_list(supervisor.inner().as_ref()).await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_get(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: String,
 ) -> Result<Option<WorkflowAutomation>, String> {
-    svc.automation().get_row(&id).map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_get(supervisor.inner().as_ref(), &id).await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_save(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     request: WorkflowAutomationRequest,
 ) -> Result<WorkflowAutomation, String> {
-    svc.automation()
-        .compat_save(&request)
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_save(supervisor.inner().as_ref(), request).await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_delete(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: String,
     confirm: Option<bool>,
 ) -> Result<(), String> {
-    svc.automation()
-        .delete(
-            &id,
-            confirm.unwrap_or(false),
-            AUTOMATION_ACTOR_SCOPE_DESKTOP,
-            None,
-        )
-        .map(|_| ())
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_delete(
+        supervisor.inner().as_ref(),
+        &id,
+        confirm.unwrap_or(false),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_set_enabled(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
-    svc.automation()
-        .set_enabled(&id, enabled, None, AUTOMATION_ACTOR_SCOPE_DESKTOP, None)
-        .map(|_| ())
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_set_enabled(supervisor.inner().as_ref(), &id, enabled).await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_list_runs(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     automation_id: String,
 ) -> Result<Vec<WorkflowAutomationRun>, String> {
-    svc.automation()
-        .run_rows(&automation_id)
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_list_runs(supervisor.inner().as_ref(), &automation_id).await
 }
 
 #[tauri::command]
 pub async fn workflow_automation_run_now(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     automation_id: String,
 ) -> Result<WorkflowAutomationRunNowResult, String> {
-    // The compatibility command performs the run only through the runtime
-    // owner's typed facade: `automation_run_compat` delegates to
-    // `automation_run`, which owns the single manual-run kernel. The command
-    // itself holds no automation write logic and never reaches the raw service
-    // helper (AC-1/INV-2); it only preserves the historical camelCase return
-    // shape (INV-9).
-    svc.automation_run_compat(automation_id).await
+    // The manual run resolves to the runtime's single manual-run kernel through
+    // the canonical `/run` route; the desktop holds no run logic (AC-1/INV-2).
+    runtime_automation::automation_run_now(supervisor.inner().as_ref(), &automation_id).await
 }
 
 /// Structured, side-effect-free plan for the draft/apply preview (AC-3/INV-4).
 /// Returns the canonical `snake_case` plan; the store maps it for display.
 #[tauri::command]
 pub async fn workflow_automation_draft(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     input: AutomationDraftInput,
 ) -> Result<AutomationPlanV1, String> {
-    svc.automation().draft(input).map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_draft(supervisor.inner().as_ref(), input).await
 }
 
 /// Applies a previously reviewed plan (AC-4). A tampered hash, moved revision or
@@ -112,16 +109,10 @@ pub async fn workflow_automation_draft(
 /// surfaces without a partial write.
 #[tauri::command]
 pub async fn workflow_automation_apply(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     request: AutomationApplyRequest,
 ) -> Result<AutomationMutationResult, String> {
-    svc.automation()
-        .apply(
-            &request,
-            AUTOMATION_ACTOR_SCOPE_DESKTOP,
-            None,
-        )
-        .map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_apply(supervisor.inner().as_ref(), request).await
 }
 
 /// The projected run lifecycle (snake_case) joined from the durable workflow
@@ -129,8 +120,8 @@ pub async fn workflow_automation_apply(
 /// camelCase `workflow_automation_list_runs` wire.
 #[tauri::command]
 pub async fn workflow_automation_run_views(
-    svc: State<'_, Arc<WorkflowApplicationService>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     automation_id: String,
 ) -> Result<Vec<AutomationRunView>, String> {
-    svc.automation().runs(&automation_id).map_err(|e| e.to_tauri_string())
+    runtime_automation::automation_run_views(supervisor.inner().as_ref(), &automation_id).await
 }

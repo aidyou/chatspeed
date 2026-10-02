@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use reqwest::Url;
 use rust_i18n::t;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
     constants::RESTRICTED_EXTENSIONS,
-    db::MainStore,
     http::{
         client::{HttpClient, HttpProxyConfig},
         types::HttpConfig,
@@ -17,7 +17,10 @@ use crate::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
-    tools::{error::ToolError, NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition},
+    tools::{
+        error::ToolError, web_config::WebToolConfig, NativeToolResult, ToolCallResult,
+        ToolCategory, ToolDefinition,
+    },
 };
 
 const DIRECT_TEXT_FETCH_EXTENSIONS: &[&str] = &[
@@ -98,11 +101,12 @@ struct WebFetchProxyConfig {
 /// A web scraper tool that uses Tauri's Webview to extract content from URLs
 pub struct WebFetch {
     app_handle: AppHandle<tauri::Wry>,
+    config: Arc<dyn WebToolConfig>,
 }
 
 impl WebFetch {
-    pub fn new(app_handle: AppHandle<tauri::Wry>) -> Self {
-        Self { app_handle }
+    pub fn new(app_handle: AppHandle<tauri::Wry>, config: Arc<dyn WebToolConfig>) -> Self {
+        Self { app_handle, config }
     }
 
     fn is_direct_text_candidate(url: &str) -> bool {
@@ -156,17 +160,14 @@ impl WebFetch {
     }
 
     fn get_proxy(&self) -> Result<WebFetchProxyConfig, ToolError> {
-        let main_store = self.app_handle.state::<std::sync::Arc<MainStore>>().inner();
-        let store = main_store.as_ref();
-
-        let proxy_type = store.get_config("proxy_type", String::new());
+        let proxy_type = self.config.get_string("proxy_type", "");
         if proxy_type == "http" {
-            let proxy_server = store.get_config("proxy_server", String::new());
+            let proxy_server = self.config.get_string("proxy_server", "");
             if proxy_server.is_empty() {
                 Ok(WebFetchProxyConfig::default())
             } else {
-                let proxy_username = store.get_config("proxy_username", String::new());
-                let proxy_password = store.get_config("proxy_password", String::new());
+                let proxy_username = self.config.get_string("proxy_username", "");
+                let proxy_password = self.config.get_string("proxy_password", "");
                 Ok(WebFetchProxyConfig {
                     server: Some(proxy_server),
                     username: if proxy_username.is_empty() {

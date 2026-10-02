@@ -13,7 +13,7 @@ use rust_i18n::t;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
-    sync::{Arc, Once},
+    sync::Once,
 };
 use tauri::AppHandle;
 use tokio::{
@@ -28,7 +28,6 @@ use tower_http::{
     services::ServeDir,
 };
 
-use crate::{ai::interaction::chat_completion::ChatState, ccproxy, db::MainStore};
 use crate::{
     HTTP_SERVER, HTTP_SERVER_DIR, HTTP_SERVER_THEME_DIR, HTTP_SERVER_TMP_DIR,
     HTTP_SERVER_UPLOAD_DIR, SCHEMA_DIR, SHARED_DATA_DIR, STORE_DIR,
@@ -36,19 +35,19 @@ use crate::{
 
 static INIT: Once = Once::new();
 
-/// Starts an HTTP server with multiple static directories.
+/// Starts the desktop-only static file server.
+///
+/// This server serves the theme/upload/tmp assets and the `/save/png` endpoint
+/// and nothing runtime-owned: the OpenAI-compatible chat completion proxy and
+/// its `/control/v1` control plane are both owned by the standalone runtime, so
+/// the desktop neither opens the canonical database nor binds a second proxy.
 ///
 /// # Arguments
 /// * `app` - Tauri application handle.
-/// * `main_store` - Shared main store for configuration and data.
 ///
 /// # Returns
 /// * `Result<(), String>` - Returns `Ok(())` on success, or an error message on failure.
-pub async fn start_http_server(
-    app: &AppHandle,
-    main_store: Arc<MainStore>,
-    chat_state: Arc<ChatState>,
-) -> Result<(), String> {
+pub async fn start_http_server(app: &AppHandle) -> Result<(), String> {
     log::info!("start_http_server function entered.");
     // plugins dir
     let app_data_dir = get_app_data_dir(app)?;
@@ -147,24 +146,6 @@ pub async fn start_http_server(
         }
     });
 
-    // The loopback chat-completion proxy is served through the shared launcher,
-    // so the desktop and a headless instance own exactly the same proxy surface
-    // and publish their own address into `CHAT_COMPLETION_PROXY`.
-    let ccproxy_version = app.package_info().version.to_string();
-    let mut ccproxy_shutdown_rx = shutdown_tx.subscribe();
-    let ccproxy_handle = task::spawn(async move {
-        let proxy =
-            match ccproxy::launcher::start(main_store.clone(), chat_state.clone(), ccproxy_version)
-                .await
-            {
-                Ok(proxy) => proxy,
-                Err(error) => return Err(error),
-            };
-        let _ = ccproxy_shutdown_rx.recv().await;
-        proxy.shutdown().await;
-        Ok(())
-    });
-
     // Start a temporary file cleanup task
     let tx_clone = shutdown_tx.clone();
     let cleanup_handle = task::spawn(async move {
@@ -183,11 +164,6 @@ pub async fn start_http_server(
         result = serve_handle => {
             if let Err(e) = result.unwrap_or_else(|e| Err(format!("HTTP server task panicked: {}", e))) {
                 log::error!("HTTP server failed: {}", e);
-            }
-        },
-        result = ccproxy_handle => {
-            if let Err(e) = result.unwrap_or_else(|e| Err(format!("CCProxy server task panicked: {}", e))) {
-                log::error!("CCProxy server failed: {}", e);
             }
         },
         _ = cleanup_handle => {

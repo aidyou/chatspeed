@@ -104,7 +104,11 @@ pub fn parse_descriptor(value: &Value) -> Result<ParsedDescriptor, CapabilityErr
                 ));
             }
         },
-        _ => return Err(invalid("'type' is required and must be 'stdio' or 'streamable_http'")),
+        _ => {
+            return Err(invalid(
+                "'type' is required and must be 'stdio' or 'streamable_http'",
+            ))
+        }
     };
 
     let url = optional_string(object.get("url"), "url")?;
@@ -139,7 +143,9 @@ pub fn parse_descriptor(value: &Value) -> Result<ParsedDescriptor, CapabilityErr
             validate_executable(&command)?;
             if let Some(values) = args.as_ref() {
                 if values.len() > MAX_ARGS {
-                    return Err(invalid(format!("'args' accepts at most {MAX_ARGS} entries")));
+                    return Err(invalid(format!(
+                        "'args' accepts at most {MAX_ARGS} entries"
+                    )));
                 }
                 for arg in values {
                     validate_argument(arg)?;
@@ -251,8 +257,10 @@ fn parse_env(field: Option<&Value>) -> Result<Option<Vec<(String, String)>>, Cap
                     .as_array()
                     .filter(|pair| pair.len() == 2)
                     .ok_or_else(|| {
-                        invalid("'env' entries must be [NAME, VALUE] pairs; a bare object is not \
-                                accepted because its values would leak into logs")
+                        invalid(
+                            "'env' entries must be [NAME, VALUE] pairs; a bare object is not \
+                                accepted because its values would leak into logs",
+                        )
                     })?;
                 let name = entry[0]
                     .as_str()
@@ -396,7 +404,8 @@ mod tests {
             "bearer_token": "tok",
             "timeout": 30
         }))
-        .expect("valid http descriptor").config;
+        .expect("valid http descriptor")
+        .config;
         assert_eq!(config.protocol_type, McpProtocolType::StreamableHttp);
         assert_eq!(config.bearer_token.as_deref(), Some("tok"));
         assert_eq!(config.timeout, Some(30));
@@ -424,7 +433,13 @@ mod tests {
 
     #[test]
     fn a_shell_command_line_is_refused() {
-        for command in ["node server.js", "bash -c 'rm -rf /'", "$(whoami)", "a;b", "a|b"] {
+        for command in [
+            "node server.js",
+            "bash -c 'rm -rf /'",
+            "$(whoami)",
+            "a;b",
+            "a|b",
+        ] {
             let error = parse_descriptor(&json!({
                 "name": "weather", "type": "stdio", "command": command
             }))
@@ -464,7 +479,10 @@ mod tests {
         .expect("pair env")
         .config
         .env;
-        assert_eq!(pairs, Some(vec![("API_TOKEN".to_string(), "value".to_string())]));
+        assert_eq!(
+            pairs,
+            Some(vec![("API_TOKEN".to_string(), "value".to_string())])
+        );
 
         let error = parse_descriptor(&json!({
             "name": "weather", "type": "stdio", "command": "node",
@@ -519,5 +537,4 @@ mod tests {
         .expect_err("unknown field");
         assert!(!error.redacted_message().contains("canary-env-value"));
     }
-
 }

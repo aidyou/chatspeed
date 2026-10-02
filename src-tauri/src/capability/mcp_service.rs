@@ -337,12 +337,21 @@ mod tests {
         );
 
         let views = project_mcp_servers(&servers, Some(&observation));
-        let weather = views.iter().find(|view| view.name == "weather").expect("weather");
-        assert_eq!(weather.drift.as_deref(), Some(DRIFT_DESIRED_BUT_NOT_RUNNING));
+        let weather = views
+            .iter()
+            .find(|view| view.name == "weather")
+            .expect("weather");
+        assert_eq!(
+            weather.drift.as_deref(),
+            Some(DRIFT_DESIRED_BUT_NOT_RUNNING)
+        );
         assert_eq!(weather.tools.count, Some(0));
         assert_eq!(weather.tools.freshness, "observed");
 
-        let notes = views.iter().find(|view| view.name == "notes").expect("notes");
+        let notes = views
+            .iter()
+            .find(|view| view.name == "notes")
+            .expect("notes");
         assert_eq!(notes.drift.as_deref(), Some(DRIFT_RUNNING_WHILE_DISABLED));
     }
 
@@ -355,7 +364,10 @@ mod tests {
         let views = project_mcp_servers(&servers, Some(&BTreeMap::new()));
         assert!(views[0].runtime.observed, "the runtime answered");
         assert_eq!(views[0].runtime.state, "stopped");
-        assert_eq!(views[0].drift.as_deref(), Some(DRIFT_DESIRED_BUT_NOT_RUNNING));
+        assert_eq!(
+            views[0].drift.as_deref(),
+            Some(DRIFT_DESIRED_BUT_NOT_RUNNING)
+        );
 
         // The same record with no observation at all claims nothing either way.
         let unobserved = project_mcp_servers(&servers, None);

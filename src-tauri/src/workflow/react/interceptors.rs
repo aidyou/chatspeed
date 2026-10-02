@@ -10,15 +10,15 @@ use crate::tools::{
     TOOL_WRITE_FILE,
 };
 use crate::workflow::react::constants::TASK_FINISHED;
+use crate::workflow::react::decision::{
+    CompletionReportCandidate, CompletionReportOrigin, ToolApprovalReview,
+};
 use crate::workflow::react::engine::WorkflowExecutor;
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::events::WorkflowEvent;
 use crate::workflow::react::file_preview::{
     attach_display_context, attach_write_file_overwrite_old_content, normalize_preview_details,
     render_preview_details_text,
-};
-use crate::workflow::react::decision::{
-    CompletionReportCandidate, CompletionReportOrigin, ToolApprovalReview,
 };
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
@@ -2439,11 +2439,18 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
 
         let candidate_reports = Self::completion_report_candidates(
-            args, text_part, &self.pending_completion_reports, self.context.current_segment_id,
-        ).unwrap_or_default();
+            args,
+            text_part,
+            &self.pending_completion_reports,
+            self.context.current_segment_id,
+        )
+        .unwrap_or_default();
         let report_result = Self::resolve_completion_report_at_step(
-            args, text_part, &self.pending_completion_reports,
-            self.context.current_segment_id, self.current_step,
+            args,
+            text_part,
+            &self.pending_completion_reports,
+            self.context.current_segment_id,
+            self.current_step,
         );
         let mut completion_report = match report_result {
             Ok(report) => report,
@@ -2567,20 +2574,30 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         if !candidates_are_equivalent
             && (candidate_reports.len() > 1 || completion_report.content.is_empty())
         {
-            let reports = candidate_reports.iter().map(|candidate| CompletionReportCandidate {
-                content: candidate.content.clone(),
-                origin: if candidate.persist_as_message {
-                    CompletionReportOrigin::ThisCallSummary
-                } else if candidate.recency.0 == 1 {
-                    CompletionReportOrigin::ThisCallText
-                } else {
-                    CompletionReportOrigin::EarlierDraft
-                },
-            }).collect::<Vec<_>>();
+            let reports = candidate_reports
+                .iter()
+                .map(|candidate| CompletionReportCandidate {
+                    content: candidate.content.clone(),
+                    origin: if candidate.persist_as_message {
+                        CompletionReportOrigin::ThisCallSummary
+                    } else if candidate.recency.0 == 1 {
+                        CompletionReportOrigin::ThisCallText
+                    } else {
+                        CompletionReportOrigin::EarlierDraft
+                    },
+                })
+                .collect::<Vec<_>>();
             let user_request = self.context.current_user_request_since_last_completion();
-            if let Some(index) = self.intelligence_manager.review_completion(
-                &reports, self.final_review_mode_enabled(), &user_request, self.context.current_segment_id,
-            ).await {
+            if let Some(index) = self
+                .intelligence_manager
+                .review_completion(
+                    &reports,
+                    self.final_review_mode_enabled(),
+                    &user_request,
+                    self.context.current_segment_id,
+                )
+                .await
+            {
                 if let Some(selected) = candidate_reports.get(index) {
                     completion_report = ResolvedCompletionReport {
                         content: selected.content.clone(),
@@ -2593,7 +2610,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
         if completion_report.content.is_empty() {
             return Ok(Some(ReinforcedResult {
-                content: Self::completion_report_rejection_reminder("multiple different completion reports are available", true),
+                content: Self::completion_report_rejection_reminder(
+                    "multiple different completion reports are available",
+                    true,
+                ),
                 llm_content: None,
                 title: "FinishTask Error".to_string(),
                 summary: "Invalid completion report source".to_string(),
@@ -2711,10 +2731,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             .and_then(|tools| serde_json::from_str::<Vec<String>>(tools).ok())
             .is_some_and(|tools| {
                 tools.iter().any(|tool| {
-                    matches!(
-                        tool.as_str(),
-                        TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_BASH
-                    )
+                    matches!(tool.as_str(), TOOL_EDIT_FILE | TOOL_WRITE_FILE | TOOL_BASH)
                 })
             });
         if !required_sections.is_empty() && write_capable {
@@ -2729,7 +2746,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     Some("failed" | "blocked" | "data_missing")
                 )
             });
-            if has_failed_todo && !required_sections.iter().any(|section| section == "Failed reason") {
+            if has_failed_todo
+                && !required_sections
+                    .iter()
+                    .any(|section| section == "Failed reason")
+            {
                 required_sections.push("Failed reason".to_string());
             }
             if !Self::todos_allow_completion_report_capture(&todos) {
@@ -2810,8 +2831,13 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         let policy_engine =
             crate::tools::ShellPolicyEngine::new(self.path_guard.clone(), custom_rules);
         let execution_audit = policy_engine.execution_audit_decision(command_str);
-        let decision_may_approve = !matches!(execution_audit, crate::tools::ShellDecision::Review(_) | crate::tools::ShellDecision::Deny(_))
-            && !policy_engine.has_explicit_review_or_deny(command_str, self.policy.phase == ExecutionPhase::Planning);
+        let decision_may_approve = !matches!(
+            execution_audit,
+            crate::tools::ShellDecision::Review(_) | crate::tools::ShellDecision::Deny(_)
+        ) && !policy_engine.has_explicit_review_or_deny(
+            command_str,
+            self.policy.phase == ExecutionPhase::Planning,
+        );
         let shell_policy_decision =
             policy_engine.check(command_str, self.policy.phase == ExecutionPhase::Planning);
         if let crate::tools::ShellDecision::Deny(reason) = &shell_policy_decision {
@@ -2875,7 +2901,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             // Don't intercept - allow the read-only command
                         } else {
                             if let Some(review) = self
-                                .review_tool_call_for_smart_mode(TOOL_BASH, args, command_str, decision_may_approve)
+                                .review_tool_call_for_smart_mode(
+                                    TOOL_BASH,
+                                    args,
+                                    command_str,
+                                    decision_may_approve,
+                                )
                                 .await?
                             {
                                 if review.approved {

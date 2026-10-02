@@ -28,11 +28,31 @@ pub async fn run(
             descriptor_file,
             enable,
             idempotency_key,
-        } => install(cli, client, descriptor_json, descriptor_file, *enable, idempotency_key).await,
+        } => {
+            install(
+                cli,
+                client,
+                descriptor_json,
+                descriptor_file,
+                *enable,
+                idempotency_key,
+            )
+            .await
+        }
         McpCommand::Uninstall {
             name,
             idempotency_key,
-        } => mutation(cli, client, "mcp-uninstall", name, "uninstall", idempotency_key).await,
+        } => {
+            mutation(
+                cli,
+                client,
+                "mcp-uninstall",
+                name,
+                "uninstall",
+                idempotency_key,
+            )
+            .await
+        }
         McpCommand::Enable {
             name,
             idempotency_key,
@@ -154,9 +174,9 @@ async fn resolve_id(client: &ControlPlaneClient, name: &str) -> Result<i64, CliE
     value
         .as_array()
         .and_then(|servers| {
-            servers.iter().find(|server| {
-                server.get("name").and_then(Value::as_str) == Some(name)
-            })
+            servers
+                .iter()
+                .find(|server| server.get("name").and_then(Value::as_str) == Some(name))
         })
         .and_then(|server| server.get("id").and_then(Value::as_i64))
         .ok_or_else(|| CliError::Server {
@@ -184,13 +204,16 @@ fn read_document(
         (Some(text), None) => text.clone(),
         (None, Some(path)) if path.as_os_str() == "-" => {
             let mut buffer = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buffer)
-                .map_err(|e| CliError::io(format!("Failed to read the descriptor from stdin: {e}")))?;
+            std::io::stdin().read_to_string(&mut buffer).map_err(|e| {
+                CliError::io(format!("Failed to read the descriptor from stdin: {e}"))
+            })?;
             buffer
         }
         (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| {
-            CliError::io(format!("Failed to read the descriptor file {}: {e}", path.display()))
+            CliError::io(format!(
+                "Failed to read the descriptor file {}: {e}",
+                path.display()
+            ))
         })?,
         (None, None) => {
             return Err(CliError::usage(
@@ -203,9 +226,8 @@ fn read_document(
             ))
         }
     };
-    serde_json::from_str(&raw).map_err(|e| {
-        CliError::usage(format!("the MCP descriptor is not valid JSON: {e}"))
-    })
+    serde_json::from_str(&raw)
+        .map_err(|e| CliError::usage(format!("the MCP descriptor is not valid JSON: {e}")))
 }
 
 /// `<status>  <name>  <operation>` for a mutation result.
@@ -233,7 +255,11 @@ fn human_tools(value: &Value) -> Vec<String> {
         rust_i18n::t!("cs.mcp_tools_header"),
         text(value, "freshness")
     )];
-    let tools = value.get("tools").and_then(Value::as_array).cloned().unwrap_or_default();
+    let tools = value
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if tools.is_empty() {
         rows.push(rust_i18n::t!("cs.no_records").to_string());
         return rows;

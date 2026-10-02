@@ -55,16 +55,18 @@ pub async fn run(
             expected_plan_hash,
             acknowledge_permission_changes,
             idempotency_key,
-        } => apply(
-            cli,
-            client,
-            plan_json,
-            plan_file,
-            expected_plan_hash,
-            *acknowledge_permission_changes,
-            idempotency_key,
-        )
-        .await,
+        } => {
+            apply(
+                cli,
+                client,
+                plan_json,
+                plan_file,
+                expected_plan_hash,
+                *acknowledge_permission_changes,
+                idempotency_key,
+            )
+            .await
+        }
         AutomationCommand::Create {
             spec_json,
             spec_file,
@@ -76,21 +78,31 @@ pub async fn run(
             spec_file,
             expected_revision,
             idempotency_key,
-        } => update(
-            cli,
-            client,
-            automation_id,
-            spec_json,
-            spec_file,
-            *expected_revision,
-            idempotency_key,
-        )
-        .await,
+        } => {
+            update(
+                cli,
+                client,
+                automation_id,
+                spec_json,
+                spec_file,
+                *expected_revision,
+                idempotency_key,
+            )
+            .await
+        }
         AutomationCommand::Enable {
             automation_id,
             idempotency_key,
         } => {
-            simple_mutation(cli, client, automation_id, "enable", json!({}), idempotency_key).await
+            simple_mutation(
+                cli,
+                client,
+                automation_id,
+                "enable",
+                json!({}),
+                idempotency_key,
+            )
+            .await
         }
         AutomationCommand::Disable {
             automation_id,
@@ -110,14 +122,8 @@ pub async fn run(
             automation_id,
             idempotency_key,
         } => {
-            let value = mutation_request(
-                client,
-                automation_id,
-                "run",
-                json!({}),
-                idempotency_key,
-            )
-            .await?;
+            let value =
+                mutation_request(client, automation_id, "run", json!({}), idempotency_key).await?;
             render(cli, &value, human_dispatch)
         }
         AutomationCommand::Delete {
@@ -164,7 +170,9 @@ async fn draft(
         "spec": spec,
         "intent": intent,
     });
-    let value = client.post("/control/v1/automation-draft", body, None).await?;
+    let value = client
+        .post("/control/v1/automation-draft", body, None)
+        .await?;
     render(cli, &value, human_plan)
 }
 
@@ -183,7 +191,11 @@ async fn apply(
     let plan = read_document(plan_json, plan_file)?;
     let expected = expected_plan_hash
         .clone()
-        .or_else(|| plan.get("plan_hash").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            plan.get("plan_hash")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_default();
     let body = json!({
         "plan": plan,
@@ -285,18 +297,26 @@ fn read_document(
         (Some(text), None) => text.clone(),
         (None, Some(path)) if path.as_os_str() == "-" => {
             let mut buffer = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buffer)
-                .map_err(|e| CliError::io(format!("Failed to read the document from stdin: {e}")))?;
+            std::io::stdin().read_to_string(&mut buffer).map_err(|e| {
+                CliError::io(format!("Failed to read the document from stdin: {e}"))
+            })?;
             buffer
         }
         (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| {
-            CliError::io(format!("Failed to read the document {}: {e}", path.display()))
+            CliError::io(format!(
+                "Failed to read the document {}: {e}",
+                path.display()
+            ))
         })?,
         (None, None) => return Err(CliError::usage("a JSON document is required")),
-        _ => return Err(CliError::usage("inline and file inputs are mutually exclusive")),
+        _ => {
+            return Err(CliError::usage(
+                "inline and file inputs are mutually exclusive",
+            ))
+        }
     };
-    serde_json::from_str(&raw).map_err(|e| CliError::usage(format!("document is not valid JSON: {e}")))
+    serde_json::from_str(&raw)
+        .map_err(|e| CliError::usage(format!("document is not valid JSON: {e}")))
 }
 
 fn enabled_text(value: &Value) -> &'static str {
@@ -392,7 +412,10 @@ fn human_dispatch(value: &Value) -> Vec<String> {
 /// A plan reports its review status, hash, base revision and permission
 /// summary, plus any blocking warnings (AC-3/AC-4).
 fn human_plan(value: &Value) -> Vec<String> {
-    let summary = value.get("permission_summary").cloned().unwrap_or(Value::Null);
+    let summary = value
+        .get("permission_summary")
+        .cloned()
+        .unwrap_or(Value::Null);
     let mut rows = vec![
         rust_i18n::t!("cs.automation_plan_header").to_string(),
         format!(
@@ -481,7 +504,9 @@ mod tests {
             "warnings": [{ "code": "requires_explicit_mutation", "message": "cannot add shell" }],
         }));
         assert!(rows[1].contains("blocked"));
-        assert!(rows.iter().any(|row| row.contains("requires_explicit_mutation")));
+        assert!(rows
+            .iter()
+            .any(|row| row.contains("requires_explicit_mutation")));
     }
 
     #[test]
@@ -499,7 +524,10 @@ mod tests {
             "keep-me"
         );
         let generated = generated_idempotency_key(&None, "create");
-        assert!(generated.starts_with("cs-automation-create-"), "{generated}");
+        assert!(
+            generated.starts_with("cs-automation-create-"),
+            "{generated}"
+        );
         assert_ne!(generated, generated_idempotency_key(&None, "create"));
     }
 

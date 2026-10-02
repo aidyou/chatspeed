@@ -1,8 +1,6 @@
 use crate::commands::workflow::workflow_start_core;
 use crate::db::automation::ManualClaimOutcome;
-use crate::db::{
-    WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert,
-};
+use crate::db::{WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
 use crate::workflow::automation::errors::AutomationError;
 use crate::workflow::automation::types::{
     DailyScheduleConfig, IntervalScheduleConfig, OnceScheduleConfig, WorkflowAutomationRequest,
@@ -256,7 +254,9 @@ fn normalize_interval_schedule_config(
     serde_json::from_value(normalized).map_err(|e| e.to_string())
 }
 
-pub(crate) fn validate_automation_request(request: &WorkflowAutomationRequest) -> Result<(), String> {
+pub(crate) fn validate_automation_request(
+    request: &WorkflowAutomationRequest,
+) -> Result<(), String> {
     if request.title.trim().is_empty() {
         return Err("Automation title is required".to_string());
     }
