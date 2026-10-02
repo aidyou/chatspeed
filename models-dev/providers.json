@@ -85,7 +85,7 @@
       "documentationUrl": "https://docs.aiand.com/",
       "id": "aiand",
       "logo": "https://models.dev/logos/aiand.svg",
-      "modelCount": 11,
+      "modelCount": 13,
       "name": "ai&",
       "protocol": "openai",
       "responses": false
@@ -453,7 +453,7 @@
       "documentationUrl": "https://docs.cohere.com/docs/models",
       "id": "cohere",
       "logo": "https://models.dev/logos/cohere.svg",
-      "modelCount": 14,
+      "modelCount": 19,
       "name": "Cohere",
       "protocol": "openai",
       "responses": false
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 286,
+      "modelCount": 289,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -951,7 +951,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 394,
+      "modelCount": 396,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1041,7 +1041,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 429,
+      "modelCount": 430,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1386,7 +1386,7 @@
       "documentationUrl": "https://docs.api.nvidia.com/nim/",
       "id": "nvidia",
       "logo": "https://models.dev/logos/nvidia.svg",
-      "modelCount": 103,
+      "modelCount": 106,
       "name": "Nvidia",
       "protocol": "openai",
       "responses": false
@@ -1449,7 +1449,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 114,
+      "modelCount": 115,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1480,7 +1480,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 387,
+      "modelCount": 389,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1964,7 +1964,7 @@
       "documentationUrl": "https://docs.together.ai/docs/serverless-models",
       "id": "togetherai",
       "logo": "https://models.dev/logos/togetherai.svg",
-      "modelCount": 36,
+      "modelCount": 29,
       "name": "Together AI",
       "protocol": "openai",
       "responses": false
@@ -2061,7 +2061,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 115,
+      "modelCount": 116,
       "name": "Venice AI",
       "responses": false
     },
@@ -2069,7 +2069,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 395,
+      "modelCount": 402,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2298,9 +2298,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "fdb01f7da8db7d92f518a3765e2a5cd87b3ed185c1b3682e72c3dbfa1829d331",
-    "generatedAt": "2026-10-01T10:10:44Z",
+    "catalogSha256": "248ef623d451a166373cc5d9d73ae1b3dcabd3dae8f34a069bc26bf10684f7b1",
+    "generatedAt": "2026-10-02T09:48:38Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "2281b5e2bf65d443215810cd6f26fdb41b8d7f23"
+    "revision": "4c722beabb4b2710ac3d0124ef89906947a87166"
   }
 }
