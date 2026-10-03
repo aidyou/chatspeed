@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Trait that provides a mechanism to stop an ongoing process.
+#[async_trait::async_trait]
 pub trait Stoppable {
     /// Returns a reference to the stop flag, which is a shared, mutable boolean.
     fn stop_flag(&self) -> &Arc<Mutex<bool>>;
