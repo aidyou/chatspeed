@@ -206,7 +206,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 186,
+      "modelCount": 189,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -453,7 +453,7 @@
       "documentationUrl": "https://docs.cohere.com/docs/models",
       "id": "cohere",
       "logo": "https://models.dev/logos/cohere.svg",
-      "modelCount": 19,
+      "modelCount": 17,
       "name": "Cohere",
       "protocol": "openai",
       "responses": false
@@ -493,7 +493,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 67,
+      "modelCount": 68,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 289,
+      "modelCount": 290,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -614,6 +614,16 @@
       "logo": "https://models.dev/logos/empiriolabs.svg",
       "modelCount": 66,
       "name": "EmpirioLabs AI",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.engy.ai/v1",
+      "documentationUrl": "https://engy.ai/pricing",
+      "id": "engy",
+      "logo": "https://models.dev/logos/engy.svg",
+      "modelCount": 8,
+      "name": "engy",
       "protocol": "openai",
       "responses": false
     },
@@ -951,7 +961,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 396,
+      "modelCount": 397,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1041,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 430,
+      "modelCount": 438,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1131,7 +1141,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 193,
+      "modelCount": 195,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1305,7 +1315,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 600,
+      "modelCount": 599,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1449,7 +1459,7 @@
       "documentationUrl": "https://opencode.ai/docs/zen",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 115,
+      "modelCount": 116,
       "name": "OpenCode Zen",
       "protocol": "openai",
       "responses": false
@@ -1480,7 +1490,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 389,
+      "modelCount": 390,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1640,7 +1650,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 165,
+      "modelCount": 166,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -1860,7 +1870,7 @@
       "documentationUrl": "https://synthetic.new/pricing",
       "id": "synthetic",
       "logo": "https://models.dev/logos/synthetic.svg",
-      "modelCount": 10,
+      "modelCount": 11,
       "name": "Synthetic",
       "protocol": "openai",
       "responses": false
@@ -2169,7 +2179,7 @@
       "documentationUrl": "https://docs.x.ai/docs/models",
       "id": "xai",
       "logo": "https://models.dev/logos/xai.svg",
-      "modelCount": 12,
+      "modelCount": 13,
       "name": "xAI",
       "protocol": "openai",
       "responses": false
@@ -2298,9 +2308,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "248ef623d451a166373cc5d9d73ae1b3dcabd3dae8f34a069bc26bf10684f7b1",
-    "generatedAt": "2026-10-02T09:48:38Z",
+    "catalogSha256": "961a527068df7d079e84db674119353a13a08d6fb1246c7f75cf243305ea8955",
+    "generatedAt": "2026-10-03T09:11:30Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "4c722beabb4b2710ac3d0124ef89906947a87166"
+    "revision": "911e9c4be5b5cdab74a71c04fe5664cdff8abfc4"
   }
 }
