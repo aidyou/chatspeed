@@ -206,7 +206,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 189,
+      "modelCount": 191,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 290,
+      "modelCount": 291,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1315,7 +1315,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 599,
+      "modelCount": 600,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1345,7 +1345,7 @@
       "documentationUrl": "https://neon.com/docs",
       "id": "neon",
       "logo": "https://models.dev/logos/neon.svg",
-      "modelCount": 46,
+      "modelCount": 47,
       "name": "Neon",
       "protocol": "openai",
       "responses": true
@@ -2014,7 +2014,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs/orgs",
       "id": "umans-ai",
       "logo": "https://models.dev/logos/umans-ai.svg",
-      "modelCount": 6,
+      "modelCount": 7,
       "name": "Umans AI",
       "protocol": "openai",
       "responses": false
@@ -2024,7 +2024,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs",
       "id": "umans-ai-coding-plan",
       "logo": "https://models.dev/logos/umans-ai-coding-plan.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "Umans AI Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -2079,7 +2079,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 402,
+      "modelCount": 403,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2308,9 +2308,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "961a527068df7d079e84db674119353a13a08d6fb1246c7f75cf243305ea8955",
-    "generatedAt": "2026-10-03T09:11:30Z",
+    "catalogSha256": "e2b31e120fcbe40684e736f437239faac4b8a80bcd0dea21af3a3286554a8e1d",
+    "generatedAt": "2026-10-04T09:50:28Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "911e9c4be5b5cdab74a71c04fe5664cdff8abfc4"
+    "revision": "ced5fda697afe5b97e9b5536edb5200c4a6cbc01"
   }
 }
