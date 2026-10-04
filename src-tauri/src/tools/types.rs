@@ -1,9 +1,11 @@
+#[cfg(not(feature = "desktop"))]
 use std::fmt::Display;
 
 use rmcp::model::IntoContents as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolScope {
@@ -15,6 +17,7 @@ pub enum ToolScope {
     Both,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ToolScope {
     // Only the runtime's workflow engine renders a scope as a string.
     #[cfg(not(feature = "desktop"))]
@@ -27,6 +30,7 @@ impl ToolScope {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ToolCategory {
     FileSystem,
@@ -38,6 +42,7 @@ pub enum ToolCategory {
     Web,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Display for ToolCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

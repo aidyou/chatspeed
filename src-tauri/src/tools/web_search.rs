@@ -1,24 +1,18 @@
-use async_trait::async_trait;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::{str::FromStr as _, sync::Arc};
 use url::Url;
 
 use crate::{
-    ai::traits::chat::MCPToolDeclaration,
     constants::{CFG_SEARCH_ENGINE, RESTRICTED_EXTENSIONS, VIDEO_AND_IMAGE_DOMAINS},
     scraper::url_helper::{decode_bing_url, get_meta_refresh_url},
     search::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
         SerperSearch, TavilySearch,
     },
-    tools::{
-        error::ToolError, web_config::WebToolConfig, NativeToolResult, ToolCallResult,
-        ToolCategory, ToolDefinition,
-    },
+    tools::{error::ToolError, web_config::WebToolConfig, ToolCallResult},
 };
 use tauri::{AppHandle, Wry};
-use chatspeed_contracts::WEB_SEARCH_TOOL;
 
 pub struct Auth {
     pub api_key: String,
@@ -193,87 +187,7 @@ impl WebSearch {
     }
 }
 
-#[async_trait]
-impl ToolDefinition for WebSearch {
-    fn category(&self) -> ToolCategory {
-        ToolCategory::Web
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Both
-    }
-
-    /// Returns the name of the function.
-    fn name(&self) -> &str {
-        WEB_SEARCH_TOOL
-    }
-
-    /// Returns a brief description of the function.
-    fn description(&self) -> &str {
-        "Search the web for up-to-date information, current events, or data beyond your knowledge cutoff. \
-        Returns a list of search results including titles, snippets, and source URLs.\n\n\
-        **Best Practices:**\n\
-        - Use specific, targeted queries. Avoid vague or overly broad searches.\n\
-        - For Chinese topics, prefer searching in Chinese for better results.\n\
-        - `query` may be a string or an array of strings. Arrays are searched as quoted exact phrases joined with spaces.\n\
-        - ALWAYS analyze search results before deciding on next action.\n\
-        - After reviewing results, use web_fetch on the 1-3 most relevant URLs.\n\
-        - If results are insufficient, try completely different keywords before searching again.\n\
-        - Do NOT call web_search repeatedly with similar queries."
-    }
-
-    /// Returns the function calling spec.
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "oneOf": [
-                                { "type": "string" },
-                                { "type": "array", "items": { "type": "string" } }
-                            ],
-                            "description": "The search query or keywords. Use a string for normal search. Use an array of strings for exact phrase matching; phrases are quoted and joined with spaces."
-                        },
-                        "page": {
-                            "type": "integer",
-                            "default": 1,
-                            "minimum": 1,
-                            "description": "Starting page number for search results. Defaults to 1. The tool may fetch up to 3 pages from this starting page to satisfy the requested number of results."
-                        },
-                        "number": {
-                            "type": "integer",
-                            "default": 5,
-                            "minimum": 1,
-                            "maximum": 30,
-                            "description": "Number of results to return, between 1 and 30. For more results, use the 'page' parameter."
-                        },
-                        "time_period": {
-                            "type": "string",
-                            "enum": ["day", "week", "month", "year"],
-                            "description": "Filters search results to a specific time range. Use this to find recent or timely information. If omitted, no time filter is applied."
-                        },
-                        "response_format": {
-                            "type": "string",
-                            "enum": ["json", "xml"],
-                            "default": "json",
-                            "description": "The format of the response data. Defaults to 'json'."
-                        },
-                        "provider": {
-                            "type": "string",
-                            "description": "Optional search provider override. If omitted, the configured default search engine is used."
-                        }
-                    },
-                    "required": ["query"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
+impl WebSearch {
     /// Executes the function with the given parameters and context.
     ///
     /// # Arguments
@@ -281,7 +195,7 @@ impl ToolDefinition for WebSearch {
     ///
     /// # Returns
     /// Returns a `FunctionResult` containing the result of the function execution.
-    async fn call(&self, params: Value) -> NativeToolResult {
+    pub async fn call(&self, params: Value) -> Result<ToolCallResult, ToolError> {
         // 1. Extract parameters
         let provider_param = params
             .get("provider")

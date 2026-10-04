@@ -111,10 +111,14 @@ impl WindowChannels {
                         // 2. Then send the error/done/step/reference message separately
                         //
                         // Note: Reference message is an array, so can't combine simply!!!
-                        if chunk.r#type != MessageType::Text
-                            && chunk.r#type != MessageType::Reasoning
-                            && chunk.r#type != MessageType::Think
-                        {
+                        let is_streamable = matches!(
+                            chunk.r#type,
+                            MessageType::Text | MessageType::Reasoning
+                        );
+                        #[cfg(not(feature = "desktop"))]
+                        let is_streamable =
+                            is_streamable || chunk.r#type == MessageType::Think;
+                        if !is_streamable {
                             #[cfg(debug_assertions)]
                             log::debug!(
                                 "sending message: {}, type: {:?}",

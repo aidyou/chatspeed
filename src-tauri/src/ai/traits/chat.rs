@@ -8,7 +8,9 @@ use crate::ai::interaction::constants::{
 };
 #[cfg(not(feature = "desktop"))]
 use crate::db::ThinkingConfig;
-use crate::{ccproxy::ChatProtocol, tools::ToolScope};
+use crate::ccproxy::ChatProtocol;
+#[cfg(not(feature = "desktop"))]
+use crate::tools::ToolScope;
 
 #[cfg(not(feature = "desktop"))]
 use async_trait::async_trait;
@@ -29,6 +31,7 @@ pub enum MessageType {
     Reasoning,
     Reference,
     Text,
+    #[cfg(not(feature = "desktop"))]
     Think,
     ToolCalls, // Assistant tool selection
     ToolResults,
@@ -59,7 +62,9 @@ impl Display for MessageType {
         let s = match self {
             MessageType::Error => "error",
             MessageType::Finished => "finished",
-            MessageType::Reasoning | MessageType::Think => "reasoning",
+            MessageType::Reasoning => "reasoning",
+            #[cfg(not(feature = "desktop"))]
+            MessageType::Think => "reasoning",
             MessageType::Reference => "reference",
             MessageType::Text => "text",
             MessageType::ToolCalls => "tool_calls",
@@ -184,8 +189,10 @@ pub struct MCPToolDeclaration {
     pub input_schema: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
+    #[cfg(not(feature = "desktop"))]
     #[serde(default, skip_serializing)]
     pub disabled: bool,
+    #[cfg(not(feature = "desktop"))]
     #[serde(default, skip_serializing)]
     pub scope: Option<ToolScope>,
 }

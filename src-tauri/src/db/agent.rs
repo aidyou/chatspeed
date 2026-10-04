@@ -323,6 +323,7 @@ pub struct Agent {
     /// Optional shared sandbox scheme ID for auto and sandbox-only modes.
     pub sandbox_scheme_id: Option<String>,
     /// Resolved workflow sandbox snapshot; not persisted on agents.
+    #[cfg(not(feature = "desktop"))]
     #[serde(skip)]
     pub sandbox_config: Option<String>,
     /// JSON array of authorized directory paths
@@ -400,6 +401,7 @@ impl Agent {
             shell_policy,
             sandbox_execution_mode: ShellExecutionMode::HostOnly,
             sandbox_scheme_id: None,
+            #[cfg(not(feature = "desktop"))]
             sandbox_config: None,
             allowed_paths,
             final_audit,
@@ -560,6 +562,7 @@ impl From<&Row<'_>> for Agent {
                 .and_then(|mode| ShellExecutionMode::parse(&mode))
                 .unwrap_or(ShellExecutionMode::HostOnly),
             sandbox_scheme_id: row.get("sandbox_scheme_id").ok(),
+            #[cfg(not(feature = "desktop"))]
             sandbox_config: None,
             allowed_paths: row.get("allowed_paths").ok(),
             final_audit: row.get("final_audit").ok(),
@@ -942,6 +945,7 @@ mod tests {
             shell_policy: Some("[]".to_string()),
             sandbox_execution_mode: ShellExecutionMode::HostOnly,
             sandbox_scheme_id: None,
+            #[cfg(not(feature = "desktop"))]
             sandbox_config: None,
             allowed_paths: Some("[]".to_string()),
             final_audit: Some(false),

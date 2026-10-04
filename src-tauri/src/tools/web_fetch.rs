@@ -1,14 +1,11 @@
-use async_trait::async_trait;
 use reqwest::Url;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
-use chatspeed_contracts::WEB_FETCH_TOOL;
 
 use crate::{
-    ai::traits::chat::MCPToolDeclaration,
     constants::RESTRICTED_EXTENSIONS,
     http::{
         client::{HttpClient, HttpProxyConfig},
@@ -18,10 +15,7 @@ use crate::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
-    tools::{
-        error::ToolError, web_config::WebToolConfig, NativeToolResult, ToolCallResult,
-        ToolCategory, ToolDefinition,
-    },
+    tools::{error::ToolError, web_config::WebToolConfig, ToolCallResult},
 };
 
 const DIRECT_TEXT_FETCH_EXTENSIONS: &[&str] = &[
@@ -325,77 +319,9 @@ impl WebFetch {
     }
 }
 
-#[async_trait]
-impl ToolDefinition for WebFetch {
-    fn category(&self) -> ToolCategory {
-        ToolCategory::Web
-    }
-
-    fn scope(&self) -> crate::tools::ToolScope {
-        crate::tools::ToolScope::Both
-    }
-
-    /// Returns the name of the function.
-    fn name(&self) -> &str {
-        WEB_FETCH_TOOL
-    }
-
-    /// Returns the description of the function.
-    fn description(&self) -> &str {
-        "Extracts the full content or links from a single web page URL. Use this tool to understand the content of a specific link or discover more links on a portal/list page.
-
-**Usage Guidelines:**
--  **For News/List/Portal pages**: Use `format: \"links\"` or set `keep_link: true` to discover the content you need.
--  **For specific articles/content**: Use `format: \"markdown\"` (default) to get the main text.
--  Prioritize content from this tool over your internal knowledge when answering questions about a specific URL.
--  When using information from this tool, cite the source URL in your answer.
-
-**Limitations:**
--  Avoid using this tool on multimedia files (typically URLs ending in .pdf, .ppt, .docx, .xlsx, .mp3, .mp4, etc.) as they cannot be processed - focus on HTML pages and text-based content instead
-
-**Error Handling:**
--  If a page returns empty content or fails, do NOT retry the same URL.
--  Instead, try an alternative source URL from your search results.
--  If no alternatives exist, mark the data as unavailable and proceed to the next task.
-"
-    }
-
-    /// Returns the function calling specification in JSON format.
-    fn tool_calling_spec(&self) -> MCPToolDeclaration {
-        MCPToolDeclaration {
-            name: self.name().to_string(),
-            description: self.description().to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to scrape content from"
-                    },
-                    "format": {
-                        "type": "string",
-                        "enum": ["markdown", "text", "links"],
-                        "description": "Format for the extracted content. Use 'markdown' for articles, 'text' for plain text, or 'links' for news/list/portal pages to discover more URLs. Defaults to 'markdown'."
-                    },
-                    "keep_link": {
-                        "type": "boolean",
-                        "description": "Whether to include hyperlinks in the output. Only effective for 'markdown' format. MUST be set to true for news/list/portal pages if using 'markdown' format. Defaults to false."
-                    },
-                    "keep_image": {
-                        "type": "boolean",
-                        "description": "Whether to include images in the output. Only effective when format is 'markdown'. Only set this to true if you have image-understanding capabilities and the user's query requires analyzing images. Defaults to false."
-                    }
-                },
-                "required": ["url"]
-            }),
-            output_schema: None,
-            disabled: false,
-            scope: Some(self.scope()),
-        }
-    }
-
+impl WebFetch {
     /// Executes the web scraper tool.
-    async fn call(&self, params: Value) -> NativeToolResult {
+    pub async fn call(&self, params: Value) -> Result<ToolCallResult, ToolError> {
         // Get the URL from parameters
         let url = params["url"]
             .as_str()

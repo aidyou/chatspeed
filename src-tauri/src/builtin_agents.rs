@@ -369,6 +369,7 @@ fn definition_to_agent(
         )?),
         sandbox_execution_mode: crate::tools::ShellExecutionMode::HostOnly,
         sandbox_scheme_id: None,
+        #[cfg(not(feature = "desktop"))]
         sandbox_config: None,
         allowed_paths: serialize_json(&manifest.config.allowed_paths),
         final_audit: manifest.config.final_audit,

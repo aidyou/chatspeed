@@ -625,6 +625,7 @@ fn message_type(message_type: &MessageType) -> MessageTypeDto {
         MessageType::Reasoning => MessageTypeDto::Reasoning,
         MessageType::Reference => MessageTypeDto::Reference,
         MessageType::Text => MessageTypeDto::Text,
+        #[cfg(not(feature = "desktop"))]
         MessageType::Think => MessageTypeDto::Think,
         MessageType::ToolCalls => MessageTypeDto::ToolCalls,
         MessageType::ToolResults => MessageTypeDto::ToolResults,

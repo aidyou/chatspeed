@@ -29,7 +29,7 @@ use tauri::{AppHandle, Wry};
 
 use crate::runtime_client::{BridgeDispatchFuture, BridgeDispatcher};
 use crate::tools::web_config::{MapWebToolConfig, WebToolConfig};
-use crate::tools::{ToolDefinition, WebFetch, WebSearch};
+use crate::tools::{WebFetch, WebSearch};
 
 /// Canonical control-plane route returning the runtime configuration map.
 const GET_ALL_CONFIG_ROUTE: &str = "/control/v1/data-commands/get_all_config";
@@ -120,12 +120,18 @@ impl WebBridgeDispatcher {
             }
         };
 
-        let tool: Arc<dyn ToolDefinition> = match invocation.capability.as_str() {
-            "web_fetch" => Arc::new(WebFetch::new(self.app_handle.clone(), config)),
-            _ => WebSearch::new(self.app_handle.clone(), config),
+        let call = match invocation.capability.as_str() {
+            "web_fetch" => {
+                let tool = WebFetch::new(self.app_handle.clone(), config);
+                tokio::time::timeout(DISPATCH_TIMEOUT, tool.call(params)).await
+            }
+            _ => {
+                let tool = WebSearch::new(self.app_handle.clone(), config);
+                tokio::time::timeout(DISPATCH_TIMEOUT, tool.call(params)).await
+            }
         };
 
-        match tokio::time::timeout(DISPATCH_TIMEOUT, tool.call(params)).await {
+        match call {
             Ok(Ok(call_result)) => serde_json::to_value(&call_result).map_err(|error| {
                 capability_error(
                     "serialization",

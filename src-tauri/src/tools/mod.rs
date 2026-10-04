@@ -44,6 +44,10 @@ mod shell_policy;
 mod skill;
 #[cfg(not(feature = "desktop"))]
 mod todo_manager;
+// The tool registry and `ToolDefinition` trait live with the runtime's
+// `ToolManager`; the desktop reaches tools through the control plane and no
+// longer links the registry.
+#[cfg(not(feature = "desktop"))]
 mod tool_manager;
 mod types;
 // Desktop-only WebView-backed tools. The runtime reaches web access through a
@@ -85,11 +89,15 @@ pub use shell_policy::*;
 pub use skill::*;
 #[cfg(not(feature = "desktop"))]
 pub use todo_manager::*;
+#[cfg(not(feature = "desktop"))]
 pub use tool_manager::{NativeToolResult, ToolDefinition};
 #[cfg(not(feature = "desktop"))]
 pub use tool_manager::ToolManager;
+#[cfg(not(feature = "desktop"))]
 pub use types::ToolScope;
-pub use types::{ToolCallResult, ToolCategory};
+pub use types::ToolCallResult;
+#[cfg(not(feature = "desktop"))]
+pub use types::ToolCategory;
 #[cfg(feature = "desktop")]
 pub use web_fetch::WebFetch;
 #[cfg(feature = "desktop")]
