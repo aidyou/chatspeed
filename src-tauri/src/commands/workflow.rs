@@ -4234,6 +4234,7 @@ pub(crate) async fn workflow_start_core(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_start(
+    app: tauri::AppHandle,
     supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     agent_id: String,
@@ -4242,8 +4243,18 @@ pub async fn workflow_start(
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, String> {
+    // Subscribe to the runtime's live workflow stream before the workflow can
+    // publish anything. The desktop owns no runtime state, so this forwarding
+    // task is the only path from the runtime SSE broker to the webview; if it
+    // cannot be established the start is refused rather than running a workflow
+    // no UI can observe.
+    let supervisor = supervisor.inner().as_ref();
+    supervisor
+        .ensure_workflow_event_stream(app, &session_id)
+        .await
+        .map_err(|error| error.to_string())?;
     crate::runtime_workflow::workflow_start(
-        supervisor.inner().as_ref(),
+        supervisor,
         crate::workflow::react::application::WorkflowStartRequest {
             session_id,
             agent_id,
@@ -4995,11 +5006,20 @@ pub(crate) async fn workflow_signal_core(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn workflow_signal(
+    app: tauri::AppHandle,
     supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
     session_id: String,
     signal: String,
 ) -> Result<String, String> {
-    crate::runtime_workflow::workflow_signal(supervisor.inner().as_ref(), &session_id, signal).await
+    let supervisor = supervisor.inner().as_ref();
+    // Signals can resume a waiting or recently completed session after the
+    // previous reader has reached a terminal state. Establish the transport
+    // before forwarding the signal so resumed execution remains observable.
+    supervisor
+        .ensure_workflow_event_stream(app, &session_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    crate::runtime_workflow::workflow_signal(supervisor, &session_id, signal).await
 }
 
 /// Terminal workflow statuses that no longer have a live executor to consume a

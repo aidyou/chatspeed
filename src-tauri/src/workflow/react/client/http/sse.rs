@@ -12,7 +12,7 @@
 //! observes an explicit lag and receives `reset_required`.
 
 use super::server::ControlPlaneState;
-use crate::workflow::react::client::hub::{SessionEventBroker, StreamEnvelope, SubscribeError};
+use crate::workflow::react::client::hub::{SessionSubscription, StreamEnvelope, SubscribeError};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -59,28 +59,21 @@ pub async fn stream_workflow_events(
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_string())
         .or(query.cursor);
+    let subscription = broker.subscribe(&session_id, after_cursor.as_deref()).await;
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
-    tokio::spawn(pump_events(
-        broker,
-        session_id,
-        after_cursor,
-        tx,
-        KEEPALIVE_INTERVAL,
-    ));
+    tokio::spawn(pump_events(subscription, tx, KEEPALIVE_INTERVAL));
 
     Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
 
 async fn pump_events(
-    broker: std::sync::Arc<SessionEventBroker>,
-    session_id: String,
-    after_cursor: Option<String>,
+    subscription: Result<SessionSubscription, SubscribeError>,
     tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
     keepalive: Duration,
 ) {
-    let subscription = match broker.subscribe(&session_id, after_cursor.as_deref()).await {
+    let subscription = match subscription {
         Ok(subscription) => subscription,
         Err(SubscribeError::ResetRequired { reason }) => {
             let _ = tx.send(Ok(reset_event(reason))).await;

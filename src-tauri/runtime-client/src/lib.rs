@@ -17,7 +17,7 @@ use chatspeed_contracts::{
     ClientCapabilityResult, ClientLease, ClientLeaseRequest, ClientLeaseResponse,
     ControlPlaneDiscovery, ErrorEnvelope, ListModelsRequest, MetaResponse, ModelDetailsDto,
     ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
-    TerminalCloseRequest, TerminalCreateRequest, TerminalListSessionsRequest,
+    StreamEnvelope, TerminalCloseRequest, TerminalCreateRequest, TerminalListSessionsRequest,
     TerminalListShellsRequest, TerminalResizeRequest, TerminalSessionMetadataDto, TerminalShellDto,
     TerminalStreamEnvelope, TerminalWriteRequest, WebMcpProviderRegistration,
     WebMcpProviderRegistrationResponse, WebMcpProviderStatus, DISCOVERY_FILE_NAME, PROTOCOL_MAJOR,
@@ -380,6 +380,23 @@ pub fn terminal_stream_path(session_id: &str) -> String {
         "/control/v1/terminal/{}/stream",
         encode_path_segment(session_id)
     )
+}
+
+/// `GET` route that streams one workflow session's versioned SSE envelopes.
+pub fn workflow_stream_path(session_id: &str) -> String {
+    format!(
+        "/control/v1/workflows/{}/stream",
+        encode_path_segment(session_id)
+    )
+}
+
+/// Formats the opaque `Last-Event-ID` cursor of one workflow stream envelope.
+///
+/// The cursor (`${server_instance_id}:${sequence}`) is an instance-local replay
+/// handle; a reconnect presents it so the server replays the gap instead of
+/// starting a fresh subscription.
+pub fn stream_envelope_cursor(envelope: &StreamEnvelope) -> String {
+    format!("{}:{}", envelope.server_instance_id, envelope.sequence)
 }
 
 /// Default request timeout; a loopback control plane answers immediately.
@@ -955,6 +972,26 @@ impl RuntimeClient {
         })
     }
 
+    /// Subscribes to the versioned SSE stream of one workflow session.
+    ///
+    /// `last_event_id` resumes from an opaque cursor after a reconnect. The
+    /// request carries no total timeout, so a long-lived session is never cut
+    /// off by the normal request timeout.
+    pub async fn stream_workflow(
+        &self,
+        session_id: &str,
+        last_event_id: Option<&str>,
+    ) -> Result<WorkflowEventStream, ClientError> {
+        let response = self
+            .stream(&workflow_stream_path(session_id), last_event_id)
+            .await?;
+        Ok(WorkflowEventStream {
+            response,
+            buffer: Vec::new(),
+            finished: false,
+        })
+    }
+
     /// Lists the shells the runtime offers for an interactive terminal.
     pub async fn terminal_list_shells(
         &self,
@@ -1232,33 +1269,13 @@ impl ChatEventStream {
 
     /// Pulls one complete `data:` frame out of the buffer.
     fn take_event(&mut self) -> Result<Option<ChatStreamEnvelope>, ClientError> {
-        loop {
-            let Some(end) = frame_end(&self.buffer) else {
-                return Ok(None);
-            };
-            let frame = String::from_utf8_lossy(&self.buffer[..end]).to_string();
-            self.buffer.drain(..end);
-
-            let mut data = String::new();
-            for line in frame.lines() {
-                let line = line.trim_end_matches('\r');
-                if let Some(value) = line.strip_prefix("data:") {
-                    let value = value.strip_prefix(' ').unwrap_or(value);
-                    if !data.is_empty() {
-                        data.push('\n');
-                    }
-                    data.push_str(value);
-                }
-            }
-            if data.is_empty() {
-                // A keepalive comment or an `id`-only frame carries no payload.
-                continue;
-            }
-            let envelope = serde_json::from_str::<ChatStreamEnvelope>(&data).map_err(|error| {
-                ClientError::Serialization(format!("invalid chat stream envelope: {error}"))
-            })?;
-            return Ok(Some(envelope));
-        }
+        let Some(data) = next_frame_data(&mut self.buffer) else {
+            return Ok(None);
+        };
+        let envelope = serde_json::from_str::<ChatStreamEnvelope>(&data).map_err(|error| {
+            ClientError::Serialization(format!("invalid chat stream envelope: {error}"))
+        })?;
+        Ok(Some(envelope))
     }
 }
 
@@ -1433,34 +1450,13 @@ impl BridgeEventStream {
 
     /// Pulls one complete `data:` frame out of the buffer.
     fn take_event(&mut self) -> Result<Option<ClientBridgeWorkEnvelope>, ClientError> {
-        loop {
-            let Some(end) = frame_end(&self.buffer) else {
-                return Ok(None);
-            };
-            let frame = String::from_utf8_lossy(&self.buffer[..end]).to_string();
-            self.buffer.drain(..end);
-
-            let mut data = String::new();
-            for line in frame.lines() {
-                let line = line.trim_end_matches('\r');
-                if let Some(value) = line.strip_prefix("data:") {
-                    let value = value.strip_prefix(' ').unwrap_or(value);
-                    if !data.is_empty() {
-                        data.push('\n');
-                    }
-                    data.push_str(value);
-                }
-            }
-            if data.is_empty() {
-                // A keepalive comment or an `id`-only frame carries no payload.
-                continue;
-            }
-            let envelope =
-                serde_json::from_str::<ClientBridgeWorkEnvelope>(&data).map_err(|error| {
-                    ClientError::Serialization(format!("invalid bridge stream envelope: {error}"))
-                })?;
-            return Ok(Some(envelope));
-        }
+        let Some(data) = next_frame_data(&mut self.buffer) else {
+            return Ok(None);
+        };
+        let envelope = serde_json::from_str::<ClientBridgeWorkEnvelope>(&data).map_err(|error| {
+            ClientError::Serialization(format!("invalid bridge stream envelope: {error}"))
+        })?;
+        Ok(Some(envelope))
     }
 }
 
@@ -1506,34 +1502,66 @@ impl TerminalEventStream {
 
     /// Pulls one complete `data:` frame out of the buffer.
     fn take_event(&mut self) -> Result<Option<TerminalStreamEnvelope>, ClientError> {
-        loop {
-            let Some(end) = frame_end(&self.buffer) else {
-                return Ok(None);
-            };
-            let frame = String::from_utf8_lossy(&self.buffer[..end]).to_string();
-            self.buffer.drain(..end);
+        let Some(data) = next_frame_data(&mut self.buffer) else {
+            return Ok(None);
+        };
+        let envelope = serde_json::from_str::<TerminalStreamEnvelope>(&data).map_err(|error| {
+            ClientError::Serialization(format!("invalid terminal stream envelope: {error}"))
+        })?;
+        Ok(Some(envelope))
+    }
+}
 
-            let mut data = String::new();
-            for line in frame.lines() {
-                let line = line.trim_end_matches('\r');
-                if let Some(value) = line.strip_prefix("data:") {
-                    let value = value.strip_prefix(' ').unwrap_or(value);
-                    if !data.is_empty() {
-                        data.push('\n');
-                    }
-                    data.push_str(value);
-                }
+/// Incremental reader over one workflow session's versioned SSE stream.
+///
+/// Every frame is a [`StreamEnvelope`] whose `payload` is the raw gateway
+/// payload the desktop forwards unchanged to its webview, so the envelope is a
+/// pure transport wrapper and is never exposed to the frontend. Frames are
+/// consumed one at a time from the raw response body, so a long-lived session
+/// is never buffered whole and never cut off by a timeout. SSE comment
+/// keepalives and `id`-only frames are skipped.
+pub struct WorkflowEventStream {
+    response: Response,
+    buffer: Vec<u8>,
+    finished: bool,
+}
+
+impl fmt::Debug for WorkflowEventStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkflowEventStream")
+            .field("buffered_bytes", &self.buffer.len())
+            .field("finished", &self.finished)
+            .finish()
+    }
+}
+
+impl WorkflowEventStream {
+    /// Returns the next stream envelope, or `None` once the stream has ended.
+    pub async fn next_event(&mut self) -> Result<Option<StreamEnvelope>, ClientError> {
+        loop {
+            if let Some(envelope) = self.take_event()? {
+                return Ok(Some(envelope));
             }
-            if data.is_empty() {
-                // A keepalive comment or an `id`-only frame carries no payload.
-                continue;
+            if self.finished {
+                return Ok(None);
             }
-            let envelope =
-                serde_json::from_str::<TerminalStreamEnvelope>(&data).map_err(|error| {
-                    ClientError::Serialization(format!("invalid terminal stream envelope: {error}"))
-                })?;
-            return Ok(Some(envelope));
+            match self.response.chunk().await {
+                Ok(Some(chunk)) => self.buffer.extend_from_slice(&chunk),
+                Ok(None) => self.finished = true,
+                Err(error) => return Err(transport_error(error)),
+            }
         }
+    }
+
+    /// Pulls one complete `data:` frame out of the buffer.
+    fn take_event(&mut self) -> Result<Option<StreamEnvelope>, ClientError> {
+        let Some(data) = next_frame_data(&mut self.buffer) else {
+            return Ok(None);
+        };
+        let envelope = serde_json::from_str::<StreamEnvelope>(&data).map_err(|error| {
+            ClientError::Serialization(format!("invalid workflow stream envelope: {error}"))
+        })?;
+        Ok(Some(envelope))
     }
 }
 
@@ -1549,6 +1577,36 @@ fn frame_end(buffer: &[u8]) -> Option<usize> {
                 .position(|window| window == b"\r\n\r\n")
                 .map(|position| position + 4)
         })
+}
+
+/// Pulls the `data:` payload of the next complete SSE frame out of `buffer`.
+///
+/// The one frame parser every typed stream reader shares: it returns `None`
+/// while no complete frame is buffered yet, and skips frames that carry no
+/// `data:` field (comment keepalives and `id`-only frames).
+fn next_frame_data(buffer: &mut Vec<u8>) -> Option<String> {
+    loop {
+        let end = frame_end(buffer)?;
+        let frame = String::from_utf8_lossy(&buffer[..end]).to_string();
+        buffer.drain(..end);
+
+        let mut data = String::new();
+        for line in frame.lines() {
+            let line = line.trim_end_matches('\r');
+            if let Some(value) = line.strip_prefix("data:") {
+                let value = value.strip_prefix(' ').unwrap_or(value);
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(value);
+            }
+        }
+        if data.is_empty() {
+            // A keepalive comment or an `id`-only frame carries no payload.
+            continue;
+        }
+        return Some(data);
+    }
 }
 
 /// Returns the first credential-shaped query parameter in `path`, if any.
@@ -1951,6 +2009,7 @@ mod tests {
         web_client: Option<String>,
         web_lease: Option<String>,
         web_instance: Option<String>,
+        last_event_id: Option<String>,
         body: String,
     }
 
@@ -2039,6 +2098,7 @@ mod tests {
         let mut web_client = None;
         let mut web_lease = None;
         let mut web_instance = None;
+        let mut last_event_id = None;
         let mut content_length = 0usize;
         for line in lines {
             if line.is_empty() {
@@ -2062,6 +2122,8 @@ mod tests {
                     web_lease = Some(value.trim().to_string());
                 } else if name == "x-web-mcp-instance" {
                     web_instance = Some(value.trim().to_string());
+                } else if name == "last-event-id" {
+                    last_event_id = Some(value.trim().to_string());
                 } else if name == "content-length" {
                     content_length = value.trim().parse().unwrap_or(0);
                 }
@@ -2088,6 +2150,7 @@ mod tests {
             web_client,
             web_lease,
             web_instance,
+            last_event_id,
             body: String::from_utf8_lossy(&body).to_string(),
         })
     }
@@ -3077,6 +3140,84 @@ mod tests {
             RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
 
         let mut stream = client.stream_chat("chat-1").await.expect("open stream");
+        let error = stream.next_event().await.expect_err("must reject");
+        assert!(matches!(error, ClientError::Serialization(_)));
+    }
+
+    // -- workflow stream ---------------------------------------------------
+
+    #[tokio::test]
+    async fn workflow_stream_parses_envelopes_and_resumes_from_a_cursor() {
+        let chunk = json!({
+            "schema_version": 1,
+            "server_instance_id": "instance-a",
+            "sequence": 7,
+            "session_id": "session-1",
+            "payload": { "type": "chunk", "content": "hello" },
+        });
+        let state = json!({
+            "schema_version": 1,
+            "server_instance_id": "instance-a",
+            "sequence": 8,
+            "session_id": "session-1",
+            "payload": { "type": "state", "state": "completed" },
+        });
+        // A comment keepalive and an `id`-only frame must be skipped.
+        let body = format!(
+            ": keepalive\n\nid: 7\ndata: {}\n\ndata: {}\n\n",
+            serde_json::to_string(&chunk).expect("chunk"),
+            serde_json::to_string(&state).expect("state"),
+        );
+        let server = FakeServer::start(move |_| sse_response(&body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let mut stream = client
+            .stream_workflow("session-1", Some("instance-a:6"))
+            .await
+            .expect("open stream");
+
+        let first = stream
+            .next_event()
+            .await
+            .expect("event")
+            .expect("first event");
+        assert_eq!(first.sequence, 7);
+        assert_eq!(first.payload["type"].as_str(), Some("chunk"));
+        assert_eq!(first.payload["content"].as_str(), Some("hello"));
+        assert_eq!(stream_envelope_cursor(&first), "instance-a:7");
+
+        let second = stream
+            .next_event()
+            .await
+            .expect("event")
+            .expect("second event");
+        assert_eq!(second.sequence, 8);
+        assert_eq!(second.payload["state"].as_str(), Some("completed"));
+
+        assert!(stream.next_event().await.expect("end").is_none());
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].method, "GET");
+        assert_eq!(recorded[0].path, workflow_stream_path("session-1"));
+        assert_eq!(
+            recorded[0].authorization.as_deref(),
+            Some("Bearer test-token")
+        );
+        assert_eq!(recorded[0].last_event_id.as_deref(), Some("instance-a:6"));
+    }
+
+    #[tokio::test]
+    async fn workflow_stream_reports_a_malformed_envelope() {
+        let body = String::from("data: not-json\n\n");
+        let server = FakeServer::start(move |_| sse_response(&body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let mut stream = client
+            .stream_workflow("session-1", None)
+            .await
+            .expect("open stream");
         let error = stream.next_event().await.expect_err("must reject");
         assert!(matches!(error, ClientError::Serialization(_)));
     }

@@ -19,6 +19,7 @@
 //! tests, while the fixed WebView provider uses rmcp over loopback and runtime
 //! registration.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,8 @@ use chatspeed_runtime_client::{
     RuntimeLaunchConfig,
 };
 use serde::Serialize;
+#[cfg(feature = "desktop")]
+use tauri::Emitter;
 use tokio::sync::{watch, Mutex};
 
 /// Client kind the desktop registers its lease under.
@@ -65,6 +68,19 @@ const BRIDGE_READER_RETRY: Duration = Duration::from_millis(500);
 /// the runtime deliberately ended (unregister, disconnect, expired lease) stops
 /// the reader immediately instead of reconnecting.
 const BRIDGE_READER_MAX_RETRIES: usize = 3;
+
+/// Backoff between workflow event stream reconnect attempts after an error.
+const WORKFLOW_READER_RETRY: Duration = Duration::from_millis(500);
+
+/// Maximum consecutive workflow stream reconnect attempts before giving up.
+///
+/// The counter resets whenever an event is forwarded, so a long-lived session
+/// may reconnect indefinitely across transient drops while a stream that keeps
+/// failing without delivering anything stops instead of looping forever.
+const WORKFLOW_READER_MAX_RETRIES: usize = 5;
+
+/// How long to wait for a cancelled workflow reader to stop before releasing.
+const WORKFLOW_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A future that resolves to one typed capability result.
 pub type BridgeDispatchFuture =
@@ -251,6 +267,8 @@ struct Connection {
     child: Option<RuntimeChild>,
     client_id: String,
     bridge: Option<BridgeHandle>,
+    /// Live workflow SSE forwarding tasks, at most one per session id.
+    workflow_streams: HashMap<String, WorkflowStreamHandle>,
     /// The desktop loopback Web MCP provider, when one is registered.
     #[cfg(feature = "desktop")]
     web_provider: Option<crate::runtime_web_mcp_provider::WebMcpProviderHandle>,
@@ -259,6 +277,16 @@ struct Connection {
 /// A live client WebView capability bridge session and its reader.
 struct BridgeHandle {
     session: BridgeSession,
+    cancel: watch::Sender<bool>,
+    reader: tokio::task::JoinHandle<()>,
+}
+
+/// A live workflow SSE forwarding task for one session.
+///
+/// The task reads the runtime's versioned workflow stream and re-emits each
+/// envelope's raw payload as the existing `workflow://event/{session}` Tauri
+/// event. Cancelling it drops the reader so the session is no longer forwarded.
+struct WorkflowStreamHandle {
     cancel: watch::Sender<bool>,
     reader: tokio::task::JoinHandle<()>,
 }
@@ -368,6 +396,7 @@ impl RuntimeSupervisor {
             client,
             client_id: client_id.to_string(),
             bridge: None,
+            workflow_streams: HashMap::new(),
             #[cfg(feature = "desktop")]
             web_provider: None,
         });
@@ -463,6 +492,75 @@ impl RuntimeSupervisor {
             reader,
         });
         log::info!("[RuntimeSupervisor] client WebView bridge connected");
+        Ok(())
+    }
+
+    /// Ensures one workflow session's live SSE stream is forwarded as Tauri events.
+    ///
+    /// The SSE subscription is established before this returns, so a caller that
+    /// starts the workflow immediately afterwards cannot publish an event into a
+    /// stream no one is reading yet. At most one forwarding task exists per
+    /// session: a repeated call for a live session is a no-op, and a task that
+    /// already finished (terminal state or a closed session) is replaced so a
+    /// restarted session can subscribe again.
+    #[cfg(feature = "desktop")]
+    pub async fn ensure_workflow_event_stream(
+        &self,
+        app: tauri::AppHandle,
+        session_id: &str,
+    ) -> Result<(), RuntimeUnavailable> {
+        let (client, session_id) = {
+            let mut state = self.inner.lock().await;
+            if state.state == RuntimeConnectionState::Released {
+                return Err(RuntimeUnavailable::NotConnected);
+            }
+            let Some(connection) = state.connection.as_mut() else {
+                return Err(RuntimeUnavailable::NotConnected);
+            };
+            connection
+                .workflow_streams
+                .retain(|_, handle| !handle.reader.is_finished());
+            if connection.workflow_streams.contains_key(session_id) {
+                return Ok(());
+            }
+            (connection.client.clone(), session_id.to_string())
+        };
+
+        // Open the SSE response before the workflow starts: the subscription is
+        // live the moment this future resolves.
+        let stream = client
+            .stream_workflow(&session_id, None)
+            .await
+            .map_err(RuntimeUnavailable::from_client_error)?;
+
+        let mut state = self.inner.lock().await;
+        if state.state == RuntimeConnectionState::Released {
+            return Err(RuntimeUnavailable::NotConnected);
+        }
+        let Some(connection) = state.connection.as_mut() else {
+            return Err(RuntimeUnavailable::NotConnected);
+        };
+        if connection.workflow_streams.contains_key(&session_id) {
+            // Another caller established the stream first; drop this duplicate.
+            return Ok(());
+        }
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let reader = tokio::spawn(run_workflow_event_reader(
+            app,
+            client,
+            session_id.clone(),
+            stream,
+            cancel_rx,
+        ));
+        connection
+            .workflow_streams
+            .insert(session_id.clone(), WorkflowStreamHandle {
+                cancel: cancel_tx,
+                reader,
+            });
+        log::info!(
+            "[RuntimeSupervisor] workflow event stream established for session {session_id}"
+        );
         Ok(())
     }
 
@@ -595,6 +693,12 @@ impl Drop for RuntimeSupervisor {
                 bridge.reader.abort();
                 let _ = bridge.session.unregister().await;
             }
+            // Cancel every workflow forwarding reader; abort guarantees each
+            // observes cancellation without the async join `Drop` cannot await.
+            for (_, handle) in connection.workflow_streams.drain() {
+                handle.cancel.send_replace(true);
+                handle.reader.abort();
+            }
             #[cfg(feature = "desktop")]
             if let Some(provider) = connection.web_provider.take() {
                 provider.shutdown().await;
@@ -630,6 +734,18 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
         if let Err(error) = bridge.session.unregister().await {
             log::debug!("[RuntimeSupervisor] unregistering the bridge failed: {error}");
         }
+    }
+    // Cancel every workflow forwarding reader before the lease is released, so
+    // no task keeps reading a stream owned by a lease the desktop has given up.
+    let workflow_readers: Vec<WorkflowStreamHandle> = connection
+        .workflow_streams
+        .drain()
+        .map(|(_, handle)| handle)
+        .collect();
+    for handle in workflow_readers {
+        handle.cancel.send_replace(true);
+        handle.reader.abort();
+        let _ = tokio::time::timeout(WORKFLOW_READER_STOP_TIMEOUT, handle.reader).await;
     }
     // Stop the desktop Web MCP provider before the lease is released, so the
     // runtime never keeps dialing a provider whose lease is already gone.
@@ -778,6 +894,149 @@ async fn dispatch_bridge_invocation(
     }
 }
 
+/// Forwards one workflow session's runtime SSE payloads as Tauri events.
+///
+/// Each envelope's raw `payload` is emitted to `workflow://event/{session_id}`
+/// exactly as the frontend expects (it reads `payload.type`), with no
+/// `StreamEnvelope` wrapper. A terminal state or a server-closed stream ends the
+/// reader; a transport error reconnects from the last `Last-Event-ID` cursor so
+/// the runtime replays the gap. A reset or an unparseable frame drops the cursor
+/// so the reconnect re-subscribes from scratch instead of replaying a stale
+/// window. Errors are logged only and never change the runtime's state.
+#[cfg(feature = "desktop")]
+async fn run_workflow_event_reader(
+    app: tauri::AppHandle,
+    client: RuntimeClient,
+    session_id: String,
+    initial: chatspeed_runtime_client::WorkflowEventStream,
+    mut cancel: watch::Receiver<bool>,
+) {
+    let event_name = workflow_event_name(&session_id);
+    let mut stream: Option<chatspeed_runtime_client::WorkflowEventStream> = Some(initial);
+    let mut cursor: Option<String> = None;
+    let mut failures = 0usize;
+
+    loop {
+        if *cancel.borrow() {
+            return;
+        }
+        if stream.is_none() {
+            match client.stream_workflow(&session_id, cursor.as_deref()).await {
+                Ok(reopened) => stream = Some(reopened),
+                Err(error) => {
+                    failures += 1;
+                    if failures > WORKFLOW_READER_MAX_RETRIES {
+                        log::warn!(
+                            "[RuntimeSupervisor] workflow reader for session {session_id} stopped after {failures} failed reconnect attempts"
+                        );
+                        return;
+                    }
+                    log::debug!(
+                        "[RuntimeSupervisor] reconnecting the workflow stream for session {session_id} failed: {error}"
+                    );
+                    if wait_or_cancel(&mut cancel, WORKFLOW_READER_RETRY).await {
+                        return;
+                    }
+                    continue;
+                }
+            }
+        }
+        let Some(mut current) = stream.take() else {
+            continue;
+        };
+
+        // The inner loop only exits through `break` after a stream error; every
+        // other outcome (terminal state, closed stream, cancellation) returns.
+        loop {
+            tokio::select! {
+                _ = cancel.changed() => return,
+                event = current.next_event() => match event {
+                    Ok(Some(envelope)) => {
+                        failures = 0;
+                        cursor = Some(chatspeed_runtime_client::stream_envelope_cursor(&envelope));
+                        let terminal = is_terminal_workflow_payload(&envelope.payload);
+                        if let Err(error) = app.emit(&event_name, envelope.payload) {
+                            log::debug!(
+                                "[RuntimeSupervisor] emitting a workflow event failed for session {session_id}: {error}"
+                            );
+                        }
+                        if terminal {
+                            log::info!(
+                                "[RuntimeSupervisor] workflow stream for session {session_id} reached a terminal state"
+                            );
+                            return;
+                        }
+                    }
+                    // The runtime closed the session stream; there is nothing
+                    // left to resume, so the reader stops instead of reconnecting.
+                    Ok(None) => {
+                        log::debug!(
+                            "[RuntimeSupervisor] workflow event stream for session {session_id} ended"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        if matches!(error, ClientError::Serialization(_)) {
+                            // A reset or a malformed frame makes the cursor
+                            // unusable; re-subscribe from scratch.
+                            cursor = None;
+                        }
+                        log::debug!(
+                            "[RuntimeSupervisor] workflow stream error for session {session_id}: {error}"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        failures += 1;
+        if failures > WORKFLOW_READER_MAX_RETRIES {
+            log::warn!(
+                "[RuntimeSupervisor] workflow reader for session {session_id} stopped after {failures} failed reconnect attempts"
+            );
+            return;
+        }
+        if wait_or_cancel(&mut cancel, WORKFLOW_READER_RETRY).await {
+            return;
+        }
+    }
+}
+
+/// Waits for `delay`, returning `true` when the reader was cancelled first.
+#[cfg(feature = "desktop")]
+async fn wait_or_cancel(cancel: &mut watch::Receiver<bool>, delay: Duration) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => false,
+        _ = cancel.changed() => true,
+    }
+}
+
+/// Returns the canonical Tauri event name for a workflow session's live stream.
+///
+/// Mirrors the frontend listener contract (`workflow://event/{session_id}`); the
+/// batching `tauri::gateway` adapter is not compiled in the desktop build, so
+/// this adapter is the single place that names the event.
+#[cfg(feature = "desktop")]
+fn workflow_event_name(session_id: &str) -> String {
+    format!("workflow://event/{session_id}")
+}
+
+/// Returns whether a forwarded workflow payload reports a terminal state.
+///
+/// Only `state` payloads carry a lifecycle status. The reader stops on the four
+/// terminal statuses so a finished session is not re-subscribed forever.
+#[cfg(feature = "desktop")]
+fn is_terminal_workflow_payload(payload: &serde_json::Value) -> bool {
+    if payload.get("type").and_then(serde_json::Value::as_str) != Some("state") {
+        return false;
+    }
+    matches!(
+        payload.get("state").and_then(serde_json::Value::as_str),
+        Some("completed") | Some("failed") | Some("error") | Some("cancelled")
+    )
+}
+
 /// Validates the client id before it is sent to the runtime.
 ///
 /// The runtime only trims and length-checks an id, so the desktop rejects the
@@ -914,5 +1173,31 @@ mod tests {
         // The Debug surface never carries a client or lease secret.
         let debug = format!("{supervisor:?}");
         assert!(!debug.contains("<redacted>"), "{debug}");
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn workflow_event_name_matches_the_frontend_listener_contract() {
+        assert_eq!(workflow_event_name("session-1"), "workflow://event/session-1");
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn only_the_four_terminal_states_stop_the_workflow_reader() {
+        for terminal in ["completed", "failed", "error", "cancelled"] {
+            let payload = serde_json::json!({ "type": "state", "state": terminal });
+            assert!(is_terminal_workflow_payload(&payload), "{terminal}");
+        }
+        for active in ["running", "awaiting_user", "awaiting_approval"] {
+            let payload = serde_json::json!({ "type": "state", "state": active });
+            assert!(!is_terminal_workflow_payload(&payload), "{active}");
+        }
+        // Only `state` payloads carry a lifecycle status.
+        assert!(!is_terminal_workflow_payload(
+            &serde_json::json!({ "type": "chunk", "content": "hi" })
+        ));
+        assert!(!is_terminal_workflow_payload(
+            &serde_json::json!({ "type": "task_completed" })
+        ));
     }
 }
