@@ -4,6 +4,9 @@ mod constants;
 #[cfg(all(test, not(feature = "desktop")))]
 mod client_bridge_web;
 mod error;
+// The filesystem executors are registered and run by the runtime's `ToolManager`
+// only; the desktop never links them.
+#[cfg(not(feature = "desktop"))]
 mod fs;
 // Runtime-only tool implementations: the desktop reaches them through the
 // control plane and never links the execution machinery, so only the runtime
@@ -18,12 +21,17 @@ pub(crate) mod helper;
 mod history;
 #[cfg(not(feature = "desktop"))]
 mod interaction;
+// LLM preview helpers serve the runtime's filesystem/search executors only.
+#[cfg(not(feature = "desktop"))]
 mod llm_output;
 // The MCP expander/executor tools are runtime-only; the desktop detects their
 // names but does not register or run them.
 #[cfg(not(feature = "desktop"))]
 mod mcp_loader;
 mod sandbox;
+// The grep/glob executors are registered and run by the runtime's `ToolManager`
+// only; the desktop never links them.
+#[cfg(not(feature = "desktop"))]
 mod search;
 // Shared shell approval DTOs. Both crates compile these even though only the
 // runtime compiles the shell policy engine and executor.
@@ -76,7 +84,9 @@ pub use shell_policy::*;
 pub use skill::*;
 #[cfg(not(feature = "desktop"))]
 pub use todo_manager::*;
-pub use tool_manager::{NativeToolResult, ToolDefinition, ToolManager};
+pub use tool_manager::{NativeToolResult, ToolDefinition};
+#[cfg(not(feature = "desktop"))]
+pub use tool_manager::ToolManager;
 pub use types::ToolScope;
 pub use types::{ToolCallResult, ToolCategory};
 #[cfg(feature = "desktop")]

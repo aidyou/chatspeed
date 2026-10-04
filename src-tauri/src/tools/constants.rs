@@ -1,9 +1,16 @@
 /// Core Tool Name Constants (Single Source of Truth)
 
-// These tools usually require review
+// The native executor tool names below are declared by the runtime's tool
+// registry and runtime-owned helpers. The desktop links none of the executors,
+// so these stay gated; the selectable-tool test still names several of them, so
+// they remain compiled in test builds.
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_BASH: &str = "bash";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_READ_FILE: &str = "read_file";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_WRITE_FILE: &str = "write_file";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_EDIT_FILE: &str = "edit_file";
 #[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_PLAN_NOTE: &str = "plan_note";
@@ -14,16 +21,24 @@ pub const TOOL_PLAN_READ_NOTE: &str = "plan_read_note";
 pub const TOOL_PLAN_WRITE_NOTE: &str = "plan_write_note";
 #[cfg(not(feature = "desktop"))]
 pub const TOOL_PLAN_EDIT_NOTE: &str = "plan_edit_note";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_LIST_DIR: &str = "list_dir";
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_GLOB: &str = "glob";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_GREP: &str = "grep";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_GIT_DIFF: &str = "git_diff";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_GIT_INSPECT: &str = "git_inspect";
+// The desktop WebView-backed fetch/search tools still name their own tools.
 pub const TOOL_WEB_SEARCH: &str = "web_search";
 pub const TOOL_WEB_FETCH: &str = "web_fetch";
 
 // These tools are internal tools for the agent, usually do not require review
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_SUB_AGENT_RUN: &str = "sub_agent_run";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_SUB_AGENT_OUTPUT: &str = "sub_agent_output";
 /// Retained for historical message display while the callable tool remains removed.
 /// Re-evaluate and delete this compatibility name in a later cleanup pass.
@@ -31,23 +46,34 @@ pub const TOOL_SUB_AGENT_OUTPUT: &str = "sub_agent_output";
 pub const TOOL_SUB_AGENT_STOP: &str = "sub_agent_stop";
 
 // todo tools
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_TODO_CREATE: &str = "todo_create";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_TODO_LIST: &str = "todo_list";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_TODO_UPDATE: &str = "todo_update";
 // Retained as an observation-only historical name; re-evaluate and delete later.
 #[cfg(any())]
 pub const TOOL_TODO_GET: &str = "todo_get";
 
 // skill tools
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_SKILL: &str = "skill";
 
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_ASK_USER: &str = "ask_user";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_COMPLETE_WORKFLOW: &str = "complete_workflow";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_SUBMIT_RESULT: &str = "submit_result";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_SUBMIT_PLAN: &str = "submit_plan";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_MCP_TOOL_EXPAND: &str = "mcp_tool_expand";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_MCP_TOOL_EXECUTE: &str = "mcp_tool_execute";
 /// Legacy workflow/chat tool name accepted for replay and compatibility.
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_MCP_TOOL_LOAD_LEGACY: &str = "mcp_tool_load";
 
 #[cfg(not(feature = "desktop"))]
@@ -55,6 +81,7 @@ pub fn is_planning_note_tool(name: &str) -> bool {
     name == TOOL_PLAN_NOTE
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn is_mcp_tool_expand_tool(name: &str) -> bool {
     matches!(name, TOOL_MCP_TOOL_EXPAND | TOOL_MCP_TOOL_LOAD_LEGACY)
 }
@@ -63,8 +90,10 @@ pub fn is_mcp_tool_expand_tool(name: &str) -> bool {
 pub fn is_mcp_tool_execute_tool(name: &str) -> bool {
     name == TOOL_MCP_TOOL_EXECUTE
 }
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_READ_HISTORY_MESSAGE: &str = "read_history_message";
 
+#[cfg(not(feature = "desktop"))]
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 
 #[cfg(not(feature = "desktop"))]

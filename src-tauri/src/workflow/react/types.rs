@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use sha2::{Digest, Sha256};
 use strum::{Display, EnumString};
 
@@ -246,6 +247,7 @@ pub enum GatewayPayload {
     },
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -259,6 +261,7 @@ pub enum RuntimeState {
     Cancelled,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl From<&WorkflowState> for RuntimeState {
     fn from(state: &WorkflowState) -> Self {
         match state {
@@ -494,6 +497,7 @@ impl WorkflowSignal {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PendingTool {
     pub tool_call_id: String,
@@ -504,6 +508,7 @@ pub struct PendingTool {
     pub display_type: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubAgentCompletion {
     pub sub_agent_id: String,
@@ -522,6 +527,7 @@ pub struct SubAgentCompletion {
     pub consumed: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl SubAgentCompletion {
     pub fn to_signal_result(&self) -> serde_json::Value {
         let mut result = serde_json::json!({
@@ -545,12 +551,14 @@ impl SubAgentCompletion {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PendingFinalReview {
     pub sub_agent_id: String,
     pub completion_summary: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingCompletionReport {
     pub source_message_id: Option<i64>,
@@ -560,6 +568,7 @@ pub struct PendingCompletionReport {
     pub created_at_step: usize,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl PendingCompletionReport {
     pub fn new(
         content: &str,
@@ -579,6 +588,7 @@ impl PendingCompletionReport {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueuedUserMessage {
     pub queued_user_message_id: String,
@@ -590,12 +600,14 @@ pub struct QueuedUserMessage {
 }
 
 /// The deterministic precedence used when several user directives belong to one task.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectiveTaskDirectivePrecedence {
     LaterDirectivesOverrideConflicts,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Default for EffectiveTaskDirectivePrecedence {
     fn default() -> Self {
         Self::LaterDirectivesOverrideConflicts
@@ -603,6 +615,7 @@ impl Default for EffectiveTaskDirectivePrecedence {
 }
 
 /// One durable user instruction contributing to the current task objective.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EffectiveTaskDirective {
     pub source_message_id: i64,
@@ -674,6 +687,7 @@ pub struct TaskGoalSourcePreview {
 /// The transcript remains the durable record of the conversation. This structure records the
 /// already-classified user directives that define the active task so compression and recovery do
 /// not need to infer scope from a generated summary or a later LLM request.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EffectiveTaskObjective {
     #[serde(default = "default_effective_task_objective_version")]
@@ -686,10 +700,12 @@ pub struct EffectiveTaskObjective {
     pub directives: Vec<EffectiveTaskDirective>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn default_effective_task_objective_version() -> u8 {
     1
 }
 
+#[cfg(not(feature = "desktop"))]
 impl EffectiveTaskObjective {
     pub fn new(source_message_id: i64, content: String) -> Self {
         Self {
@@ -731,6 +747,7 @@ impl EffectiveTaskObjective {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutionContext {
     pub session_id: String,
@@ -771,10 +788,12 @@ pub struct ExecutionContext {
     pub removed_queued_user_message_ids: Vec<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn default_execution_context_segment_id() -> i32 {
     1
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ExecutionContext {
     pub const CURRENT_VERSION: &'static str = "1.4.0";
 
@@ -827,7 +846,7 @@ impl ExecutionContext {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

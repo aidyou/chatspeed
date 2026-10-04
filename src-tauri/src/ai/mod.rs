@@ -10,4 +10,5 @@ pub mod network;
 pub mod traits;
 #[cfg(not(feature = "desktop"))]
 pub mod transport;
+#[cfg(not(feature = "desktop"))]
 pub mod util;

@@ -9,7 +9,6 @@
 //! this legacy diagnostic command fails closed rather than invoking the removed
 //! client-pull bridge or creating a second executor.
 
-use serde_json::Value;
 use tauri::{command, AppHandle, Wry};
 
 use crate::{

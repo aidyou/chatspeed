@@ -1,7 +1,10 @@
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::error::WorkflowEngineError;
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use std::collections::HashMap;
+#[cfg(not(feature = "desktop"))]
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,7 +21,9 @@ pub struct SkillManifest {
     #[serde(default)]
     pub instructions: String,
 
-    // Store skill directory path for on-demand reference loading
+    // Store skill directory path for on-demand reference loading. Loading is a
+    // runtime concern, so the desktop never reads this field.
+    #[cfg(not(feature = "desktop"))]
     #[serde(skip)]
     pub skill_dir: Option<PathBuf>,
 
@@ -44,6 +49,7 @@ fn default_source() -> String {
 }
 
 /// A skill found on disk with the search root it was found under.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone)]
 pub struct ScannedSkill {
     pub manifest: SkillManifest,
@@ -55,10 +61,12 @@ pub struct ScannedSkill {
     pub builtin: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 pub struct SkillScanner {
     search_paths: Vec<PathBuf>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl SkillScanner {
     pub fn new(app_data_dir: PathBuf) -> Self {
         let mut search_paths = vec![];
@@ -338,7 +346,7 @@ impl SkillScanner {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use std::fs;

@@ -2,21 +2,24 @@
 use super::stoppable::Stoppable;
 #[cfg(not(feature = "desktop"))]
 use crate::ai::error::AiError;
-use crate::{
-    ai::interaction::constants::{
-        TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
-    },
-    ccproxy::ChatProtocol,
-    db::ThinkingConfig,
-    tools::ToolScope,
+#[cfg(not(feature = "desktop"))]
+use crate::ai::interaction::constants::{
+    TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
 };
+#[cfg(not(feature = "desktop"))]
+use crate::db::ThinkingConfig;
+use crate::{ccproxy::ChatProtocol, tools::ToolScope};
 
 #[cfg(not(feature = "desktop"))]
 use async_trait::async_trait;
 use log::warn;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{json, Value};
-use std::{default::Default, fmt::Display, sync::Arc};
+#[cfg(not(feature = "desktop"))]
+use serde_json::json;
+use serde_json::Value;
+use std::{default::Default, fmt::Display};
+#[cfg(not(feature = "desktop"))]
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +126,10 @@ pub struct ChatResponse {
 }
 
 impl ChatResponse {
+    // Runtime-only: the in-process chat loop fans a single response out to the
+    // registered window channels through an `Arc`; the desktop only deserializes
+    // the wire `ChatResponse` shape.
+    #[cfg(not(feature = "desktop"))]
     pub fn new_with_arc(
         chat_id: String,
         chunk: String,
@@ -154,6 +161,7 @@ pub struct Usage {
 // =================================================
 
 /// ToolCallDeclaration represents a tool call declaration.
+#[cfg(not(feature = "desktop"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCallDeclaration {
     #[serde(skip_serializing, default)]
@@ -182,6 +190,10 @@ pub struct MCPToolDeclaration {
     pub scope: Option<ToolScope>,
 }
 
+// The provider-side conversion helpers feed the in-process runtime chat
+// execution; the desktop only carries the declaration struct itself over the
+// tool wire.
+#[cfg(not(feature = "desktop"))]
 impl MCPToolDeclaration {
     /// Converts the tool declaration to standard JSON format
     ///
@@ -340,6 +352,10 @@ pub struct ModelDetails {
     pub metadata: Option<serde_json::Value>,
 }
 
+// The chat-continuity and workflow-attribution metadata below is constructed and
+// consumed only by the in-process runtime chat execution and the workflow
+// engine; the desktop passes metadata through as an opaque `Value`.
+#[cfg(not(feature = "desktop"))]
 /// Internal parameters used to maintain chat continuity, especially for tool calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -355,6 +371,7 @@ pub struct InternalChatParam {
     pub retry_on_transient_error: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomHeader {
@@ -363,6 +380,7 @@ pub struct CustomHeader {
 }
 
 /// Internal-only ownership attached to workflow model requests for durable usage accounting.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowUsageAttribution {
     pub workflow_session_id: String,
@@ -373,6 +391,7 @@ pub struct WorkflowUsageAttribution {
     pub request_kind: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomParam {
@@ -381,6 +400,7 @@ pub struct CustomParam {
 }
 
 /// Metadata and parameters for a chat request.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMetadata {
@@ -430,6 +450,7 @@ pub struct ChatMetadata {
     pub extra: Option<serde_json::Map<String, Value>>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ChatMetadata {
     /// Deserializes ChatMetadata from a JSON value.
     pub fn from_value(value: Option<Value>) -> Self {

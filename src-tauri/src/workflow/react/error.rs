@@ -1,3 +1,8 @@
+// The engine error and its terminal projection are runtime-only: the desktop
+// reaches the runtime over the control plane and never constructs or matches the
+// engine error, so this module is runtime-only.
+#![cfg(not(feature = "desktop"))]
+
 use crate::ai::error::AiError;
 use crate::db::error::StoreError;
 use crate::tools::ToolError;

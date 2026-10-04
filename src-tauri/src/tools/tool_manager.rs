@@ -1,32 +1,46 @@
 use async_trait::async_trait;
+#[cfg(not(feature = "desktop"))]
 use futures::FutureExt;
+#[cfg(not(feature = "desktop"))]
 use rust_i18n::t;
-use serde_json::{json, Value};
+#[cfg(not(feature = "desktop"))]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(not(feature = "desktop"))]
 use std::collections::{HashMap, HashSet};
+#[cfg(not(feature = "desktop"))]
 use std::panic::AssertUnwindSafe;
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
+#[cfg(not(feature = "desktop"))]
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 #[cfg(not(feature = "desktop"))]
 use crate::db::MainStore;
+#[cfg(not(feature = "desktop"))]
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, StdioClient, StreamableHttpClient,
 };
 use crate::tools::error::ToolError;
-use crate::tools::{ToolCallResult, ToolCategory, ToolScope, MCP_TOOL_NAME_SPLIT};
+#[cfg(not(feature = "desktop"))]
+use crate::tools::MCP_TOOL_NAME_SPLIT;
+use crate::tools::{ToolCallResult, ToolCategory, ToolScope};
 
 // use super::tools::SearchDedup;
 // use super::tools::{ChatCompletion, ModelName};
 
+#[cfg(not(feature = "desktop"))]
 const DEFAULT_BROADCAST_CAPACITY: usize = 100;
 
 /// Per-name registration generations prevent detached discovery tasks from
 /// restoring state after a stop or same-name restart.
+#[cfg(not(feature = "desktop"))]
 type McpRegistrationGenerations = HashMap<String, u64>;
 
 /// The result type of a function call.
 pub type NativeToolResult = Result<ToolCallResult, ToolError>;
+#[cfg(not(feature = "desktop"))]
 pub type ToolResult = Result<Value, ToolError>;
 
 /// A trait defining the characteristics of a function.
@@ -72,6 +86,7 @@ pub trait ToolDefinition: Send + Sync {
 
 /// A wrapper that adapts an MCP tool to the ToolDefinition trait.
 /// This allows MCP tools to be registered and called just like native tools.
+#[cfg(not(feature = "desktop"))]
 pub(crate) struct McpToolWrapper {
     pub(crate) server_name: String,
     pub(crate) tool_decl: MCPToolDeclaration,
@@ -80,12 +95,14 @@ pub(crate) struct McpToolWrapper {
     pub(crate) public_name: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Default)]
 struct McpAliasRegistry {
     alias_to_canonical: HashMap<String, String>,
     canonical_to_alias: HashMap<String, String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl McpAliasRegistry {
     fn resolve(&self, name: &str) -> Option<String> {
         self.alias_to_canonical.get(name).cloned()
@@ -96,6 +113,7 @@ impl McpAliasRegistry {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Clone)]
 struct McpAliasInput {
     canonical_name: String,
@@ -103,6 +121,7 @@ struct McpAliasInput {
     tool_name: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn normalize_mcp_alias(value: &str) -> String {
     let normalized: String = value
         .chars()
@@ -122,6 +141,7 @@ fn normalize_mcp_alias(value: &str) -> String {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reserved_mcp_aliases() -> HashSet<String> {
     [
         crate::tools::TOOL_BASH,
@@ -155,6 +175,7 @@ fn reserved_mcp_aliases() -> HashSet<String> {
     .collect()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn allocate_mcp_aliases(
     mut inputs: Vec<McpAliasInput>,
     native_names: impl IntoIterator<Item = String>,
@@ -200,6 +221,7 @@ fn allocate_mcp_aliases(
     registry
 }
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait]
 impl ToolDefinition for McpToolWrapper {
     fn name(&self) -> &str {
@@ -251,6 +273,7 @@ impl ToolDefinition for McpToolWrapper {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn scope_allows(tool_scope: ToolScope, scope_filter: Option<ToolScope>) -> bool {
     match scope_filter {
         Some(ToolScope::Chat) => tool_scope == ToolScope::Chat || tool_scope == ToolScope::Both,
@@ -259,6 +282,7 @@ fn scope_allows(tool_scope: ToolScope, scope_filter: Option<ToolScope>) -> bool 
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Clone)]
 pub struct McpToolSpec {
     pub canonical_name: String,
@@ -268,6 +292,7 @@ pub struct McpToolSpec {
 /// Manages the registration and execution of workflow functions.
 ///
 /// This struct is responsible for maintaining a collection of functions
+#[cfg(not(feature = "desktop"))]
 pub struct ToolManager {
     /// A map of registered functions.
     tools: RwLock<HashMap<String, Arc<dyn ToolDefinition>>>,
@@ -285,6 +310,7 @@ pub struct ToolManager {
     mcp_registration_generations: Mutex<McpRegistrationGenerations>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ToolManager {
     /// Creates a new instance of `FunctionManager`.
     pub fn new() -> Self {
@@ -1479,7 +1505,7 @@ impl ToolManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::tools::{ToolCallResult, ToolCategory, ToolScope};
@@ -2242,6 +2268,7 @@ mod tests {
 }
 
 /// A default implementation of `FunctionManager`.
+#[cfg(not(feature = "desktop"))]
 impl Default for ToolManager {
     fn default() -> Self {
         Self::new()

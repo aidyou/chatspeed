@@ -286,6 +286,7 @@ fn dedupe_shells(shells: impl IntoIterator<Item = ShellDescriptor>) -> Vec<Shell
     unique
 }
 
+#[cfg(any(test, not(feature = "desktop")))]
 fn select_default_shell(
     shells: Vec<ShellDescriptor>,
     #[allow(unused_variables)] user_shell: Option<&str>,
@@ -318,12 +319,14 @@ fn select_default_shell(
 }
 
 /// Gets the preferred interactive terminal shell for the current platform.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
     let user_shell = env::var("SHELL").ok();
     select_default_shell(get_available_shells(), user_shell.as_deref())
 }
 
 /// Builds the minimal environment required by a terminal child without exposing it to the UI.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
     let mut environment = env::vars().collect::<Vec<_>>();
     let original_path = env::var("PATH").unwrap_or_default();
@@ -345,6 +348,7 @@ pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
     environment
 }
 
+#[cfg(not(feature = "desktop"))]
 fn set_environment_value(environment: &mut Vec<(String, String)>, key: &str, value: String) {
     if let Some((_, existing_value)) = environment
         .iter_mut()

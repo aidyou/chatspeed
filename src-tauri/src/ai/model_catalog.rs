@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(feature = "desktop"))]
 pub mod pricing;
 
 // The provider display payload is a shared wire contract: the desktop command,

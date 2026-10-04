@@ -1,12 +1,18 @@
+#[cfg(not(feature = "desktop"))]
 use crate::libs::ai_temp::resolve_ai_temp_path;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::error::WorkflowEngineError;
 
+#[cfg(not(feature = "desktop"))]
 use ignore::gitignore::Gitignore;
-#[cfg(any(test, not(feature = "desktop")))]
+#[cfg(not(feature = "desktop"))]
 use ignore::gitignore::GitignoreBuilder;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
+#[cfg(not(feature = "desktop"))]
+use std::path::{Component, PathBuf};
 
 /// Critical system directories that should NEVER be accessed by the AI
+#[cfg(not(feature = "desktop"))]
 const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
     "/etc",
     "/bin",
@@ -31,10 +37,12 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
+#[cfg(not(feature = "desktop"))]
 pub fn is_user_skill_path(path: &Path) -> bool {
     dirs::home_dir().is_some_and(|home| is_user_skill_path_for_home(path, &home))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_user_skill_path_for_home(path: &Path, home: &Path) -> bool {
     let user_skill_root = PathGuard::resolve_physical_path(&home.join(".chatspeed").join("skills"));
     let physical_path = PathGuard::resolve_physical_path(path);
@@ -81,17 +89,20 @@ pub fn workspace_walk_builder(path: &Path) -> ignore::WalkBuilder {
     builder
 }
 
+#[cfg(not(feature = "desktop"))]
 struct IgnoreScope {
     base_dir: PathBuf,
     matcher: Gitignore,
 }
 
+#[cfg(not(feature = "desktop"))]
 struct AuthorizedRoot {
     path: PathBuf,
     gitignore_scopes: Vec<IgnoreScope>,
     chatspeed_scopes: Vec<IgnoreScope>,
 }
 
+#[cfg(not(feature = "desktop"))]
 pub struct PathGuard {
     workspace_roots: Vec<AuthorizedRoot>,
     sandbox_roots: Vec<AuthorizedRoot>,
@@ -99,6 +110,7 @@ pub struct PathGuard {
     primary_root: Option<PathBuf>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl PathGuard {
     // Constructing a guard is a runtime concern; the desktop only reaches an
     // already-built guard, except for shared tool tests that still build one.

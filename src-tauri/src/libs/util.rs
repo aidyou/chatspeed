@@ -12,6 +12,7 @@ use url::form_urlencoded::{byte_serialize, parse};
 ///
 /// # Returns
 /// The formatted JSON string
+#[cfg(not(feature = "desktop"))]
 pub fn format_json_str(jstr: &str) -> String {
     let mut jstr = jstr.trim().to_string();
 

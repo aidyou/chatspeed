@@ -1,10 +1,13 @@
+#[cfg(not(feature = "desktop"))]
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(not(feature = "desktop"))]
 use crate::db::ProxyGroup;
 
+#[cfg(not(feature = "desktop"))]
 use super::mcp::Mcp;
 
 // use crate::plugins::traits::PluginType;
@@ -50,6 +53,7 @@ pub struct Conversation {
 ///
 /// Note: When using internal headers (X-CS-Provider-Id/X-CS-Model-Id) to directly specify
 /// a model, `client_model` will be set to the model_id since no user-configured alias exists.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CcproxyStat {
@@ -440,6 +444,7 @@ pub struct AiSkill {
 }
 
 /// Represents the configuration settings for the application, including AI models and skills.
+#[cfg(not(feature = "desktop"))]
 pub struct Config {
     /// A HashMap storing the settings as key-value pairs.
     pub settings: HashMap<String, Value>,

@@ -30,11 +30,16 @@ pub static BASE_URL: phf::Map<&'static str, &'static str> = phf_map! {
     "x" => "https://api.x.ai/v1",
 };
 
-/// Token usage keys
+/// Token usage keys, consumed only by the runtime chat metadata accounting.
+#[cfg(not(feature = "desktop"))]
 pub const TOKENS: &str = "tokens";
+#[cfg(not(feature = "desktop"))]
 pub const TOKENS_TOTAL: &str = "total";
+#[cfg(not(feature = "desktop"))]
 pub const TOKENS_PROMPT: &str = "prompt";
+#[cfg(not(feature = "desktop"))]
 pub const TOKENS_COMPLETION: &str = "completion";
+#[cfg(not(feature = "desktop"))]
 pub const TOKENS_PER_SECOND: &str = "tokensPerSecond";
 
 // The bundled system prompts are consumed only by the desktop-free runtime chat

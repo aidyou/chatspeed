@@ -1,19 +1,33 @@
+// Only `McpProtocolType`, `McpServerConfig` and `McpStatus` are shared with the
+// desktop build; the client traits and their supporting items below are
+// runtime-only, so their imports carry the same gate.
+#[cfg(not(feature = "desktop"))]
 use rmcp::model::{CallToolRequestParams, InitializeRequestParams};
+#[cfg(not(feature = "desktop"))]
 use rmcp::service::RunningService;
+#[cfg(not(feature = "desktop"))]
 use rmcp::RoleClient;
+#[cfg(not(feature = "desktop"))]
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use serde_json::{Map, Value};
+#[cfg(not(feature = "desktop"))]
 use tokio::sync::RwLock;
+#[cfg(not(feature = "desktop"))]
 use tokio::time::{timeout, Duration};
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
+#[cfg(not(feature = "desktop"))]
 use crate::ai::traits::chat::MCPToolDeclaration;
+#[cfg(not(feature = "desktop"))]
 use crate::mcp::McpError; // Ensure this is the correct path
 
+#[cfg(not(feature = "desktop"))]
 use super::util::get_tools;
 
 /// MCP protocol type
@@ -127,6 +141,7 @@ impl Default for McpServerConfig {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub type McpClientResult<T> = Result<T, McpError>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,8 +173,10 @@ impl Display for McpStatus {
 /// # Arguments
 /// * `id` - The ID of the MCP server ID whose status has changed.
 /// * `status` - The new status of the MCP server.
+#[cfg(not(feature = "desktop"))]
 pub type StatusChangeCallback = Box<dyn Fn(String, McpStatus) -> () + Send + Sync>;
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait::async_trait]
 pub trait McpClientInternal: Send + Sync {
     /// Internal method to set MCP status
@@ -171,6 +188,7 @@ pub trait McpClientInternal: Send + Sync {
 
 /// Main trait containing methods for an MCP client.
 /// This trait is designed to be object-safe for use with `dyn McpClient`.
+#[cfg(not(feature = "desktop"))]
 #[async_trait::async_trait]
 pub(crate) trait McpClient: Send + Sync + McpClientInternal {
     /// Gets the name of the MCP client

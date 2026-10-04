@@ -1,5 +1,12 @@
-use crate::ai::model_catalog::pricing::{calculate_cost, UsageBreakdown};
+// Task-terminal usage aggregation is runtime-only: the desktop reads finalized
+// usage summaries through the control plane and never links this module.
+#![cfg(not(feature = "desktop"))]
+
 use serde::{Deserialize, Serialize};
+
+// The pricing helper only backs the wire-shape test below, so it is test-only.
+#[cfg(test)]
+use crate::ai::model_catalog::pricing::{calculate_cost, UsageBreakdown};
 
 /// Immutable, snake_case usage summary persisted at a workflow task terminal boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,8 +64,8 @@ pub struct ModelUsageBreakdown {
     pub estimated_cost: Option<f64>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct PricingSnapshot {
     pub input_per_million: f64,
     pub output_per_million: f64,
@@ -66,7 +73,7 @@ pub struct PricingSnapshot {
     pub multiplier: f64,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn calculate_model_cost(
     input_tokens: i64,
     output_tokens: i64,

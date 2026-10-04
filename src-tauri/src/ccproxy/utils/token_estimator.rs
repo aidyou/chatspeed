@@ -1,7 +1,6 @@
 //! A simple token estimator.
 
-// The unified request/response estimators are runtime-only; the desktop keeps
-// only the lightweight `estimate_tokens` heuristic.
+// Token estimation belongs to runtime request handling and workflow context.
 #[cfg(not(feature = "desktop"))]
 use serde_json::Value;
 
@@ -28,6 +27,7 @@ use crate::ccproxy::adapter::unified::{
 /// # Returns
 ///
 /// An estimated token count as a `f64`.
+#[cfg(not(feature = "desktop"))]
 pub fn estimate_tokens(text: &str) -> f64 {
     let mut token_count: f64 = 0.0;
     for c in text.chars() {

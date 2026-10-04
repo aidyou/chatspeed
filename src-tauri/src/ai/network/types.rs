@@ -1,6 +1,11 @@
+#[cfg(not(feature = "desktop"))]
+#[cfg(not(feature = "desktop"))]
 use reqwest::Response;
+#[cfg(not(feature = "desktop"))]
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use serde_json::{json, Value};
+#[cfg(not(feature = "desktop"))]
 use std::fmt;
 
 /// Represents different types of proxy configurations
@@ -33,6 +38,10 @@ impl From<ProxyType> for String {
 }
 // 不能实现From<ProxyType> for &str，因为&str是引用类型，需要指定生命周期
 
+// The request/response plumbing below is driven only by the desktop-free
+// runtime chat execution; the desktop reaches the provider through the control
+// plane. Only `ProxyType` stays shared as a config/UI wire value.
+#[cfg(not(feature = "desktop"))]
 /// Configuration for API requests
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -42,6 +51,7 @@ pub struct ApiConfig {
     pub headers: Option<Value>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ApiConfig {
     /// Creates a new ApiConfig with minimal required parameters
     ///
@@ -70,6 +80,7 @@ impl ApiConfig {
 }
 
 /// Response wrapper for API calls
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug)]
 pub struct ApiResponse {
     /// The response content
@@ -84,6 +95,7 @@ pub struct ApiResponse {
     pub raw_response: Option<Response>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResponseError {
     pub status_code: Option<u16>,
@@ -92,6 +104,7 @@ pub struct ResponseError {
     pub message: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ResponseError {
     pub fn new(status_code: Option<u16>, error_type: Option<String>, message: String) -> Self {
         Self {
@@ -102,6 +115,7 @@ impl ResponseError {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ApiResponse {
     /// Creates a new successful response
     pub fn success(content: String) -> Self {
@@ -140,6 +154,7 @@ impl ApiResponse {
 }
 
 /// Represents different error response formats
+#[cfg(not(feature = "desktop"))]
 pub enum ErrorFormat {
     /// OpenAI format
     OpenAI,
@@ -151,6 +166,7 @@ pub enum ErrorFormat {
     Custom(Box<dyn Fn(&str) -> Option<(String, String)> + Send + Sync>),
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Clone for ErrorFormat {
     fn clone(&self) -> Self {
         match self {
@@ -162,6 +178,7 @@ impl Clone for ErrorFormat {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl fmt::Debug for ErrorFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -173,12 +190,14 @@ impl fmt::Debug for ErrorFormat {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Default for ErrorFormat {
     fn default() -> Self {
         Self::OpenAI
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ErrorFormat {
     /// Parse error message from response
     ///
@@ -224,6 +243,7 @@ impl ErrorFormat {
 // =================================================
 // OpenAI compatible response format
 // =================================================
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAIStreamResponse {
@@ -232,6 +252,7 @@ pub struct OpenAIStreamResponse {
     pub usage: Option<OpenAIUsage>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamChoice {
     pub delta: OpenAIStreamDelta,
@@ -239,6 +260,7 @@ pub struct OpenAIStreamChoice {
     pub finish_reason: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIStreamDelta {
     pub content: Option<String>,
@@ -256,6 +278,7 @@ pub struct OpenAIStreamDelta {
     pub reference: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 pub struct ToolCall {
     pub index: u32,
@@ -263,6 +286,7 @@ pub struct ToolCall {
     pub function: ToolFunction,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 pub struct ToolFunction {
     pub name: Option<String>,
@@ -270,6 +294,7 @@ pub struct ToolFunction {
     pub arguments: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 pub struct OpenAIUsage {
     #[serde(default)]

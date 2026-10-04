@@ -31,19 +31,30 @@ pub const CFG_WORKFLOW_PREVENT_IDLE_SLEEP: &str = "workflow_prevent_idle_sleep";
 
 // interface language
 pub const CFG_INTERFACE_LANGUAGE: &str = "interface_language";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CHAT_COMPLETION_PROXY: &str = "chat_completion_proxy";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_ACTIVE_PROXY_GROUP: &str = "active_proxy_group";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_PORT: &str = "chat_completion_proxy_port";
 pub const CFG_CCPROXY_PORT_DEFAULT: u16 = 11435;
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_LISTEN: &str = "chat_completion_proxy_listen";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_LISTEN_DEFAULT: &str = "127.0.0.1";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_LOG_TO_FILE: &str = "chat_completion_proxy_log_to_file";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_LOG_PROXY_TO_FILE: &str = "chat_completion_proxy_log_proxy_to_file";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_RETRY_ON_429: &str = "chat_completion_proxy_retry_on_429";
+#[cfg(not(feature = "desktop"))]
 pub const CFG_CCPROXY_RETRY_ON_429_DEFAULT: u32 = 0;
 pub const CFG_SEARCH_ENGINE: &str = "search_engine";
 pub const CFG_SCRAPER_DEBUG_MODE: &str = "scraper_debug_mode";
+#[cfg(not(feature = "desktop"))]
 pub const DEFAULT_WEB_SEARCH_TOOL: &str = "WebSearch";
+#[cfg(not(feature = "desktop"))]
 pub const DEFAULT_WEB_FETCH_TOOL: &str = "WebFetch";
 // pub const CFG_SCRAPER_CONCURRENCY_COUNT: &str = "scraper_concurrency_count";
 
@@ -257,4 +268,5 @@ pub static RESTRICTED_EXTENSIONS: phf::Set<&'static str> = phf::phf_set! {
 
 // Internal parameter names for tool execution context
 // These are injected by the workflow engine and should be removed before tool processing
+#[cfg(not(feature = "desktop"))]
 pub const INTERNAL_PARAM_TOOL_CALL_ID: &str = "__inner_tool_call_id";

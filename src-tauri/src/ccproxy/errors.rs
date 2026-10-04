@@ -114,6 +114,7 @@ impl IntoResponse for CCProxyError {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub type ProxyResult<T> = std::result::Result<T, CCProxyError>;
 
 #[cfg(test)]

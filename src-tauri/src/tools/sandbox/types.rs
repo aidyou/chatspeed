@@ -273,6 +273,8 @@ pub enum ShellExecutionMode {
 }
 
 impl ShellExecutionMode {
+    // Only the runtime persists and logs the resolved mode string.
+    #[cfg(not(feature = "desktop"))]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -582,6 +584,7 @@ impl AgentSandboxConfig {
         serde_json::from_str(raw).ok()
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn to_json(&self) -> Option<String> {
         serde_json::to_string(self).ok()
     }

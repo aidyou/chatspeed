@@ -61,6 +61,7 @@ const MCP_TOOL_DECLARATIONS_ROUTE: &str = "/control/v1/mcp-tool-declarations";
 const MCP_TOOL_STATUS_ROUTE: &str = "/control/v1/mcp-tool-status";
 
 /// Read-only client WebView capability bridge route (U-7).
+#[cfg(test)]
 const CLIENT_CAPABILITIES_ROUTE: &str = "/control/v1/client-capabilities";
 
 /// A capability result, already carrying the stable wire code the Tauri
@@ -299,6 +300,7 @@ pub async fn mcp_update_tool_status(
 // Client WebView capability bridge (U-7)
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// Legacy compatibility read for clients that still display the old capability
 /// inventory. Runtime workflow execution does not use this route; it uses the
 /// canonical MCP registry.

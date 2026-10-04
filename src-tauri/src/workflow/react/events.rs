@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::types::EffectiveTaskObjective;
 
+#[cfg(not(feature = "desktop"))]
 pub const EVENT_VERSION: &str = "1.0.0";
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowEventType {
@@ -28,6 +31,7 @@ pub enum WorkflowEventType {
     WorkflowCancelled,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl WorkflowEventType {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -53,6 +57,7 @@ impl WorkflowEventType {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowEvent {
     pub event_type: WorkflowEventType,
@@ -61,6 +66,7 @@ pub struct WorkflowEvent {
     pub version: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl WorkflowEvent {
     pub fn new(event_type: WorkflowEventType, session_id: String, event_data: Value) -> Self {
         Self {
@@ -410,7 +416,7 @@ pub struct WorkflowEventRecord {
     pub created_at: String,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

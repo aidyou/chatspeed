@@ -16,6 +16,8 @@ pub enum ToolScope {
 }
 
 impl ToolScope {
+    // Only the runtime's workflow engine renders a scope as a string.
+    #[cfg(not(feature = "desktop"))]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Chat => "chat",

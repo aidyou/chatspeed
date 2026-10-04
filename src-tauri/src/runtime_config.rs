@@ -22,6 +22,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
+#[cfg(test)]
 use crate::ai::network::ProxyType;
 use crate::constants::{
     CFG_ASSISTANT_WINDOW_SIZE, CFG_PROXY_SWITCHER_WINDOW_SIZE, CFG_SCRAPER_DEBUG_MODE,
@@ -137,6 +138,7 @@ impl RuntimeConfigSnapshot {
     }
 
     /// Resolves the outbound proxy the model catalog refresh should use.
+    #[cfg(test)]
     pub fn proxy_type(&self) -> ProxyType {
         match self.get_string(CFG_PROXY_TYPE, "none").as_str() {
             "http" => ProxyType::Http(

@@ -48,6 +48,7 @@ pub mod planners;
 #[cfg(not(feature = "desktop"))]
 pub mod policy;
 pub mod prompts;
+#[cfg(not(feature = "desktop"))]
 pub mod replay;
 #[cfg(not(feature = "desktop"))]
 pub mod runners;
