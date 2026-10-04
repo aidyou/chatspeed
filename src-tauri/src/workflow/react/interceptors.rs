@@ -21,6 +21,7 @@ use crate::workflow::react::file_preview::{
     render_preview_details_text,
 };
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
+use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{
@@ -1317,8 +1318,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 | crate::tools::TOOL_GREP
                 | crate::tools::TOOL_GIT_DIFF
                 | crate::tools::TOOL_GIT_INSPECT
-                | crate::tools::TOOL_WEB_SEARCH
-                | crate::tools::TOOL_WEB_FETCH
+                | WEB_SEARCH_TOOL
+                | WEB_FETCH_TOOL
         )
     }
 

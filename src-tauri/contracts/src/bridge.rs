@@ -21,11 +21,16 @@ pub const BRIDGE_PROTOCOL_VERSION: &str = "1";
 /// Schema version for the bridge envelope DTOs.
 pub const BRIDGE_SCHEMA_VERSION: &str = "1";
 
+/// Stable model-facing name for the desktop WebView fetch capability.
+pub const WEB_FETCH_TOOL: &str = "web_fetch";
+/// Stable model-facing name for the desktop WebView search capability.
+pub const WEB_SEARCH_TOOL: &str = "web_search";
+
 /// Closed allowlist of capabilities a client bridge may declare or execute.
 ///
 /// A client bridge is web-only by contract, so it can never grow into a
 /// general-purpose execution surface.
-pub const BRIDGE_CAPABILITY_ALLOWLIST: [&str; 2] = ["web_fetch", "web_search"];
+pub const BRIDGE_CAPABILITY_ALLOWLIST: [&str; 2] = [WEB_FETCH_TOOL, WEB_SEARCH_TOOL];
 
 /// One capability a client bridge declares, with the schema version it speaks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -56,6 +56,7 @@ mod web_fetch;
 #[cfg(feature = "desktop")]
 mod web_search;
 
+#[cfg(not(feature = "desktop"))]
 pub use constants::*;
 pub use error::ToolError;
 // The filesystem and search tools are registered by the runtime's `ToolManager`

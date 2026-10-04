@@ -23,15 +23,13 @@ use serde_json::{json, Value};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::tools::tool_manager::{NativeToolResult, ToolDefinition};
-use crate::tools::{
-    ToolCallResult, ToolCategory, ToolError, ToolScope, TOOL_WEB_FETCH, TOOL_WEB_SEARCH,
-};
+use crate::tools::{ToolCallResult, ToolCategory, ToolError, ToolScope};
 use crate::workflow::react::client::http::client_bridge::{
     BridgeError, BridgeOutcome, ClientBridgeRegistry,
 };
 use chatspeed_contracts::{
     validate_capability_arguments, ClientCapabilityError, ClientCapabilityResult,
-    ClientCapabilityStatus, BRIDGE_SCHEMA_VERSION,
+    ClientCapabilityStatus, BRIDGE_SCHEMA_VERSION, WEB_FETCH_TOOL, WEB_SEARCH_TOOL,
 };
 
 /// Bound on one runtime-side capability invocation.
@@ -55,12 +53,12 @@ pub struct ClientBridgeWebTool {
 impl ClientBridgeWebTool {
     /// The `web_fetch` capability tool.
     pub fn fetch(registry: Arc<ClientBridgeRegistry>) -> Self {
-        Self::new(TOOL_WEB_FETCH, registry)
+        Self::new(WEB_FETCH_TOOL, registry)
     }
 
     /// The `web_search` capability tool.
     pub fn search(registry: Arc<ClientBridgeRegistry>) -> Self {
-        Self::new(TOOL_WEB_SEARCH, registry)
+        Self::new(WEB_SEARCH_TOOL, registry)
     }
 
     fn new(capability: &'static str, registry: Arc<ClientBridgeRegistry>) -> Self {
@@ -186,7 +184,7 @@ impl ToolDefinition for ClientBridgeWebTool {
 
     fn description(&self) -> &str {
         match self.capability {
-            TOOL_WEB_FETCH => self.fetch_description(),
+            WEB_FETCH_TOOL => self.fetch_description(),
             _ => self.search_description(),
         }
     }
@@ -201,7 +199,7 @@ impl ToolDefinition for ClientBridgeWebTool {
 
     fn tool_calling_spec(&self) -> MCPToolDeclaration {
         let input_schema = match self.capability {
-            TOOL_WEB_FETCH => self.fetch_schema(),
+            WEB_FETCH_TOOL => self.fetch_schema(),
             _ => self.search_schema(),
         };
         MCPToolDeclaration {
@@ -365,11 +363,11 @@ mod tests {
             schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
             capabilities: vec![
                 ClientBridgeCapability {
-                    name: TOOL_WEB_FETCH.to_string(),
+                    name: WEB_FETCH_TOOL.to_string(),
                     schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
                 },
                 ClientBridgeCapability {
-                    name: TOOL_WEB_SEARCH.to_string(),
+                    name: WEB_SEARCH_TOOL.to_string(),
                     schema_version: BRIDGE_SCHEMA_VERSION.to_string(),
                 },
             ],
@@ -391,8 +389,8 @@ mod tests {
         let fetch = ClientBridgeWebTool::fetch(registry.clone()).tool_calling_spec();
         let search = ClientBridgeWebTool::search(registry).tool_calling_spec();
 
-        assert_eq!(fetch.name, TOOL_WEB_FETCH);
-        assert_eq!(search.name, TOOL_WEB_SEARCH);
+        assert_eq!(fetch.name, WEB_FETCH_TOOL);
+        assert_eq!(search.name, WEB_SEARCH_TOOL);
         assert_eq!(
             schema_keys(&fetch.input_schema),
             WEB_FETCH_ARGUMENTS
@@ -448,7 +446,7 @@ mod tests {
             tokio::spawn(async move { tool.call(json!({"url": "https://example.com"})).await });
 
         let envelope = work.recv().await.expect("work envelope");
-        assert_eq!(envelope.invocation.capability, TOOL_WEB_FETCH);
+        assert_eq!(envelope.invocation.capability, WEB_FETCH_TOOL);
         assert_eq!(envelope.invocation.schema_version, BRIDGE_SCHEMA_VERSION);
         assert_eq!(
             envelope.invocation.arguments,

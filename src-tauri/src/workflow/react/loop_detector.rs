@@ -214,8 +214,8 @@ fn is_context_gathering_tool(tool_name: &str) -> bool {
             | crate::tools::TOOL_GLOB
             | crate::tools::TOOL_LIST_DIR
             | crate::tools::TOOL_READ_FILE
-            | crate::tools::TOOL_WEB_FETCH
-            | crate::tools::TOOL_WEB_SEARCH
+            | chatspeed_contracts::WEB_FETCH_TOOL
+            | chatspeed_contracts::WEB_SEARCH_TOOL
             | crate::tools::TOOL_SUB_AGENT_OUTPUT
     )
 }

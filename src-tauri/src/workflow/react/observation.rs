@@ -6,8 +6,9 @@ use crate::tools::{
     ToolError, TOOL_BASH, TOOL_COMPLETE_WORKFLOW, TOOL_EDIT_FILE, TOOL_GLOB, TOOL_GREP,
     TOOL_LIST_DIR, TOOL_PLAN_EDIT_NOTE, TOOL_PLAN_NOTE, TOOL_PLAN_READ_NOTE, TOOL_PLAN_WRITE_NOTE,
     TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_LIST,
-    TOOL_TODO_UPDATE, TOOL_WEB_FETCH, TOOL_WEB_SEARCH, TOOL_WRITE_FILE,
+    TOOL_TODO_UPDATE, TOOL_WRITE_FILE,
 };
+use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
 };
@@ -303,8 +304,8 @@ impl ObservationReinforcer {
 
                 if raw_res == "[]" || raw_res == "{}" || raw_res.is_empty() {
                     let empty_hint = match tool_name {
-                        TOOL_WEB_SEARCH => "No results. Try narrower keywords; use Chinese for China-centric topics.",
-                        TOOL_WEB_FETCH => "No page content. Try another source or treat this URL as unavailable.",
+                        WEB_SEARCH_TOOL => "No results. Try narrower keywords; use Chinese for China-centric topics.",
+                        WEB_FETCH_TOOL => "No page content. Try another source or treat this URL as unavailable.",
                         _ => "No data returned. Narrow the query or verify the target exists.",
                     };
                     ReinforcedResult {
@@ -607,11 +608,11 @@ impl ObservationReinforcer {
                     format!("Grep \"{}\"", pattern)
                 }
             }
-            TOOL_WEB_FETCH => {
+            WEB_FETCH_TOOL => {
                 let url = args["url"].as_str().unwrap_or("");
                 format!("Fetch {}", get_domain(url))
             }
-            TOOL_WEB_SEARCH => {
+            WEB_SEARCH_TOOL => {
                 let query = args["query"].as_str().unwrap_or("");
                 let num_results = args["num_results"].as_i64();
                 if let Some(n) = num_results {
@@ -775,14 +776,14 @@ impl ObservationReinforcer {
                     format!("Found {} entries", lines)
                 }
             }
-            TOOL_WEB_SEARCH => {
+            WEB_SEARCH_TOOL => {
                 if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(content) {
                     format!("Found {} results", arr.len())
                 } else {
                     "Search completed".to_string()
                 }
             }
-            TOOL_WEB_FETCH => {
+            WEB_FETCH_TOOL => {
                 // Return success immediately, handled by reinforcement usually
                 "Fetched content".to_string()
             }
@@ -1006,7 +1007,7 @@ mod tests {
             .join("\n");
         let tool_call = json!({
             "function": {
-                "name": TOOL_WEB_FETCH,
+                "name": WEB_FETCH_TOOL,
                 "arguments": "{\"url\":\"https://raw.githubusercontent.com/waditu-tushare/skills/refs/heads/master/tushare/references/%E6%95%B0%E6%8D%AE%E6%8E%A5%E5%8F%A3.md\"}"
             }
         });
@@ -1080,7 +1081,7 @@ mod tests {
         let raw_content = format!("{}SECRET_TAIL", "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT));
         let tool_call = json!({
             "function": {
-                "name": TOOL_WEB_FETCH,
+                "name": WEB_FETCH_TOOL,
                 "arguments": {"url":"https://example.com/large.txt"}
             }
         });

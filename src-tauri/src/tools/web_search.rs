@@ -18,6 +18,7 @@ use crate::{
     },
 };
 use tauri::{AppHandle, Wry};
+use chatspeed_contracts::WEB_SEARCH_TOOL;
 
 pub struct Auth {
     pub api_key: String,
@@ -204,7 +205,7 @@ impl ToolDefinition for WebSearch {
 
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        crate::tools::TOOL_WEB_SEARCH
+        WEB_SEARCH_TOOL
     }
 
     /// Returns a brief description of the function.

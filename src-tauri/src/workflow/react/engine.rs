@@ -21,6 +21,7 @@ use crate::tools::{
     TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
+use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::{
     child_tasks::{render_call_mode_sub_agent_tool_result, SubAgentResolution},
     compression::{CompressionMode, ContextCompressor},
@@ -2634,13 +2635,13 @@ impl WorkflowExecutor {
 
         // 1. Register Web tool
         if self.policy.allowed_categories.contains(&ToolCategory::Web) {
-            if is_allowed(TOOL_WEB_SEARCH) {
-                if let Ok(ws) = self.global_tool_manager.get_tool(TOOL_WEB_SEARCH).await {
+            if is_allowed(WEB_SEARCH_TOOL) {
+                if let Ok(ws) = self.global_tool_manager.get_tool(WEB_SEARCH_TOOL).await {
                     tm.register_tool(ws.clone()).await?;
                 }
             }
-            if is_allowed(TOOL_WEB_FETCH) {
-                if let Ok(wf) = self.global_tool_manager.get_tool(TOOL_WEB_FETCH).await {
+            if is_allowed(WEB_FETCH_TOOL) {
+                if let Ok(wf) = self.global_tool_manager.get_tool(WEB_FETCH_TOOL).await {
                     tm.register_tool(wf.clone()).await?;
                 }
             }

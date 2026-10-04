@@ -23,7 +23,7 @@ pub use bridge::{
     ClientBridgeUnregisterRequest, ClientBridgeWorkEnvelope, ClientCapabilityError,
     ClientCapabilityInvocation, ClientCapabilityResult, ClientCapabilityStatus,
     BRIDGE_CAPABILITY_ALLOWLIST, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
-    WEB_FETCH_ARGUMENTS, WEB_SEARCH_ARGUMENTS,
+    WEB_FETCH_ARGUMENTS, WEB_FETCH_TOOL, WEB_SEARCH_ARGUMENTS, WEB_SEARCH_TOOL,
 };
 pub use chat::{
     ChatProtocolDto, ChatResponseDto, ChatStartRequest, ChatStartResponse, ChatStopRequest,

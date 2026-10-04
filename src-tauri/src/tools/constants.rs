@@ -31,9 +31,6 @@ pub const TOOL_GREP: &str = "grep";
 pub const TOOL_GIT_DIFF: &str = "git_diff";
 #[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_GIT_INSPECT: &str = "git_inspect";
-// The desktop WebView-backed fetch/search tools still name their own tools.
-pub const TOOL_WEB_SEARCH: &str = "web_search";
-pub const TOOL_WEB_FETCH: &str = "web_fetch";
 
 // These tools are internal tools for the agent, usually do not require review
 #[cfg(any(test, not(feature = "desktop")))]
@@ -180,8 +177,8 @@ mod tests {
             TOOL_GREP,
             TOOL_GIT_DIFF,
             TOOL_GIT_INSPECT,
-            TOOL_WEB_SEARCH,
-            TOOL_WEB_FETCH,
+            chatspeed_contracts::WEB_SEARCH_TOOL,
+            chatspeed_contracts::WEB_FETCH_TOOL,
         ] {
             assert!(
                 !is_core_workflow_builtin_tool(tool),

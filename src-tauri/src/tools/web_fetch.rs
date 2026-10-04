@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
+use chatspeed_contracts::WEB_FETCH_TOOL;
 
 use crate::{
     ai::traits::chat::MCPToolDeclaration,
@@ -336,7 +337,7 @@ impl ToolDefinition for WebFetch {
 
     /// Returns the name of the function.
     fn name(&self) -> &str {
-        crate::tools::TOOL_WEB_FETCH
+        WEB_FETCH_TOOL
     }
 
     /// Returns the description of the function.
