@@ -459,6 +459,7 @@ pub async fn run() -> crate::error::Result<()> {
             workflow_approve_plan,
             workflow_get_tasks,
             workflow_signal,
+            workflow_subscribe,
             workflow_start,
             workflow_stop,
             workflow_automation_delete,

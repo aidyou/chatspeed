@@ -1025,6 +1025,13 @@ export function useWorkflowCore({
                     if (isWorkflowBeingDeleted(sessionId)) return
                     const payload = event.payload
                     if (!payload?.type) return
+                    if (payload.type === 'reset_required') {
+                        console.warn(`[Workflow] Resetting background session after SSE gap: ${sessionId}`)
+                        workflowStore.loadWorkflows().catch((error) => {
+                            console.warn('[Workflow] Failed to refresh workflows after SSE reset:', error)
+                        })
+                        return
+                    }
                     const isActiveSession = sessionId === (currentWorkflowId.value || currentSessionId.value)
 
                     if (payload.type === 'sub_agent_approval_requested') {
@@ -1131,6 +1138,14 @@ export function useWorkflowCore({
                 continue
             }
 
+            try {
+                await invokeWrapper('workflow_subscribe', { sessionId })
+            } catch (error) {
+                console.warn(`[Workflow] Failed to subscribe runtime events for background session ${sessionId}:`, error)
+                unlisten()
+                continue
+            }
+
             backgroundStateListeners.set(sessionId, unlisten)
         }
 
@@ -1195,6 +1210,14 @@ export function useWorkflowCore({
             // Phase 9: Error boundary - capture UI update exceptions
             safeExecute(() => {
                 const payload = event.payload
+                if (!payload?.type) return
+                if (payload.type === 'reset_required') {
+                    console.warn(`[Workflow] Resetting active session after SSE gap: ${sessionId}`)
+                    workflowStore.selectWorkflow(sessionId).catch((error) => {
+                        console.warn('[Workflow] Failed to refresh workflow after SSE reset:', error)
+                    })
+                    return
+                }
                 const markSessionLiveFromNonTerminalEvent = () => {
                     if (workflowStore.currentWorkflowId !== sessionId) return
                     const currentStatus = String(workflowStore.currentWorkflow?.status || '').toLowerCase()
@@ -1461,6 +1484,14 @@ export function useWorkflowCore({
         })
 
         if (setupRevision !== workflowEventSetupRevision || currentSessionId.value !== sessionId) {
+            unlisten()
+            return false
+        }
+
+        try {
+            await invokeWrapper('workflow_subscribe', { sessionId })
+        } catch (error) {
+            console.warn(`[Workflow] Failed to subscribe runtime events for session ${sessionId}:`, error)
             unlisten()
             return false
         }

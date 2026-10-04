@@ -5005,6 +5005,21 @@ pub(crate) async fn workflow_signal_core(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+pub async fn workflow_subscribe(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,
+    session_id: String,
+) -> Result<(), String> {
+    supervisor
+        .inner()
+        .as_ref()
+        .ensure_workflow_event_stream(app, &session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn workflow_signal(
     app: tauri::AppHandle,
     supervisor: State<'_, Arc<crate::runtime_client::RuntimeSupervisor>>,

@@ -977,13 +977,26 @@ async fn run_workflow_event_reader(
                     }
                     Err(error) => {
                         if matches!(error, ClientError::Serialization(_)) {
-                            // A reset or a malformed frame makes the cursor
+                            let reason = error.to_string();
+                            if let Err(emit_error) = app.emit(
+                                &event_name,
+                                serde_json::json!({
+                                    "type": "reset_required",
+                                    "reason": reason,
+                                }),
+                            ) {
+                                log::debug!(
+                                    "[RuntimeSupervisor] emitting workflow reset event failed for session {session_id}: {emit_error}"
+                                );
+                            }
+                            // A reset or malformed frame makes the cursor
                             // unusable; re-subscribe from scratch.
                             cursor = None;
+                        } else {
+                            log::debug!(
+                                "[RuntimeSupervisor] workflow stream error for session {session_id}: {error}"
+                            );
                         }
-                        log::debug!(
-                            "[RuntimeSupervisor] workflow stream error for session {session_id}: {error}"
-                        );
                         break;
                     }
                 }

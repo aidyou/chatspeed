@@ -134,6 +134,12 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
 
   const applyEvent = payload => {
     if (!payload || !sessionId.value) return
+    if (payload.type === 'reset_required') {
+      hydrateChildSession().catch(error => {
+        console.warn('[Workflow] Failed to rehydrate child session after SSE reset:', error)
+      })
+      return
+    }
     if (payload.type === 'message') {
       addMessage(payload)
     } else if (payload.type === 'chunk') {
@@ -207,6 +213,14 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
       const { stop, applied } = await hydrateWorkflowSession({
         registerListener: handleEvent => listen(`workflow://event/${targetSessionId}`, event => {
           if (targetSessionId === sessionId.value) handleEvent(event.payload)
+        }).then(async stop => {
+          try {
+            await invokeWrapper('workflow_subscribe', { sessionId: targetSessionId })
+            return stop
+          } catch (error) {
+            stop()
+            throw error
+          }
         }),
         fetchSnapshot: () => invokeWrapper('get_workflow_snapshot', { sessionId: targetSessionId }),
         applySnapshot: snapshot => {
