@@ -1,16 +1,17 @@
+#[cfg(not(feature = "desktop"))]
 use super::stoppable::Stoppable;
+#[cfg(not(feature = "desktop"))]
+use crate::ai::error::AiError;
 use crate::{
-    ai::{
-        error::AiError,
-        interaction::constants::{
-            TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
-        },
+    ai::interaction::constants::{
+        TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
     },
     ccproxy::ChatProtocol,
     db::ThinkingConfig,
     tools::ToolScope,
 };
 
+#[cfg(not(feature = "desktop"))]
 use async_trait::async_trait;
 use log::warn;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -539,6 +540,7 @@ impl ChatMetadata {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait]
 pub trait AiChatTrait: Send + Sync + Stoppable {
     /// Sends a chat request to the AI API and processes the response.

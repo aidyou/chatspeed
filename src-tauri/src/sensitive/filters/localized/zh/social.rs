@@ -1,32 +1,42 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::FilterCandidate;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct SocialFilter {
+    #[cfg(not(feature = "desktop"))]
     wechat_regex: Regex,
+    #[cfg(not(feature = "desktop"))]
     qq_regex: Regex,
 }
 
 impl SocialFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let wechat_regex =
-            Regex::new(r#"(?i)(?:微信|微信号|WeChat)[:：]?\s*([a-zA-Z][a-zA-Z0-9_-]{5,19})"#)
-                .map_err(|e| SensitiveError::RegexCompilationFailed {
-                    pattern: "zh_social_wechat".to_string(),
+        #[cfg(not(feature = "desktop"))]
+        {
+            let wechat_regex =
+                Regex::new(r#"(?i)(?:微信|微信号|WeChat)[:：]?\s*([a-zA-Z][a-zA-Z0-9_-]{5,19})"#)
+                    .map_err(|e| SensitiveError::RegexCompilationFailed {
+                        pattern: "zh_social_wechat".to_string(),
+                        message: e.to_string(),
+                    })?;
+            let qq_regex = Regex::new(r#"(?i)QQ[:：]?\s*([1-9][0-9]{4,11})"#).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "zh_social_qq".to_string(),
                     message: e.to_string(),
-                })?;
-        let qq_regex = Regex::new(r#"(?i)QQ[:：]?\s*([1-9][0-9]{4,11})"#).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
-                pattern: "zh_social_qq".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-        Ok(Self {
-            wechat_regex,
-            qq_regex,
-        })
+                }
+            })?;
+            Ok(Self {
+                wechat_regex,
+                qq_regex,
+            })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -39,9 +49,11 @@ impl SensitiveDataFilter for SocialFilter {
         vec!["WeChatID", "QQNumber"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

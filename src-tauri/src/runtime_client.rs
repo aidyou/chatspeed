@@ -14,14 +14,10 @@
 //! `chatspeed-runtime-client`, so later command adapters can delegate to it
 //! without reintroducing a second owner.
 //!
-//! The WebView capability bridge is a client-pull stream: once connected the
-//! supervisor registers one opaque bridge session bound to its live lease,
-//! starts a reader that pulls typed work envelopes, and unregisters the session
-//! before releasing the lease on shutdown. No generic RPC passthrough is
-//! exposed: the reader only executes the allowlisted web capabilities through
-//! the injected [`BridgeDispatcher`], and callers otherwise reach the control
-//! plane through the typed [`RuntimeSupervisor::client`] accessor and the
-//! documented `/control/v1` routes.
+//! The desktop no longer starts or invokes the legacy client-pull bridge in
+//! production. The bridge protocol types remain available for compatibility
+//! tests, while the fixed WebView provider uses rmcp over loopback and runtime
+//! registration.
 
 use std::fmt;
 use std::future::Future;
@@ -37,6 +33,7 @@ use chatspeed_contracts::{
 };
 use chatspeed_runtime_client::{
     BridgeSession, ClientError, Heartbeat, LeaseGuard, RuntimeChild, RuntimeClient,
+    RuntimeLaunchConfig,
 };
 use serde::Serialize;
 use tokio::sync::{watch, Mutex};
@@ -105,17 +102,25 @@ pub fn web_bridge_declaration() -> ClientBridgeDeclaration {
     }
 }
 
-/// Resolves the runtime directory the runtime binary itself defaults to.
+/// Resolves the typed launch configuration the desktop defaults to.
 ///
 /// The shared runtime client already encodes the path priority
-/// (`CHATSPEED_RUNTIME_DIR`, then `${CHATSPEED_HOME:-~/.chatspeed}/runtime`), so
-/// deriving the directory from it keeps the desktop, `cscli` and the runtime
-/// binary from ever disagreeing about where discovery and the database live.
-pub fn default_runtime_dir() -> PathBuf {
-    chatspeed_runtime_client::discovery_path(None)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(".chatspeed").join("runtime"))
+/// (`CHATSPEED_RUNTIME_DIR`, then `${CHATSPEED_HOME}/runtime`, then the
+/// build-profile default), and it resolves the runtime directory, database and
+/// application-data directory together, so the desktop, `cscli` and the runtime
+/// binary can never disagree about where discovery and the database live.
+///
+/// Fails closed when no platform directory is available: there is no
+/// `.`-relative fallback.
+pub fn default_launch_config() -> Result<RuntimeLaunchConfig, RuntimeUnavailable> {
+    chatspeed_runtime_client::resolve_launch_config().map_err(|error| {
+        RuntimeUnavailable::InvalidConfig(format!("cannot resolve runtime paths: {error}"))
+    })
+}
+
+/// Resolves the runtime directory the runtime binary itself defaults to.
+pub fn default_runtime_dir() -> Result<PathBuf, RuntimeUnavailable> {
+    default_launch_config().map(|config| config.runtime_dir().to_path_buf())
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +160,7 @@ pub enum RuntimeUnavailable {
 
 impl RuntimeUnavailable {
     /// Classifies a client error and scrubs it before it is stored or logged.
-    fn from_client_error(error: ClientError) -> Self {
+    pub(crate) fn from_client_error(error: ClientError) -> Self {
         match error {
             ClientError::Discovery(message) => Self::Discovery(redact_secrets(&message)),
             ClientError::Protocol(message) => Self::Protocol(redact_secrets(&message)),
@@ -246,6 +251,9 @@ struct Connection {
     child: Option<RuntimeChild>,
     client_id: String,
     bridge: Option<BridgeHandle>,
+    /// The desktop loopback Web MCP provider, when one is registered.
+    #[cfg(feature = "desktop")]
+    web_provider: Option<crate::runtime_web_mcp_provider::WebMcpProviderHandle>,
 }
 
 /// A live client WebView capability bridge session and its reader.
@@ -298,18 +306,21 @@ impl RuntimeSupervisor {
 
     /// Attaches to a live runtime or starts one, then holds a client lease.
     ///
-    /// The runtime directory is the runtime's identity: a published discovery
-    /// document there is attached to only after the readiness handshake proves
-    /// it is the expected standalone runtime, and a runtime is started only when
-    /// that document is genuinely absent. An unreachable, protocol-incompatible
-    /// or malformed endpoint is reported as [`RuntimeUnavailable`] and never
-    /// silently worked around.
+    /// The launch configuration is the runtime's identity: a published discovery
+    /// document in its runtime directory is attached to only after the readiness
+    /// handshake proves it is the expected standalone runtime, and a runtime is
+    /// started only when that document is genuinely absent. A started runtime
+    /// receives every path explicitly, so an inherited environment or a
+    /// cross-profile binary can never redirect it.
+    ///
+    /// An unreachable, protocol-incompatible or malformed endpoint is reported as
+    /// [`RuntimeUnavailable`] and never silently worked around.
     ///
     /// Expected to run once, from a background task; other accessors wait until
     /// the attempt settles.
     pub async fn connect_or_start(
         &self,
-        runtime_dir: &Path,
+        config: &RuntimeLaunchConfig,
         client_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
         validate_client_id(client_id)?;
@@ -320,11 +331,11 @@ impl RuntimeSupervisor {
                 "runtime supervisor is already connected".to_string(),
             ));
         }
-        state.runtime_dir = Some(runtime_dir.to_path_buf());
+        state.runtime_dir = Some(config.runtime_dir().to_path_buf());
 
-        let discovery_file = chatspeed_runtime_client::discovery_file_in(runtime_dir);
+        let discovery_file = config.discovery_file();
         let attempt = if chatspeed_runtime_client::discovery_absent(&discovery_file) {
-            start_runtime(runtime_dir, &discovery_file).await
+            start_runtime(config, &discovery_file).await
         } else {
             attach_runtime(&discovery_file).await
         };
@@ -357,6 +368,8 @@ impl RuntimeSupervisor {
             client,
             client_id: client_id.to_string(),
             bridge: None,
+            #[cfg(feature = "desktop")]
+            web_provider: None,
         });
         state.state = connection_state;
         state.last_error = None;
@@ -377,6 +390,29 @@ impl RuntimeSupervisor {
             }
             _ => Err(RuntimeUnavailable::NotConnected),
         }
+    }
+
+    /// Returns the connected client plus the exact lease identity used by typed
+    /// runtime-owned interactive terminal routes.
+    ///
+    /// The lease id is exposed only to the in-process adapter so it can be sent
+    /// in the dedicated terminal proof header; it is never serialized into a
+    /// generic request, URL or log message.
+    pub async fn terminal_connection(
+        &self,
+    ) -> Result<(RuntimeClient, String, String), RuntimeUnavailable> {
+        let state = self.inner.lock().await;
+        let Some(connection) = state.connection.as_ref() else {
+            return Err(RuntimeUnavailable::NotConnected);
+        };
+        if state.state == RuntimeConnectionState::Released {
+            return Err(RuntimeUnavailable::NotConnected);
+        }
+        Ok((
+            connection.client.clone(),
+            connection.client_id.clone(),
+            connection.lease.lease_id().to_string(),
+        ))
     }
 
     /// Redacted snapshot for a status command or a log line.
@@ -427,6 +463,32 @@ impl RuntimeSupervisor {
             reader,
         });
         log::info!("[RuntimeSupervisor] client WebView bridge connected");
+        Ok(())
+    }
+
+    /// Stores the desktop loopback Web MCP provider so it is stopped before the
+    /// lease is released.
+    ///
+    /// Registering twice without an intervening release is refused, so a second
+    /// provider server is never silently left running.
+    #[cfg(feature = "desktop")]
+    pub async fn set_web_provider(
+        &self,
+        handle: crate::runtime_web_mcp_provider::WebMcpProviderHandle,
+    ) -> Result<(), RuntimeUnavailable> {
+        let mut state = self.inner.lock().await;
+        if state.state == RuntimeConnectionState::Released {
+            return Err(RuntimeUnavailable::NotConnected);
+        }
+        let Some(connection) = state.connection.as_mut() else {
+            return Err(RuntimeUnavailable::NotConnected);
+        };
+        if connection.web_provider.is_some() {
+            return Err(RuntimeUnavailable::InvalidConfig(
+                "the desktop Web MCP provider is already connected".to_string(),
+            ));
+        }
+        connection.web_provider = Some(handle);
         Ok(())
     }
 
@@ -533,6 +595,10 @@ impl Drop for RuntimeSupervisor {
                 bridge.reader.abort();
                 let _ = bridge.session.unregister().await;
             }
+            #[cfg(feature = "desktop")]
+            if let Some(provider) = connection.web_provider.take() {
+                provider.shutdown().await;
+            }
             let _ = connection.lease.release().await;
             // `connection` drops here: its `RuntimeChild` only reaps an exited
             // runtime and never kills a healthy one.
@@ -565,6 +631,12 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
             log::debug!("[RuntimeSupervisor] unregistering the bridge failed: {error}");
         }
     }
+    // Stop the desktop Web MCP provider before the lease is released, so the
+    // runtime never keeps dialing a provider whose lease is already gone.
+    #[cfg(feature = "desktop")]
+    if let Some(provider) = connection.web_provider.take() {
+        provider.shutdown().await;
+    }
     connection
         .lease
         .release()
@@ -574,12 +646,13 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
     Ok(())
 }
 
-/// Starts the runtime child and waits for its readiness handshake.
+/// Starts the runtime child with a fully resolved launch configuration and waits
+/// for its readiness handshake.
 async fn start_runtime(
-    runtime_dir: &Path,
+    config: &RuntimeLaunchConfig,
     discovery_file: &Path,
 ) -> Result<(RuntimeClient, Option<RuntimeChild>, RuntimeConnectionState), RuntimeUnavailable> {
-    let mut child = chatspeed_runtime_client::spawn_runtime(runtime_dir)
+    let mut child = chatspeed_runtime_client::spawn_runtime_with_config(config)
         .map_err(RuntimeUnavailable::from_client_error)?;
     let document = match chatspeed_runtime_client::wait_for_discovery(
         Some(discovery_file),

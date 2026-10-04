@@ -18,11 +18,13 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Manager};
 use url::Url;
 use wry::{ProxyConfig, ProxyEndpoint};
 
-use crate::db::MainStore;
+use crate::runtime_config::{
+    RuntimeConfigCache, RuntimeConfigSnapshot, CFG_PROXY_SERVER, CFG_PROXY_TYPE, CFG_PROXY_USERNAME,
+};
 
 /// First macOS release whose webviews accept an explicit proxy.
 #[cfg(target_os = "macos")]
@@ -46,7 +48,21 @@ pub struct WebviewProxy {
 impl WebviewProxy {
     /// Reads the proxy a webview has to use, when the settings ask for one and this
     /// system can apply it.
-    pub fn current(app: &AppHandle<Wry>) -> Option<Self> {
+    ///
+    /// Reads the desktop's cached runtime configuration snapshot: webview creation
+    /// is synchronous and cannot await a control-plane round trip. The snapshot is
+    /// refreshed by the async paths and on connect, so a proxy configured later
+    /// reaches a webview built after that refresh.
+    pub fn current<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<Self> {
+        let snapshot = app.try_state::<Arc<RuntimeConfigCache>>()?.current()?;
+        Self::from_snapshot(snapshot.as_ref())
+    }
+
+    /// Reads the proxy a webview has to use from a runtime configuration snapshot.
+    ///
+    /// The runtime is the authority for these settings; there is no local store to
+    /// fall back to, so a missing snapshot or an unusable server yields no proxy.
+    pub fn from_snapshot(snapshot: &RuntimeConfigSnapshot) -> Option<Self> {
         if !Self::is_supported() {
             log::debug!(
                 "This system has no webview proxy support, the configured proxy is not applied"
@@ -54,14 +70,13 @@ impl WebviewProxy {
             return None;
         }
 
-        let store = app.try_state::<Arc<MainStore>>()?;
-        let proxy_type = store.get_config("proxy_type", String::new());
-        let server = store.get_config("proxy_server", String::new());
+        let proxy_type = snapshot.get_string(CFG_PROXY_TYPE, "");
+        let server = snapshot.get_string(CFG_PROXY_SERVER, "");
         let proxy = Self::from_settings(&proxy_type, &server)?;
 
         // A webview proxy carries a host and a port only, so a proxy that asks for
         // credentials cannot be used; saying so keeps a failing request explainable.
-        let username = store.get_config("proxy_username", String::new());
+        let username = snapshot.get_string(CFG_PROXY_USERNAME, "");
         if !username.trim().is_empty() {
             log::warn!(
                 "The configured proxy needs credentials a webview cannot send, only its host and port are used"
@@ -303,5 +318,57 @@ mod tests {
     #[test]
     fn the_macos_version_is_readable() {
         assert!(macos_major_version().is_some_and(|major| major >= 11));
+    }
+
+    /// Only a usable `http` setting in the runtime snapshot reaches a webview;
+    /// there is no local store to fall back to, so a missing or unusable value
+    /// leaves the webview direct.
+    #[test]
+    fn a_snapshot_proxy_reaches_a_webview_only_when_usable() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let snapshot = |proxy_type: &str, server: &str| {
+            let mut settings = HashMap::new();
+            settings.insert(CFG_PROXY_TYPE.to_string(), json!(proxy_type));
+            settings.insert(CFG_PROXY_SERVER.to_string(), json!(server));
+            RuntimeConfigSnapshot::from_settings(settings)
+        };
+
+        assert!(WebviewProxy::from_snapshot(&RuntimeConfigSnapshot::default()).is_none());
+        assert!(WebviewProxy::from_snapshot(&snapshot("none", "http://127.0.0.1:7890")).is_none());
+        assert!(WebviewProxy::from_snapshot(&snapshot("system", "http://127.0.0.1:7890")).is_none());
+        assert!(WebviewProxy::from_snapshot(&snapshot("http", "")).is_none());
+
+        let proxy = WebviewProxy::from_snapshot(&snapshot("http", "http://127.0.0.1:7890"))
+            .expect("a usable http proxy has to be accepted");
+        assert_eq!(proxy.host, "127.0.0.1");
+        assert_eq!(proxy.port, 7890);
+    }
+
+    /// The synchronous reader takes the proxy from the cached runtime snapshot
+    /// and reports nothing while the runtime has not published one.
+    #[tokio::test]
+    async fn the_cached_snapshot_supplies_the_webview_proxy() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let app = crate::test::get_app_handle();
+        app.manage(Arc::new(RuntimeConfigCache::new()));
+
+        // No snapshot yet: the webview is left direct instead of reading a store.
+        assert!(WebviewProxy::current(&app).is_none());
+
+        {
+            let cache = app.state::<Arc<RuntimeConfigCache>>();
+            let mut settings = HashMap::new();
+            settings.insert(CFG_PROXY_TYPE.to_string(), json!("http"));
+            settings.insert(CFG_PROXY_SERVER.to_string(), json!("http://127.0.0.1:7890"));
+            cache.store(RuntimeConfigSnapshot::from_settings(settings));
+        }
+
+        let proxy = WebviewProxy::current(&app).expect("the cached proxy has to be used");
+        assert_eq!(proxy.host, "127.0.0.1");
+        assert_eq!(proxy.port, 7890);
     }
 }

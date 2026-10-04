@@ -3,44 +3,18 @@
 //! `WebFetch` and `WebSearch` used to read their proxy/search configuration from
 //! an `Arc<MainStore>` reached through the Tauri `AppHandle`. The runtime now
 //! owns that database, so the desktop tools are constructed with a small port
-//! instead: the legacy tool manager supplies a store-backed port, and the client
-//! bridge dispatcher supplies a port built from the runtime configuration it
-//! reads over the control plane. Neither path ever puts runtime state into the
-//! desktop process.
+//! instead: the client bridge dispatcher supplies [`MapWebToolConfig`] built from
+//! the runtime configuration it reads over the control plane. The desktop never
+//! reaches a local database for these tools.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use serde_json::Value;
-
-use crate::db::MainStore;
 
 /// The narrow synchronous configuration surface the web tools need.
 pub trait WebToolConfig: Send + Sync + 'static {
     /// Reads a string setting, falling back to `default` when absent.
     fn get_string(&self, key: &str, default: &str) -> String;
-}
-
-/// A port backed by the legacy local `MainStore`.
-///
-/// Only the (dormant) `ToolManager::register_available_tools` path builds this;
-/// the runtime-owned desktop no longer creates a `MainStore`, so the client
-/// bridge uses [`MapWebToolConfig`] instead.
-pub struct MainStoreWebToolConfig {
-    store: Arc<MainStore>,
-}
-
-impl MainStoreWebToolConfig {
-    /// Wraps a local store as a web-tool configuration port.
-    pub fn new(store: Arc<MainStore>) -> Self {
-        Self { store }
-    }
-}
-
-impl WebToolConfig for MainStoreWebToolConfig {
-    fn get_string(&self, key: &str, default: &str) -> String {
-        self.store.get_config(key, default.to_string())
-    }
 }
 
 /// A port backed by a plain key/value map.

@@ -1,50 +1,81 @@
 //! Transport-neutral capability management for Agent Skills and MCP servers.
 //!
-//! This module is the single canonical path for every capability mutation: the
-//! Tauri commands, the `/control/v1` HTTP plane and the `cs` CLI all delegate
-//! here (AC-1). It owns no runtime of its own — `MainStore`, `ConfigCache`,
-//! `ToolManager` and MCP child processes stay with the desktop main process
-//! (INV-1) — and it never opens a database connection outside the shared
-//! `MainStore`.
+//! The standalone runtime owns the single canonical capability implementation:
+//! the `CapabilityApplicationService`, the durable journal, the reconcile and
+//! doctor paths and the Skill/MCP implementations are constructed and driven
+//! only by the runtime process. The desktop crate does not link a second
+//! capability service; its Tauri commands and the `/control/v1` HTTP plane both
+//! reach the runtime-owned service over the control plane (AC-1/INV-1).
 //!
-//! Structure:
+//! This module therefore compiles the shared wire surface into both crates and
+//! the runtime-only implementation into the runtime crate alone:
 //!
-//! - [`repository`] is the durable journal (operations, effects, ownership);
-//! - [`operation`] provides canonical hashing, stable ids and resource locks;
-//! - [`redaction`] guarantees no secret reaches a log, DTO or journal row;
-//! - [`error`] is the stable machine-readable error contract shared by all
+//! - `error` is the stable machine-readable error contract shared by all
 //!   adapters;
-//! - [`targets`] is the closed Skill install-target registry;
-//! - [`skill_inventory`] classifies installed Skills without mutating them;
-//! - [`mcp_service`] projects desired/runtime/tools state for MCP servers;
-//! - [`doctor`] reports journal, ownership, runtime and staging drift.
+//! - `types` is the durable operation contract shared by both crates;
+//! - `redaction` is the secret filter the error contract depends on;
+//! - `operation` keeps canonical hashing, stable ids and the in-process
+//!   resource locks for the runtime; only the shared `now_ms` clock is compiled
+//!   into the desktop crate, because the durable receipt rows in the store
+//!   timestamp through it too;
+//! - `mcp_service` keeps the runtime-only MCP desired/runtime/tools projection;
+//!   the desktop crate compiles only the secret-stripping helpers its legacy
+//!   command wire still needs;
+//! - `repository` is the durable journal (operations, effects, ownership);
+//! - `reconcile` and `doctor` converge and report journal/runtime drift;
+//! - `targets`, `skill_inventory` and `skill` are the Skill install and
+//!   inventory implementation;
+//! - `mcp` is the MCP desired-state store, descriptor, lifecycle orchestrator
+//!   and runtime ports.
+//!
+//! Everything except `error`, `types`, `redaction` and those two narrow desktop
+//! helper seams is gated behind `#[cfg(not(feature = "desktop"))]`.
 
+#[cfg(not(feature = "desktop"))]
 pub mod doctor;
 pub mod error;
+#[cfg(not(feature = "desktop"))]
 pub mod mcp;
 pub mod mcp_service;
 pub mod operation;
+#[cfg(not(feature = "desktop"))]
 pub mod reconcile;
 pub mod redaction;
+#[cfg(not(feature = "desktop"))]
 pub mod repository;
+#[cfg(not(feature = "desktop"))]
 pub mod skill;
+#[cfg(not(feature = "desktop"))]
 pub mod skill_inventory;
+#[cfg(not(feature = "desktop"))]
 pub mod targets;
 pub mod types;
 
+#[cfg(not(feature = "desktop"))]
 use std::path::{Path, PathBuf};
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
+#[cfg(not(feature = "desktop"))]
 use crate::ai::network::ProxyType;
+#[cfg(not(feature = "desktop"))]
 use crate::db::MainStore;
 
+#[cfg(not(feature = "desktop"))]
 use error::{code, CapabilityError};
+#[cfg(not(feature = "desktop"))]
 use mcp::runtime::{McpRuntimePort, UnavailableRuntimePort};
+#[cfg(not(feature = "desktop"))]
 use mcp_service::{project_mcp_servers, McpServerView};
+#[cfg(not(feature = "desktop"))]
 use operation::ResourceLocks;
+#[cfg(not(feature = "desktop"))]
 use repository::CapabilityRepository;
+#[cfg(not(feature = "desktop"))]
 use skill_inventory::{SkillInventory, SkillInventoryService};
+#[cfg(not(feature = "desktop"))]
 use targets::{resolve_targets, ResolvedSkillTarget, TargetEnvironment};
+#[cfg(not(feature = "desktop"))]
 use types::{
     CapabilityOperation as OperationRecord, EffectOutcome, OperationBegin, OperationRequest,
     OperationState,
@@ -56,21 +87,25 @@ pub use types::{CapabilityKind, LOCAL_ACTOR_SCOPE};
 ///
 /// It holds only short-lived staging and quarantine content, plus diagnostics.
 /// It is never the journal authority (AC-2).
+#[cfg(not(feature = "desktop"))]
 pub fn capability_private_root(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("capability")
 }
 
 /// The private staging directory a mutation stages content into before commit.
+#[cfg(not(feature = "desktop"))]
 pub fn staging_dir(app_data_dir: &Path) -> PathBuf {
     capability_private_root(app_data_dir).join("staging")
 }
 
 /// The quarantine directory an uninstall moves content into before finalize.
+#[cfg(not(feature = "desktop"))]
 pub fn quarantine_dir(app_data_dir: &Path) -> PathBuf {
     capability_private_root(app_data_dir).join("quarantine")
 }
 
 /// What startup recovery did with the operations left in flight by a crash.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct CapabilityRecoveryReport {
     /// Operations interrupted before any effect: safe to retry.
@@ -79,6 +114,7 @@ pub struct CapabilityRecoveryReport {
     pub needs_reconcile: Vec<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl CapabilityRecoveryReport {
     pub fn is_empty(&self) -> bool {
         self.failed_before_effect.is_empty() && self.needs_reconcile.is_empty()
@@ -86,6 +122,7 @@ impl CapabilityRecoveryReport {
 }
 
 /// The single application service every capability adapter delegates to.
+#[cfg(not(feature = "desktop"))]
 pub struct CapabilityApplicationService {
     repository: CapabilityRepository,
     locks: ResourceLocks,
@@ -97,6 +134,7 @@ pub struct CapabilityApplicationService {
     mcp_timing: mcp::orchestrator::McpTiming,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl CapabilityApplicationService {
     /// Creates the service over the shared desktop store.
     ///
@@ -411,7 +449,7 @@ impl CapabilityApplicationService {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use serde_json::json;

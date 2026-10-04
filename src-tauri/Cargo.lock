@@ -933,7 +933,6 @@ dependencies = [
  "memchr",
  "parking_lot",
  "phf",
- "portable-pty",
  "rand 0.10.3",
  "regex",
  "reqwest",
@@ -1017,6 +1016,7 @@ version = "2.0.17"
 dependencies = [
  "chatspeed-contracts",
  "chatspeed-runtime-backend",
+ "chatspeed-runtime-client",
  "chrono",
  "hex",
  "libc",
@@ -1064,6 +1064,7 @@ dependencies = [
  "memchr",
  "parking_lot",
  "phf",
+ "portable-pty",
  "rand 0.10.3",
  "regex",
  "reqwest",
@@ -1099,23 +1100,11 @@ name = "chatspeed-runtime-client"
 version = "2.0.17"
 dependencies = [
  "chatspeed-contracts",
+ "dirs 6.0.0",
  "reqwest",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "chatspeed-runtime-core"
-version = "2.0.17"
-dependencies = [
- "async-trait",
- "bytes",
- "chatspeed-contracts",
- "serde",
- "serde_json",
  "thiserror 2.0.21",
  "tokio",
 ]

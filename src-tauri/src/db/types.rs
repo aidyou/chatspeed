@@ -13,6 +13,7 @@ use super::mcp::Mcp;
 // conversation and message
 // =================================================
 /// Represents a message in a conversation.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Message {
     pub id: Option<i64>,
@@ -91,6 +92,9 @@ pub struct CcproxyStat {
     pub request_at: Option<String>,
 }
 
+// Workflow attribution is stamped by the runtime proxy; the desktop reads the
+// resulting statistics over the control plane.
+#[cfg(not(feature = "desktop"))]
 impl CcproxyStat {
     pub fn with_workflow_attribution(mut self, headers: &http::HeaderMap) -> Self {
         let read = |name: &str| {
@@ -128,7 +132,7 @@ impl CcproxyStat {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod ccproxy_usage_attribution_tests {
     use super::*;
 

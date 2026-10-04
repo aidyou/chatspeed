@@ -2,15 +2,28 @@
 //!
 //! This module provides database operations for managing workflows and their messages.
 
+#[cfg(not(feature = "desktop"))]
 use crate::db::{MainStore, StoreError};
-use crate::workflow::react::events::{WorkflowEvent, WorkflowEventRecord};
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::events::WorkflowEvent;
+use crate::workflow::react::events::WorkflowEventRecord;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::replay::replay_events_to_execution_context;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
-use rusqlite::{params, OptionalExtension, Row};
+#[cfg(not(feature = "desktop"))]
+use rusqlite::params;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::OptionalExtension;
+use rusqlite::Row;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(not(feature = "desktop"))]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(not(feature = "desktop"))]
 use std::collections::{HashMap, HashSet};
 
+#[cfg(not(feature = "desktop"))]
 fn estimate_ai_context_tokens(messages: &[WorkflowAiContextMessage]) -> usize {
     messages
         .iter()
@@ -26,6 +39,7 @@ fn estimate_ai_context_tokens(messages: &[WorkflowAiContextMessage]) -> usize {
         .round() as usize
 }
 
+#[cfg(not(feature = "desktop"))]
 fn restore_execution_context_from_manual_clear_marker(
     marker: Option<&WorkflowMessage>,
     fallback_execution_context: Option<&ExecutionContext>,
@@ -139,6 +153,7 @@ pub struct WorkflowMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowAiContextMessage {
     /// AI-only projected context cache.
     /// This is derived from `WorkflowMessage` using explicit projection rules
@@ -158,6 +173,7 @@ pub struct WorkflowAiContextMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowSnapshot {
     /// Snapshot payload returned to commands/UI.
     /// Transcript authority comes from `messages`; runtime recovery authority
@@ -168,6 +184,7 @@ pub struct WorkflowSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowMessageWindow {
     pub messages: Vec<WorkflowMessage>,
     pub before_message_id: Option<i64>,
@@ -176,6 +193,7 @@ pub struct WorkflowMessageWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowMessagePage {
     pub messages: Vec<WorkflowMessage>,
     pub before_message_id: Option<i64>,
@@ -184,6 +202,7 @@ pub struct WorkflowMessagePage {
     pub has_more_in_current_task: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
     if message.role != "tool" || message.is_error {
         return false;
@@ -228,15 +247,18 @@ fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
         && (execution_status.is_empty() || execution_status == "completed")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_workflow_ui_task_boundary(message: &WorkflowMessage) -> bool {
     is_completed_workflow_task_boundary(message) || is_manual_clear_context_message(message)
 }
 
+#[cfg(not(feature = "desktop"))]
 struct WorkflowUiMessagePageSelection {
     messages: Vec<WorkflowMessage>,
     has_more_in_current_task: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn select_workflow_ui_message_page(
     messages_descending: Vec<WorkflowMessage>,
     message_limit: usize,
@@ -417,6 +439,7 @@ impl From<&Row<'_>> for WorkflowEventRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(feature = "desktop"))]
 enum RewindPhase {
     Preserve,
     Planning,
@@ -424,6 +447,7 @@ enum RewindPhase {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(not(feature = "desktop"))]
 struct TailRewindPlan {
     kind: &'static str,
     delete_message_boundary_id: Option<i64>,
@@ -432,6 +456,7 @@ struct TailRewindPlan {
     message_metadata_updates: Vec<(i64, Value)>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn message_tool_name(message: &WorkflowMessage) -> Option<&str> {
     message
         .metadata
@@ -440,6 +465,7 @@ fn message_tool_name(message: &WorkflowMessage) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn message_tool_call_id(message: &WorkflowMessage) -> Option<&str> {
     message
         .metadata
@@ -448,6 +474,7 @@ fn message_tool_call_id(message: &WorkflowMessage) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn message_approval_status(message: &WorkflowMessage) -> Option<&str> {
     message
         .metadata
@@ -456,6 +483,7 @@ fn message_approval_status(message: &WorkflowMessage) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn message_execution_status(message: &WorkflowMessage) -> Option<&str> {
     message
         .metadata
@@ -464,29 +492,34 @@ fn message_execution_status(message: &WorkflowMessage) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_tool_observation_message(message: &WorkflowMessage) -> bool {
     message.role == "tool"
         && message.step_type.as_deref() == Some("observe")
         && message_tool_call_id(message).is_some()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_pending_submit_plan_message(message: &WorkflowMessage) -> bool {
     message.role == "tool"
         && message_tool_name(message) == Some(crate::tools::TOOL_SUBMIT_PLAN)
         && message_approval_status(message) == Some("pending")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
     message.role == "system"
         && message.message_kind == "summary"
         && message.message_subtype.as_deref() == Some("manual_clear_context")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_user_input_wait_event(event: &WorkflowEventRecord) -> bool {
     event.event_type == "wait_entered"
         && event.event_data["wait_reason"].as_str() == Some("user_input")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_approval_wait_event_for_tool(event: &WorkflowEventRecord, tool_call_id: &str) -> bool {
     if event.event_type != "wait_entered"
         || event.event_data["wait_reason"].as_str() != Some("approval")
@@ -501,6 +534,7 @@ fn is_approval_wait_event_for_tool(event: &WorkflowEventRecord, tool_call_id: &s
         .any(|tool| tool["tool_call_id"].as_str() == Some(tool_call_id))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn approval_requested_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
     events
         .iter()
@@ -512,6 +546,7 @@ fn approval_requested_event_id(events: &[WorkflowEventRecord], tool_call_id: &st
         .map(|event| event.id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn approval_resolved_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
     events
         .iter()
@@ -523,6 +558,7 @@ fn approval_resolved_event_id(events: &[WorkflowEventRecord], tool_call_id: &str
         .map(|event| event.id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn tool_started_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
     events
         .iter()
@@ -534,6 +570,7 @@ fn tool_started_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> 
         .map(|event| event.id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_approval_submitted_message<'a>(
     messages: &'a [WorkflowMessage],
     tool_call_id: &str,
@@ -545,6 +582,7 @@ fn latest_approval_submitted_message<'a>(
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_approved_plan_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
     messages.iter().rev().find(|message| {
         message.id.is_some()
@@ -554,6 +592,7 @@ fn latest_approved_plan_summary_message(messages: &[WorkflowMessage]) -> Option<
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn pending_approval_event_boundary(
     events: &[WorkflowEventRecord],
     tool_call_id: &str,
@@ -573,6 +612,7 @@ fn pending_approval_event_boundary(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn approval_tool_rewind_event_boundary(
     events: &[WorkflowEventRecord],
     tool_call_id: &str,
@@ -582,6 +622,7 @@ fn approval_tool_rewind_event_boundary(
         .or_else(|| tool_started_event_id(events, tool_call_id))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reverted_pending_approval_metadata(message: &WorkflowMessage) -> Option<Value> {
     let mut metadata = message.metadata.clone()?;
     metadata["approval_status"] = Value::String("pending".to_string());
@@ -593,6 +634,7 @@ fn reverted_pending_approval_metadata(message: &WorkflowMessage) -> Option<Value
     Some(metadata)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_rewindable_user_message(message: &WorkflowMessage) -> bool {
     message.role == "user"
         && message.step_type.as_deref() != Some("observe")
@@ -605,12 +647,14 @@ fn is_rewindable_user_message(message: &WorkflowMessage) -> bool {
         })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn wait_event_matches_ask_user_tool_call(event: &WorkflowEventRecord, tool_call_id: &str) -> bool {
     event.event_data["awaiting_user_tool_call_id"]
         .as_str()
         .is_none_or(|waiting_tool_call_id| waiting_tool_call_id == tool_call_id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_unanswered_user_input_wait_event_id(
     events: &[WorkflowEventRecord],
     tool_call_id: &str,
@@ -630,6 +674,7 @@ fn latest_unanswered_user_input_wait_event_id(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_answered_user_input_wait_event_ids(
     events: &[WorkflowEventRecord],
     tool_call_id: Option<&str>,
@@ -647,6 +692,7 @@ fn latest_answered_user_input_wait_event_ids(
     Some((latest_wait.id, latest_resume.id))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn answered_ask_user_event_id_for_message(
     events: &[WorkflowEventRecord],
     message: &WorkflowMessage,
@@ -686,6 +732,7 @@ fn answered_ask_user_event_id_for_message(
     .then_some(resume_event_id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_user_input_event_id_for_message(
     events: &[WorkflowEventRecord],
     message: &WorkflowMessage,
@@ -700,6 +747,7 @@ fn latest_user_input_event_id_for_message(
         .map(|event| event.id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn assistant_batch_message_id_for_tool_call(
     messages: &[WorkflowMessage],
     tool_call_id: &str,
@@ -728,6 +776,7 @@ fn assistant_batch_message_id_for_tool_call(
         .and_then(|message| message.id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn determine_tail_rewind_plan(
     messages: &[WorkflowMessage],
     events: &[WorkflowEventRecord],
@@ -939,6 +988,7 @@ fn determine_tail_rewind_plan(
     None
 }
 
+#[cfg(not(feature = "desktop"))]
 fn prune_removed_tool_calls_from_assistant_message(
     message: &WorkflowMessage,
     removed_tool_call_ids: &HashSet<String>,
@@ -993,6 +1043,7 @@ fn prune_removed_tool_calls_from_assistant_message(
     Some(Some(metadata))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn execution_context_to_workflow_status(context: &ExecutionContext) -> String {
     match context.state {
         RuntimeState::Pending => "pending".to_string(),
@@ -1011,6 +1062,7 @@ fn execution_context_to_workflow_status(context: &ExecutionContext) -> String {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sanitize_wait_reason_for_runtime_state(
     session_id: &str,
     state: &RuntimeState,
@@ -1030,6 +1082,7 @@ fn sanitize_wait_reason_for_runtime_state(
     false
 }
 
+#[cfg(not(feature = "desktop"))]
 fn update_agent_config_phase(
     agent_config: Option<&str>,
     phase: RewindPhase,
@@ -1060,6 +1113,7 @@ fn update_agent_config_phase(
     serde_json::to_string(&config).map_err(StoreError::from)
 }
 
+#[cfg(not(feature = "desktop"))]
 impl From<&Row<'_>> for WorkflowAiContextMessage {
     fn from(row: &Row<'_>) -> Self {
         let metadata_str: Option<String> = row.get("metadata").ok();
@@ -1087,7 +1141,9 @@ impl From<&Row<'_>> for WorkflowAiContextMessage {
 //  MainStore Implementation
 // =================================================
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_efficiency_report(
         &self,
         session_id: &str,
@@ -1150,6 +1206,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn list_workflow_messages_for_session(
         conn: &rusqlite::Connection,
         session_id: &str,
@@ -1168,6 +1225,7 @@ impl MainStore {
         Ok(messages)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn create_workflow_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -1190,6 +1248,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn create_workflow(
         &self,
         id: &str,
@@ -1214,6 +1273,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn list_workflows_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
     ) -> Result<Vec<Workflow>, StoreError> {
@@ -1229,6 +1289,7 @@ impl MainStore {
     }
 
     #[cfg(test)]
+    #[cfg(not(feature = "desktop"))]
     pub fn list_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
@@ -1239,6 +1300,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn list_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
@@ -1251,6 +1313,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn list_child_workflows_with_pending_approvals(&self) -> Result<Vec<Workflow>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
@@ -1265,6 +1328,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn list_child_workflows_for_parent(
         &self,
         parent_session_id: &str,
@@ -1282,6 +1346,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn delete_workflow_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -1386,6 +1451,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn delete_last_message(&self, session_id: &str) -> Result<bool, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.write_blocking(move |conn| {
@@ -1704,6 +1770,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_recent_workflow_message_page(
         &self,
         session_id: &str,
@@ -1744,6 +1811,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_earlier_workflow_message_page(
         &self,
         session_id: &str,
@@ -1787,6 +1855,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_message_window(
         &self,
         session_id: &str,
@@ -1882,6 +1951,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_for_ui(&self, id: &str) -> Result<Workflow, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -1904,6 +1974,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn get_workflow_snapshot_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -1936,6 +2007,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -1965,6 +2037,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_message_by_id_and_role(
         &self,
         session_id: &str,
@@ -1984,6 +2057,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_tail_rewind_kind(
         &self,
         session_id: &str,
@@ -2047,6 +2121,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_workflow(&self, id: &str) -> Result<Option<Workflow>, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -2060,6 +2135,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn add_workflow_message_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         msg: WorkflowMessage,
@@ -2084,6 +2160,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn add_workflow_message(
         &self,
         msg: &WorkflowMessage,
@@ -2115,6 +2192,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn workflow_current_task_run_id(&self, session_id: &str) -> Result<String, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -2128,6 +2206,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn workflow_task_phase_started_at_ms(
         &self,
         session_id: &str,
@@ -2158,6 +2237,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn workflow_started_at_ms(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -2177,6 +2257,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn attach_usage_summary_to_tool_call(
         &self,
         session_id: &str,
@@ -2213,6 +2294,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_message_metadata(
         &self,
         message_id: i64,
@@ -2228,6 +2310,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn add_workflow_ai_context_message(
         &self,
         msg: &WorkflowAiContextMessage,
@@ -2246,6 +2329,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn delete_workflow_ai_context_segment(
         &self,
         session_id: &str,
@@ -2261,6 +2345,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_status_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2283,6 +2368,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
         let id = id.to_string();
         let status = status.to_string();
@@ -2298,6 +2384,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_title_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2314,6 +2401,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
         let id = id.to_string();
         let title = title.to_string();
@@ -2326,6 +2414,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_title_and_query_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2343,6 +2432,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_query_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2359,6 +2449,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_query(&self, id: &str, user_query: &str) -> Result<(), StoreError> {
         let id = id.to_string();
         let user_query = user_query.to_string();
@@ -2371,6 +2462,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_todo_list_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -2400,6 +2492,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_agent_config(
         &self,
         id: &str,
@@ -2416,6 +2509,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_workflow_agent_id(&self, id: &str, agent_id: &str) -> Result<(), StoreError> {
         let id = id.to_string();
         let agent_id = agent_id.to_string();
@@ -2428,6 +2522,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_todo_list_for_workflow(&self, id: &str) -> Result<Vec<Value>, StoreError> {
         let id = id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -2447,6 +2542,7 @@ impl MainStore {
 
     // ExecutionContext Snapshot Operations
 
+    #[cfg(not(feature = "desktop"))]
     pub fn latest_workflow_message_segment_id(
         &self,
         session_id: &str,
@@ -2462,6 +2558,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_execution_context(
         &self,
         session_id: &str,
@@ -2488,7 +2585,7 @@ impl MainStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub(crate) async fn upsert_execution_context_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         ctx: ExecutionContext,
@@ -2518,6 +2615,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<(), StoreError> {
         let ctx = ctx.clone();
         let context_json = serde_json::to_string(&ctx)?;
@@ -2542,6 +2640,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn upsert_execution_context_preserving_concurrent_completions(
         &self,
         ctx: &ExecutionContext,
@@ -2621,6 +2720,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn persist_sub_agent_completion(
         &self,
         expected_parent_segment_id: Option<i32>,
@@ -2718,7 +2818,7 @@ impl MainStore {
 
     // Workflow Event Operations
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub(crate) async fn append_workflow_event_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         event: WorkflowEvent,
@@ -2737,6 +2837,7 @@ impl MainStore {
             .await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn append_workflow_event(&self, event: &WorkflowEvent) -> Result<i64, StoreError> {
         let event = event.clone();
         let event_type = event.event_type.as_str().to_string();
@@ -2758,6 +2859,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_child_reconciliation_state(
         &self,
         parent_session_id: &str,
@@ -2800,6 +2902,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn list_workflow_events(
         &self,
         session_id: &str,
@@ -2825,15 +2928,13 @@ impl MainStore {
         })
     }
 
-    /// Maximum number of durable events returned by one bounded query.
-    pub const WORKFLOW_EVENTS_MAX_LIMIT: u32 = 500;
-
     /// Bounded durable-events query for transport adapters.
     ///
     /// Returns events with durable ID strictly greater than `after`, in
     /// ascending ID order, capped at `limit` (default 200, maximum
-    /// [`Self::WORKFLOW_EVENTS_MAX_LIMIT`]). `after` is a durable DB event ID;
-    /// live stream cursors must never be passed here.
+    /// `chatspeed_contracts::workflow::WORKFLOW_EVENTS_MAX_LIMIT`). `after` is a
+    /// durable DB event ID; live stream cursors must never be passed here.
+    #[cfg(not(feature = "desktop"))]
     pub fn list_workflow_events_after(
         &self,
         session_id: &str,
@@ -2843,7 +2944,7 @@ impl MainStore {
         const DEFAULT_LIMIT: u32 = 200;
         let limit = limit
             .unwrap_or(DEFAULT_LIMIT)
-            .min(Self::WORKFLOW_EVENTS_MAX_LIMIT);
+            .min(chatspeed_contracts::workflow::WORKFLOW_EVENTS_MAX_LIMIT);
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
             let mut statement = conn.prepare(
@@ -2868,6 +2969,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn latest_workflow_event_type(
         &self,
         session_id: &str,
@@ -2888,6 +2990,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_last_event_id(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -2901,6 +3004,7 @@ impl MainStore {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficiencyMetrics {
     let mut metrics = WorkflowEfficiencyMetrics::default();
     let mut read_counts: HashMap<String, u32> = HashMap::new();
@@ -3002,10 +3106,12 @@ fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficienc
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 struct ToolCallShape {
     name: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn extract_tool_calls_from_metadata(metadata: Option<&Value>) -> Vec<ToolCallShape> {
     metadata
         .and_then(|meta| meta.get("tool_calls"))
@@ -3027,6 +3133,7 @@ fn extract_tool_calls_from_metadata(metadata: Option<&Value>) -> Vec<ToolCallSha
         .unwrap_or_default()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn extract_tool_name(metadata: Option<&Value>) -> Option<String> {
     metadata
         .and_then(|meta| meta.get("tool_name"))
@@ -3042,6 +3149,7 @@ fn extract_tool_name(metadata: Option<&Value>) -> Option<String> {
         })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_search_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -3049,6 +3157,7 @@ fn is_search_tool(tool_name: &str) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_read_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -3056,10 +3165,12 @@ fn is_read_tool(tool_name: &str) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_edit_tool(tool_name: &str) -> bool {
     matches!(tool_name, "edit_file" | "write_file")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_verification_tool(tool_name: &str, metadata: Option<&Value>) -> bool {
     if !matches!(tool_name, "bash" | "execute_command") {
         return false;
@@ -3093,6 +3204,7 @@ fn is_verification_tool(tool_name: &str, metadata: Option<&Value>) -> bool {
     .any(|needle| command_text.contains(needle))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn extract_paths_for_tool(message: &WorkflowMessage, tool_name: &str) -> Vec<String> {
     let mut paths = Vec::new();
 
@@ -3119,6 +3231,7 @@ fn extract_paths_for_tool(message: &WorkflowMessage, tool_name: &str) -> Vec<Str
     paths
 }
 
+#[cfg(not(feature = "desktop"))]
 fn extract_file_content_path(message: &str) -> Option<String> {
     let marker = "<file_content path=\"";
     let start = message.find(marker)? + marker.len();
@@ -3127,6 +3240,7 @@ fn extract_file_content_path(message: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn collect_paths_from_json(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -3153,6 +3267,7 @@ fn collect_paths_from_json(value: &Value, output: &mut Vec<String>) {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn score_convergence(metrics: &WorkflowEfficiencyMetrics) -> u32 {
     let mut score: i32 = 72;
     score += ((metrics.parallel_search_rounds.min(2)) as i32) * 4;
@@ -3171,6 +3286,7 @@ fn score_convergence(metrics: &WorkflowEfficiencyMetrics) -> u32 {
     score.clamp(35, 95) as u32
 }
 
+#[cfg(not(feature = "desktop"))]
 fn score_execution(metrics: &WorkflowEfficiencyMetrics) -> u32 {
     let mut score: i32 = 72;
 
@@ -3195,7 +3311,7 @@ fn score_execution(metrics: &WorkflowEfficiencyMetrics) -> u32 {
     score.clamp(45, 96) as u32
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::workflow::react::types::{

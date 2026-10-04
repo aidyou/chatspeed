@@ -1,18 +1,20 @@
+#[cfg(not(feature = "desktop"))]
 use indexmap::IndexMap;
 use rust_i18n::t;
-use std::{
-    collections::HashMap,
-    fmt::{self, Display},
-    str::FromStr,
-};
+use std::{fmt::Display, str::FromStr};
+#[cfg(not(feature = "desktop"))]
+use std::{collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use serde_json::Value;
 
+#[cfg(not(feature = "desktop"))]
 use crate::ai::model_catalog::ThinkingAdapter;
 use crate::ccproxy::errors::CCProxyError;
 
 /// Represents a target backend model for a proxy alias.
+#[cfg(not(feature = "desktop"))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendModelTarget {
@@ -24,9 +26,11 @@ pub struct BackendModelTarget {
 
 /// Configuration for chat completion proxy.
 /// Maps a proxy alias (String key) to a list of backend model targets.
+#[cfg(not(feature = "desktop"))]
 pub type ChatCompletionProxyConfig = HashMap<String, IndexMap<String, Vec<BackendModelTarget>>>;
 
 /// Represents an access key for the chat completion proxy.
+#[cfg(not(feature = "desktop"))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyAccessKey {
@@ -37,9 +41,11 @@ pub struct ProxyAccessKey {
 }
 
 /// Configuration for chat completion proxy access keys.
+#[cfg(not(feature = "desktop"))]
 pub type ChatCompletionProxyKeysConfig = Vec<ProxyAccessKey>;
 
 /// Represents different types of stream response formats
+#[cfg(not(feature = "desktop"))]
 pub enum StreamFormat {
     /// OpenAI compatible format
     /// data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}
@@ -54,6 +60,7 @@ pub enum StreamFormat {
     Claude,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl fmt::Debug for StreamFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -72,6 +79,7 @@ impl fmt::Debug for StreamFormat {
 ///   direct provider/model ID headers, this equals `model` since no alias exists.
 /// - `model`: The actual backend model ID sent to the provider's API
 ///   (e.g., "Qwen/Qwen3-Next-80B-A3B-Instruct").
+#[cfg(not(feature = "desktop"))]
 pub struct ProxyModel {
     /// User-facing alias (from alias lookup) or model_id (from direct header specification)
     pub client_alias: String,

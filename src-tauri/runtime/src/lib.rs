@@ -21,6 +21,7 @@
 //! stopped, so a successor instance can never observe a half-stopped owner.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,11 +32,20 @@ use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
 use chatspeed_runtime_backend::background::RuntimeBackground;
 use chatspeed_runtime_backend::owner::{RuntimeOwner, RuntimeOwnerConfig};
 use chatspeed_runtime_backend::workflow::react::client::http::server::{
-    self, RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError,
+    self, RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError, RuntimeWebMcpPlane,
+};
+use chatspeed_runtime_backend::web_provider::{
+    ToolManagerProviderInstaller, WebProviderRegistry,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+
+/// Database file name inside the runtime-owned application-data directory.
+///
+/// Shared with the client resolver so a spawn and the runtime binary it starts
+/// never disagree about the file name.
+pub use chatspeed_runtime_client::DB_FILE_NAME;
 
 /// Service name the standalone runtime reports on `GET /control/v1/meta`.
 ///
@@ -44,8 +54,8 @@ use tokio::sync::watch;
 pub const SERVICE_NAME: &str = "chatspeed-runtime";
 /// Runtime-directory lock file name.
 pub const LOCK_FILE_NAME: &str = "runtime.lock";
-/// Database file name inside the runtime-owned directory.
-pub const DB_FILE_NAME: &str = "chatspeed.db";
+/// Suffix appended to the database file name for the DB-authority sidecar lock.
+const DB_LOCK_SUFFIX: &str = ".authority.lock";
 /// Idle grace period applied when no client lease is active.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(30);
 /// Default lease TTL.
@@ -88,17 +98,15 @@ pub enum RuntimeError {
 
 /// Runtime launch configuration.
 ///
-/// `runtime_dir` is always explicit in the struct: the default resolves from
-/// `${CHATSPEED_HOME:-~/.chatspeed}/runtime`, but a caller (or the binary via
-/// `CHATSPEED_RUNTIME_DIR`) can pass a different directory so two runtimes on
-/// the same machine never share a lock, a database or a discovery document.
-///
-/// The database and application-data directory default to children of
-/// `runtime_dir`, which is the directory the runtime exclusively owns. There is
-/// no `:memory:` option.
+/// The three paths are resolved by the shared, Tauri-free
+/// [`chatspeed_runtime_client::resolve_launch_config`] rule so the runtime
+/// binary, the desktop and `cscli` can never disagree: the runtime directory
+/// owns the lock and discovery document, the database file is the persistence
+/// authority, and the application-data directory holds server-owned storage.
+/// Each path has a `with_*` override for tests and explicit sandboxes. There is
+/// no `:memory:` database option.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
-    home: PathBuf,
     runtime_dir: PathBuf,
     db_path: PathBuf,
     app_data_dir: PathBuf,
@@ -107,58 +115,41 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    /// Builds a configuration rooted at the default ChatSpeed home.
-    pub fn new() -> Self {
-        let home = default_chatspeed_home();
-        let runtime_dir = home.join("runtime");
-        Self {
-            db_path: runtime_dir.join(DB_FILE_NAME),
-            app_data_dir: runtime_dir.clone(),
-            runtime_dir,
-            home,
-            grace: DEFAULT_GRACE,
-            lease_ttl: DEFAULT_LEASE_TTL,
-        }
+    /// Builds the build-profile default configuration.
+    ///
+    /// Production resolves to `<platform data dir>/ai.aidyou.chatspeed` and
+    /// development to the repository's `dev_data`, exactly as
+    /// [`chatspeed_runtime_client::resolve_launch_config`] decides. It fails
+    /// closed when no platform directory is available; there is no
+    /// `.`-relative fallback. A caller that already owns a runtime directory
+    /// uses [`RuntimeConfig::with_runtime_dir`] instead.
+    pub fn new() -> Result<Self, RuntimeError> {
+        let launch = chatspeed_runtime_client::resolve_launch_config()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        Ok(Self::from_launch_config(launch))
     }
 
     /// Builds a configuration with an explicitly owned runtime directory.
     ///
-    /// The database and application-data directory default under `runtime_dir`;
-    /// the home only exists so logs can name the process ChatSpeed home.
+    /// The database and application-data directory default under `runtime_dir`.
+    /// This sandbox never consults the environment or the platform profile, so
+    /// two sandboxes on the same machine are always isolated.
     pub fn with_runtime_dir(runtime_dir: impl Into<PathBuf>) -> Self {
-        let runtime_dir = runtime_dir.into();
-        Self {
-            db_path: runtime_dir.join(DB_FILE_NAME),
-            app_data_dir: runtime_dir.clone(),
-            runtime_dir,
-            ..Self::new()
-        }
+        Self::from_launch_config(chatspeed_runtime_client::sandbox_launch_config(runtime_dir))
     }
 
-    /// Resolves the configuration from the process environment.
+    /// Resolves the configuration from the process environment and build profile.
     ///
-    /// - `CHATSPEED_HOME` overrides `~/.chatspeed`;
-    /// - `CHATSPEED_RUNTIME_DIR` overrides the runtime directory;
+    /// - `CHATSPEED_RUNTIME_DIR` selects an explicit runtime-directory sandbox;
+    /// - `CHATSPEED_HOME` selects the legacy `${home}/runtime` sandbox;
     /// - `CHATSPEED_RUNTIME_DB` overrides the database file path;
+    /// - `CHATSPEED_RUNTIME_APP_DATA_DIR` overrides the application-data directory;
     /// - `CHATSPEED_RUNTIME_GRACE_MS` / `CHATSPEED_RUNTIME_LEASE_TTL_MS`
     ///   override the grace and lease TTL in milliseconds.
     pub fn from_env() -> Result<Self, RuntimeError> {
-        let home = default_chatspeed_home();
-        let runtime_dir = match std::env::var_os("CHATSPEED_RUNTIME_DIR") {
-            Some(value) if !value.is_empty() => PathBuf::from(value),
-            _ => home.join("runtime"),
-        };
-        let db_path = match std::env::var_os("CHATSPEED_RUNTIME_DB") {
-            Some(value) if !value.is_empty() => PathBuf::from(value),
-            _ => runtime_dir.join(DB_FILE_NAME),
-        };
-        let mut config = Self {
-            db_path,
-            app_data_dir: runtime_dir.clone(),
-            runtime_dir,
-            home,
-            ..Self::new()
-        };
+        let launch = chatspeed_runtime_client::resolve_launch_config()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        let mut config = Self::from_launch_config(launch);
         if let Some(value) = read_duration_ms("CHATSPEED_RUNTIME_GRACE_MS")? {
             config.grace = value;
         }
@@ -168,9 +159,15 @@ impl RuntimeConfig {
         Ok(config)
     }
 
-    /// ChatSpeed home directory (`CHATSPEED_HOME` or `~/.chatspeed`).
-    pub fn home(&self) -> &Path {
-        &self.home
+    /// Wraps a resolved launch configuration with the default grace and TTL.
+    fn from_launch_config(launch: chatspeed_runtime_client::RuntimeLaunchConfig) -> Self {
+        Self {
+            runtime_dir: launch.runtime_dir().to_path_buf(),
+            db_path: launch.db_path().to_path_buf(),
+            app_data_dir: launch.app_data_dir().to_path_buf(),
+            grace: DEFAULT_GRACE,
+            lease_ttl: DEFAULT_LEASE_TTL,
+        }
     }
 
     /// Directory that the runtime exclusively owns.
@@ -230,26 +227,6 @@ impl RuntimeConfig {
         let ceiling = Duration::from_millis(1000);
         half.clamp(floor, ceiling)
     }
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Default ChatSpeed home: `CHATSPEED_HOME`, else `<profile>/.chatspeed`.
-pub fn default_chatspeed_home() -> PathBuf {
-    if let Some(value) = std::env::var_os("CHATSPEED_HOME") {
-        if !value.is_empty() {
-            return PathBuf::from(value);
-        }
-    }
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".chatspeed")
 }
 
 fn read_duration_ms(key: &str) -> Result<Option<Duration>, RuntimeError> {
@@ -380,6 +357,168 @@ fn restrict_permissions(path: &Path, mode: u32) -> Result<(), RuntimeError> {
 fn restrict_permissions(_path: &Path, _mode: u32) -> Result<(), RuntimeError> {
     // Windows inherits the current-user ACL from the profile directory.
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Database-authority lock
+// ---------------------------------------------------------------------------
+
+/// Path of the database-authority sidecar lock for `db_path`.
+///
+/// The lock lives next to the *canonical* database file and is never the
+/// database itself: the database content is never opened or read, only its
+/// metadata and canonical path are used. Resolving the canonical file target is
+/// what makes two aliases of one database agree on a single lock: a symlinked
+/// directory, a `.`/`..` component, or a symlink to the database file itself all
+/// map to the same file's lock, while a genuinely different file keeps its own.
+///
+/// A database that exists is keyed by its canonical file path; a database that
+/// does not exist yet is keyed by its canonical parent directory plus its file
+/// name. Resolution fails closed: an unresolvable symlink, a parent that cannot
+/// be canonicalized, or a database reachable through extra hard links (whose
+/// aliases cannot be proven unique without scanning the filesystem) is refused
+/// rather than given an ambiguity-prone lock name.
+pub fn database_lock_path(db_path: &Path) -> Result<PathBuf, RuntimeError> {
+    let parent = db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "database path {} has no parent directory",
+                db_path.display()
+            ))
+        })?;
+    fs::create_dir_all(parent)?;
+
+    match fs::canonicalize(db_path) {
+        Ok(canonical_path) => {
+            reject_ambiguous_database_links(&canonical_path)?;
+            let mut lock_path = canonical_path.into_os_string();
+            lock_path.push(DB_LOCK_SUFFIX);
+            Ok(PathBuf::from(lock_path))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // A symlink whose target does not resolve is an alias we cannot prove
+            // unique; refuse rather than guess at a lock name.
+            if db_path
+                .symlink_metadata()
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return Err(RuntimeError::Config(format!(
+                    "database path {} is an unresolvable symlink; refusing to derive an ambiguity-prone authority lock",
+                    db_path.display()
+                )));
+            }
+            // The database does not exist yet: anchor the lock to the canonical
+            // parent so directory aliases still coincide. No `.`-relative
+            // fallback: a parent that cannot be canonicalized fails closed.
+            let normalized_parent = fs::canonicalize(parent)?;
+            let mut lock_name = db_path
+                .file_name()
+                .map(OsStr::to_os_string)
+                .unwrap_or_else(|| OsString::from(DB_FILE_NAME));
+            lock_name.push(DB_LOCK_SUFFIX);
+            Ok(normalized_parent.join(lock_name))
+        }
+        Err(error) => Err(RuntimeError::Io(error)),
+    }
+}
+
+/// Rejects a database whose canonical file has extra hard links.
+///
+/// The lock is keyed by canonical path, which cannot unify two hard links to one
+/// inode; proving a single authority would require scanning the filesystem for
+/// every alias. Failing closed for the uncommon hard-linked database is the
+/// minimal safe behavior. The link count is metadata only: the database is never
+/// opened or read.
+#[cfg(unix)]
+fn reject_ambiguous_database_links(canonical_path: &Path) -> Result<(), RuntimeError> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(canonical_path)?;
+    // Only a regular file is a database. A directory carries an inherent link
+    // count and is not a candidate here; pointing the database at one fails later
+    // when it cannot be opened, which is the caller's concern, not the lock's.
+    if metadata.is_file() && metadata.nlink() > 1 {
+        return Err(RuntimeError::Config(format!(
+            "database file {} has {} hard links; a unique authority lock cannot be proven without scanning the filesystem",
+            canonical_path.display(),
+            metadata.nlink()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_ambiguous_database_links(_canonical_path: &Path) -> Result<(), RuntimeError> {
+    Ok(())
+}
+
+/// Kernel-level exclusive authority over one database file.
+///
+/// The runtime-directory lock makes one runtime win per directory; this sidecar
+/// lock is what makes one runtime win per *database*. Two runtimes with
+/// different runtime directories but the same database would otherwise both open
+/// it, so acquiring this lock fails before the owner is assembled. The file's
+/// inode is never removed (unlinking a locked file would let a new opener lock a
+/// different inode), and the database content is never touched.
+#[derive(Debug)]
+pub struct RuntimeDbLock {
+    path: PathBuf,
+    file: fs::File,
+}
+
+impl RuntimeDbLock {
+    /// Acquires the database authority for `db_path`.
+    pub fn acquire(db_path: &Path) -> Result<Self, RuntimeError> {
+        let path = database_lock_path(db_path)?;
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path)?;
+        file.try_lock().map_err(|error| {
+            let pid = read_lock_record(&path)
+                .map(|record| record.pid)
+                .unwrap_or(0);
+            match error {
+                std::fs::TryLockError::WouldBlock => RuntimeError::AlreadyRunning {
+                    dir: db_path.to_path_buf(),
+                    pid,
+                },
+                std::fs::TryLockError::Error(error) => RuntimeError::Io(error),
+            }
+        })?;
+        restrict_permissions(&path, 0o600)?;
+        let record = LockRecord {
+            instance_id: generate_instance_id(),
+            pid: std::process::id(),
+            started_at: now_rfc3339(),
+        };
+        let body = serde_json::to_vec_pretty(&record)
+            .map_err(|error| RuntimeError::Serialization(error.to_string()))?;
+        file.set_len(0)?;
+        file.write_all(&body)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        Ok(Self { path, file })
+    }
+
+    /// Path of the sidecar lock file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RuntimeDbLock {
+    fn drop(&mut self) {
+        // The record remains for diagnostics; releasing the kernel lock is what
+        // lets a successor acquire the same stable inode.
+        let _ = self.file.unlock();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +904,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     }
 
     let lock = RuntimeDirLock::acquire(config.runtime_dir())?;
+    // Take the database authority before assembling the owner: a second runtime
+    // with a different runtime directory but the same database must be refused
+    // here, before it can open the database or publish discovery.
+    let db_lock = RuntimeDbLock::acquire(config.db_path())?;
     let instance_id = lock.instance_id().to_string();
 
     // The standalone binary has no Tauri AppHandle to provide the bundled
@@ -806,6 +949,15 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
             discovery_dir: config.runtime_dir().to_path_buf(),
             leases: leases.clone(),
             chat: Some(owner.chat_plane()),
+            terminal: Some(owner.terminal_plane()),
+            // The desktop registers its loopback Web MCP provider onto this
+            // single lease-bound slot; the runtime reaches it as an ordinary MCP
+            // server, so the fixed web tools stay on the canonical tool path.
+            web_provider: Some(
+                Arc::new(WebProviderRegistry::new(Arc::new(
+                    ToolManagerProviderInstaller::new(owner.chat_state().clone()),
+                ))) as Arc<dyn RuntimeWebMcpPlane>,
+            ),
         },
     )
     .await
@@ -840,6 +992,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         // request is never cut off by background shutdown.
         background.shutdown().await;
         drop(owner);
+        // Release the database authority only after the owner (and the control
+        // plane that serves it) has fully drained, so a successor never opens
+        // the database while this instance is still using it.
+        drop(db_lock);
         drop(lock);
         let _ = finished_tx.send_replace(true);
         log::info!(
@@ -962,6 +1118,9 @@ mod tests {
     use chatspeed_runtime_backend::workflow::react::client::http::discovery;
     use serde_json::Value;
 
+    /// Serializes tests that mutate the process environment.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn lease_request(client_id: &str) -> ClientLeaseRequest {
         ClientLeaseRequest {
             client_id: client_id.to_string(),
@@ -973,6 +1132,224 @@ mod tests {
         RuntimeConfig::with_runtime_dir(dir)
             .with_grace(grace)
             .with_lease_ttl(ttl)
+    }
+
+    // -- configuration resolution -------------------------------------------
+
+    /// Clears the runtime path environment keys and restores them on drop.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn clear() -> Self {
+            let keys = [
+                "CHATSPEED_RUNTIME_DIR",
+                "CHATSPEED_RUNTIME_DB",
+                "CHATSPEED_RUNTIME_APP_DATA_DIR",
+                "CHATSPEED_HOME",
+                "HOME",
+                "USERPROFILE",
+                "XDG_DATA_HOME",
+            ];
+            let saved = keys
+                .iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect();
+            for key in keys {
+                std::env::remove_var(key);
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn default_config_uses_the_shared_profile_resolver() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _env = EnvGuard::clear();
+
+        let config = RuntimeConfig::new().expect("resolve the profile default");
+        let launch = chatspeed_runtime_client::resolve_launch_config().expect("shared resolver");
+        assert_eq!(config.runtime_dir(), launch.runtime_dir());
+        assert_eq!(config.db_path(), launch.db_path());
+        assert_eq!(config.app_data_dir(), launch.app_data_dir());
+
+        // Development and production roots are isolated, and neither is a
+        // `.`-relative fallback.
+        assert!(config.app_data_dir().is_absolute());
+        match chatspeed_runtime_client::build_profile() {
+            chatspeed_runtime_client::BuildProfile::Debug => {
+                assert!(config.app_data_dir().ends_with("dev_data"));
+            }
+            chatspeed_runtime_client::BuildProfile::Release => {
+                assert!(config.app_data_dir().ends_with("ai.aidyou.chatspeed"));
+            }
+        }
+    }
+
+    #[test]
+    fn from_env_honors_explicit_overrides() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _env = EnvGuard::clear();
+        std::env::set_var("CHATSPEED_RUNTIME_DIR", "/sandbox/rt");
+        std::env::set_var("CHATSPEED_RUNTIME_DB", "/sandbox/db/chatspeed.db");
+        std::env::set_var("CHATSPEED_RUNTIME_APP_DATA_DIR", "/sandbox/app");
+
+        let config = RuntimeConfig::from_env().expect("from env");
+        assert_eq!(config.runtime_dir(), Path::new("/sandbox/rt"));
+        assert_eq!(config.db_path(), Path::new("/sandbox/db/chatspeed.db"));
+        assert_eq!(config.app_data_dir(), Path::new("/sandbox/app"));
+    }
+
+    #[test]
+    fn explicit_runtime_dir_isolates_db_and_app_data() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = RuntimeConfig::with_runtime_dir(dir.path());
+        assert_eq!(config.runtime_dir(), dir.path());
+        assert_eq!(config.db_path(), dir.path().join(DB_FILE_NAME));
+        assert_eq!(config.app_data_dir(), dir.path());
+    }
+
+    // -- database authority -------------------------------------------------
+
+    #[test]
+    fn database_lock_path_normalizes_directory_aliases() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let canonical =
+            database_lock_path(&dir.path().join(DB_FILE_NAME)).expect("canonical lock path");
+        let aliased = database_lock_path(&dir.path().join(".").join(DB_FILE_NAME))
+            .expect("aliased lock path");
+        assert_eq!(canonical, aliased);
+        assert!(canonical.starts_with(dir.path().canonicalize().expect("canonicalize")));
+        // Taking the lock path never creates or touches the database.
+        assert!(!dir.path().join(DB_FILE_NAME).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_lock_path_resolves_a_symlinked_database_to_one_target() {
+        let real_dir = tempfile::tempdir().expect("real dir");
+        let real_db = real_dir.path().join(DB_FILE_NAME);
+        // An empty placeholder stands in for the database; only its metadata and
+        // canonical path are ever consulted, never its content.
+        fs::write(&real_db, b"").expect("placeholder database file");
+
+        let alias_dir = tempfile::tempdir().expect("alias dir");
+        let alias_db = alias_dir.path().join("alias.db");
+        std::os::unix::fs::symlink(&real_db, &alias_db).expect("symlink alias");
+
+        let real_lock = database_lock_path(&real_db).expect("real lock path");
+        let alias_lock = database_lock_path(&alias_db).expect("alias lock path");
+        // One database target, one authority lock, whatever the alias is called.
+        assert_eq!(real_lock, alias_lock);
+
+        // The kernel lock actually conflicts across the two aliases ...
+        let first = RuntimeDbLock::acquire(&real_db).expect("acquire via the real path");
+        let second = RuntimeDbLock::acquire(&alias_db);
+        assert!(matches!(second, Err(RuntimeError::AlreadyRunning { .. })));
+
+        // ... and is released on drop, so the alias can acquire it again.
+        drop(first);
+        let third = RuntimeDbLock::acquire(&alias_db).expect("re-acquire via the alias");
+        drop(third);
+
+        // Only the sidecar lock was created; the placeholder is untouched.
+        assert!(real_db.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_lock_path_rejects_a_hard_linked_database() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join(DB_FILE_NAME);
+        fs::write(&db, b"").expect("placeholder database file");
+        fs::hard_link(&db, dir.path().join("alias.db")).expect("hard link alias");
+
+        // Two hard links to one inode cannot be unified by canonical path, so the
+        // resolver fails closed instead of handing out two different locks.
+        let result = database_lock_path(&db);
+        assert!(matches!(result, Err(RuntimeError::Config(_))));
+    }
+
+    #[test]
+    fn database_lock_refuses_a_second_holder_and_keeps_the_inode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join(DB_FILE_NAME);
+
+        let lock = RuntimeDbLock::acquire(&db).expect("first acquire");
+        let path = lock.path().to_path_buf();
+        assert!(path.exists());
+
+        let second = RuntimeDbLock::acquire(&db);
+        assert!(matches!(second, Err(RuntimeError::AlreadyRunning { .. })));
+        assert!(path.exists(), "a refused instance must not remove the lock");
+
+        drop(lock);
+        assert!(path.exists(), "the stable lock inode must not be removed");
+        let third = RuntimeDbLock::acquire(&db).expect("re-acquire");
+        drop(third);
+        assert!(path.exists());
+        // Only the sidecar lock exists; the database content was never created.
+        assert!(!db.exists());
+    }
+
+    #[tokio::test]
+    async fn a_shared_database_is_refused_across_runtime_directories() {
+        let shared = tempfile::tempdir().expect("shared tempdir");
+        let db = shared.path().join(DB_FILE_NAME);
+        let first_dir = tempfile::tempdir().expect("first dir");
+        let second_dir = tempfile::tempdir().expect("second dir");
+
+        let handle = start_runtime(
+            RuntimeConfig::with_runtime_dir(first_dir.path())
+                .with_db_path(&db)
+                .with_grace(Duration::from_secs(30))
+                .with_lease_ttl(Duration::from_secs(30)),
+        )
+        .await
+        .expect("first runtime owns the database");
+
+        // A different runtime directory with the same database is refused before
+        // it can open the database or publish discovery.
+        let second = start_runtime(
+            RuntimeConfig::with_runtime_dir(second_dir.path())
+                .with_db_path(&db)
+                .with_grace(Duration::from_secs(30))
+                .with_lease_ttl(Duration::from_secs(30)),
+        )
+        .await;
+        assert!(matches!(second, Err(RuntimeError::AlreadyRunning { .. })));
+        assert!(!discovery::discovery_path_in(second_dir.path()).exists());
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("runtime stops");
+
+        // Once the owner has drained, the same database can be acquired again.
+        let restart = start_runtime(
+            RuntimeConfig::with_runtime_dir(second_dir.path())
+                .with_db_path(&db)
+                .with_grace(Duration::from_secs(30))
+                .with_lease_ttl(Duration::from_secs(30)),
+        )
+        .await
+        .expect("database authority released on drop");
+        restart.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), restart.wait())
+            .await
+            .expect("restart stops");
     }
 
     // -- lease proofs -------------------------------------------------------
@@ -1501,7 +1878,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_core_tool_surface_is_desktop_free_and_excludes_webview_tools() {
+    async fn runtime_core_tool_surface_is_desktop_free_and_requires_web_provider() {
         let dir = tempfile::tempdir().expect("tempdir");
         let owner = assemble_owner(dir.path());
 
@@ -1517,9 +1894,10 @@ mod tests {
         assert!(tool_manager.has_tool("read_file").await);
         assert!(tool_manager.has_tool("write_file").await);
         assert!(tool_manager.has_tool("grep").await);
-        // The desktop-free runtime can never advertise a WebView tool it is
-        // unable to run (the shared WebSearch/WebFetch tools are not compiled
-        // into this crate).
+
+        // The desktop-only Web MCP provider is registered separately after it
+        // has started its loopback rmcp server. A headless runtime must not
+        // advertise web tools before that provider is live.
         assert!(!tool_manager.has_tool("web_search").await);
         assert!(!tool_manager.has_tool("web_fetch").await);
     }

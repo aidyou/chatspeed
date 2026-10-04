@@ -16,7 +16,13 @@ use chatspeed_contracts::{
     ClientBridgeRegistrationResponse, ClientBridgeUnregisterRequest, ClientBridgeWorkEnvelope,
     ClientCapabilityResult, ClientLease, ClientLeaseRequest, ClientLeaseResponse,
     ControlPlaneDiscovery, ErrorEnvelope, ListModelsRequest, MetaResponse, ModelDetailsDto,
-    DISCOVERY_FILE_NAME, PROTOCOL_MAJOR, SCHEMA_VERSION,
+    ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
+    TerminalCloseRequest, TerminalCreateRequest, TerminalListSessionsRequest,
+    TerminalListShellsRequest, TerminalResizeRequest, TerminalSessionMetadataDto, TerminalShellDto,
+    TerminalStreamEnvelope, TerminalWriteRequest, WebMcpProviderRegistration,
+    WebMcpProviderRegistrationResponse, WebMcpProviderStatus, DISCOVERY_FILE_NAME, PROTOCOL_MAJOR,
+    SCHEMA_VERSION, WEB_MCP_CLIENT_HEADER, WEB_MCP_INSTANCE_HEADER, WEB_MCP_LEASE_HEADER,
+    WEB_MCP_PROOF_HEADER, WEB_MCP_REGISTER_PATH, WEB_MCP_STATUS_PATH, WEB_MCP_UNREGISTER_PATH,
 };
 use reqwest::redirect::Policy;
 use reqwest::{header, Method, Response, StatusCode};
@@ -28,6 +34,20 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
+
+pub mod paths;
+
+pub use paths::{
+    build_profile, dev_app_data_dir, production_app_data_dir, resolve_launch_config,
+    sandbox_launch_config, BuildProfile, LaunchConfigError, RuntimeLaunchConfig, DB_FILE_NAME,
+    LEGACY_HOME_ENV, RUNTIME_APP_DATA_DIR_ENV, RUNTIME_DB_ENV, RUNTIME_DIR_ENV,
+};
+
+/// Serializes tests that mutate the process environment so path resolution and
+/// respawn tests never observe another test's overrides. Shared by every test
+/// module in this crate.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Protocol major version this client understands.
 pub const SUPPORTED_PROTOCOL_MAJOR: u32 = PROTOCOL_MAJOR;
@@ -116,12 +136,32 @@ impl Drop for RuntimeChild {
 
 /// Starts the runtime binary with `runtime_dir` as its owned runtime directory.
 ///
+/// This is the explicit-sandbox entry point: the database and the
+/// application-data directory are derived inside `runtime_dir`. Callers that
+/// have resolved a full [`RuntimeLaunchConfig`] (the desktop and `cscli`
+/// defaults) use [`spawn_runtime_with_config`] instead, so a cross-profile spawn
+/// passes every path explicitly instead of relying on inherited environment.
+///
 /// The binary is resolved explicitly: `CHATSPEED_RUNTIME_BIN` wins, otherwise
 /// the `chatspeed-runtime` binary next to this executable is used. It refuses to
 /// start when a discovery document already exists in `runtime_dir`, so a client
 /// never races a live (or freshly published) runtime and starts a second one.
 pub fn spawn_runtime(runtime_dir: &Path) -> Result<RuntimeChild, ClientError> {
-    let discovery = discovery_file_in(runtime_dir);
+    spawn_runtime_with_config(&paths::sandbox_launch_config(runtime_dir))
+}
+
+/// Starts the runtime binary with a fully resolved launch configuration.
+///
+/// All three paths are passed explicitly (`CHATSPEED_RUNTIME_DIR`,
+/// `CHATSPEED_RUNTIME_DB`, `CHATSPEED_RUNTIME_APP_DATA_DIR`) and the legacy
+/// `CHATSPEED_HOME` is removed, so an inherited environment can never redirect
+/// the child to a different runtime directory, database or profile. A release
+/// runtime binary started by a debug client therefore still serves the
+/// development paths the client resolved.
+pub fn spawn_runtime_with_config(
+    config: &RuntimeLaunchConfig,
+) -> Result<RuntimeChild, ClientError> {
+    let discovery = discovery_file_in(config.runtime_dir());
     if discovery.exists() {
         return Err(ClientError::Discovery(format!(
             "refusing to start a second runtime: a discovery document already exists at {}",
@@ -139,7 +179,10 @@ pub fn spawn_runtime(runtime_dir: &Path) -> Result<RuntimeChild, ClientError> {
     #[cfg(not(test))]
     let stderr = Stdio::null();
     let child = Command::new(&binary)
-        .env("CHATSPEED_RUNTIME_DIR", runtime_dir)
+        .env(RUNTIME_DIR_ENV, config.runtime_dir())
+        .env(RUNTIME_DB_ENV, config.db_path())
+        .env(RUNTIME_APP_DATA_DIR_ENV, config.app_data_dir())
+        .env_remove(LEGACY_HOME_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(stderr)
@@ -183,7 +226,7 @@ pub async fn wait_for_discovery(
     timeout: Duration,
 ) -> Result<ControlPlaneDiscovery, ClientError> {
     let deadline = tokio::time::Instant::now() + timeout;
-    let path = discovery_path(explicit);
+    let path = try_discovery_path(explicit)?;
     loop {
         let ready = match load_discovery(Some(&path)) {
             Ok(document) => RuntimeClient::connect(&document).await.map(|_| document),
@@ -232,6 +275,17 @@ pub const CLIENT_REGISTER_PATH: &str = "/control/v1/clients/register";
 /// `POST` route that lists the models a provider exposes.
 pub const MODELS_LIST_PATH: &str = "/control/v1/models/list";
 
+/// `POST` route prefix for the allowlisted runtime data commands.
+///
+/// The command set is the runtime's explicit allowlist; this client only ever
+/// appends a fixed, known command name and never exposes a generic RPC.
+pub const DATA_COMMANDS_PATH: &str = "/control/v1/data-commands";
+
+/// Builds the allowlisted data-command path for one fixed command name.
+pub fn data_command_path(command: &str) -> String {
+    format!("{DATA_COMMANDS_PATH}/{command}")
+}
+
 /// Header that carries the opaque client-bridge session secret.
 ///
 /// The secret is only ever sent here: never a URL, query string or body.
@@ -277,6 +331,53 @@ pub fn bridge_cancel_path(session_id: &str) -> String {
 pub fn bridge_unregister_path(session_id: &str) -> String {
     format!(
         "/control/v1/client-bridge/{}/unregister",
+        encode_path_segment(session_id)
+    )
+}
+
+/// Header carrying the owning client id for a runtime terminal call.
+///
+/// The lease proof travels here rather than in a URL query or body, so it is
+/// never captured by request logging.
+pub const TERMINAL_CLIENT_HEADER: &str = "X-Terminal-Client";
+/// Header carrying the owning lease id for a runtime terminal call.
+pub const TERMINAL_LEASE_HEADER: &str = "X-Terminal-Lease";
+
+/// `GET` route that lists the shells the runtime offers for a terminal.
+pub const TERMINAL_SHELLS_PATH: &str = "/control/v1/terminal/shells";
+/// `GET` route that lists the caller's own terminal sessions.
+pub const TERMINAL_SESSIONS_PATH: &str = "/control/v1/terminal/sessions";
+/// `POST` route that opens a terminal session.
+pub const TERMINAL_CREATE_PATH: &str = "/control/v1/terminal/create";
+
+/// `POST` route that forwards input to one terminal session.
+pub fn terminal_write_path(session_id: &str) -> String {
+    format!(
+        "/control/v1/terminal/{}/write",
+        encode_path_segment(session_id)
+    )
+}
+
+/// `POST` route that resizes one terminal session.
+pub fn terminal_resize_path(session_id: &str) -> String {
+    format!(
+        "/control/v1/terminal/{}/resize",
+        encode_path_segment(session_id)
+    )
+}
+
+/// `POST` route that retires one terminal session.
+pub fn terminal_close_path(session_id: &str) -> String {
+    format!(
+        "/control/v1/terminal/{}/close",
+        encode_path_segment(session_id)
+    )
+}
+
+/// `GET` route that streams one terminal session's typed SSE envelopes.
+pub fn terminal_stream_path(session_id: &str) -> String {
+    format!(
+        "/control/v1/terminal/{}/stream",
         encode_path_segment(session_id)
     )
 }
@@ -357,31 +458,22 @@ fn error_from_status(status: StatusCode, body: &str) -> ClientError {
 // Discovery
 // ---------------------------------------------------------------------------
 
-/// Resolves the discovery file path.
+/// Resolves the discovery file path, failing closed instead of falling back.
 ///
-/// Priority: an explicit path, then `CHATSPEED_RUNTIME_DIR`, then
-/// `${CHATSPEED_HOME}/runtime`, then `${HOME}/.chatspeed/runtime`; the discovery
-/// file name is always [`DISCOVERY_FILE_NAME`]. `USERPROFILE` is used when
-/// `HOME` is absent, matching the runtime and `cscli`.
-pub fn discovery_path(explicit: Option<&Path>) -> PathBuf {
+/// An explicit path always wins. Otherwise the shared launch resolver decides
+/// the runtime directory: an explicit `CHATSPEED_RUNTIME_DIR` sandbox,
+/// `${CHATSPEED_HOME}/runtime`, or the build-profile default (the production
+/// platform directory, or the repository's `dev_data`), so a client and the
+/// runtime binary never disagree about where discovery lives. When no platform
+/// directory is available and no override is configured this returns a
+/// [`ClientError::Discovery`] rather than a `.`-relative guess.
+pub fn try_discovery_path(explicit: Option<&Path>) -> Result<PathBuf, ClientError> {
     if let Some(path) = explicit {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     }
-    if let Some(dir) = non_empty_env("CHATSPEED_RUNTIME_DIR") {
-        return PathBuf::from(dir).join(DISCOVERY_FILE_NAME);
-    }
-    if let Some(home) = non_empty_env("CHATSPEED_HOME") {
-        return PathBuf::from(home)
-            .join("runtime")
-            .join(DISCOVERY_FILE_NAME);
-    }
-    let home = non_empty_env("HOME")
-        .or_else(|| non_empty_env("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".chatspeed")
-        .join("runtime")
-        .join(DISCOVERY_FILE_NAME)
+    let config =
+        resolve_launch_config().map_err(|error| ClientError::Discovery(error.to_string()))?;
+    Ok(config.discovery_file())
 }
 
 /// Discovery document path inside a known runtime directory.
@@ -406,7 +498,7 @@ pub fn discovery_absent(path: &Path) -> bool {
 /// Errors name the file that failed but never its contents, so a malformed or
 /// incompatible document cannot leak the bearer token.
 pub fn load_discovery(explicit: Option<&Path>) -> Result<ControlPlaneDiscovery, ClientError> {
-    let path = discovery_path(explicit);
+    let path = try_discovery_path(explicit)?;
     let body = std::fs::read(&path).map_err(|error| {
         ClientError::Discovery(format!(
             "cannot read discovery file {}: {error} (is ChatSpeed running?)",
@@ -687,6 +779,44 @@ impl RuntimeClient {
         self.post_json(MODELS_LIST_PATH, request).await
     }
 
+    /// Returns the generated Models.dev provider presets the runtime owns.
+    ///
+    /// The presets are served from the same runtime snapshot the provider-model
+    /// read resolves against, so the desktop never caches a second catalog.
+    pub async fn models_dev_providers(
+        &self,
+    ) -> Result<Vec<ModelsDevPresetProviderDto>, ClientError> {
+        self.post_json(
+            &data_command_path("get_models_dev_providers"),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
+    /// Returns the embedded catalog models of one Models.dev provider.
+    pub async fn models_dev_provider_models(
+        &self,
+        request: &ModelsDevProviderModelsRequest,
+    ) -> Result<Vec<ModelDetailsDto>, ClientError> {
+        self.post_json(
+            &data_command_path("get_models_dev_provider_models"),
+            request,
+        )
+        .await
+    }
+
+    /// Resolves a model profile against the runtime-owned catalog snapshot.
+    ///
+    /// The response keeps the canonical camelCase profile shape; the desktop
+    /// decodes it back into its own `ResolvedModelProfile` domain type.
+    pub async fn resolve_model_profile(
+        &self,
+        request: &ResolveModelProfileRequest,
+    ) -> Result<Value, ClientError> {
+        self.post_json(&data_command_path("resolve_model_profile"), request)
+            .await
+    }
+
     /// Opens a client WebView capability bridge session.
     ///
     /// The bearer token proves the client; the runtime resolves the client's
@@ -714,6 +844,84 @@ impl RuntimeClient {
     ) -> Result<ClientBridgeRegistrationResponse, ClientError> {
         self.post_json(CLIENT_BRIDGE_REGISTER_PATH, registration)
             .await
+    }
+
+    /// Registers the desktop-hosted loopback Web MCP provider with the runtime.
+    ///
+    /// The JSON body carries **only** the loopback port, so the runtime derives
+    /// the endpoint itself. The provider proof token, the client id, the lease id
+    /// and the desktop instance id travel in dedicated headers, never in the
+    /// URL, query string or body.
+    pub async fn register_web_mcp_provider(
+        &self,
+        registration: &WebMcpProviderRegistration,
+        client_id: &str,
+        lease_id: &str,
+        instance_id: &str,
+        proof: &str,
+    ) -> Result<WebMcpProviderRegistrationResponse, ClientError> {
+        let response = self
+            .build(Method::POST, WEB_MCP_REGISTER_PATH)?
+            .header(WEB_MCP_PROOF_HEADER, proof)
+            .header(WEB_MCP_CLIENT_HEADER, client_id)
+            .header(WEB_MCP_LEASE_HEADER, lease_id)
+            .header(WEB_MCP_INSTANCE_HEADER, instance_id)
+            .json(registration)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let value = decode(response).await?;
+        serde_json::from_value(value).map_err(|error| {
+            ClientError::Serialization(format!("unexpected response body: {error}"))
+        })
+    }
+
+    /// Unregisters this client's loopback Web MCP provider.
+    ///
+    /// Repeating it for an already-dropped provider is harmless: the runtime
+    /// treats a missing slot for the same proof as a no-op.
+    pub async fn unregister_web_mcp_provider(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        instance_id: &str,
+        proof: &str,
+    ) -> Result<(), ClientError> {
+        let response = self
+            .build(Method::POST, WEB_MCP_UNREGISTER_PATH)?
+            .header(WEB_MCP_PROOF_HEADER, proof)
+            .header(WEB_MCP_CLIENT_HEADER, client_id)
+            .header(WEB_MCP_LEASE_HEADER, lease_id)
+            .header(WEB_MCP_INSTANCE_HEADER, instance_id)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(transport_error)?;
+        decode(response).await?;
+        Ok(())
+    }
+
+    /// Reads the current provider slot; `None` when no provider is installed.
+    pub async fn web_mcp_provider_status(
+        &self,
+    ) -> Result<Option<WebMcpProviderStatus>, ClientError> {
+        let response = self
+            .build(Method::GET, WEB_MCP_STATUS_PATH)?
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let value = decode(response).await?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| {
+                ClientError::Serialization(format!("unexpected response body: {error}"))
+            })
     }
 
     /// Starts one chat turn on the runtime owner.
@@ -744,6 +952,170 @@ impl RuntimeClient {
             response,
             buffer: Vec::new(),
             finished: false,
+        })
+    }
+
+    /// Lists the shells the runtime offers for an interactive terminal.
+    pub async fn terminal_list_shells(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Result<Vec<TerminalShellDto>, ClientError> {
+        let request = TerminalListShellsRequest::default();
+        self.send_terminal(
+            Method::GET,
+            TERMINAL_SHELLS_PATH,
+            client_id,
+            lease_id,
+            &request,
+        )
+        .await
+    }
+
+    /// Lists the terminal sessions owned by this client's live lease.
+    pub async fn terminal_list_sessions(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Result<Vec<TerminalSessionMetadataDto>, ClientError> {
+        let request = TerminalListSessionsRequest::default();
+        self.send_terminal(
+            Method::GET,
+            TERMINAL_SESSIONS_PATH,
+            client_id,
+            lease_id,
+            &request,
+        )
+        .await
+    }
+
+    /// Opens a terminal session bound to this client's live lease.
+    pub async fn terminal_create(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        request: &TerminalCreateRequest,
+    ) -> Result<TerminalSessionMetadataDto, ClientError> {
+        self.send_terminal(
+            Method::POST,
+            TERMINAL_CREATE_PATH,
+            client_id,
+            lease_id,
+            request,
+        )
+        .await
+    }
+
+    /// Forwards raw input to a terminal session owned by this client.
+    pub async fn terminal_write(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+        request: &TerminalWriteRequest,
+    ) -> Result<(), ClientError> {
+        self.send_terminal(
+            Method::POST,
+            &terminal_write_path(session_id),
+            client_id,
+            lease_id,
+            request,
+        )
+        .await
+    }
+
+    /// Resizes a terminal session owned by this client.
+    pub async fn terminal_resize(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+        request: &TerminalResizeRequest,
+    ) -> Result<(), ClientError> {
+        self.send_terminal(
+            Method::POST,
+            &terminal_resize_path(session_id),
+            client_id,
+            lease_id,
+            request,
+        )
+        .await
+    }
+
+    /// Retires a terminal session owned by this client; repeating it is harmless.
+    pub async fn terminal_close(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+    ) -> Result<(), ClientError> {
+        let request = TerminalCloseRequest::default();
+        self.send_terminal(
+            Method::POST,
+            &terminal_close_path(session_id),
+            client_id,
+            lease_id,
+            &request,
+        )
+        .await
+    }
+
+    /// Subscribes to a terminal session's typed SSE stream.
+    ///
+    /// The request carries no total timeout, so a long-lived terminal is never
+    /// cut off by the normal request timeout.
+    pub async fn terminal_stream(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+    ) -> Result<TerminalEventStream, ClientError> {
+        let response = self
+            .build_without_timeout(Method::GET, &terminal_stream_path(session_id))?
+            .header(TERMINAL_CLIENT_HEADER, client_id)
+            .header(TERMINAL_LEASE_HEADER, lease_id)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(error_from_status(status, &body));
+        }
+        Ok(TerminalEventStream {
+            response,
+            buffer: Vec::new(),
+            finished: false,
+        })
+    }
+
+    /// Sends a typed terminal call that proves the caller's live lease.
+    ///
+    /// The lease proof travels in dedicated headers, never in the URL or body,
+    /// so a credential can never be captured by request logging.
+    async fn send_terminal<T, R>(
+        &self,
+        method: Method,
+        path: &str,
+        client_id: &str,
+        lease_id: &str,
+        body: &T,
+    ) -> Result<R, ClientError>
+    where
+        T: Serialize + ?Sized,
+        R: DeserializeOwned,
+    {
+        let response = self
+            .build(method, path)?
+            .header(TERMINAL_CLIENT_HEADER, client_id)
+            .header(TERMINAL_LEASE_HEADER, lease_id)
+            .json(body)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let value = decode(response).await?;
+        serde_json::from_value(value).map_err(|error| {
+            ClientError::Serialization(format!("unexpected response body: {error}"))
         })
     }
 
@@ -1086,6 +1458,79 @@ impl BridgeEventStream {
             let envelope =
                 serde_json::from_str::<ClientBridgeWorkEnvelope>(&data).map_err(|error| {
                     ClientError::Serialization(format!("invalid bridge stream envelope: {error}"))
+                })?;
+            return Ok(Some(envelope));
+        }
+    }
+}
+
+/// Incremental reader over one terminal session's typed SSE stream.
+///
+/// Frames are consumed one at a time from the raw response body, so a
+/// long-lived terminal is never buffered whole and never cut off by a timeout.
+/// SSE comment keepalives and `id`-only frames are skipped. A `Reset` or
+/// `Unavailable` event terminates the stream: the runtime keeps no transcript,
+/// so the caller must reset its view instead of expecting a replay.
+pub struct TerminalEventStream {
+    response: Response,
+    buffer: Vec<u8>,
+    finished: bool,
+}
+
+impl fmt::Debug for TerminalEventStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TerminalEventStream")
+            .field("buffered_bytes", &self.buffer.len())
+            .field("finished", &self.finished)
+            .finish()
+    }
+}
+
+impl TerminalEventStream {
+    /// Returns the next terminal envelope, or `None` once the stream has ended.
+    pub async fn next_event(&mut self) -> Result<Option<TerminalStreamEnvelope>, ClientError> {
+        loop {
+            if let Some(envelope) = self.take_event()? {
+                return Ok(Some(envelope));
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            match self.response.chunk().await {
+                Ok(Some(chunk)) => self.buffer.extend_from_slice(&chunk),
+                Ok(None) => self.finished = true,
+                Err(error) => return Err(transport_error(error)),
+            }
+        }
+    }
+
+    /// Pulls one complete `data:` frame out of the buffer.
+    fn take_event(&mut self) -> Result<Option<TerminalStreamEnvelope>, ClientError> {
+        loop {
+            let Some(end) = frame_end(&self.buffer) else {
+                return Ok(None);
+            };
+            let frame = String::from_utf8_lossy(&self.buffer[..end]).to_string();
+            self.buffer.drain(..end);
+
+            let mut data = String::new();
+            for line in frame.lines() {
+                let line = line.trim_end_matches('\r');
+                if let Some(value) = line.strip_prefix("data:") {
+                    let value = value.strip_prefix(' ').unwrap_or(value);
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(value);
+                }
+            }
+            if data.is_empty() {
+                // A keepalive comment or an `id`-only frame carries no payload.
+                continue;
+            }
+            let envelope =
+                serde_json::from_str::<TerminalStreamEnvelope>(&data).map_err(|error| {
+                    ClientError::Serialization(format!("invalid terminal stream envelope: {error}"))
                 })?;
             return Ok(Some(envelope));
         }
@@ -1439,17 +1884,14 @@ mod tests {
         ChatProtocolDto, ChatResponseDto, ChatStartRequest, ChatStopRequest, ChatStreamEvent,
         ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
         ClientCapabilityResult, ClientCapabilityStatus, FinishReasonDto, ListModelsRequest,
-        MessageTypeDto, ModelDetailsDto, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
-        CONTROL_PLANE_HOST, PROTOCOL_VERSION,
+        MessageTypeDto, ModelDetailsDto, TerminalOutputEvent, TerminalStreamEvent,
+        BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION, CONTROL_PLANE_HOST, PROTOCOL_VERSION,
     };
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
-
-    /// Serializes tests that mutate the process environment.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn discovery(protocol_version: &str, token: &str) -> ControlPlaneDiscovery {
         ControlPlaneDiscovery {
@@ -1503,6 +1945,12 @@ mod tests {
         path: String,
         authorization: Option<String>,
         bridge_session: Option<String>,
+        terminal_client: Option<String>,
+        terminal_lease: Option<String>,
+        web_proof: Option<String>,
+        web_client: Option<String>,
+        web_lease: Option<String>,
+        web_instance: Option<String>,
         body: String,
     }
 
@@ -1585,6 +2033,12 @@ mod tests {
         let path = parts.next().unwrap_or("").to_string();
         let mut authorization = None;
         let mut bridge_session = None;
+        let mut terminal_client = None;
+        let mut terminal_lease = None;
+        let mut web_proof = None;
+        let mut web_client = None;
+        let mut web_lease = None;
+        let mut web_instance = None;
         let mut content_length = 0usize;
         for line in lines {
             if line.is_empty() {
@@ -1596,6 +2050,18 @@ mod tests {
                     authorization = Some(value.trim().to_string());
                 } else if name == "x-bridge-session" {
                     bridge_session = Some(value.trim().to_string());
+                } else if name == "x-terminal-client" {
+                    terminal_client = Some(value.trim().to_string());
+                } else if name == "x-terminal-lease" {
+                    terminal_lease = Some(value.trim().to_string());
+                } else if name == "x-web-mcp-proof" {
+                    web_proof = Some(value.trim().to_string());
+                } else if name == "x-web-mcp-client" {
+                    web_client = Some(value.trim().to_string());
+                } else if name == "x-web-mcp-lease" {
+                    web_lease = Some(value.trim().to_string());
+                } else if name == "x-web-mcp-instance" {
+                    web_instance = Some(value.trim().to_string());
                 } else if name == "content-length" {
                     content_length = value.trim().parse().unwrap_or(0);
                 }
@@ -1616,6 +2082,12 @@ mod tests {
             path,
             authorization,
             bridge_session,
+            terminal_client,
+            terminal_lease,
+            web_proof,
+            web_client,
+            web_lease,
+            web_instance,
             body: String::from_utf8_lossy(&body).to_string(),
         })
     }
@@ -1702,42 +2174,48 @@ mod tests {
     // -- discovery path -----------------------------------------------------
 
     #[test]
-    fn discovery_path_priority_is_explicit_runtime_dir_home_then_default() {
+    fn discovery_path_priority_is_explicit_runtime_dir_home_then_profile_default() {
         // The process environment is shared with other tests, so this test owns
-        // every mutation under the lock and restores the original values.
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let original_runtime_dir = std::env::var_os("CHATSPEED_RUNTIME_DIR");
-        let original_home = std::env::var_os("CHATSPEED_HOME");
-        let original_user_home = std::env::var_os("HOME");
+        // every mutation under the crate lock and restores the original values.
+        let _guard = crate::ENV_LOCK.lock().expect("env lock");
+        let original_runtime_dir = std::env::var_os(RUNTIME_DIR_ENV);
+        let original_home = std::env::var_os(LEGACY_HOME_ENV);
 
         let explicit = PathBuf::from("/explicit/control-plane-v1.json");
-        std::env::set_var("CHATSPEED_RUNTIME_DIR", "/explicit-runtime");
-        std::env::set_var("CHATSPEED_HOME", "/explicit-home");
-        std::env::set_var("HOME", "/explicit-user-home");
+        std::env::set_var(RUNTIME_DIR_ENV, "/explicit-runtime");
+        std::env::set_var(LEGACY_HOME_ENV, "/explicit-home");
 
         // An explicit path always wins.
-        assert_eq!(discovery_path(Some(explicit.as_path())), explicit);
+        assert_eq!(
+            try_discovery_path(Some(explicit.as_path())).expect("explicit"),
+            explicit
+        );
         // Then CHATSPEED_RUNTIME_DIR.
         assert_eq!(
-            discovery_path(None),
+            try_discovery_path(None).expect("runtime dir"),
             PathBuf::from("/explicit-runtime").join(DISCOVERY_FILE_NAME)
         );
         // Then CHATSPEED_HOME/runtime.
-        std::env::remove_var("CHATSPEED_RUNTIME_DIR");
+        std::env::remove_var(RUNTIME_DIR_ENV);
         assert_eq!(
-            discovery_path(None),
-            PathBuf::from("/explicit-home/runtime/control-plane-v1.json")
+            try_discovery_path(None).expect("home"),
+            PathBuf::from("/explicit-home/runtime").join(DISCOVERY_FILE_NAME)
         );
-        // Then HOME/.chatspeed/runtime.
-        std::env::remove_var("CHATSPEED_HOME");
+        // Then the build-profile default, never a `.`-relative fallback.
+        std::env::remove_var(LEGACY_HOME_ENV);
+        let default_root = match build_profile() {
+            BuildProfile::Debug => dev_app_data_dir().expect("dev root"),
+            BuildProfile::Release => {
+                production_app_data_dir(&dirs::data_dir().expect("platform data dir"))
+            }
+        };
         assert_eq!(
-            discovery_path(None),
-            PathBuf::from("/explicit-user-home/.chatspeed/runtime/control-plane-v1.json")
+            try_discovery_path(None).expect("profile default"),
+            default_root.join("runtime").join(DISCOVERY_FILE_NAME)
         );
 
-        restore_env("CHATSPEED_RUNTIME_DIR", original_runtime_dir);
-        restore_env("CHATSPEED_HOME", original_home);
-        restore_env("HOME", original_user_home);
+        restore_env(RUNTIME_DIR_ENV, original_runtime_dir);
+        restore_env(LEGACY_HOME_ENV, original_home);
     }
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
@@ -2234,7 +2712,7 @@ mod tests {
 
     #[test]
     fn heartbeat_interval_follows_the_configured_lease_ttl() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = crate::ENV_LOCK.lock().expect("env lock");
         let original_heartbeat = std::env::var_os(HEARTBEAT_MS_ENV);
         let original_ttl = std::env::var_os(LEASE_TTL_ENV);
         std::env::remove_var(HEARTBEAT_MS_ENV);
@@ -2288,7 +2766,7 @@ mod tests {
     fn spawn_uses_the_explicit_binary_and_reaps_its_child() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = crate::ENV_LOCK.lock().expect("env lock");
         let dir = tempfile::tempdir().expect("tempdir");
         let script = dir.path().join("fake-runtime");
         std::fs::write(
@@ -2319,6 +2797,70 @@ mod tests {
 
         restore_env(RUNTIME_BINARY_ENV, original);
         // Dropping the handle after reaping must stay panic-free.
+        drop(child);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_spawn_passes_every_path_and_clears_the_legacy_home() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::ENV_LOCK.lock().expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dump = dir.path().join("env-dump");
+        let script = dir.path().join("fake-runtime");
+        std::fs::write(&script, format!("#!/bin/sh\nenv > '{}'\n", dump.display()))
+            .expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod script");
+
+        let original_bin = std::env::var_os(RUNTIME_BINARY_ENV);
+        let original_home = std::env::var_os(LEGACY_HOME_ENV);
+        std::env::set_var(RUNTIME_BINARY_ENV, &script);
+        // An inherited legacy home must not survive into the child.
+        std::env::set_var(LEGACY_HOME_ENV, "/inherited-home");
+
+        let config = RuntimeLaunchConfig::new(
+            "/typed/runtime",
+            "/typed/profile/chatspeed.db",
+            "/typed/app-data",
+        );
+        let mut child = spawn_runtime_with_config(&config).expect("spawn");
+        loop {
+            if child.try_wait().expect("try_wait").is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let env_dump = std::fs::read_to_string(&dump).expect("env dump");
+
+        assert!(
+            env_dump
+                .lines()
+                .any(|line| line == "CHATSPEED_RUNTIME_DIR=/typed/runtime"),
+            "{env_dump}"
+        );
+        assert!(
+            env_dump
+                .lines()
+                .any(|line| line == "CHATSPEED_RUNTIME_DB=/typed/profile/chatspeed.db"),
+            "{env_dump}"
+        );
+        assert!(
+            env_dump
+                .lines()
+                .any(|line| line == "CHATSPEED_RUNTIME_APP_DATA_DIR=/typed/app-data"),
+            "{env_dump}"
+        );
+        assert!(
+            !env_dump
+                .lines()
+                .any(|line| line.starts_with("CHATSPEED_HOME=")),
+            "the legacy home must be cleared: {env_dump}"
+        );
+
+        restore_env(RUNTIME_BINARY_ENV, original_bin);
+        restore_env(LEGACY_HOME_ENV, original_home);
         drop(child);
     }
 
@@ -2650,6 +3192,242 @@ mod tests {
             assert_eq!(request.bridge_session.as_deref(), Some("opaque-token"));
             assert!(!request.body.contains("opaque-token"));
         }
+    }
+
+    // -- runtime terminal client -------------------------------------------
+
+    #[tokio::test]
+    async fn terminal_calls_carry_the_lease_proof_in_headers_not_the_url() {
+        let response_body =
+            json!([{ "name": "bash", "path": "/bin/bash", "is_default": true }]).to_string();
+        let server = FakeServer::start(move |_| http_response("200 OK", &response_body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let shells = client
+            .terminal_list_shells("tauri-main", "lease-1")
+            .await
+            .expect("shells");
+        assert_eq!(shells.len(), 1);
+        assert_eq!(shells[0].path, "/bin/bash");
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].method, "GET");
+        assert_eq!(recorded[0].path, TERMINAL_SHELLS_PATH);
+        assert_eq!(recorded[0].terminal_client.as_deref(), Some("tauri-main"));
+        assert_eq!(recorded[0].terminal_lease.as_deref(), Some("lease-1"));
+        assert_eq!(
+            recorded[0].authorization.as_deref(),
+            Some("Bearer test-token")
+        );
+        // The lease proof never appears in the URL or the request body.
+        assert!(!recorded[0].path.contains("lease-1"));
+        assert!(!recorded[0].body.contains("lease-1"));
+    }
+
+    #[tokio::test]
+    async fn terminal_create_write_resize_and_close_use_typed_bodies_and_paths() {
+        let metadata = json!({
+            "session_id": "session-1",
+            "shell_name": "bash",
+            "shell_path": "/bin/bash",
+            "cwd": "/workspace",
+            "alive": true,
+        })
+        .to_string();
+        let server = FakeServer::start(move |request| {
+            if request.path == TERMINAL_CREATE_PATH {
+                http_response("200 OK", &metadata)
+            } else {
+                http_response("204 No Content", "")
+            }
+        })
+        .await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let session = client
+            .terminal_create(
+                "tauri-main",
+                "lease-1",
+                &TerminalCreateRequest {
+                    cwd: Some("/workspace".to_string()),
+                    shell_path: None,
+                    cols: Some(120),
+                    rows: None,
+                },
+            )
+            .await
+            .expect("create");
+        assert_eq!(session.session_id, "session-1");
+
+        client
+            .terminal_write(
+                "tauri-main",
+                "lease-1",
+                &session.session_id,
+                &TerminalWriteRequest {
+                    input: "ls\n".to_string(),
+                },
+            )
+            .await
+            .expect("write");
+        client
+            .terminal_resize(
+                "tauri-main",
+                "lease-1",
+                &session.session_id,
+                &TerminalResizeRequest { cols: 80, rows: 24 },
+            )
+            .await
+            .expect("resize");
+        client
+            .terminal_close("tauri-main", "lease-1", &session.session_id)
+            .await
+            .expect("close");
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].path, TERMINAL_CREATE_PATH);
+        assert!(recorded[0].body.contains("\"cwd\":\"/workspace\""));
+        assert_eq!(recorded[1].path, terminal_write_path("session-1"));
+        assert!(recorded[1].body.contains("\"input\""));
+        assert!(recorded[1].body.contains("ls"));
+        assert_eq!(recorded[2].path, terminal_resize_path("session-1"));
+        assert_eq!(recorded[3].path, terminal_close_path("session-1"));
+        for request in &recorded {
+            assert_eq!(request.terminal_client.as_deref(), Some("tauri-main"));
+            assert_eq!(request.terminal_lease.as_deref(), Some("lease-1"));
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_stream_decodes_typed_envelopes_and_a_terminal_reset() {
+        let output = TerminalStreamEnvelope::new(
+            "session-1",
+            0,
+            TerminalStreamEvent::Output(TerminalOutputEvent {
+                session_id: "session-1".to_string(),
+                data_base64: "aGVsbG8=".to_string(),
+            }),
+        );
+        let reset = TerminalStreamEnvelope::new(
+            "session-1",
+            1,
+            TerminalStreamEvent::Reset {
+                reason: "stream_lagged".to_string(),
+            },
+        );
+        let body = format!(
+            ": keepalive\n\nid: 0\ndata: {}\n\ndata: {}\n\n",
+            serde_json::to_string(&output).expect("output"),
+            serde_json::to_string(&reset).expect("reset"),
+        );
+        let server = FakeServer::start(move |_| sse_response(&body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let mut stream = client
+            .terminal_stream("tauri-main", "lease-1", "session-1")
+            .await
+            .expect("open stream");
+        let first = stream
+            .next_event()
+            .await
+            .expect("read")
+            .expect("output envelope");
+        assert_eq!(
+            first.event,
+            TerminalStreamEvent::Output(TerminalOutputEvent {
+                session_id: "session-1".to_string(),
+                data_base64: "aGVsbG8=".to_string(),
+            })
+        );
+        let terminal = stream
+            .next_event()
+            .await
+            .expect("read")
+            .expect("reset envelope");
+        assert!(terminal.is_terminal());
+        assert_eq!(
+            terminal.event,
+            TerminalStreamEvent::Reset {
+                reason: "stream_lagged".to_string(),
+            }
+        );
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].path, terminal_stream_path("session-1"));
+        assert_eq!(recorded[0].terminal_client.as_deref(), Some("tauri-main"));
+        assert_eq!(recorded[0].terminal_lease.as_deref(), Some("lease-1"));
+    }
+
+    #[tokio::test]
+    async fn web_provider_registration_proves_identity_in_headers_only() {
+        let response_body = json!({
+            "server_name": chatspeed_contracts::WEB_MCP_SERVER_NAME,
+            "generation": 2,
+            "expires_at": "unix-100",
+        })
+        .to_string();
+        let server = FakeServer::start(move |_| http_response("200 OK", &response_body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let response = client
+            .register_web_mcp_provider(
+                &WebMcpProviderRegistration { port: 41234 },
+                "tauri-main",
+                "lease-1",
+                "desktop-instance",
+                "provider-proof",
+            )
+            .await
+            .expect("register");
+        assert_eq!(response.server_name, chatspeed_contracts::WEB_MCP_SERVER_NAME);
+        assert_eq!(response.generation, 2);
+
+        client
+            .unregister_web_mcp_provider(
+                "tauri-main",
+                "lease-1",
+                "desktop-instance",
+                "provider-proof",
+            )
+            .await
+            .expect("unregister");
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].method, "POST");
+        assert_eq!(recorded[0].path, WEB_MCP_REGISTER_PATH);
+        // Only the loopback port is in the body.
+        assert_eq!(recorded[0].body, "{\"port\":41234}");
+        assert_eq!(recorded[1].path, WEB_MCP_UNREGISTER_PATH);
+        for request in &recorded {
+            assert_eq!(request.web_proof.as_deref(), Some("provider-proof"));
+            assert_eq!(request.web_client.as_deref(), Some("tauri-main"));
+            assert_eq!(request.web_lease.as_deref(), Some("lease-1"));
+            assert_eq!(request.web_instance.as_deref(), Some("desktop-instance"));
+            assert_eq!(
+                request.authorization.as_deref(),
+                Some("Bearer test-token")
+            );
+            // The proof never appears in the URL or the body.
+            assert!(!request.path.contains("provider-proof"));
+            assert!(!request.body.contains("provider-proof"));
+        }
+    }
+
+    #[tokio::test]
+    async fn web_provider_status_reads_an_absent_slot_as_none() {
+        let server = FakeServer::start(move |_| http_response("404 Not Found", "{}")).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+        assert!(client
+            .web_mcp_provider_status()
+            .await
+            .expect("status")
+            .is_none());
+        assert_eq!(server.requests()[0].path, WEB_MCP_STATUS_PATH);
     }
 
     #[test]

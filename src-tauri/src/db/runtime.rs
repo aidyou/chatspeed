@@ -15,7 +15,11 @@ use tokio::sync::{mpsc, oneshot, Notify};
 const DEFAULT_READER_COUNT: usize = 2;
 const DEFAULT_QUEUE_CAPACITY: usize = 256;
 const DEFAULT_TELEMETRY_QUEUE_CAPACITY: usize = 1_000;
+// CCProxy telemetry ingestion is a runtime-only path; the desktop records no
+// proxy statistics locally and reaches them through the control plane.
+#[cfg(not(feature = "desktop"))]
 const TELEMETRY_HIGH_WATER_WARNING: usize = 1_000;
+#[cfg(not(feature = "desktop"))]
 const SLOW_ENQUEUE_WARNING: Duration = Duration::from_millis(100);
 const SLOW_JOB_WARNING: Duration = Duration::from_millis(250);
 
@@ -23,6 +27,7 @@ const SLOW_JOB_WARNING: Duration = Duration::from_millis(250);
 pub struct DbRuntimeMetrics {
     write_queue_high_water: AtomicUsize,
     read_queue_high_water: AtomicUsize,
+    #[cfg(not(feature = "desktop"))]
     telemetry_pending_high_water: AtomicUsize,
     write_jobs_completed: AtomicU64,
     read_jobs_completed: AtomicU64,
@@ -31,7 +36,7 @@ pub struct DbRuntimeMetrics {
     failed_jobs: AtomicU64,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DbRuntimeMetricsSnapshot {
     pub write_queue_high_water: usize,
@@ -60,7 +65,7 @@ impl DbRuntimeMetrics {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub fn snapshot(&self) -> DbRuntimeMetricsSnapshot {
         DbRuntimeMetricsSnapshot {
             write_queue_high_water: self.write_queue_high_water.load(Ordering::Relaxed),
@@ -136,6 +141,7 @@ impl MaintenanceGate {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
     async fn enter(self: &Arc<Self>) -> Result<JobPermit, StoreError> {
         loop {
             let state_changed = self.async_state_changed.notified();
@@ -239,6 +245,7 @@ struct Worker {
 }
 
 enum TelemetryMessage {
+    #[cfg(not(feature = "desktop"))]
     Stat(CcproxyStat, JobPermit),
     Flush(oneshot::Sender<Result<(), String>>),
     Shutdown(oneshot::Sender<Result<(), String>>),
@@ -246,6 +253,7 @@ enum TelemetryMessage {
 
 struct TelemetryIngress {
     sender: std_mpsc::SyncSender<TelemetryMessage>,
+    #[cfg(not(feature = "desktop"))]
     pending: Arc<AtomicUsize>,
     join_handle: Mutex<Option<JoinHandle<()>>>,
 }
@@ -264,6 +272,7 @@ impl TelemetryIngress {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn enqueue(&self, stat: CcproxyStat, permit: JobPermit) -> Result<(), StoreError> {
         let pending = self.pending.fetch_add(1, Ordering::Relaxed) + 1;
         if pending == TELEMETRY_HIGH_WATER_WARNING {
@@ -282,7 +291,8 @@ impl TelemetryIngress {
         }
     }
 
-    #[cfg(test)]
+    // Telemetry lifecycle helpers are exercised by the runtime-only test module.
+    #[cfg(all(test, not(feature = "desktop")))]
     async fn flush(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
         self.sender
@@ -316,7 +326,7 @@ impl TelemetryIngress {
         ack_result.and(join_result)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     async fn shutdown(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
         let ack_result = match self.sender.send(TelemetryMessage::Shutdown(ack_sender)) {
@@ -370,7 +380,7 @@ impl Worker {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     async fn shutdown(&self) -> Result<(), StoreError> {
         let (ack_sender, ack_receiver) = oneshot::channel();
         self.sender
@@ -523,12 +533,13 @@ impl DbRuntime {
         let join_handle = std::thread::Builder::new()
             .name("db-telemetry".to_string())
             .spawn(move || {
-                let mut batch = Vec::with_capacity(100);
+                let mut batch: Vec<(CcproxyStat, JobPermit)> = Vec::with_capacity(100);
                 let mut flush_acks = Vec::new();
                 let mut shutdown_acks = Vec::new();
                 let mut pending_error = None;
                 loop {
                     match receiver.recv_timeout(Duration::from_millis(25)) {
+                        #[cfg(not(feature = "desktop"))]
                         Ok(TelemetryMessage::Stat(stat, permit)) => batch.push((stat, permit)),
                         Ok(TelemetryMessage::Flush(ack_sender)) => flush_acks.push(ack_sender),
                         Ok(TelemetryMessage::Shutdown(ack_sender)) => shutdown_acks.push(ack_sender),
@@ -538,6 +549,7 @@ impl DbRuntime {
 
                     while batch.len() < 100 {
                         match receiver.try_recv() {
+                            #[cfg(not(feature = "desktop"))]
                             Ok(TelemetryMessage::Stat(stat, permit)) => batch.push((stat, permit)),
                             Ok(TelemetryMessage::Flush(ack_sender)) => flush_acks.push(ack_sender),
                             Ok(TelemetryMessage::Shutdown(ack_sender)) => {
@@ -651,11 +663,13 @@ impl DbRuntime {
 
         Ok(TelemetryIngress {
             sender,
+            #[cfg(not(feature = "desktop"))]
             pending,
             join_handle: Mutex::new(Some(join_handle)),
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub async fn write<T, F>(&self, operation: F) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -664,6 +678,7 @@ impl DbRuntime {
         self.execute(&self.writer, operation, true).await
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub async fn read<T, F>(&self, operation: F) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -678,6 +693,7 @@ impl DbRuntime {
         self.execute(worker, operation, self.is_memory).await
     }
 
+    #[cfg(not(feature = "desktop"))]
     async fn execute<T, F>(
         &self,
         worker: &Worker,
@@ -865,6 +881,7 @@ impl DbRuntime {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn enqueue_ccproxy_stat(&self, stat: CcproxyStat) -> Result<(), StoreError> {
         let permit = self.maintenance_gate.enter_blocking()?;
         self.telemetry.enqueue(stat, permit)?;
@@ -875,12 +892,12 @@ impl DbRuntime {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub fn metrics(&self) -> DbRuntimeMetricsSnapshot {
         self.metrics.snapshot()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub async fn shutdown(&self) -> Result<(), StoreError> {
         self.maintenance_gate.close_and_wait();
         let mut first_error = self.telemetry.flush().await.err();
@@ -932,7 +949,7 @@ fn configure_writer_connection(connection: &Connection) -> Result<(), StoreError
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::{DbRuntime, DbRuntimeMetrics, MaintenanceGate, TelemetryIngress};
     use crate::db::{CcproxyStat, StoreError};

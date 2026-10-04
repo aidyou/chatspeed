@@ -6,7 +6,6 @@ use serde_json::{from_str, json, Value};
 use crate::{
     ai::{
         error::AiError,
-        model_catalog::resolve_model_profile,
         network::{ApiClient, ApiConfig, DefaultApiClient, ErrorFormat},
         traits::chat::ModelDetails,
         util::{
@@ -15,6 +14,7 @@ use crate::{
         },
     },
     ccproxy::ChatProtocol,
+    model_catalog_engine::resolve_model_profile,
 };
 
 const OPENAI_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";

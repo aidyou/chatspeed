@@ -3,6 +3,10 @@
 //! Sinks are the output targets for dispatched events. Each sink handles
 //! a specific type of output (UI, DB, etc.) and operates independently
 //! from other sinks.
+//!
+//! The desktop never links the dispatcher or its sinks; it reaches the runtime
+//! over the control plane, so this module is runtime-only.
+#![cfg(not(feature = "desktop"))]
 
 use std::sync::Arc;
 

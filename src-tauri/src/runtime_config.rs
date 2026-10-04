@@ -10,20 +10,22 @@
 //!
 //! [`RuntimeConfigCache`] keeps the last loaded snapshot so the synchronous
 //! window event handlers can read saved geometry without blocking on I/O. The
-//! cache is written once per successful connection; a write goes straight to the
-//! runtime and never mutates the cached snapshot, so a later read still reflects
-//! the runtime's own value.
+//! cache is written from a successful connection and refreshed by the async
+//! readers ([`current_or_load`]) that need the latest values; a configuration
+//! write goes straight to the runtime and never mutates the cached snapshot, so
+//! a later read still reflects the runtime's own value.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tauri::{AppHandle, Manager};
 
 use crate::ai::network::ProxyType;
 use crate::constants::{
-    CFG_ASSISTANT_WINDOW_SIZE, CFG_PROXY_SWITCHER_WINDOW_SIZE, CFG_WINDOW_POSITION,
-    CFG_WINDOW_SIZE, CFG_WORKFLOW_WINDOW_POSITION, CFG_WORKFLOW_WINDOW_SIZE,
+    CFG_ASSISTANT_WINDOW_SIZE, CFG_PROXY_SWITCHER_WINDOW_SIZE, CFG_SCRAPER_DEBUG_MODE,
+    CFG_WINDOW_POSITION, CFG_WINDOW_SIZE, CFG_WORKFLOW_WINDOW_POSITION, CFG_WORKFLOW_WINDOW_SIZE,
 };
 use crate::runtime_client::RuntimeSupervisor;
 use crate::window::{MainWindowPosition, WindowRestoreConfig, WindowSize};
@@ -89,6 +91,14 @@ impl RuntimeConfigSnapshot {
             .unwrap_or_else(|| default.to_string())
     }
 
+    /// Whether scraped pages are kept visible for inspection.
+    ///
+    /// A local display preference only: when the runtime has not published a
+    /// snapshot this stays off rather than falling back to a local store.
+    pub fn scraper_debug_mode(&self) -> bool {
+        self.get_bool(CFG_SCRAPER_DEBUG_MODE, false)
+    }
+
     /// The remembered size for a window label, when one is stored.
     pub fn window_size(&self, window_label: &str) -> Option<WindowSize> {
         self.get(window_size_key(window_label)?)
@@ -142,8 +152,9 @@ impl RuntimeConfigSnapshot {
 
 /// Holds the most recent runtime configuration snapshot for synchronous readers.
 ///
-/// Written once per successful supervisor connection and read by the window
-/// event handlers, which cannot await. The lock is never held across an await.
+/// Written from a successful supervisor connection and from each async refresh,
+/// then read by the window event handlers, which cannot await. The lock is never
+/// held across an await.
 #[derive(Default)]
 pub struct RuntimeConfigCache {
     snapshot: RwLock<Option<Arc<RuntimeConfigSnapshot>>>,
@@ -172,6 +183,28 @@ impl RuntimeConfigCache {
             Err(_) => None,
         }
     }
+
+    /// Replaces the cached snapshot with a freshly loaded one, keeping the
+    /// previous snapshot when the load failed.
+    ///
+    /// The runtime stays the authority: the cache is only ever written from a
+    /// successful runtime read, so a failed refresh cannot leave a partial or
+    /// invented value behind. Split out of [`refresh`](Self::refresh) so this
+    /// policy is testable without a live control plane.
+    fn persist(&self, loaded: Result<RuntimeConfigSnapshot, String>) -> Result<(), String> {
+        match loaded {
+            Ok(snapshot) => {
+                self.store(snapshot);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reloads the snapshot from the runtime over the control plane.
+    pub async fn refresh(&self, supervisor: &RuntimeSupervisor) -> Result<(), String> {
+        self.persist(load(supervisor).await)
+    }
 }
 
 /// Loads the runtime configuration map over the control plane.
@@ -180,6 +213,26 @@ pub async fn load(supervisor: &RuntimeSupervisor) -> Result<RuntimeConfigSnapsho
     let settings = serde_json::from_value::<HashMap<String, Value>>(value)
         .map_err(|error| format!("unexpected runtime config response: {error}"))?;
     Ok(RuntimeConfigSnapshot::from_settings(settings))
+}
+
+/// Reads the freshest runtime configuration an async desktop path can get.
+///
+/// Prefers a live control-plane read so a value the runtime just changed is
+/// visible at once, writes it to the cache for the synchronous readers, and
+/// falls back to the last cached snapshot only when the runtime is
+/// unavailable. Returns `None` before the runtime has ever published a
+/// snapshot; callers then apply their own explicit default instead of reading a
+/// local database.
+pub async fn current_or_load<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<Arc<RuntimeConfigSnapshot>> {
+    let cache = app.try_state::<Arc<RuntimeConfigCache>>()?;
+    if let Some(supervisor) = app.try_state::<Arc<RuntimeSupervisor>>() {
+        if let Err(error) = cache.refresh(supervisor.as_ref()).await {
+            log::warn!("Failed to refresh the runtime configuration: {error}");
+        }
+    }
+    cache.current()
 }
 
 /// Persists one window size to the runtime configuration.
@@ -289,5 +342,67 @@ mod tests {
                 .map(|snapshot| snapshot.get_bool("missing", true)),
             Some(true)
         );
+    }
+
+    #[test]
+    fn scraper_debug_mode_defaults_off_and_reads_the_flag() {
+        // No snapshot at all means the local display preference stays off
+        // instead of falling back to a local store.
+        assert!(!RuntimeConfigSnapshot::default().scraper_debug_mode());
+
+        let mut settings = HashMap::new();
+        settings.insert(CFG_SCRAPER_DEBUG_MODE.to_string(), json!(true));
+        assert!(RuntimeConfigSnapshot::from_settings(settings).scraper_debug_mode());
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_previous_snapshot() {
+        let cache = RuntimeConfigCache::new();
+        cache.store(snapshot());
+        let previous = cache.current().expect("the snapshot was just stored");
+
+        let error = cache
+            .persist(Err("runtime unavailable".to_string()))
+            .expect_err("a failed load is reported");
+        assert_eq!(error, "runtime unavailable");
+        // The cache is written from the runtime only; a failure changes nothing.
+        assert!(
+            Arc::ptr_eq(
+                &previous,
+                &cache.current().expect("the previous snapshot is kept")
+            ),
+            "a failed refresh must not replace the cached snapshot"
+        );
+
+        // A later successful load does replace it.
+        cache
+            .persist(Ok(RuntimeConfigSnapshot::default()))
+            .expect("a successful load is applied");
+        assert!(!cache
+            .current()
+            .expect("the new snapshot is present")
+            .scraper_debug_mode());
+        assert!(!Arc::ptr_eq(
+            &previous,
+            &cache.current().expect("the new snapshot is present")
+        ));
+    }
+
+    #[tokio::test]
+    async fn current_or_load_falls_back_to_the_cached_snapshot() {
+        let app = crate::test::get_app_handle();
+        app.manage(Arc::new(RuntimeConfigCache::new()));
+
+        // With the runtime cache registered but no snapshot published yet,
+        // there is nothing to read.
+        assert!(current_or_load(&app).await.is_none());
+
+        {
+            let cache = app.state::<Arc<RuntimeConfigCache>>();
+            cache.store(snapshot());
+        }
+        // Without a connected supervisor the last cached snapshot is returned
+        // instead of blocking on a control-plane read.
+        assert!(current_or_load(&app).await.is_some());
     }
 }

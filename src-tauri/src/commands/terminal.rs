@@ -1,4 +1,6 @@
-use crate::terminal::{TerminalManager, TerminalSessionMetadata, TerminalShell};
+use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_terminal;
+use crate::terminal::{TerminalSessionMetadata, TerminalShell};
 use std::sync::Arc;
 use tauri::{State, Window};
 
@@ -28,66 +30,73 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn terminal_list_shells(
+pub async fn terminal_list_shells(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
 ) -> Result<Vec<TerminalShell>, String> {
     ensure_workflow_window(&window)?;
-    Ok(terminal_manager.list_shells())
+    runtime_terminal::list_shells(supervisor.inner()).await
 }
 
 #[tauri::command]
-pub fn terminal_list_sessions(
+pub async fn terminal_list_sessions(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
 ) -> Result<Vec<TerminalSessionMetadata>, String> {
     ensure_workflow_window(&window)?;
-    Ok(terminal_manager.list_sessions())
+    runtime_terminal::list_sessions(window, supervisor.inner().clone()).await
 }
 
 #[tauri::command]
-pub fn terminal_create(
+pub async fn terminal_create(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     cwd: Option<String>,
     shell_path: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<TerminalSessionMetadata, String> {
-    eprintln!("[terminal] create request cwd: {cwd:?}");
     ensure_workflow_window(&window)?;
-    terminal_manager.create(cwd.as_deref(), shell_path.as_deref(), cols, rows)
+    runtime_terminal::create(
+        window,
+        supervisor.inner().clone(),
+        cwd,
+        shell_path,
+        cols,
+        rows,
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn terminal_write(
+pub async fn terminal_write(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     session_id: String,
     input: String,
 ) -> Result<(), String> {
     ensure_workflow_window(&window)?;
-    terminal_manager.write(&session_id, &input)
+    runtime_terminal::write(supervisor.inner(), &session_id, input).await
 }
 
 #[tauri::command]
-pub fn terminal_resize(
+pub async fn terminal_resize(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     session_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
     ensure_workflow_window(&window)?;
-    terminal_manager.resize(&session_id, cols, rows)
+    runtime_terminal::resize(supervisor.inner(), &session_id, cols, rows).await
 }
 
 #[tauri::command]
-pub fn terminal_close(
+pub async fn terminal_close(
     window: Window,
-    terminal_manager: State<'_, Arc<TerminalManager>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
     session_id: String,
 ) -> Result<(), String> {
     ensure_workflow_window(&window)?;
-    terminal_manager.close(&session_id)
+    runtime_terminal::close(supervisor.inner(), &session_id).await
 }

@@ -1,29 +1,39 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::FilterCandidate;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct FinancialFilter {
+    #[cfg(not(feature = "desktop"))]
     money_regex: Regex,
+    #[cfg(not(feature = "desktop"))]
     bank_account_regex: Regex,
 }
 
 impl FinancialFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let money_regex = Regex::new(r#"(?i)(?:Total\s+Fee|Total\s+Amount|Sum|Price|Payment|Paid|Amount)(?:[:：]|\s+is\s+|\s+of\s+|\s+totaling\s+|\s)*([$¥£€]?[0-9.,]+\s*(?:USD|RMB|EUR|GBP|dollars|million|billion)?)"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_financial_money".to_string(), message: e.to_string() })?;
-        let bank_account_regex = Regex::new(
-            r#"(?i)(?:Account\s+Number|IBAN|SWIFT|Sort\s+Code)[:：]\s*([A-Z0-9\s-]{8,34})"#,
-        )
-        .map_err(|e| SensitiveError::RegexCompilationFailed {
-            pattern: "en_financial_bank".to_string(),
-            message: e.to_string(),
-        })?;
-        Ok(Self {
-            money_regex,
-            bank_account_regex,
-        })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let money_regex = Regex::new(r#"(?i)(?:Total\s+Fee|Total\s+Amount|Sum|Price|Payment|Paid|Amount)(?:[:：]|\s+is\s+|\s+of\s+|\s+totaling\s+|\s)*([$¥£€]?[0-9.,]+\s*(?:USD|RMB|EUR|GBP|dollars|million|billion)?)"#)
+                .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_financial_money".to_string(), message: e.to_string() })?;
+            let bank_account_regex = Regex::new(
+                r#"(?i)(?:Account\s+Number|IBAN|SWIFT|Sort\s+Code)[:：]\s*([A-Z0-9\s-]{8,34})"#,
+            )
+            .map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "en_financial_bank".to_string(),
+                message: e.to_string(),
+            })?;
+            Ok(Self {
+                money_regex,
+                bank_account_regex,
+            })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -36,9 +46,11 @@ impl SensitiveDataFilter for FinancialFilter {
         vec!["EnglishFinancial", "BankAccount"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["en"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

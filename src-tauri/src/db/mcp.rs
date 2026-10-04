@@ -2,10 +2,15 @@
 //!
 //! Provides CRUD operations for MCP records with JSON serialization/deserialization.
 
-use rusqlite::{params, Connection};
+#[cfg(not(feature = "desktop"))]
+use rusqlite::params;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::Connection;
 
+#[cfg(not(feature = "desktop"))]
 use super::{MainStore, StoreError};
 use crate::mcp::client::{McpServerConfig, McpStatus};
+#[cfg(not(feature = "desktop"))]
 use rust_i18n::t;
 
 /// Represents a Model Context Protocol (MCP) record
@@ -26,6 +31,7 @@ pub struct Mcp {
     pub status: Option<McpStatus>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     /// Retrieves all MCP records from the database
     ///
@@ -87,6 +93,7 @@ impl MainStore {
     /// Returns `StoreError` if:
     /// - JSON serialization fails
     /// - SQL execution fails
+    #[cfg(not(feature = "desktop"))]
     pub fn add_mcp(
         &self,
         name: String,
@@ -127,6 +134,7 @@ impl MainStore {
     /// Returns `StoreError` if:
     /// - JSON serialization fails
     /// - SQL execution fails
+    #[cfg(not(feature = "desktop"))]
     pub fn update_mcp(
         &self,
         id: i64,
@@ -171,6 +179,7 @@ impl MainStore {
     /// Returns `StoreError` if:
     /// - SQL execution fails
     /// - Transaction commit fails
+    #[cfg(not(feature = "desktop"))]
     pub fn delete_mcp(&self, id: i64) -> Result<(), StoreError> {
         let _config_update_guard = self.config_update_lock.lock();
         let mcps = self.db_runtime()?.write_blocking(move |conn| {
@@ -189,6 +198,7 @@ impl MainStore {
     ///
     /// # Returns
     /// Returns `Result` with unit type `()` on success, or `StoreError` on failure
+    #[cfg(not(feature = "desktop"))]
     pub fn change_mcp_status(&self, id: i64, disabled: bool) -> Result<Mcp, StoreError> {
         let _config_update_guard = self.config_update_lock.lock();
         let mcps = self.db_runtime()?.write_blocking(move |conn| {

@@ -1,18 +1,30 @@
 //! Built-in agent synchronization from bundled assets.
 
-use crate::db::agent::{AgentModels, ShellPolicyRule};
+use crate::db::agent::ShellPolicyRule;
+// Built-in agent synchronization writes to the runtime-owned database, so the
+// manifest model and the sync entry point are runtime-only. The desktop keeps
+// only the bundled default shell-policy loader.
+#[cfg(not(feature = "desktop"))]
+use crate::db::agent::AgentModels;
+#[cfg(not(feature = "desktop"))]
 use crate::db::{Agent, MainStore};
+#[cfg(not(feature = "desktop"))]
 use crate::tools::MCP_TOOL_NAME_SPLIT;
+#[cfg(not(feature = "desktop"))]
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
+#[cfg(not(feature = "desktop"))]
 const BUILTIN_AGENT_ID_PREFIX: &str = "builtin:";
 const BUILTIN_AGENTS_DIR: &str = "agents";
+#[cfg(not(feature = "desktop"))]
 const BUILTIN_AGENT_SCHEMA_VERSION: i32 = 1;
 const DEFAULT_SHELL_POLICY_FILE: &str = "default-shell-policy.json";
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 struct BuiltinAgentManifest {
     schema_version: i32,
@@ -34,6 +46,7 @@ struct BuiltinAgentManifest {
     disabled: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum BuiltinAgentRole {
@@ -42,6 +55,7 @@ enum BuiltinAgentRole {
     Child,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl BuiltinAgentRole {
     fn as_db_role(&self) -> &'static str {
         match self {
@@ -51,6 +65,7 @@ impl BuiltinAgentRole {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Deserialize)]
 struct BuiltinAgentPrompts {
     system: String,
@@ -60,6 +75,7 @@ struct BuiltinAgentPrompts {
     image_recognition: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Default, Deserialize)]
 struct BuiltinAgentConfig {
     #[serde(default)]
@@ -90,10 +106,12 @@ struct BuiltinAgentConfig {
     max_contexts: Option<i32>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn default_task_tracking_enabled() -> bool {
     true
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum BuiltinShellPolicyConfig {
@@ -101,6 +119,7 @@ enum BuiltinShellPolicyConfig {
     Mode(String),
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug)]
 struct BuiltinAgentDefinition {
     manifest: BuiltinAgentManifest,
@@ -109,14 +128,17 @@ struct BuiltinAgentDefinition {
     image_recognition_prompt: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn builtin_agent_db_id(builtin_id: &str) -> String {
     format!("{}{}", BUILTIN_AGENT_ID_PREFIX, builtin_id)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn serialize_json<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
     value.as_ref().and_then(|v| serde_json::to_string(v).ok())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn merge_builtin_tools_with_existing_mcp(
     builtin_tools: Option<String>,
     existing_tools: Option<&str>,
@@ -148,6 +170,7 @@ fn merge_builtin_tools_with_existing_mcp(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn read_prompt_file(base_dir: &Path, relative_path: &str) -> Result<String, String> {
     let path = base_dir.join(relative_path);
     fs::read_to_string(&path)
@@ -195,6 +218,7 @@ pub fn load_default_shell_policy_from_resources() -> Result<Vec<ShellPolicyRule>
     Ok(read_default_shell_policy(&builtin_agents_root)?.unwrap_or_default())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn resolve_shell_policy_config(
     config: Option<&BuiltinShellPolicyConfig>,
     default_shell_policy: Option<&Vec<ShellPolicyRule>>,
@@ -210,6 +234,7 @@ fn resolve_shell_policy_config(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn load_builtin_agent_definition(agent_dir: &Path) -> Result<BuiltinAgentDefinition, String> {
     let manifest_path = agent_dir.join("agent.yaml");
     let manifest_str = fs::read_to_string(&manifest_path)
@@ -246,6 +271,7 @@ fn load_builtin_agent_definition(agent_dir: &Path) -> Result<BuiltinAgentDefinit
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn scan_builtin_agents(root: &Path) -> Result<Vec<BuiltinAgentDefinition>, String> {
     if !root.exists() {
         return Ok(vec![]);
@@ -273,6 +299,7 @@ fn scan_builtin_agents(root: &Path) -> Result<Vec<BuiltinAgentDefinition>, Strin
     Ok(definitions)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn builtin_name_conflicts(store: &MainStore, agent_id: &str, name: &str) -> Result<bool, String> {
     let agents = store.get_all_agents().map_err(|e| e.to_string())?;
     Ok(agents
@@ -280,6 +307,7 @@ fn builtin_name_conflicts(store: &MainStore, agent_id: &str, name: &str) -> Resu
         .any(|agent| agent.id != agent_id && agent.name.eq_ignore_ascii_case(name)))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn resolve_builtin_name(
     store: &MainStore,
     agent_id: &str,
@@ -307,6 +335,7 @@ fn resolve_builtin_name(
     ))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn definition_to_agent(
     definition: &BuiltinAgentDefinition,
     default_shell_policy: Option<&Vec<ShellPolicyRule>>,
@@ -359,6 +388,7 @@ fn definition_to_agent(
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sync_single_builtin_agent(
     store: &MainStore,
     definition: &BuiltinAgentDefinition,
@@ -410,7 +440,7 @@ fn sync_single_builtin_agent(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::{
         builtin_agent_db_id, sync_single_builtin_agent, BuiltinAgentConfig, BuiltinAgentDefinition,
@@ -630,6 +660,7 @@ mod tests {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn sync_builtin_agents_if_needed(main_store: Arc<MainStore>) -> Result<(), String> {
     let builtin_agents_root = match resolve_builtin_agents_root() {
         Some(path) => path,

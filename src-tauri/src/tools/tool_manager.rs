@@ -5,13 +5,10 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-#[cfg(feature = "desktop")]
-use tauri::{AppHandle, Manager};
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
-#[cfg(feature = "desktop")]
-use crate::constants::CFG_SEARCH_ENGINE;
+#[cfg(not(feature = "desktop"))]
 use crate::db::MainStore;
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, StdioClient, StreamableHttpClient,
@@ -169,8 +166,15 @@ fn allocate_mcp_aliases(
 
     for input in inputs {
         let tool_name = normalize_mcp_alias(&input.tool_name);
+        // The dedicated desktop Web MCP provider owns the two exact web aliases
+        // (`web_fetch`, `web_search`); `reserved_mcp_aliases` keeps every other
+        // server out of them, so this assignment cannot shadow or be shadowed.
+        let is_reserved_web_alias = input.server_name == chatspeed_contracts::WEB_MCP_SERVER_NAME
+            && chatspeed_contracts::WEB_MCP_ALIASES.contains(&tool_name.as_str());
         let server_tool_name = format!("{}_{}", normalize_mcp_alias(&input.server_name), tool_name);
-        let alias = if !occupied.contains(&tool_name) {
+        let alias = if is_reserved_web_alias {
+            tool_name
+        } else if !occupied.contains(&tool_name) {
             tool_name
         } else if !occupied.contains(&server_tool_name) {
             server_tool_name
@@ -375,54 +379,6 @@ impl ToolManager {
         let _ = self.mcp_tool_change_event_sender.send(());
     }
 
-    /// Register tools for DAG Workflow
-    ///
-    /// # Arguments
-    /// * `self` - An Arc pointing to the ToolManager instance.
-    /// * `chat_state` - The chat state.
-    /// * `main_store` - The main store.
-    ///
-    /// # Returns
-    /// * `Result<(), ToolError>` - The result of the registration.
-    ///
-    /// Desktop-only: the web tools it adds need a Tauri webview. A desktop-free
-    /// runtime registers [`ToolManager::register_core_tools`] directly and
-    /// receives web access through a client capability bridge instead.
-    #[cfg(feature = "desktop")]
-    pub async fn register_available_tools(
-        self: Arc<Self>, // Changed to take Arc<Self>
-        app_handle: AppHandle,
-    ) -> Result<(), ToolError> {
-        let main_store = app_handle.state::<Arc<MainStore>>().inner();
-
-        // =================================================
-        // Built-in tools
-        // =================================================
-
-        // Register search tool
-        let search_engine = main_store.get_config(CFG_SEARCH_ENGINE, "bing".to_string());
-        if !search_engine.is_empty() {
-            let ws = crate::tools::WebSearch::new(
-                app_handle.clone(),
-                std::sync::Arc::new(crate::tools::web_config::MainStoreWebToolConfig::new(
-                    main_store.clone(),
-                )),
-            );
-            self.register_tool(ws).await?;
-        }
-
-        // Register web fetch tool
-        self.register_tool(Arc::new(crate::tools::WebFetch::new(
-            app_handle.clone(),
-            std::sync::Arc::new(crate::tools::web_config::MainStoreWebToolConfig::new(
-                main_store.clone(),
-            )),
-        )))
-        .await?;
-
-        self.register_core_tools(main_store.clone()).await
-    }
-
     /// Registers every tool that needs no Tauri/window state.
     ///
     /// This is the AppHandle-free core of the tool surface: the file-system and
@@ -435,6 +391,7 @@ impl ToolManager {
     /// The system/workflow/interaction tools (shell execute, todo, skills,
     /// task orchestration) remain unregistered for both runtimes, exactly as
     /// before this split; enabling them is a separate change.
+    #[cfg(not(feature = "desktop"))]
     pub async fn register_core_tools(
         self: Arc<Self>,
         _main_store: Arc<MainStore>,
@@ -514,6 +471,30 @@ impl ToolManager {
         Ok(())
     }
 
+    /// Registers the fixed desktop-free web tools that execute only through the
+    /// live client WebView capability bridge.
+    ///
+    /// The runtime never links a WebView, so `web_fetch`/`web_search` reach a
+    /// desktop-backed capability exclusively by dispatching a typed invocation
+    /// on the same registry the control plane's bridge routes own. With no live
+    /// bridge each call fails closed with a structured result, so the runtime
+    /// never advertises a capability it cannot prove.
+    #[cfg(all(test, not(feature = "desktop")))]
+    pub async fn register_client_bridge_web_tools(
+        &self,
+        registry: Arc<crate::workflow::react::client::http::client_bridge::ClientBridgeRegistry>,
+    ) -> Result<(), ToolError> {
+        self.register_tool(Arc::new(
+            crate::tools::client_bridge_web::ClientBridgeWebTool::fetch(registry.clone()),
+        ))
+        .await?;
+        self.register_tool(Arc::new(
+            crate::tools::client_bridge_web::ClientBridgeWebTool::search(registry),
+        ))
+        .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
     pub async fn register_available_mcp_tools(
         self: Arc<Self>,
         main_store: Arc<MainStore>,
@@ -583,6 +564,7 @@ impl ToolManager {
 
     /// Copies an MCP wrapper from another manager without rebuilding it from this manager's MCP
     /// server cache. Session-local workflow managers use this for model-visible autoExpand tools.
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn register_mcp_tool_wrapper(
         &self,
         tool: Arc<dyn ToolDefinition>,
@@ -595,7 +577,7 @@ impl ToolManager {
         self.register_tool(tool).await
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub(crate) async fn register_test_mcp_tool(
         &self,
         server_name: &str,
@@ -918,6 +900,44 @@ impl ToolManager {
         self: Arc<Self>, // Changed to take Arc<Self>
         mcp_server_config: McpServerConfig,
     ) -> Result<(), ToolError> {
+        // The reserved server name belongs to the dedicated desktop Web MCP
+        // provider. An ordinary, user-configured server may never occupy it, so
+        // the fixed web tools can never be shadowed by a user MCP server.
+        if mcp_server_config.name == chatspeed_contracts::WEB_MCP_SERVER_NAME {
+            return Err(ToolError::Config(format!(
+                "MCP server name `{}` is reserved for the desktop Web MCP provider",
+                mcp_server_config.name
+            )));
+        }
+        self.register_mcp_server_generic(mcp_server_config, None)
+            .await
+    }
+
+    /// Registers the dedicated desktop loopback Web MCP provider.
+    ///
+    /// Only the reserved server name is accepted, and the streamable-HTTP client
+    /// is built with a single bounded connect attempt so a released or dead
+    /// provider fails its in-flight call immediately instead of silently
+    /// reconnecting.
+    pub async fn register_web_mcp_provider(
+        self: Arc<Self>,
+        mcp_server_config: McpServerConfig,
+    ) -> Result<(), ToolError> {
+        if mcp_server_config.name != chatspeed_contracts::WEB_MCP_SERVER_NAME {
+            return Err(ToolError::Config(format!(
+                "Web MCP provider must use the reserved server name `{}`",
+                chatspeed_contracts::WEB_MCP_SERVER_NAME
+            )));
+        }
+        self.register_mcp_server_generic(mcp_server_config, Some(1))
+            .await
+    }
+
+    async fn register_mcp_server_generic(
+        self: Arc<Self>, // Changed to take Arc<Self>
+        mcp_server_config: McpServerConfig,
+        provider_max_retries: Option<usize>,
+    ) -> Result<(), ToolError> {
         #[cfg(debug_assertions)]
         {
             log::debug!("Register MCP server {} ... ", &mcp_server_config.name);
@@ -957,10 +977,18 @@ impl ToolManager {
                 StdioClient::new(mcp_server_config.clone()) // Clone for the client
                     .map(|c| Arc::new(c) as Arc<dyn McpClient>)
             }
-            McpProtocolType::StreamableHttp => {
-                StreamableHttpClient::new(mcp_server_config.clone()) // Clone for the client
-                    .map(|c| Arc::new(c) as Arc<dyn McpClient>)
-            }
+            McpProtocolType::StreamableHttp => match provider_max_retries {
+                // The dedicated desktop provider is reached once: a dead or
+                // released provider must fail closed, never reconnect.
+                Some(max_retries) => StreamableHttpClient::with_retry(
+                    mcp_server_config.clone(),
+                    max_retries,
+                    std::time::Duration::from_millis(250),
+                )
+                .map(|c| Arc::new(c) as Arc<dyn McpClient>),
+                None => StreamableHttpClient::new(mcp_server_config.clone()) // Clone for the client
+                    .map(|c| Arc::new(c) as Arc<dyn McpClient>),
+            },
         }
         .map_err(|e_mcp| {
             ToolError::Config(
@@ -1569,6 +1597,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reserved_web_provider_owns_the_exact_web_aliases() {
+        let server = chatspeed_contracts::WEB_MCP_SERVER_NAME;
+        let registry = allocate_mcp_aliases(
+            vec![
+                McpAliasInput {
+                    canonical_name: format!("{server}__MCP__web_fetch"),
+                    server_name: server.to_string(),
+                    tool_name: "web_fetch".into(),
+                },
+                McpAliasInput {
+                    canonical_name: format!("{server}__MCP__web_search"),
+                    server_name: server.to_string(),
+                    tool_name: "web_search".into(),
+                },
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            registry
+                .alias_for(&format!("{server}__MCP__web_fetch"))
+                .as_deref(),
+            Some("web_fetch")
+        );
+        assert_eq!(
+            registry
+                .alias_for(&format!("{server}__MCP__web_search"))
+                .as_deref(),
+            Some("web_search")
+        );
+    }
+
+    #[test]
+    fn an_ordinary_mcp_server_cannot_occupy_the_reserved_web_aliases() {
+        let registry = allocate_mcp_aliases(
+            vec![McpAliasInput {
+                canonical_name: "evil__MCP__web_fetch".into(),
+                server_name: "evil".into(),
+                tool_name: "web_fetch".into(),
+            }],
+            Vec::new(),
+        );
+        assert_eq!(
+            registry.alias_for("evil__MCP__web_fetch").as_deref(),
+            Some("evil_web_fetch")
+        );
+    }
+
+    #[tokio::test]
+    async fn register_mcp_server_rejects_the_reserved_provider_name() {
+        let manager = Arc::new(ToolManager::new());
+        let config = McpServerConfig {
+            name: chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string(),
+            protocol_type: McpProtocolType::Stdio,
+            ..Default::default()
+        };
+        let error = manager
+            .register_mcp_server(config)
+            .await
+            .expect_err("the reserved provider name must be rejected");
+        assert!(matches!(error, ToolError::Config(_)), "{error}");
+    }
+
+    #[cfg(not(feature = "desktop"))]
     #[tokio::test]
     async fn disabled_mcp_tools_do_not_reserve_public_aliases() {
         let manager = Arc::new(ToolManager::new());
@@ -1645,6 +1737,7 @@ mod tests {
         }));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[tokio::test]
     async fn legacy_mcp_expander_name_resolves_to_new_name() {
         let manager = Arc::new(ToolManager::new());
@@ -1718,6 +1811,7 @@ mod tests {
         assert!(names.contains("both"));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[tokio::test]
     async fn native_registration_after_a_copied_mcp_wrapper_removes_the_wrapper() {
         let manager = ToolManager::new();
@@ -1766,6 +1860,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[tokio::test]
     async fn copied_mcp_wrapper_registered_last_remains_model_visible() {
         let manager = ToolManager::new();
@@ -2014,6 +2109,135 @@ mod tests {
         assert!(result.is_ok());
         assert!(dispatched);
         assert!(flag.load(Ordering::SeqCst));
+    }
+
+    // End-to-end coverage that the dedicated desktop Web MCP provider is
+    // reached through the canonical `ToolManager` MCP client path: a real
+    // streamable-HTTP MCP server exposes exactly `web_fetch`/`web_search`, the
+    // manager allocates the exact public aliases, and a call executes.
+    #[cfg(not(feature = "desktop"))]
+    mod web_provider_e2e {
+        use super::*;
+        use axum::Router;
+        use rmcp::model::{
+            CallToolRequestParams, CallToolResponse, CallToolResult, ListToolsResult,
+            PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+        };
+        use rmcp::service::{RequestContext, RoleServer};
+        use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService,
+        };
+        use rmcp::{ErrorData, ServerHandler};
+
+        /// A stub MCP server exposing exactly the two fixed web tools.
+        #[derive(Clone)]
+        struct StubWebProvider;
+
+        impl ServerHandler for StubWebProvider {
+            fn get_info(&self) -> ServerConfig {
+                let mut info = ServerConfig::default();
+                info.capabilities = ServerCapabilities::builder().enable_tools().build();
+                info
+            }
+
+            async fn list_tools(
+                &self,
+                _request: Option<PaginatedRequestParams>,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<ListToolsResult, ErrorData> {
+                let schema = Arc::new(serde_json::Map::new());
+                Ok(ListToolsResult::with_all_items(vec![
+                    Tool::new("web_fetch", "fetch", schema.clone()),
+                    Tool::new("web_search", "search", schema),
+                ]))
+            }
+
+            async fn call_tool(
+                &self,
+                request: CallToolRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<CallToolResponse, ErrorData> {
+                Ok(CallToolResponse::Complete(CallToolResult::structured(
+                    json!({"tool": request.name, "ok": true}),
+                )))
+            }
+        }
+
+        async fn spawn_stub() -> (u16, tokio::task::JoinHandle<()>) {
+            let factory = move || Ok(StubWebProvider);
+            let service = StreamableHttpService::new(
+                factory,
+                Arc::new(LocalSessionManager::default()),
+                StreamableHttpServerConfig::default(),
+            );
+            let router = Router::new().nest_service("/mcp", service);
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("bind stub provider");
+            let port = listener.local_addr().expect("addr").port();
+            let task = tokio::spawn(async move {
+                let _ = axum::serve(listener, router).await;
+            });
+            (port, task)
+        }
+
+        async fn await_alias(manager: &Arc<ToolManager>, alias: &str) -> String {
+            for _ in 0..100 {
+                if let Some(canonical) = manager.resolve_mcp_tool_name(alias).await {
+                    return canonical;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            panic!("alias `{alias}` was never exposed");
+        }
+
+        #[tokio::test]
+        async fn web_provider_is_registered_through_the_canonical_mcp_path() {
+            let (port, task) = spawn_stub().await;
+            let manager = Arc::new(ToolManager::new());
+            let config = McpServerConfig {
+                name: chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string(),
+                protocol_type: McpProtocolType::StreamableHttp,
+                url: Some(chatspeed_contracts::web_mcp_endpoint(port)),
+                bearer_token: Some("provider-proof".to_string()),
+                timeout: Some(10),
+                ..Default::default()
+            };
+            manager
+                .clone()
+                .register_web_mcp_provider(config)
+                .await
+                .expect("register the provider as an MCP server");
+
+            let fetch = await_alias(&manager, "web_fetch").await;
+            let search = await_alias(&manager, "web_search").await;
+            let split = crate::tools::MCP_TOOL_NAME_SPLIT;
+            assert_eq!(
+                fetch,
+                format!("{}{split}web_fetch", chatspeed_contracts::WEB_MCP_SERVER_NAME)
+            );
+            assert_eq!(
+                search,
+                format!("{}{split}web_search", chatspeed_contracts::WEB_MCP_SERVER_NAME)
+            );
+
+            let result = manager
+                .tool_call(&fetch, json!({"url": "https://example.com"}))
+                .await
+                .expect("call the fixed web tool through the MCP path");
+            assert!(
+                result.to_string().contains("web_fetch"),
+                "unexpected result: {result}"
+            );
+
+            manager
+                .unregister_mcp_server(chatspeed_contracts::WEB_MCP_SERVER_NAME)
+                .await
+                .expect("unregister");
+            assert!(manager.resolve_mcp_tool_name("web_fetch").await.is_none());
+            task.abort();
+        }
     }
 }
 

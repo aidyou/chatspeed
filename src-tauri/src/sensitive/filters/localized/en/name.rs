@@ -1,42 +1,52 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::{Regex, RegexSet};
 
 /// A filter for detecting English names based on patterns and context.
 pub struct NameFilter {
+    #[cfg(not(feature = "desktop"))]
     name_pattern: Regex,
+    #[cfg(not(feature = "desktop"))]
     context_keywords: RegexSet,
 }
 
 impl NameFilter {
     /// Creates a new `NameFilter` and pre-compiles its regexes.
     pub fn new() -> Result<Self, SensitiveError> {
-        let name_pattern = Regex::new(r#"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b"#).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
-                pattern: "en_name_pattern".to_string(),
+        #[cfg(not(feature = "desktop"))]
+        {
+            let name_pattern = Regex::new(r#"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b"#).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "en_name_pattern".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+
+            let context_keywords = RegexSet::new(&[
+                r"(?i)my name is",
+                r"(?i)i am",
+                r"(?i)this is",
+                r"(?i)call me",
+                r"(?i)name[:：]",
+                r"(?i)contact[:：]",
+            ])
+            .map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "en_name_context".to_string(),
                 message: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let context_keywords = RegexSet::new(&[
-            r"(?i)my name is",
-            r"(?i)i am",
-            r"(?i)this is",
-            r"(?i)call me",
-            r"(?i)name[:：]",
-            r"(?i)contact[:：]",
-        ])
-        .map_err(|e| SensitiveError::RegexCompilationFailed {
-            pattern: "en_name_context".to_string(),
-            message: e.to_string(),
-        })?;
-
-        Ok(Self {
-            name_pattern,
-            context_keywords,
-        })
+            Ok(Self {
+                name_pattern,
+                context_keywords,
+            })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -45,10 +55,12 @@ impl SensitiveDataFilter for NameFilter {
         "EnglishName"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["en"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -93,7 +105,7 @@ impl SensitiveDataFilter for NameFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

@@ -1,28 +1,37 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting UnionPay card numbers.
 pub struct UnionPayFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl UnionPayFilter {
     /// Creates a new `UnionPayFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let patterns = vec![
-            r#"\b62\d{14,17}\b"#,
-            r#"\b(?:62\d{2})[-\s]\d{4,6}[-\s]\d{4,6}[-\s]\d{4,6}\b"#,
-        ];
-        let regex = Regex::new(&patterns.join("|")).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
-                pattern: "unionpay_regex".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let patterns = vec![
+                r#"\b62\d{14,17}\b"#,
+                r#"\b(?:62\d{2})[-\s]\d{4,6}[-\s]\d{4,6}[-\s]\d{4,6}\b"#,
+            ];
+            let regex = Regex::new(&patterns.join("|")).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "unionpay_regex".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -31,10 +40,12 @@ impl SensitiveDataFilter for UnionPayFilter {
         "UnionPay"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -62,7 +73,7 @@ impl SensitiveDataFilter for UnionPayFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

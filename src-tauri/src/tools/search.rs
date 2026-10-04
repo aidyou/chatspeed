@@ -99,6 +99,7 @@ pub struct Grep {
 }
 
 impl Grep {
+    #[cfg(any(test, not(feature = "desktop")))]
     pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
         Self { path_guard }
     }

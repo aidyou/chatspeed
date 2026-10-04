@@ -13,8 +13,6 @@ use tauri::async_runtime::spawn;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::db::MainStore;
-
 const EVENT_UPDATE_PROGRESS: &str = "update://download-progress";
 const EVENT_UPDATE_READY: &str = "update://ready";
 const EVENT_UPDATE_AVAILABLE: &str = "update://available";
@@ -63,6 +61,7 @@ impl UpdateManager {
         let result = async {
             let updater = self
                 .build_updater()
+                .await
                 .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
 
             if let Ok(Some(update)) = updater.check().await {
@@ -107,19 +106,27 @@ impl UpdateManager {
         result
     }
 
-    fn build_updater(&self) -> Result<tauri_plugin_updater::Updater> {
+    /// Builds the updater, applying the proxy the runtime configuration describes.
+    ///
+    /// The proxy is read from the runtime over the control plane, never a local
+    /// database. Before the runtime publishes a snapshot the builder keeps its
+    /// default, so the updater follows system/env proxy settings instead of
+    /// inventing a value.
+    async fn build_updater(&self) -> Result<tauri_plugin_updater::Updater> {
         let mut builder = self.app.updater_builder();
 
-        if let Some(main_store) = self.app.try_state::<Arc<MainStore>>() {
-            let store = main_store.as_ref();
+        if let Some(snapshot) = crate::runtime_config::current_or_load(&self.app).await {
+            use crate::runtime_config::{
+                CFG_PROXY_PASSWORD, CFG_PROXY_SERVER, CFG_PROXY_TYPE, CFG_PROXY_USERNAME,
+            };
 
-            let proxy_type = store.get_config("proxy_type", "none".to_string());
+            let proxy_type = snapshot.get_string(CFG_PROXY_TYPE, "none");
             match proxy_type.as_str() {
                 "none" => {
                     builder = builder.no_proxy();
                 }
                 "http" => {
-                    let proxy_server = store.get_config("proxy_server", String::new());
+                    let proxy_server = snapshot.get_string(CFG_PROXY_SERVER, "");
                     if proxy_server.trim().is_empty() {
                         return Err(UpdateError::ConfigError(
                             "HTTP proxy is enabled for updates, but proxy_server is empty"
@@ -129,8 +136,8 @@ impl UpdateManager {
 
                     let mut proxy = Proxy::all(proxy_server.as_str())
                         .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
-                    let proxy_username = store.get_config("proxy_username", String::new());
-                    let proxy_password = store.get_config("proxy_password", String::new());
+                    let proxy_username = snapshot.get_string(CFG_PROXY_USERNAME, "");
+                    let proxy_password = snapshot.get_string(CFG_PROXY_PASSWORD, "");
 
                     if !proxy_username.is_empty() && !proxy_password.is_empty() {
                         proxy = proxy.basic_auth(&proxy_username, &proxy_password);

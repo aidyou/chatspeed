@@ -1,38 +1,64 @@
+// Runtime-only ReAct core. The desktop delegates every workflow command to the
+// standalone runtime over the control plane, so it compiles only the shared
+// workflow types/adapters and drops the execution engine entirely.
+#[cfg(not(feature = "desktop"))]
 pub mod agents_md;
 pub mod application;
+/// Shared wire DTOs and domain errors that both crates compile.
+pub mod application_types;
+#[cfg(not(feature = "desktop"))]
 pub mod child_tasks;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 pub mod child_tasks_tests;
 pub mod client;
+#[cfg(not(feature = "desktop"))]
 pub mod compression;
 pub mod constants;
+#[cfg(not(feature = "desktop"))]
 pub mod context;
+#[cfg(not(feature = "desktop"))]
 pub mod decision;
 pub mod dispatcher;
+#[cfg(not(feature = "desktop"))]
 pub mod engine;
 pub mod error;
 pub mod events;
+#[cfg(not(feature = "desktop"))]
 pub mod file_preview;
 pub mod gateway;
+#[cfg(not(feature = "desktop"))]
 pub mod goal_tracker;
 pub mod idle_sleep;
+#[cfg(not(feature = "desktop"))]
 pub mod intelligence;
+#[cfg(not(feature = "desktop"))]
 pub mod interceptors;
+#[cfg(not(feature = "desktop"))]
 pub mod llm;
+#[cfg(not(feature = "desktop"))]
 pub mod loop_detector;
+#[cfg(not(feature = "desktop"))]
 pub mod manager;
+#[cfg(not(feature = "desktop"))]
 pub mod observation;
+#[cfg(not(feature = "desktop"))]
 pub mod orchestrator;
+#[cfg(not(feature = "desktop"))]
 pub mod planners;
+#[cfg(not(feature = "desktop"))]
 pub mod policy;
 pub mod prompts;
 pub mod replay;
+#[cfg(not(feature = "desktop"))]
 pub mod runners;
+#[cfg(not(feature = "desktop"))]
 pub mod runtime_observation;
 pub mod security;
+#[cfg(not(feature = "desktop"))]
 pub mod signals;
 pub mod sinks;
 pub mod skills;
 pub mod types;
 pub mod usage;
+#[cfg(not(feature = "desktop"))]
 pub mod user_context;

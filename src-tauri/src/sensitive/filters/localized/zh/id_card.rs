@@ -1,23 +1,32 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting Chinese ID Card numbers (15 or 18-digit).
 pub struct IdCardFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl IdCardFilter {
     /// Creates a new `IdCardFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let pattern = r#"(?:[1-9]\d{5}(?:18|19|20)\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3}[\dXx]|[1-9]\d{5}\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3})"#;
-        let regex = Regex::new(pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
-            pattern: "id_card_regex".to_string(),
-            message: e.to_string(),
-        })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let pattern = r#"(?:[1-9]\d{5}(?:18|19|20)\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3}[\dXx]|[1-9]\d{5}\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3})"#;
+            let regex = Regex::new(pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "id_card_regex".to_string(),
+                message: e.to_string(),
+            })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -26,10 +35,12 @@ impl SensitiveDataFilter for IdCardFilter {
         "ChineseIDCard"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -57,7 +68,7 @@ impl SensitiveDataFilter for IdCardFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

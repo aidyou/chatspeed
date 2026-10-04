@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{
-    webview::PageLoadEvent, AppHandle, Emitter, EventId, Listener, Manager, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
+    webview::PageLoadEvent, AppHandle, Emitter, EventId, Listener, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent, Wry,
 };
 use url::ParseError;
 
@@ -13,8 +13,6 @@ use url::ParseError;
 use serde_json::Value;
 
 use super::types::{FullConfig, GenericContentRule};
-use crate::constants::CFG_SCRAPER_DEBUG_MODE;
-use crate::db::MainStore;
 use crate::libs::webview_proxy::WebviewProxy;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -49,12 +47,16 @@ impl WebviewScraper {
     }
 
     /// Scrapes the content of a webpage using a webview.
+    ///
+    /// `debug_mode` is the value the pool read from the runtime configuration for
+    /// this scrape; it decides whether the page is kept visible for inspection.
     pub async fn scrape(
         &self,
         webview: &WebviewWindow<Wry>,
         url: &str,
         config: Option<FullConfig>,
         generic_content_rule: Option<GenericContentRule>,
+        debug_mode: bool,
     ) -> (Result<String>, Vec<EventId>) {
         let (tx_scrape_result, rx_scrape_result) =
             tokio::sync::oneshot::channel::<Result<String>>();
@@ -132,9 +134,6 @@ impl WebviewScraper {
                 }
             },
         );
-
-        let main_store = self.app_handle.state::<Arc<MainStore>>();
-        let debug_mode = main_store.get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         if debug_mode {
             let webview_clone = webview.clone();
@@ -319,11 +318,15 @@ impl WebviewScraper {
     }
 
     /// Creates a new webview window for scraping.
+    ///
+    /// `proxy` is the proxy the caller read from the runtime configuration for this
+    /// scrape; a webview takes its proxy only while it is built.
     pub fn create_webview(
         &self,
         url: &str,
         visible: bool,
         _block_images: bool,
+        proxy: Option<WebviewProxy>,
     ) -> Result<WebviewWindow<Wry>> {
         let window_label = format!(
             "scraper-{}",
@@ -381,8 +384,8 @@ impl WebviewScraper {
 
         // The scraper leaves through the same network settings as the embedded ChatHub
         // page, and like there the proxy can only be given while the webview is built.
-        if let Some(proxy) = WebviewProxy::current(&self.app_handle).and_then(|p| p.proxy_url()) {
-            builder = builder.proxy_url(proxy);
+        if let Some(proxy_url) = proxy.and_then(|proxy| proxy.proxy_url()) {
+            builder = builder.proxy_url(proxy_url);
         }
 
         builder

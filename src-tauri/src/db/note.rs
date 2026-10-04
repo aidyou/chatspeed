@@ -1,10 +1,16 @@
+#[cfg(not(feature = "desktop"))]
 use chrono::Utc;
+#[cfg(not(feature = "desktop"))]
 use rusqlite::{params, OptionalExtension, Result as SqliteResult};
+#[cfg(not(feature = "desktop"))]
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use xxhash_rust::xxh32::xxh32;
 
+#[cfg(not(feature = "desktop"))]
 use crate::db::error::StoreError;
+#[cfg(not(feature = "desktop"))]
 use crate::db::main_store::MainStore;
 
 /// Represents a note with its metadata.
@@ -52,6 +58,9 @@ pub struct NoteTag {
     pub created_at: i64,
 }
 
+// Note persistence is owned by the standalone runtime; the desktop keeps only
+// the `Note`/`NoteTag` DTOs it exchanges over the control plane.
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     pub(crate) async fn add_note_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,

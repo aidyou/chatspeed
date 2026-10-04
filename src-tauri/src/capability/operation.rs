@@ -6,15 +6,23 @@
 //! (AC-2). The hash is computed over a canonicalized JSON projection, so key
 //! order, insignificant whitespace and object identity cannot change it.
 
+#[cfg(not(feature = "desktop"))]
 use dashmap::DashMap;
+#[cfg(not(feature = "desktop"))]
 use sha2::{Digest, Sha256};
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(feature = "desktop"))]
 use super::error::CapabilityError;
+#[cfg(not(feature = "desktop"))]
 use super::types::CapabilityKind;
 
 /// Milliseconds since the Unix epoch, the single clock for the journal.
+///
+/// The durable automation receipts in `db::automation` timestamp through this
+/// same clock, so it is the one helper the desktop crate still compiles.
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -23,11 +31,13 @@ pub fn now_ms() -> i64 {
 }
 
 /// Mints a stable, sortable operation id for one capability family.
+#[cfg(not(feature = "desktop"))]
 pub fn new_operation_id(capability: CapabilityKind) -> String {
     format!("op-{}-{}", capability.as_str(), uuid::Uuid::now_v7())
 }
 
 /// Mints a stable id for one effect journal row.
+#[cfg(not(feature = "desktop"))]
 pub fn new_effect_id() -> String {
     format!("eff-{}", uuid::Uuid::now_v7())
 }
@@ -36,12 +46,14 @@ pub fn new_effect_id() -> String {
 ///
 /// Object keys are emitted in sorted order and strings are escaped with the
 /// JSON encoder, so the output is a pure function of the value's meaning.
+#[cfg(not(feature = "desktop"))]
 pub fn canonical_json(value: &serde_json::Value) -> String {
     let mut output = String::new();
     write_canonical(value, &mut output);
     output
 }
 
+#[cfg(not(feature = "desktop"))]
 fn write_canonical(value: &serde_json::Value, output: &mut String) {
     match value {
         serde_json::Value::Null => output.push_str("null"),
@@ -87,11 +99,13 @@ fn write_canonical(value: &serde_json::Value, output: &mut String) {
 }
 
 /// The canonical SHA-256 hash of a request projection, as lowercase hex.
+#[cfg(not(feature = "desktop"))]
 pub fn canonical_request_hash(value: &serde_json::Value) -> String {
     hex::encode(Sha256::digest(canonical_json(value).as_bytes()))
 }
 
 /// A stable content digest over an ordered list of `(relative_path, sha256)`.
+#[cfg(not(feature = "desktop"))]
 pub fn content_digest(entries: &[(String, String)]) -> String {
     let mut hasher = Sha256::new();
     for (path, digest) in entries {
@@ -105,6 +119,7 @@ pub fn content_digest(entries: &[(String, String)]) -> String {
 
 /// Validates that an idempotency key is usable, returning the canonical code
 /// when it is not. Every mutation path shares this check (AC-2).
+#[cfg(not(feature = "desktop"))]
 pub fn require_idempotency_key(key: &str) -> Result<String, CapabilityError> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -127,10 +142,12 @@ pub fn require_idempotency_key(key: &str) -> Result<String, CapabilityError> {
 /// concurrent callers from racing on the same resource and burning work. Keys
 /// are bounded by the number of managed resources (Skill names / MCP server
 /// ids), so entries are intentionally retained for the process lifetime.
+#[cfg(not(feature = "desktop"))]
 pub struct ResourceLocks {
     locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ResourceLocks {
     pub fn new() -> Self {
         Self {
@@ -154,13 +171,14 @@ impl ResourceLocks {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Default for ResourceLocks {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use serde_json::json;

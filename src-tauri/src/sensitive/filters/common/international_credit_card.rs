@@ -1,30 +1,39 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting international credit card numbers (Amex, Discover, etc.).
 pub struct InternationalCreditCardFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl InternationalCreditCardFilter {
     /// Creates a new `InternationalCreditCardFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let patterns = vec![
-            r#"\b3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5}\b"#, // Amex
-            r#"\b6(?:011|5\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // Discover
-            r#"\b(?:30[0-5]|36\d|38\d)[-\s]?\d{4}[-\s]?\d{6}\b"#, // Diners Club
-            r#"\b(?:2131|1800|35(?:2[89]|[3-8][0-9]|90))[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // JCB
-        ];
-        let regex = Regex::new(&patterns.join("|")).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
-                pattern: "international_credit_card_regex".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let patterns = vec![
+                r#"\b3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5}\b"#, // Amex
+                r#"\b6(?:011|5\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // Discover
+                r#"\b(?:30[0-5]|36\d|38\d)[-\s]?\d{4}[-\s]?\d{6}\b"#, // Diners Club
+                r#"\b(?:2131|1800|35(?:2[89]|[3-8][0-9]|90))[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#, // JCB
+            ];
+            let regex = Regex::new(&patterns.join("|")).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "international_credit_card_regex".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -33,10 +42,12 @@ impl SensitiveDataFilter for InternationalCreditCardFilter {
         "InternationalCreditCard"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         Vec::new() // Language-agnostic
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -64,7 +75,7 @@ impl SensitiveDataFilter for InternationalCreditCardFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

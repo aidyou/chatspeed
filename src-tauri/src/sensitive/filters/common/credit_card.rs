@@ -1,23 +1,32 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting common credit card numbers (Visa, Mastercard).
 pub struct CreditCardFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl CreditCardFilter {
     /// Creates a new `CreditCardFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"\b(?:4\d{3}|5[1-5]\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed {
-                pattern: "credit_card_regex".to_string(),
-                message: e.to_string(),
-            })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex = Regex::new(r#"\b(?:4\d{3}|5[1-5]\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#)
+                .map_err(|e| SensitiveError::RegexCompilationFailed {
+                    pattern: "credit_card_regex".to_string(),
+                    message: e.to_string(),
+                })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -26,10 +35,12 @@ impl SensitiveDataFilter for CreditCardFilter {
         "CreditCard"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         Vec::new() // Language-agnostic
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -57,7 +68,7 @@ impl SensitiveDataFilter for CreditCardFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

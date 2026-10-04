@@ -1,7 +1,9 @@
 use crate::libs::ai_temp::resolve_ai_temp_path;
 use crate::workflow::react::error::WorkflowEngineError;
 
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::gitignore::Gitignore;
+#[cfg(any(test, not(feature = "desktop")))]
+use ignore::gitignore::GitignoreBuilder;
 use std::path::{Component, Path, PathBuf};
 
 /// Critical system directories that should NEVER be accessed by the AI
@@ -98,6 +100,9 @@ pub struct PathGuard {
 }
 
 impl PathGuard {
+    // Constructing a guard is a runtime concern; the desktop only reaches an
+    // already-built guard, except for shared tool tests that still build one.
+    #[cfg(any(test, not(feature = "desktop")))]
     pub fn new(
         workspace_paths: Vec<PathBuf>,
         sandbox_paths: Vec<PathBuf>,
@@ -119,6 +124,7 @@ impl PathGuard {
         }
     }
 
+    #[cfg(any(test, not(feature = "desktop")))]
     fn process_roots(paths: Vec<PathBuf>) -> Vec<AuthorizedRoot> {
         let mut roots_with_ignore = Vec::new();
         for p in paths {
@@ -146,6 +152,7 @@ impl PathGuard {
         roots_with_ignore
     }
 
+    #[cfg(any(test, not(feature = "desktop")))]
     fn collect_ignore_scopes(root: &Path, file_name: &str) -> Vec<IgnoreScope> {
         let mut scopes = Vec::new();
         // Scan up to 3 levels deep to avoid massive stalls on large workspaces.
@@ -183,6 +190,7 @@ impl PathGuard {
         scopes
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn workspace_roots(&self) -> Vec<PathBuf> {
         self.workspace_roots
             .iter()
@@ -190,6 +198,7 @@ impl PathGuard {
             .collect()
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn skill_roots(&self) -> Vec<PathBuf> {
         self.skill_roots.clone()
     }
@@ -207,6 +216,7 @@ impl PathGuard {
             .any(|prefix| path.starts_with(prefix))
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn is_authorized_root(&self, path: &Path) -> bool {
         let requested_path = Self::normalize_requested_path(path);
         let physical_path = requested_path
@@ -224,6 +234,7 @@ impl PathGuard {
                 .any(|root| root.path == physical_path)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn is_within_skill_root(&self, path: &Path) -> bool {
         let physical_path = path
             .canonicalize()
@@ -236,6 +247,7 @@ impl PathGuard {
             .any(|root| physical_path.starts_with(root))
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn update_allowed_roots(&mut self, workspace_paths: Vec<PathBuf>) {
         let processed = Self::process_roots(workspace_paths);
         self.workspace_roots = processed;
@@ -297,6 +309,7 @@ impl PathGuard {
         Self::normalize_path(path)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn validate(
         &self,
         target: &Path,
@@ -502,7 +515,9 @@ impl PathGuard {
     }
 }
 
-#[cfg(test)]
+// Path authorization is a runtime concern; the desktop only shares the walk
+// builder and ignore-file helpers, so these tests run in the runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use std::fs;

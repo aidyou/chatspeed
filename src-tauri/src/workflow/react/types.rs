@@ -21,6 +21,10 @@ pub enum WorkflowState {
     Cancelled,
 }
 
+// `StepType`, `GatewayPayload`, `WorkflowSignal` and the task-goal ledger are
+// runtime wire/state types: the desktop streams workflow events from the
+// runtime and never names them, so they are gated out of the desktop build.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -30,6 +34,7 @@ pub enum StepType {
     Observe,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayPayload {
@@ -286,6 +291,7 @@ pub enum WaitReason {
 
 /// Structured signal types for workflow control.
 /// Signals are parsed from JSON strings sent by the frontend.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkflowSignal {
@@ -410,6 +416,7 @@ pub enum WorkflowSignal {
     },
 }
 
+#[cfg(not(feature = "desktop"))]
 impl WorkflowSignal {
     /// Parse a JSON string into a WorkflowSignal.
     /// Returns None if parsing fails or the signal type is unknown.
@@ -606,6 +613,7 @@ pub struct EffectiveTaskDirective {
 ///
 /// The model may phrase `current_goal`, but the source IDs and completion
 /// evidence are assigned by the runtime from durable workflow messages.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskGoalStatus {
@@ -614,6 +622,7 @@ pub enum TaskGoalStatus {
     None,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskGoalState {
     #[serde(default = "default_task_goal_state_version")]
@@ -632,14 +641,16 @@ pub struct TaskGoalState {
     pub completion_evidence_message_id: Option<i64>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn default_task_goal_state_version() -> u8 {
     1
 }
 
 /// Bounded source material supplied to a compression model and persisted only
 /// as a hidden projection aid. Durable workflow messages remain authoritative.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TaskGoalLedger {
+pub struct TaskGoalLedger {
     pub source_message_ids: Vec<i64>,
     pub source_previews: Vec<TaskGoalSourcePreview>,
     pub previous_state: Option<TaskGoalState>,
@@ -651,6 +662,7 @@ pub(crate) struct TaskGoalLedger {
     pub tracked_current_goal: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskGoalSourcePreview {
     pub source_message_id: i64,
@@ -884,6 +896,7 @@ mod tests {
         assert!(context.removed_queued_user_message_ids.is_empty());
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_task_completed_gateway_payload_serialization() {
         let payload = GatewayPayload::TaskCompleted {
@@ -897,6 +910,7 @@ mod tests {
         assert_eq!(serialized["segment_id"], 7);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_compression_applied_gateway_payload_serialization() {
         let payload = GatewayPayload::CompressionApplied {
@@ -911,6 +925,7 @@ mod tests {
         assert_eq!(serialized["max_context_tokens"], 8192);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_confirm_gateway_payload_serialization() {
         let payload = GatewayPayload::Confirm {
@@ -929,6 +944,7 @@ mod tests {
         assert_eq!(serialized["display_type"], "text");
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_approval_resolved_gateway_payload_preserves_tool_identity() {
         let payload = GatewayPayload::ApprovalResolved {
@@ -1036,6 +1052,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_gateway_message_serializes_persisted_id() {
         let payload = GatewayPayload::Message {
@@ -1135,6 +1152,7 @@ mod tests {
         assert_eq!(deserialized.pending_tools[2].tool_name, "tool_2");
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_workflow_signal_parse() {
         let json = r#"{"type":"user_message","content":"hello"}"#;
@@ -1178,6 +1196,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_workflow_signal_validation() {
         // Stop is valid in all waiting states

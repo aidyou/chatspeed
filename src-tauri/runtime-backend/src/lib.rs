@@ -46,6 +46,25 @@ pub mod mcp;
 #[path = "../../src/ai/mod.rs"]
 pub mod ai;
 
+/// Runtime-owned Models.dev catalog parsing and resolution engine.
+///
+/// A real backend module rather than a `#[path]` include of desktop source: the
+/// desktop-free runtime is the only owner of catalog parsing, the models.dev
+/// snapshot cache/loader and the endpoint-bound profile/transport resolvers.
+/// The shared `ai::model_catalog` module keeps only the DTOs both crates name,
+/// so the desktop never links a second parser or the embedded catalog assets.
+#[path = "ai/model_catalog_engine.rs"]
+pub mod model_catalog_engine;
+
+/// Runtime-owned Models.dev catalog service.
+///
+/// A real backend module rather than a `#[path]` include of desktop source: the
+/// desktop-free runtime is the only owner of the catalog snapshot, its loading
+/// and its refresh. The shared `ai::model_catalog_updater` re-exports it so the
+/// runtime sources name exactly one implementation.
+#[path = "ai/model_catalog_service.rs"]
+pub mod model_catalog_service;
+
 #[path = "../../src/tools/mod.rs"]
 pub mod tools;
 
@@ -64,11 +83,31 @@ pub mod workflow;
 // automation service call directly.
 pub mod commands;
 
+/// The canonical, transport-neutral environment and shell discovery helpers.
+///
+/// `src/environment.rs` is pure `std` (plus `dirs`/`log`) and references no
+/// Tauri type, so the runtime includes the same source the desktop uses instead
+/// of keeping a second copy. The interactive terminal resolves its available
+/// shells, child environment and login-PATH merge through it.
+#[path = "../../src/environment.rs"]
+pub mod environment;
+
+/// The runtime-owned, Tauri-free interactive user terminal PTY core (U-7).
+///
+/// A real backend module rather than a `#[path]` include: the desktop terminal
+/// is bound to `tauri::AppHandle` and emits window events, while this module
+/// publishes typed events into a bounded per-session broadcast the control
+/// plane relays over SSE.
+pub mod terminal;
+
 /// The single canonical runtime owner assembly.
 pub mod owner;
 
 /// The long-lived background tasks the runtime starts after assembly.
 pub mod background;
+
+/// The single-slot desktop Web MCP provider registry (AC-8).
+pub mod web_provider;
 
 /// The canonical runtime data-command dispatcher, shared with the desktop crate
 /// through `#[path]`. Re-exported at the crate root so the shared control-plane

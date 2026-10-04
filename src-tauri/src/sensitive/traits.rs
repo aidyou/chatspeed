@@ -1,5 +1,10 @@
+// The filter execution surface (`FilterCandidate` and the matching helpers) is
+// only reachable from the runtime filter engine; the desktop keeps the trait
+// shell it needs to register filters and list their types.
+#[cfg(not(feature = "desktop"))]
 use super::error::SensitiveError;
 
+#[cfg(not(feature = "desktop"))]
 /// Helper function to adjust byte index to nearest character boundary.
 /// This ensures that indices from regex matches don't fall inside multi-byte Unicode characters.
 pub fn adjust_to_char_boundary(text: &str, mut idx: usize) -> usize {
@@ -14,6 +19,7 @@ pub fn adjust_to_char_boundary(text: &str, mut idx: usize) -> usize {
     idx
 }
 
+#[cfg(not(feature = "desktop"))]
 /// Represents a candidate for a sensitive data match.
 #[derive(Debug)]
 pub struct FilterCandidate {
@@ -35,9 +41,11 @@ pub trait SensitiveDataFilter {
         vec![self.filter_type()]
     }
 
+    #[cfg(not(feature = "desktop"))]
     /// List of supported languages. An empty vector means it's a common filter.
     fn supported_languages(&self) -> Vec<&'static str>;
 
+    #[cfg(not(feature = "desktop"))]
     /// Executes the filter on the given text.
     ///
     /// # Arguments
@@ -60,7 +68,7 @@ pub trait SensitiveDataFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

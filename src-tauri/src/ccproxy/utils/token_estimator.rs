@@ -1,7 +1,11 @@
 //! A simple token estimator.
 
+// The unified request/response estimators are runtime-only; the desktop keeps
+// only the lightweight `estimate_tokens` heuristic.
+#[cfg(not(feature = "desktop"))]
 use serde_json::Value;
 
+#[cfg(not(feature = "desktop"))]
 use crate::ccproxy::adapter::unified::{
     UnifiedContentBlock, UnifiedRequest, UnifiedResponse, UnifiedUsage,
 };
@@ -40,8 +44,10 @@ pub fn estimate_tokens(text: &str) -> f64 {
     token_count
 }
 
+#[cfg(not(feature = "desktop"))]
 const IMAGE_BLOCK_PLACEHOLDER_TOKENS: f64 = 256.0;
 
+#[cfg(not(feature = "desktop"))]
 fn estimate_json_value_tokens(value: &Value) -> f64 {
     match value {
         Value::Null => 0.0,
@@ -56,6 +62,7 @@ fn estimate_json_value_tokens(value: &Value) -> f64 {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn estimate_data_url_tokens(url: &str) -> f64 {
     if url.starts_with("data:") {
         IMAGE_BLOCK_PLACEHOLDER_TOKENS
@@ -64,6 +71,7 @@ fn estimate_data_url_tokens(url: &str) -> f64 {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn estimate_unified_request_tokens(request: &UnifiedRequest) -> f64 {
     let mut total = 0.0;
 
@@ -164,6 +172,7 @@ pub fn estimate_unified_request_tokens(request: &UnifiedRequest) -> f64 {
     total
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn estimate_known_request_json_tokens(body: &Value) -> f64 {
     let mut total = 0.0;
 
@@ -227,6 +236,7 @@ pub fn estimate_known_request_json_tokens(body: &Value) -> f64 {
     total
 }
 
+#[cfg(not(feature = "desktop"))]
 fn estimate_openai_like_content_tokens(content: &Value) -> f64 {
     match content {
         Value::String(text) => estimate_tokens(text),
@@ -265,6 +275,7 @@ fn estimate_openai_like_content_tokens(content: &Value) -> f64 {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn estimate_unified_response_tokens(response: &UnifiedResponse) -> f64 {
     response
         .content
@@ -280,10 +291,12 @@ pub fn estimate_unified_response_tokens(response: &UnifiedResponse) -> f64 {
         .sum()
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn token_usage_is_missing_or_zero(values: &[Option<u64>]) -> bool {
     values.iter().all(|value| value.unwrap_or(0) == 0)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn should_estimate_usage(usage: &UnifiedUsage) -> bool {
     token_usage_is_missing_or_zero(&[
         Some(usage.input_tokens),
@@ -295,6 +308,7 @@ pub fn should_estimate_usage(usage: &UnifiedUsage) -> bool {
     ])
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn resolve_usage_with_estimate(
     protocol: &str,
     usage: &UnifiedUsage,
@@ -318,7 +332,7 @@ pub fn resolve_usage_with_estimate(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::{
         estimate_known_request_json_tokens, estimate_tokens, estimate_unified_request_tokens,

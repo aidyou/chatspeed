@@ -1,22 +1,31 @@
+#[cfg(not(feature = "desktop"))]
 use crate::libs::tsid::TsidGenerator;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+#[cfg(not(feature = "desktop"))]
+use std::fs::{File, OpenOptions};
+use std::io;
+#[cfg(not(feature = "desktop"))]
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "desktop")))]
 use std::os::unix::fs::OpenOptionsExt;
 
 pub const AI_TEMP_ROOT: &str = "/tmp";
 pub const AI_TEMP_DIRECTORY_NAME: &str = "chatspeed";
+#[cfg(not(feature = "desktop"))]
 pub const LARGE_TOOL_OUTPUT_CHAR_LIMIT: usize = 20_000;
+#[cfg(not(feature = "desktop"))]
 const TEMP_FILE_CREATE_ATTEMPTS: usize = 4;
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedToolOutput {
     pub path: String,
     pub file_size_bytes: u64,
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) struct ToolOutputWriter {
     file: Option<File>,
     physical_path: PathBuf,
@@ -42,6 +51,7 @@ pub fn ai_temp_physical_root_unchecked() -> PathBuf {
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ToolOutputWriter {
     pub(crate) fn create() -> io::Result<Self> {
         let generator = TsidGenerator::new(1).map_err(io::Error::other)?;
@@ -116,6 +126,7 @@ impl ToolOutputWriter {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Drop for ToolOutputWriter {
     fn drop(&mut self) {
         if self.file.is_some() {
@@ -163,6 +174,7 @@ pub fn resolve_ai_temp_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+#[cfg(not(feature = "desktop"))]
 /// Maps unquoted, standalone `/tmp` path words for Host shell execution.
 ///
 /// This deliberately avoids a general Shell rewriter: quoted strings, escaped text, inline
@@ -233,6 +245,7 @@ pub fn map_ai_temp_paths_for_host_command(command: &str) -> String {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_shell_path_word_start(bytes: &[u8], index: usize) -> bool {
     index == 0
         || matches!(
@@ -241,6 +254,7 @@ fn is_shell_path_word_start(bytes: &[u8], index: usize) -> bool {
         )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_shell_path_word_end(bytes: &[u8], index: usize) -> bool {
     index == bytes.len()
         || matches!(
@@ -249,6 +263,7 @@ fn is_shell_path_word_end(bytes: &[u8], index: usize) -> bool {
         )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn shell_path_word_end(bytes: &[u8], mut index: usize) -> usize {
     while index < bytes.len()
         && !matches!(
@@ -261,6 +276,7 @@ fn shell_path_word_end(bytes: &[u8], mut index: usize) -> usize {
     index
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_physical_ai_temp_path(path: &str, physical_root: &str) -> bool {
     path == physical_root
         || path
@@ -293,12 +309,14 @@ pub fn display_ai_temp_path(path: &Path) -> Option<String> {
         .map(display_ai_temp_relative_path)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn persist_tool_output(content: &str) -> io::Result<PersistedToolOutput> {
     let mut writer = ToolOutputWriter::create()?;
     writer.append(content)?;
     writer.finalize()
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn persist_large_tool_output(content: &str) -> io::Result<Option<PersistedToolOutput>> {
     if content.chars().count() <= LARGE_TOOL_OUTPUT_CHAR_LIMIT {
         return Ok(None);
@@ -329,6 +347,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn maps_only_unquoted_standalone_ai_tmp_path_words_for_host_commands() {
         let physical_root = ai_temp_physical_root_unchecked()
@@ -360,6 +379,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn incremental_writer_preserves_append_order_and_size() {
         let mut writer = ToolOutputWriter::create().unwrap();
@@ -387,6 +407,7 @@ mod tests {
         fs::remove_file(physical_path).unwrap();
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn dropping_unfinalized_writer_removes_the_file() {
         let physical_path = {
@@ -398,6 +419,7 @@ mod tests {
         assert!(!physical_path.exists());
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn persists_large_output_behind_ai_temp_alias() {
         let content = "x".repeat(LARGE_TOOL_OUTPUT_CHAR_LIMIT + 1);

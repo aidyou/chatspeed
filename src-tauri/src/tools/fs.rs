@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(feature = "desktop"))]
 const PLANNING_NOTE_FILE: &str = "note.md";
 pub(crate) const DEFAULT_READ_FILE_LIMIT: usize = 800;
 const READ_FILE_MAX_LINE_LENGTH: usize = 10_000;
@@ -109,6 +110,7 @@ fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolEr
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn planning_note_path(planning_root: &Path) -> PathBuf {
     planning_root.join(PLANNING_NOTE_FILE)
 }
@@ -601,6 +603,7 @@ pub struct ReadFile {
 }
 
 impl ReadFile {
+    #[cfg(not(feature = "desktop"))]
     pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
         Self { path_guard }
     }
@@ -676,6 +679,7 @@ pub struct WriteFile {
 }
 
 impl WriteFile {
+    #[cfg(not(feature = "desktop"))]
     pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
         Self { path_guard }
     }
@@ -813,6 +817,7 @@ pub struct EditFile {
 }
 
 impl EditFile {
+    #[cfg(not(feature = "desktop"))]
     pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
         Self { path_guard }
     }
@@ -894,16 +899,19 @@ impl ToolDefinition for EditFile {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub struct PlanNote {
     planning_root: PathBuf,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl PlanNote {
     pub fn new(planning_root: PathBuf) -> Self {
         Self { planning_root }
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait]
 impl ToolDefinition for PlanNote {
     fn name(&self) -> &str {
@@ -1025,6 +1033,7 @@ pub struct ListDir {
 }
 
 impl ListDir {
+    #[cfg(not(feature = "desktop"))]
     pub fn new(path_guard: Option<Arc<RwLock<PathGuard>>>) -> Self {
         Self { path_guard }
     }

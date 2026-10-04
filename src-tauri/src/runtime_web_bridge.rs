@@ -22,15 +22,12 @@ use std::time::Duration;
 
 use chatspeed_contracts::{
     ClientCapabilityError, ClientCapabilityInvocation, ClientCapabilityResult,
-    ClientCapabilityStatus, BRIDGE_SCHEMA_VERSION,
+    ClientCapabilityStatus, BRIDGE_SCHEMA_VERSION, WEB_FETCH_ARGUMENTS, WEB_SEARCH_ARGUMENTS,
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Wry};
 
-use crate::runtime_client::{
-    web_bridge_declaration, BridgeDispatchFuture, BridgeDispatcher, RuntimeSupervisor,
-    RuntimeUnavailable,
-};
+use crate::runtime_client::{BridgeDispatchFuture, BridgeDispatcher};
 use crate::tools::web_config::{MapWebToolConfig, WebToolConfig};
 use crate::tools::{ToolDefinition, WebFetch, WebSearch};
 
@@ -43,17 +40,6 @@ const GET_ALL_CONFIG_ROUTE: &str = "/control/v1/data-commands/get_all_config";
 /// the client reports its own timeout as a typed error instead of the runtime
 /// reporting a bare deadline.
 const DISPATCH_TIMEOUT: Duration = Duration::from_secs(55);
-
-/// The declared argument keys of each bridged capability.
-const WEB_FETCH_ARGUMENTS: [&str; 4] = ["url", "format", "keep_link", "keep_image"];
-const WEB_SEARCH_ARGUMENTS: [&str; 6] = [
-    "query",
-    "page",
-    "number",
-    "time_period",
-    "response_format",
-    "provider",
-];
 
 /// Executes allowlisted web capabilities on behalf of the runtime bridge.
 #[derive(Clone)]
@@ -182,21 +168,7 @@ impl BridgeDispatcher for WebBridgeDispatcher {
     }
 }
 
-/// Connects the desktop bridge to a supervisor that already holds a lease.
-///
-/// This is the one entry point `setup` calls after connecting; it registers the
-/// fixed web declaration and starts the reader.
-pub async fn start(
-    app_handle: AppHandle<Wry>,
-    supervisor: &Arc<RuntimeSupervisor>,
-) -> Result<(), RuntimeUnavailable> {
-    let client = supervisor.client().await?;
-    let dispatcher = Arc::new(WebBridgeDispatcher::new(app_handle, client));
-    supervisor
-        .start_bridge(web_bridge_declaration(), dispatcher)
-        .await
-}
-
+/// Rejects an undeclared argument for an allowlisted web capability.
 fn reject_unknown(
     arguments: &serde_json::Map<String, Value>,
     allowed: &[&str],

@@ -13,7 +13,7 @@
 //! session secret travels in a dedicated header, never a URL or body.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Wire protocol major for the bridge transport.
 pub const BRIDGE_PROTOCOL_VERSION: &str = "1";
@@ -167,6 +167,186 @@ pub struct ClientBridgeUnregisterRequest {
     pub reason: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Argument schema
+// ---------------------------------------------------------------------------
+
+/// The declared argument keys of the `web_fetch` capability.
+pub const WEB_FETCH_ARGUMENTS: [&str; 4] = ["url", "format", "keep_link", "keep_image"];
+
+/// The declared argument keys of the `web_search` capability.
+pub const WEB_SEARCH_ARGUMENTS: [&str; 6] = [
+    "query",
+    "page",
+    "number",
+    "time_period",
+    "response_format",
+    "provider",
+];
+
+/// Validates the typed arguments object of an allowlisted web capability.
+///
+/// This is the single canonical schema gate for the bridge. The runtime tool
+/// that executes a capability, the control-plane invocation route, and the
+/// desktop dispatcher all reject exactly these keys with exactly these types,
+/// so none of them can drift into accepting an undeclared argument and none of
+/// them duplicates a divergent allowlist. Unknown keys and wrong types are
+/// rejected with the stable `invalid_arguments` code; a capability outside the
+/// web allowlist is rejected with `unsupported_capability`.
+pub fn validate_capability_arguments(
+    capability: &str,
+    arguments: &Map<String, Value>,
+) -> Result<(), ClientCapabilityError> {
+    match capability {
+        "web_fetch" => {
+            reject_unknown(arguments, &WEB_FETCH_ARGUMENTS)?;
+            required_non_empty_string(arguments, "url")?;
+            optional_enum_string(arguments, "format", &["markdown", "text", "links"])?;
+            optional_bool(arguments, "keep_link")?;
+            optional_bool(arguments, "keep_image")?;
+        }
+        "web_search" => {
+            reject_unknown(arguments, &WEB_SEARCH_ARGUMENTS)?;
+            required_search_query(arguments)?;
+            optional_bounded_integer(arguments, "page", 1, u64::MAX)?;
+            optional_bounded_integer(arguments, "number", 1, 30)?;
+            optional_enum_string(arguments, "time_period", &["day", "week", "month", "year"])?;
+            optional_enum_string(arguments, "response_format", &["json", "xml"])?;
+            optional_string(arguments, "provider")?;
+        }
+        other => {
+            return Err(argument_error(
+                "unsupported_capability",
+                format!("`{other}` is not an allowlisted web client capability"),
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Builds a structured argument-schema violation.
+fn argument_error(code: &str, message: impl Into<String>) -> ClientCapabilityError {
+    ClientCapabilityError {
+        code: code.to_string(),
+        message: message.into(),
+    }
+}
+
+/// Rejects any argument outside the capability's declared schema.
+fn reject_unknown(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), ClientCapabilityError> {
+    if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(argument_error(
+            "invalid_arguments",
+            format!("unexpected argument `{unknown}`"),
+        ));
+    }
+    Ok(())
+}
+
+/// Requires a non-empty string argument.
+fn required_non_empty_string(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<(), ClientCapabilityError> {
+    match object.get(key) {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(()),
+        _ => Err(argument_error(
+            "invalid_arguments",
+            format!("`{key}` must be a non-empty string"),
+        )),
+    }
+}
+
+/// Requires a non-empty search query: a string, or a non-empty array of strings.
+fn required_search_query(object: &Map<String, Value>) -> Result<(), ClientCapabilityError> {
+    match object.get("query") {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(()),
+        Some(Value::Array(values)) if !values.is_empty() => {
+            if values
+                .iter()
+                .all(|value| value.as_str().is_some_and(|text| !text.trim().is_empty()))
+            {
+                Ok(())
+            } else {
+                Err(argument_error(
+                    "invalid_arguments",
+                    "`query` array entries must be non-empty strings",
+                ))
+            }
+        }
+        _ => Err(argument_error(
+            "invalid_arguments",
+            "`query` must be a non-empty string or a non-empty array of strings",
+        )),
+    }
+}
+
+/// Validates an optional string argument when present.
+fn optional_string(object: &Map<String, Value>, key: &str) -> Result<(), ClientCapabilityError> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(Value::String(_)) => Ok(()),
+        Some(_) => Err(argument_error(
+            "invalid_arguments",
+            format!("`{key}` must be a string"),
+        )),
+    }
+}
+
+/// Validates an optional string argument against a closed enum when present.
+fn optional_enum_string(
+    object: &Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+) -> Result<(), ClientCapabilityError> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(Value::String(value)) if allowed.contains(&value.as_str()) => Ok(()),
+        Some(_) => Err(argument_error(
+            "invalid_arguments",
+            format!("`{key}` must be one of {}", allowed.join(", ")),
+        )),
+    }
+}
+
+/// Validates an optional boolean argument when present.
+fn optional_bool(object: &Map<String, Value>, key: &str) -> Result<(), ClientCapabilityError> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(Value::Bool(_)) => Ok(()),
+        Some(_) => Err(argument_error(
+            "invalid_arguments",
+            format!("`{key}` must be a boolean"),
+        )),
+    }
+}
+
+/// Validates an optional integer argument within an inclusive range.
+fn optional_bounded_integer(
+    object: &Map<String, Value>,
+    key: &str,
+    min: u64,
+    max: u64,
+) -> Result<(), ClientCapabilityError> {
+    match object.get(key) {
+        None => Ok(()),
+        Some(value)
+            if value
+                .as_u64()
+                .is_some_and(|value| (min..=max).contains(&value)) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(argument_error(
+            "invalid_arguments",
+            format!("`{key}` must be an integer between {min} and {max}"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +449,63 @@ mod tests {
             "extra": 1
         }))
         .is_err());
+    }
+
+    #[test]
+    fn capability_argument_gate_matches_the_declared_schemas() {
+        fn object(value: Value) -> Map<String, Value> {
+            value.as_object().expect("object").clone()
+        }
+
+        // Only the declared keys are accepted.
+        assert!(validate_capability_arguments(
+            "web_fetch",
+            &object(json!({"url": "https://example.com", "format": "markdown", "keep_link": true}))
+        )
+        .is_ok());
+        let unknown = validate_capability_arguments(
+            "web_fetch",
+            &object(json!({"url": "https://example.com", "selector": "body"})),
+        )
+        .expect_err("an undeclared argument is rejected");
+        assert_eq!(unknown.code, "invalid_arguments");
+
+        // Typed validation mirrors the runtime route.
+        assert!(validate_capability_arguments("web_fetch", &object(json!({}))).is_err());
+        assert!(validate_capability_arguments(
+            "web_fetch",
+            &object(json!({"url": "https://example.com", "format": "pdf"}))
+        )
+        .is_err());
+        assert!(validate_capability_arguments(
+            "web_search",
+            &object(json!({
+                "query": ["rust", "async"],
+                "number": 5,
+                "page": 1,
+                "time_period": "week",
+                "response_format": "json",
+                "provider": "bing"
+            }))
+        )
+        .is_ok());
+        assert!(validate_capability_arguments(
+            "web_search",
+            &object(json!({"query": "rust", "limit": 5}))
+        )
+        .is_err());
+        assert!(validate_capability_arguments(
+            "web_search",
+            &object(json!({"query": "rust", "number": 31}))
+        )
+        .is_err());
+
+        // A non-web capability is refused, never silently accepted.
+        assert_eq!(
+            validate_capability_arguments("filesystem_read", &Map::new())
+                .expect_err("a non-web capability is refused")
+                .code,
+            "unsupported_capability"
+        );
     }
 }

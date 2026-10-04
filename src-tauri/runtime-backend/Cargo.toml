@@ -53,6 +53,10 @@ md5              = "0.7"
 memchr           = "2.8.0"
 parking_lot      = "0.12.5"
 phf              = { version = "0.13.1", features = ["macros"] }
+# The runtime is the single owner of the interactive user terminal PTY (U-7).
+# The version matches the workspace root's `portable-pty` so both crates link
+# the same PTY backend; this crate never links Tauri, Wry or GTK.
+portable-pty     = "0.9.0"
 rand             = "0.10.1"
 regex            = "1.12.3"
 reqwest          = { version = "0.13.3", features = ["json", "stream", "multipart", "cookies"] }

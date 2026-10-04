@@ -1,53 +1,82 @@
+#[cfg(not(feature = "desktop"))]
 use crate::ai::interaction::chat_completion::ChatState;
+#[cfg(not(feature = "desktop"))]
 use crate::db::agent::normalize_agent_tool_config;
-use crate::db::{
-    Agent, AgentConfig, MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage,
-    WorkflowSnapshot,
-};
+use crate::db::{Workflow, WorkflowEfficiencyReport, WorkflowMessage};
+#[cfg(not(feature = "desktop"))]
+use crate::db::{Agent, AgentConfig, MainStore, WorkflowSnapshot};
+#[cfg(not(feature = "desktop"))]
 use crate::libs::tsid::TsidGenerator;
+use crate::workflow::react::application::WorkflowCreateRequest;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::application::{
-    ApplicationError, WorkflowApplicationService, WorkflowCreateRequest, WorkflowEventsQuery,
+    ApplicationError, WorkflowApplicationService, WorkflowEventsQuery,
 };
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::child_tasks::get_sub_agent_registry;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::client::hub::WorkflowRuntimeHub;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::dispatcher::{Dispatcher, DispatcherMetricsSnapshot};
+use crate::workflow::react::dispatcher::DispatcherMetricsSnapshot;
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::dispatcher::Dispatcher;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::engine::WorkflowExecutor;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::events::WorkflowEvent;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::gateway::Gateway;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::intelligence::IntelligenceManager;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::orchestrator::{
     clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
     stop_background_task, BackgroundTask, SubAgentFactory, BACKGROUND_TASKS,
 };
 
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::prompts::{
     is_agent_personality_preset, AGENT_PERSONALITY_PRESET_DEFAULT_ID,
     AGENT_PERSONALITY_PRESET_PREFIX,
 };
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::replay::{
     replay_events_to_execution_context, restore_execution_context, RecoveryResult,
 };
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata, runtime_observation_metadata_with_visibility,
     RuntimeObservationLlmVisibility, RuntimeObservationType, RuntimeObservationUiVisibility,
 };
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::security::workspace_walk_builder;
 #[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::signals::{stash_runtime_signal, SignalType};
+use crate::workflow::react::types::{WaitReason, WorkflowState};
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::types::{
-    ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WaitReason,
-    WorkflowSignal, WorkflowState,
+    ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WorkflowSignal,
 };
+#[cfg(not(feature = "desktop"))]
 use chrono::{DateTime, Local};
+#[cfg(not(feature = "desktop"))]
 use glob::glob;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(not(feature = "desktop"))]
+use serde_json::json;
+#[cfg(not(feature = "desktop"))]
 use std::fs;
+#[cfg(not(feature = "desktop"))]
 use std::io::{BufRead, BufReader};
+#[cfg(not(feature = "desktop"))]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 // The `#[tauri::command]` wrappers below are desktop-only; the transport-neutral
@@ -58,12 +87,15 @@ use tauri::State;
 #[cfg(test)]
 use rusqlite::params;
 
+#[cfg(not(feature = "desktop"))]
 const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 300;
 
+#[cfg(not(feature = "desktop"))]
 fn serialize_workflow_message_page_cursor(before_message_id: Option<i64>) -> Option<String> {
     before_message_id.map(|message_id| message_id.to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn parse_workflow_message_page_cursor(before_message_id: &str) -> Result<i64, String> {
     before_message_id
         .parse::<i64>()
@@ -74,6 +106,7 @@ fn parse_workflow_message_page_cursor(before_message_id: &str) -> Result<i64, St
 // 0. Helper Functions for @mentions
 // ==========================================
 
+#[cfg(not(feature = "desktop"))]
 fn workflow_planning_root(allowed_roots: &[PathBuf]) -> PathBuf {
     allowed_roots
         .first()
@@ -82,6 +115,7 @@ fn workflow_planning_root(allowed_roots: &[PathBuf]) -> PathBuf {
         .join(".cs")
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reset_workflow_planning_note(allowed_roots: &[PathBuf]) -> Result<(), String> {
     let planning_root = workflow_planning_root(allowed_roots);
     let note_path = planning_root.join("note.md");
@@ -91,6 +125,7 @@ fn reset_workflow_planning_note(allowed_roots: &[PathBuf]) -> Result<(), String>
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn should_treat_as_title_source(message: &WorkflowMessage) -> bool {
     message.role == "user"
         && message
@@ -100,6 +135,7 @@ fn should_treat_as_title_source(message: &WorkflowMessage) -> bool {
         && !message.message.trim().is_empty()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn try_acquire_workflow_title_generation(session_id: &str, chat_state: &ChatState) -> bool {
     match chat_state
         .workflow_title_generation_in_flight
@@ -113,12 +149,14 @@ fn try_acquire_workflow_title_generation(session_id: &str, chat_state: &ChatStat
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn release_workflow_title_generation(session_id: &str, chat_state: &ChatState) {
     chat_state
         .workflow_title_generation_in_flight
         .remove(session_id);
 }
 
+#[cfg(not(feature = "desktop"))]
 fn spawn_workflow_title_generation_if_missing(
     session_id: String,
     user_query: String,
@@ -220,6 +258,7 @@ fn spawn_workflow_title_generation_if_missing(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
     if message.role != "tool" || message.is_error {
         return false;
@@ -250,6 +289,7 @@ fn is_successful_completion_tool_message(message: &WorkflowMessage) -> bool {
     execution_status == "completed" && approval_status != "pending" && approval_status != "rejected"
 }
 
+#[cfg(not(feature = "desktop"))]
 fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<usize> {
     messages
         .iter()
@@ -264,8 +304,10 @@ fn latest_successful_completion_index(messages: &[WorkflowMessage]) -> Option<us
         })
 }
 
+#[cfg(not(feature = "desktop"))]
 const NEW_SEGMENT_AFTER_COMPLETION_REMINDER: &str = "<SYSTEM_REMINDER>This is a new context segment following earlier completed work. A segment boundary is not necessarily an objective boundary. Determine the completion-report scope from the user's current request. If the request is independent, complete and summarize only the work and verification for this segment's task. If the user explicitly continues, corrects, refines, or extends the immediately preceding objective, treat the related segments as one continuous objective and summarize the combined outcome, including relevant earlier work and the current changes. Do not include unrelated completed tasks. In either case, this segment requires a new current completion report; never reuse an earlier task's completion report or pending draft as this segment's report.</SYSTEM_REMINDER>";
 
+#[cfg(not(feature = "desktop"))]
 fn prompt_with_new_segment_completion_scope(clean_prompt: &str) -> String {
     format!(
         "{}\n\n{}",
@@ -273,6 +315,7 @@ fn prompt_with_new_segment_completion_scope(clean_prompt: &str) -> String {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn rollback_workflow_agent_config(
     state: &Arc<MainStore>,
     session_id: &str,
@@ -281,6 +324,7 @@ fn rollback_workflow_agent_config(
     let _ = state.update_workflow_agent_config(session_id, previous_config_json);
 }
 
+#[cfg(not(feature = "desktop"))]
 fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> bool {
     matches!(
         signal_type,
@@ -301,6 +345,7 @@ fn can_defer_runtime_config_signal_for_completed_session(signal_type: &str) -> b
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn should_inject_terminal_user_message_into_live_session(
     managed_status: Option<ManagedSessionStatus>,
 ) -> bool {
@@ -310,6 +355,7 @@ fn should_inject_terminal_user_message_into_live_session(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus>) -> bool {
     matches!(
         managed_status,
@@ -321,6 +367,7 @@ fn managed_status_blocks_tail_rewind(managed_status: Option<ManagedSessionStatus
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn inject_runtime_config_signal(
     gateway: &Arc<WorkflowRuntimeHub>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -365,6 +412,7 @@ async fn inject_runtime_config_signal(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn raw_workflow_agent_config_json(store: &MainStore, session_id: &str) -> Result<String, String> {
     store
         .get_workflow(session_id)
@@ -373,6 +421,7 @@ fn raw_workflow_agent_config_json(store: &MainStore, session_id: &str) -> Result
         .map(|workflow| workflow.agent_config.unwrap_or_else(|| "{}".to_string()))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn raw_workflow_agent_config(store: &MainStore, session_id: &str) -> Result<AgentConfig, String> {
     Ok(
         AgentConfig::from_json(&raw_workflow_agent_config_json(store, session_id)?)
@@ -380,6 +429,7 @@ fn raw_workflow_agent_config(store: &MainStore, session_id: &str) -> Result<Agen
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn wait_reason_blocks_manual_clear(wait_reason: Option<&WaitReason>) -> bool {
     matches!(
         wait_reason,
@@ -392,6 +442,7 @@ fn wait_reason_blocks_manual_clear(wait_reason: Option<&WaitReason>) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn runtime_state_allows_manual_clear(state: &RuntimeState) -> bool {
     matches!(
         state,
@@ -402,6 +453,7 @@ fn runtime_state_allows_manual_clear(state: &RuntimeState) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn workflow_state_allows_manual_clear(state: &WorkflowState) -> bool {
     matches!(
         state,
@@ -412,6 +464,7 @@ fn workflow_state_allows_manual_clear(state: &WorkflowState) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
     store
         .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
@@ -431,6 +484,7 @@ fn persist_cancelled_workflow_state(store: &MainStore, session_id: &str) -> Resu
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn persist_failed_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
     store
         .update_workflow_status(session_id, &WorkflowState::Error.to_string())
@@ -450,6 +504,7 @@ fn persist_failed_workflow_state(store: &MainStore, session_id: &str) -> Result<
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn persist_pending_workflow_state(store: &MainStore, session_id: &str) -> Result<(), String> {
     if let Some(mut context) = store
         .get_execution_context(session_id)
@@ -468,6 +523,7 @@ fn persist_pending_workflow_state(store: &MainStore, session_id: &str) -> Result
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn workflow_auto_compress_enabled(config: &Value) -> bool {
     config
         .get("autoCompress")
@@ -480,6 +536,7 @@ fn workflow_auto_compress_enabled(config: &Value) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessage> {
     let mut latest_tool_message_index = std::collections::HashMap::<String, usize>::new();
 
@@ -545,6 +602,7 @@ fn merge_ui_workflow_messages(messages: &[WorkflowMessage]) -> Vec<WorkflowMessa
     merged
 }
 
+#[cfg(not(feature = "desktop"))]
 fn normalize_snapshot_after_live_reconciliation(
     store: &MainStore,
     session_id: &str,
@@ -569,6 +627,7 @@ fn normalize_snapshot_after_live_reconciliation(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{}B", bytes)
@@ -581,6 +640,7 @@ fn format_size(bytes: u64) -> String {
 
 /// Efficiently count lines using BufReader streaming (no full content load)
 /// Returns None if file cannot be read or is binary
+#[cfg(not(feature = "desktop"))]
 fn count_lines(path: &Path) -> Option<u64> {
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
@@ -588,6 +648,7 @@ fn count_lines(path: &Path) -> Option<u64> {
     Some(reader.lines().count() as u64)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn get_file_metadata_info(path: &Path) -> String {
     let metadata = match fs::metadata(path) {
         Ok(m) => m,
@@ -613,6 +674,7 @@ fn get_file_metadata_info(path: &Path) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(not(feature = "desktop"))]
 struct LargeFileReadChunk {
     offset: usize,
     limit: usize,
@@ -620,6 +682,7 @@ struct LargeFileReadChunk {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg(not(feature = "desktop"))]
 struct LargeFileReadPlan {
     total_lines: usize,
     average_line_chars: usize,
@@ -629,6 +692,7 @@ struct LargeFileReadPlan {
     chunk_plan: Vec<LargeFileReadChunk>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn build_large_file_read_plan(path: &Path) -> Option<LargeFileReadPlan> {
     let file = fs::File::open(path).ok()?;
     let reader = BufReader::new(file);
@@ -704,6 +768,7 @@ fn build_large_file_read_plan(path: &Path) -> Option<LargeFileReadPlan> {
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn format_large_file_read_plan(
     path_label: &str,
     file_size: u64,
@@ -738,6 +803,7 @@ fn format_large_file_read_plan(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn format_large_file_read_plan_block(
     path_label: &str,
     file_size: u64,
@@ -764,8 +830,10 @@ fn format_large_file_read_plan_block(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 const MAX_AT_MENTION_TARGETS: usize = 10;
 
+#[cfg(not(feature = "desktop"))]
 fn parse_at_mention_capture(capture: &regex::Captures<'_>) -> Option<String> {
     if let Some(quoted) = capture.get(1) {
         let mut value = String::new();
@@ -787,6 +855,7 @@ fn parse_at_mention_capture(capture: &regex::Captures<'_>) -> Option<String> {
     capture.get(2).map(|unquoted| unquoted.as_str().to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn parse_at_mentions(prompt: &str) -> Vec<String> {
     let mention_re =
         Regex::new(r#"@\"((?:\\.|[^\"\\])*)\"|@([^\s]+)"#).expect("at-mention regex must compile");
@@ -797,6 +866,7 @@ fn parse_at_mentions(prompt: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn canonical_allowed_roots(allowed_paths: &[String]) -> Vec<PathBuf> {
     allowed_paths
         .iter()
@@ -804,6 +874,7 @@ fn canonical_allowed_roots(allowed_paths: &[String]) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_path_within_allowed_roots(path: &Path, allowed_roots: &[PathBuf]) -> Option<PathBuf> {
     let canonical_path = fs::canonicalize(path).ok()?;
     allowed_roots
@@ -812,6 +883,7 @@ fn is_path_within_allowed_roots(path: &Path, allowed_roots: &[PathBuf]) -> Optio
         .then_some(canonical_path)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn format_at_mention_path(path: &Path, allowed_roots: &[PathBuf]) -> String {
     if let Some(primary_root) = allowed_roots.first() {
         if let Ok(relative) = path.strip_prefix(primary_root) {
@@ -821,6 +893,7 @@ fn format_at_mention_path(path: &Path, allowed_roots: &[PathBuf]) -> String {
     path.to_string_lossy().into_owned()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn format_at_mention_token(path: &str) -> String {
     if path.chars().any(char::is_whitespace) {
         format!("@\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
@@ -829,6 +902,7 @@ fn format_at_mention_token(path: &str) -> String {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<PathBuf> {
     let pattern_path = Path::new(pattern);
     let candidate_patterns = if pattern_path.is_absolute() {
@@ -861,6 +935,7 @@ fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<P
     targets
 }
 
+#[cfg(not(feature = "desktop"))]
 fn normalize_at_mentions(prompt: &str, allowed_roots: &[PathBuf]) -> String {
     let mention_re =
         Regex::new(r#"@\"((?:\\.|[^\"\\])*)\"|@([^\s]+)"#).expect("at-mention regex must compile");
@@ -895,6 +970,7 @@ fn normalize_at_mentions(prompt: &str, allowed_roots: &[PathBuf]) -> String {
         .into_owned()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String) {
     let mut attached_context = String::new();
     let allowed_roots = canonical_allowed_roots(allowed_paths);
@@ -1038,6 +1114,7 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn allowed_paths_from_workflow_snapshot(snapshot: &WorkflowSnapshot) -> Vec<String> {
     snapshot
         .workflow
@@ -1048,6 +1125,7 @@ fn allowed_paths_from_workflow_snapshot(snapshot: &WorkflowSnapshot) -> Vec<Stri
         .unwrap_or_default()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn inject_at_mentions_into_signal(signal: &str, allowed_paths: &[String]) -> String {
     let mut parsed = match serde_json::from_str::<serde_json::Value>(signal) {
         Ok(value) => value,
@@ -1116,6 +1194,7 @@ pub struct CreateWorkflowRequest {
     pub inherited_agent_config: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn build_agent_config_from_agent(
     agent: &Agent,
     allowed_paths: Option<&Value>,
@@ -1180,6 +1259,7 @@ fn build_agent_config_from_agent(
     config
 }
 
+#[cfg(not(feature = "desktop"))]
 fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     let mut inherited_config = AgentConfig::from_json(inherited)?;
 
@@ -1230,6 +1310,7 @@ fn validated_inherited_agent_config(inherited: &str) -> Option<AgentConfig> {
     Some(inherited_config)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn build_workflow_config_for_request(
     agent: &Agent,
     request: &CreateWorkflowRequest,
@@ -1270,6 +1351,7 @@ fn build_workflow_config_for_request(
     config
 }
 
+#[cfg(not(feature = "desktop"))]
 fn merge_unique_tools(tool_lists: impl IntoIterator<Item = Option<Vec<String>>>) -> Vec<String> {
     let mut merged = Vec::new();
     for tools in tool_lists.into_iter().flatten() {
@@ -1282,6 +1364,7 @@ fn merge_unique_tools(tool_lists: impl IntoIterator<Item = Option<Vec<String>>>)
     merged
 }
 
+#[cfg(not(feature = "desktop"))]
 fn enforce_auto_approve_tool_visibility(config: &mut AgentConfig) {
     let available_tools = config.available_tools.as_ref();
     if let Some(auto_approve) = config.auto_approve.as_mut() {
@@ -1299,6 +1382,7 @@ fn enforce_auto_approve_tool_visibility(config: &mut AgentConfig) {
 
 /// Keeps the current Agent's shell rules authoritative and appends non-conflicting workflow
 /// `Allow` rules, so user-defined commands stay cumulative without weakening the Agent policy.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn merge_shell_allow_rules(
     agent_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
     inherited_rules: Option<Vec<crate::tools::ShellPolicyRule>>,
@@ -1334,6 +1418,7 @@ pub(crate) fn merge_shell_allow_rules(
 /// selected until the user chooses them. Auto-approval is then filtered against that
 /// resulting visible tool set; shell command policy and sandbox configuration keep
 /// their separate inheritance rules below.
+#[cfg(not(feature = "desktop"))]
 fn merge_inherited_workflow_config(
     agent_config: &AgentConfig,
     inherited_config: &AgentConfig,
@@ -1449,6 +1534,7 @@ fn merge_inherited_workflow_config(
     merged
 }
 
+#[cfg(not(feature = "desktop"))]
 fn resolve_inherited_workflow_personality(
     agent_config: &AgentConfig,
     inherited_config: &AgentConfig,
@@ -1467,6 +1553,7 @@ fn resolve_inherited_workflow_personality(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn resolve_agent_sandbox_snapshot(
     store: &MainStore,
     agent: &Agent,
@@ -1534,6 +1621,7 @@ fn resolve_agent_sandbox_snapshot(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reset_workflow_phase_for_new_context(store: &MainStore, session_id: &str) -> Result<(), String> {
     let mut config = raw_workflow_agent_config(store, session_id)?;
     config.phase = Some("standard".to_string());
@@ -1542,6 +1630,7 @@ fn reset_workflow_phase_for_new_context(store: &MainStore, session_id: &str) -> 
         .map_err(|error| error.to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sync_workflow_agent_config_at_tool_boundary(
     store: &MainStore,
     session_id: &str,
@@ -1580,6 +1669,7 @@ fn sync_workflow_agent_config_at_tool_boundary(
     Ok(merged)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
     agent
         .shell_policy
@@ -1587,6 +1677,7 @@ fn agent_shell_policy_value(agent: &Agent) -> Option<Value> {
         .and_then(|policy| serde_json::from_str::<Value>(policy).ok())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn agent_config_to_json_with_agent_shell_policy(
     config: &AgentConfig,
     agent: &Agent,
@@ -1600,6 +1691,7 @@ fn agent_config_to_json_with_agent_shell_policy(
     serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> bool {
     let defaults = build_agent_config_from_agent(agent, None, None);
     let mut changed = false;
@@ -1700,6 +1792,7 @@ fn fill_missing_agent_config_fields(config: &mut AgentConfig, agent: &Agent) -> 
     changed
 }
 
+#[cfg(not(feature = "desktop"))]
 fn normalize_workflow_agent_config_inner(
     store: &MainStore,
     workflow: &mut Workflow,
@@ -1740,6 +1833,7 @@ fn normalize_workflow_agent_config_inner(
 /// Normalize agent config in memory only, without DB write.
 /// Use this for read-only operations like `get_workflow_snapshot`
 /// to avoid silently updating `updated_at` and changing sort order.
+#[cfg(not(feature = "desktop"))]
 fn normalize_workflow_agent_config_in_memory(
     store: &MainStore,
     workflow: &mut Workflow,
@@ -1748,6 +1842,7 @@ fn normalize_workflow_agent_config_in_memory(
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn create_workflow_core(
     svc: &WorkflowApplicationService,
     request: WorkflowCreateRequest,
@@ -1832,6 +1927,7 @@ pub(crate) async fn create_workflow_core(
 /// Builds the effective agent config for a create request and resolves its
 /// sandbox snapshot, so every create path uses one canonical config resolver
 /// (no parallel path).
+#[cfg(not(feature = "desktop"))]
 fn build_resolved_workflow_config(
     store: &MainStore,
     agent: &Agent,
@@ -1862,6 +1958,7 @@ pub async fn create_workflow(
     .await
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn list_workflows_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Vec<Workflow>, ApplicationError> {
@@ -1879,6 +1976,7 @@ pub async fn list_workflows(
     crate::runtime_workflow::list_workflows(supervisor.inner().as_ref()).await
 }
 
+#[cfg(not(feature = "desktop"))]
 fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
     match runtime_state {
         RuntimeState::Completed => Some(WorkflowState::Completed),
@@ -1888,6 +1986,7 @@ fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn terminal_workflow_state_from_event_type(event_type: &str) -> Option<WorkflowState> {
     match event_type {
         "workflow_completed" => Some(WorkflowState::Completed),
@@ -1897,6 +1996,7 @@ fn terminal_workflow_state_from_event_type(event_type: &str) -> Option<WorkflowS
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn durable_child_terminal_state(
     store: &MainStore,
     child_id: &str,
@@ -1939,6 +2039,7 @@ fn durable_child_terminal_state(
     Ok(terminal_workflow_state(&context.state))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn child_was_detached_by_latest_manual_clear(
     store: &MainStore,
     parent_session_id: &str,
@@ -1996,6 +2097,7 @@ fn child_was_detached_by_latest_manual_clear(
     }))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reconcile_durable_child_completion(
     store: &MainStore,
     child: &Workflow,
@@ -2213,6 +2315,7 @@ fn reconcile_durable_child_completion(
     Ok(true)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reconcile_child_workflows(
     store: &MainStore,
     child_workflows: Vec<Workflow>,
@@ -2478,6 +2581,7 @@ fn reconcile_child_workflows(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn reconcile_interrupted_child_workflows(
     store: &MainStore,
 ) -> Result<(), crate::db::StoreError> {
@@ -2485,6 +2589,7 @@ pub(crate) fn reconcile_interrupted_child_workflows(
     reconcile_child_workflows(store, child_workflows)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reconcile_child_workflows_for_parent(
     store: &MainStore,
     parent_session_id: &str,
@@ -2543,6 +2648,7 @@ pub struct WorkflowContextFrameResult {
     pub has_live_session: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn newest_persisted_segment_id(messages: &[WorkflowMessage]) -> i32 {
     messages
         .iter()
@@ -2551,6 +2657,7 @@ fn newest_persisted_segment_id(messages: &[WorkflowMessage]) -> i32 {
         .unwrap_or(1)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn effective_segment_id_from_snapshot(
     messages: &[WorkflowMessage],
     execution_context_segment_id: Option<i32>,
@@ -2560,6 +2667,7 @@ fn effective_segment_id_from_snapshot(
         .max(1)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn hydrate_execution_context_for_snapshot(
     main_store: Arc<MainStore>,
     session_id: &str,
@@ -2640,6 +2748,7 @@ async fn hydrate_execution_context_for_snapshot(
     Some(hydrated)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn begin_new_context_frame_for_cold_session(
     main_store: Arc<MainStore>,
     tsid_generator: Arc<TsidGenerator>,
@@ -2723,6 +2832,7 @@ async fn begin_new_context_frame_for_cold_session(
     Ok((context.current_segment_id, context.messages.last().cloned()))
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn clear_persisted_workflow_todo_list(
     main_store: &MainStore,
     session_id: &str,
@@ -2737,6 +2847,7 @@ async fn clear_persisted_workflow_todo_list(
     .map_err(|e| e.to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn finalize_manual_clear_context_state(
     main_store: &Arc<MainStore>,
     workflow_manager: &Arc<WorkflowManager>,
@@ -2791,6 +2902,7 @@ pub async fn list_pending_sub_agent_approvals(
     crate::runtime_workflow::list_pending_sub_agent_approvals(supervisor.inner().as_ref()).await
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_snapshot_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -3038,6 +3150,7 @@ pub async fn update_workflow_status(
 // 3. ReAct Runtime Control Commands
 // ==========================================
 
+#[cfg(not(feature = "desktop"))]
 async fn has_reconciled_live_session(
     workflow_manager: &Arc<WorkflowManager>,
     session_id: &str,
@@ -3112,6 +3225,7 @@ async fn has_reconciled_live_session(
     true
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn append_initial_prompt_to_executor(
     executor: &mut dyn crate::workflow::react::engine::ReActExecutor,
     raw_prompt: &str,
@@ -3167,6 +3281,7 @@ async fn append_initial_prompt_to_executor(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn try_resume_completed_live_session(
     session_id: &str,
     raw_prompt: &str,
@@ -3343,6 +3458,7 @@ async fn try_resume_completed_live_session(
     Ok(true)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_stale_gateway_injection_error(
     error: &crate::workflow::react::error::WorkflowEngineError,
 ) -> bool {
@@ -3353,6 +3469,7 @@ fn is_stale_gateway_injection_error(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn interrupt_openai_session(chat_state: &Arc<ChatState>, session_id: &str) {
     let mut chats = chat_state.chats.lock().await;
     if let Some(protocol_chats) = chats.get_mut(&crate::ccproxy::ChatProtocol::OpenAI) {
@@ -3366,6 +3483,7 @@ async fn interrupt_openai_session(chat_state: &Arc<ChatState>, session_id: &str)
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &Arc<ChatState>) {
     let registry = get_sub_agent_registry();
     let mut visited = std::collections::HashSet::new();
@@ -3397,6 +3515,7 @@ async fn cleanup_owned_background_resources(root_session_id: &str, chat_state: &
     clear_completed_background_tasks_for_owner(root_session_id);
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn cleanup_workflow_resources(
     session_id: &str,
     chat_state: &Arc<ChatState>,
@@ -3430,8 +3549,10 @@ async fn cleanup_workflow_resources(
         .await;
 }
 
+#[cfg(not(feature = "desktop"))]
 const COMPLETED_SESSION_CLEANUP_DELAY_SECS: u64 = 600;
 
+#[cfg(not(feature = "desktop"))]
 fn schedule_completed_session_cleanup(
     session_id: String,
     completed_at_ms: i64,
@@ -3475,10 +3596,12 @@ fn schedule_completed_session_cleanup(
     });
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compat_wait_reason_from_snapshot_status(status: &str) -> Option<WaitReason> {
     compat_snapshot_workflow_state(status).and_then(wait_reason_for_workflow_state)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compat_snapshot_workflow_state(status: &str) -> Option<WorkflowState> {
     use std::str::FromStr;
 
@@ -3489,6 +3612,7 @@ fn compat_snapshot_workflow_state(status: &str) -> Option<WorkflowState> {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn wait_reason_for_workflow_state(state: WorkflowState) -> Option<WaitReason> {
     match state {
         WorkflowState::Paused => Some(WaitReason::Confirmation),
@@ -3501,6 +3625,7 @@ fn wait_reason_for_workflow_state(state: WorkflowState) -> Option<WaitReason> {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compat_is_terminal_snapshot_status(status: &str) -> bool {
     matches!(
         compat_snapshot_workflow_state(status),
@@ -3508,6 +3633,7 @@ fn compat_is_terminal_snapshot_status(status: &str) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn should_run_terminal_manual_compression(
     signal: Option<&WorkflowSignal>,
     snapshot_status: &str,
@@ -3516,6 +3642,7 @@ fn should_run_terminal_manual_compression(
         && compat_is_terminal_snapshot_status(snapshot_status)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn should_bypass_manager_for_terminal_manual_compression(
     signal: Option<&WorkflowSignal>,
     snapshot_status: &str,
@@ -3532,6 +3659,7 @@ fn should_bypass_manager_for_terminal_manual_compression(
         )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
     matches!(
         compat_snapshot_workflow_state(status),
@@ -3545,6 +3673,7 @@ fn compat_is_resumable_snapshot_status_for_user_message(status: &str) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn compat_is_awaiting_user_snapshot_status(status: &str) -> bool {
     matches!(
         compat_snapshot_workflow_state(status),
@@ -3552,6 +3681,7 @@ fn compat_is_awaiting_user_snapshot_status(status: &str) -> bool {
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option<ExecutionContext> {
     match restore_execution_context(store, session_id) {
         RecoveryResult::SnapshotHit { context } | RecoveryResult::ReplayFallback { context } => {
@@ -3575,6 +3705,7 @@ fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) -> bool {
     match ctx {
         Some(context) => match context.state {
@@ -3590,6 +3721,7 @@ fn is_resumable_from_context_for_user_message(ctx: Option<&ExecutionContext>) ->
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn can_resume_user_message_from_recovery(
     ctx: Option<&ExecutionContext>,
     snapshot_status: &str,
@@ -3600,6 +3732,7 @@ fn can_resume_user_message_from_recovery(
         || (ctx.is_none() && compat_is_resumable_snapshot_status_for_user_message(snapshot_status))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn should_reinject_user_message_after_recovery(effective_wait_reason: Option<&WaitReason>) -> bool {
     matches!(
         effective_wait_reason,
@@ -3607,12 +3740,14 @@ fn should_reinject_user_message_after_recovery(effective_wait_reason: Option<&Wa
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn signal_json_content(signal: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(signal)
         .ok()
         .and_then(|value| value["content"].as_str().map(|content| content.to_string()))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn signal_json_attached_context(signal: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(signal)
         .ok()
@@ -3628,12 +3763,14 @@ fn signal_json_attached_context(signal: &str) -> Option<String> {
         })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn signal_json_metadata(signal: &str) -> Option<Value> {
     serde_json::from_str::<serde_json::Value>(signal)
         .ok()
         .and_then(|value| value.get("metadata").cloned())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn combine_attached_context(base: String, extra: Option<String>) -> String {
     let extra = extra.unwrap_or_default();
     if base.is_empty() {
@@ -3645,6 +3782,7 @@ fn combine_attached_context(base: String, extra: Option<String>) -> String {
     format!("{}\n\n{}", base, extra)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_start_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -4118,6 +4256,7 @@ pub async fn workflow_start(
     .await
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn run_terminal_manual_compression(
     app_data_dir: PathBuf,
     main_store: Arc<MainStore>,
@@ -4217,6 +4356,7 @@ pub async fn workflow_approve_plan(
     .await
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_signal_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -4866,10 +5006,12 @@ pub async fn workflow_signal(
 /// stop signal. See CONSTITUTION.md §5.3: stop stays actionable during active
 /// execution, waiting, retry/backoff windows, and temporary signal drains; only
 /// true terminal states are skipped.
+#[cfg(not(feature = "desktop"))]
 fn is_terminal_workflow_status(status: &str) -> bool {
     matches!(status, "completed" | "error" | "cancelled")
 }
 
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_stop_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5039,7 +5181,9 @@ pub async fn search_workspace_files(
     crate::runtime_workflow::search_workspace_files(supervisor.inner().as_ref(), paths, query).await
 }
 
-use crate::workflow::react::skills::{SkillManifest, SkillScanner};
+use crate::workflow::react::skills::SkillManifest;
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::skills::SkillScanner;
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -5264,6 +5408,7 @@ pub async fn remove_shell_policy_item(
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_events_core(
     svc: &WorkflowApplicationService,
     query: WorkflowEventsQuery,
@@ -5325,6 +5470,7 @@ pub async fn get_workflow_efficiency_report(
 ///
 /// The daemon rejects any other name before executing a handler, so an
 /// arbitrary path segment can never select an unintended code path.
+#[cfg(not(feature = "desktop"))]
 pub(crate) const WORKFLOW_COMMANDS: [&str; 34] = [
     "delete_workflow",
     "delete_last_workflow_message",
@@ -5363,11 +5509,13 @@ pub(crate) const WORKFLOW_COMMANDS: [&str; 34] = [
 ];
 
 /// Whether `name` is one of the allowlisted compatibility commands.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn is_known_workflow_command(name: &str) -> bool {
     WORKFLOW_COMMANDS.contains(&name)
 }
 
 /// Parses a command parameter object into a strongly-typed struct.
+#[cfg(not(feature = "desktop"))]
 fn parse_command_params<T: serde::de::DeserializeOwned>(
     params: Value,
 ) -> Result<T, ApplicationError> {
@@ -5377,22 +5525,26 @@ fn parse_command_params<T: serde::de::DeserializeOwned>(
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct SessionIdParams {
     session_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct AddMessageParams {
     message: WorkflowMessage,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct TitleParams {
     session_id: String,
     title: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct TitleAndQueryParams {
     session_id: String,
     title: String,
@@ -5400,59 +5552,69 @@ struct TitleAndQueryParams {
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct QueryParams {
     session_id: String,
     user_query: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct StatusParams {
     session_id: String,
     status: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct TodoParams {
     session_id: String,
     todo_list: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct AllowedPathsParams {
     session_id: String,
     allowed_paths: Value,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct SessionKeyParams {
     workflow_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct FinalAuditParams {
     session_id: String,
     final_audit: bool,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct AutoCompressParams {
     session_id: String,
     auto_compress: bool,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct PersonalityParams {
     session_id: String,
     personality: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct ModelConfigParams {
     session_id: String,
     configs: Value,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct SkillsConfigParams {
     session_id: String,
     skill_enabled: bool,
@@ -5460,18 +5622,21 @@ struct SkillsConfigParams {
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct ApprovalLevelParams {
     session_id: String,
     approval_level: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct PhaseParams {
     session_id: String,
     phase: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct SandboxConfigParams {
     session_id: String,
     execution_mode: crate::tools::ShellExecutionMode,
@@ -5479,30 +5644,35 @@ struct SandboxConfigParams {
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct AgentConfigParams {
     session_id: String,
     agent_config: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct AgentIdParams {
     session_id: String,
     agent_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct RemoveToolParams {
     session_id: String,
     tool_name: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct RemoveShellPolicyParams {
     session_id: String,
     pattern: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct ApprovePlanParams {
     session_id: String,
     agent_id: String,
@@ -5510,18 +5680,21 @@ struct ApprovePlanParams {
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct MessagePageParams {
     session_id: String,
     before_message_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg(not(feature = "desktop"))]
 struct SearchFilesParams {
     paths: Vec<String>,
     query: String,
 }
 
 /// Deletes a workflow session after reclaiming its owned runtime resources.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn delete_workflow_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5544,6 +5717,7 @@ pub(crate) async fn delete_workflow_core(
 }
 
 /// Deletes the last workflow message after reclaiming owned runtime resources.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn delete_last_workflow_message_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5562,6 +5736,7 @@ pub(crate) async fn delete_last_workflow_message_core(
 
 /// Starts a manual clear-context frame, or no-ops when the boundary already
 /// exists. This is the single canonical manual-clear path (CONSTITUTION §8.6).
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn begin_new_context_frame_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5758,6 +5933,7 @@ pub(crate) async fn begin_new_context_frame_core(
 }
 
 /// Lists pending sub-agent approvals from the durable child execution contexts.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn list_pending_sub_agent_approvals_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Vec<Value>, ApplicationError> {
@@ -5803,6 +5979,7 @@ pub(crate) async fn list_pending_sub_agent_approvals_core(
 }
 
 /// Loads an older UI message page.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_earlier_workflow_message_page_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5829,6 +6006,7 @@ pub(crate) async fn get_earlier_workflow_message_page_core(
 }
 
 /// Loads an older completed-task message window.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_earlier_workflow_messages_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5850,6 +6028,7 @@ pub(crate) async fn get_earlier_workflow_messages_core(
 }
 
 /// Reads the persisted workflow agent config as JSON.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_agent_config_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5860,6 +6039,7 @@ pub(crate) async fn get_workflow_agent_config_core(
 }
 
 /// Appends a workflow message, spawning title generation when required.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn add_workflow_message_core(
     svc: &WorkflowApplicationService,
     message: WorkflowMessage,
@@ -5886,6 +6066,7 @@ pub(crate) async fn add_workflow_message_core(
 }
 
 /// Updates a workflow title.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_title_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5901,6 +6082,7 @@ pub(crate) async fn update_workflow_title_core(
 }
 
 /// Updates a workflow title and user query together.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_title_and_query_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5917,6 +6099,7 @@ pub(crate) async fn update_workflow_title_and_query_core(
 }
 
 /// Updates a workflow user query.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_query_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5932,6 +6115,7 @@ pub(crate) async fn update_workflow_query_core(
 }
 
 /// Updates a workflow status.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_status_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5947,6 +6131,7 @@ pub(crate) async fn update_workflow_status_core(
 }
 
 /// Reads the persisted todo list for a workflow.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_get_tasks_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5957,6 +6142,7 @@ pub(crate) async fn workflow_get_tasks_core(
 }
 
 /// Persists a workflow todo list.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_todo_list_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -5972,6 +6158,7 @@ pub(crate) async fn update_workflow_todo_list_core(
 }
 
 /// Searches the allowed workspace roots for files matching a query.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn search_workspace_files_core(
     paths: Vec<String>,
     query: String,
@@ -6081,6 +6268,7 @@ pub(crate) fn search_workspace_files_core(
 }
 
 /// Lists the runtime's installed system skills.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_system_skills_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Vec<SkillManifest>, ApplicationError> {
@@ -6096,6 +6284,7 @@ pub(crate) async fn get_system_skills_core(
 
 /// Updates the allowed paths of a workflow's effective config and signals the
 /// live session.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_allowed_paths_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6129,6 +6318,7 @@ pub(crate) async fn update_workflow_allowed_paths_core(
 ///
 /// This is a credential: it is only served to a loopback bearer client of the
 /// owning runtime and is never logged.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_session_key_core(
     svc: &WorkflowApplicationService,
     workflow_id: String,
@@ -6143,6 +6333,7 @@ pub(crate) async fn get_workflow_session_key_core(
 }
 
 /// Updates the final-audit flag.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_final_audit_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6175,6 +6366,7 @@ pub(crate) async fn update_workflow_final_audit_core(
 }
 
 /// Updates the auto-compress flag.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_auto_compress_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6202,6 +6394,7 @@ pub(crate) async fn update_workflow_auto_compress_core(
 }
 
 /// Updates the execution-style (personality) selection with Agent validation.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_personality_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6266,6 +6459,7 @@ pub(crate) async fn update_workflow_personality_core(
 }
 
 /// Updates the workflow model config.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_model_config_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6299,6 +6493,7 @@ pub(crate) async fn update_workflow_model_config_core(
 }
 
 /// Updates the workflow skill config.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_skills_config_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6332,6 +6527,7 @@ pub(crate) async fn update_workflow_skills_config_core(
 }
 
 /// Updates the workflow approval level.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_approval_level_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6359,6 +6555,7 @@ pub(crate) async fn update_workflow_approval_level_core(
 }
 
 /// Updates the execution phase.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_phase_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6386,6 +6583,7 @@ pub(crate) async fn update_workflow_phase_core(
 }
 
 /// Updates the workflow sandbox override.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_sandbox_config_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6441,6 +6639,7 @@ pub(crate) async fn update_workflow_sandbox_config_core(
 }
 
 /// Replaces the workflow agent config after normalization.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_agent_config_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6535,6 +6734,7 @@ pub(crate) async fn update_workflow_agent_config_core(
 }
 
 /// Rebinds a not-yet-started workflow to another primary agent.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_agent_id_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6604,6 +6804,7 @@ pub(crate) async fn update_workflow_agent_id_core(
 }
 
 /// Lists the workflow's effective auto-approved tools.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_auto_approved_tools_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6621,6 +6822,7 @@ pub(crate) async fn get_auto_approved_tools_core(
 }
 
 /// Removes one tool from the auto-approved set.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn remove_auto_approved_tool_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6650,6 +6852,7 @@ pub(crate) async fn remove_auto_approved_tool_core(
 }
 
 /// Removes one entry from the shell policy.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn remove_shell_policy_item_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6679,6 +6882,7 @@ pub(crate) async fn remove_shell_policy_item_core(
 }
 
 /// Approves the pending plan through the canonical signal path.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_approve_plan_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6723,6 +6927,7 @@ pub(crate) async fn workflow_approve_plan_core(
 }
 
 /// Reads the in-memory dispatcher metrics for one session.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn get_workflow_dispatcher_metrics_core(
     session_id: &str,
 ) -> Result<DispatcherMetricsSnapshot, ApplicationError> {
@@ -6734,6 +6939,7 @@ pub(crate) fn get_workflow_dispatcher_metrics_core(
 }
 
 /// Reads the workflow efficiency report.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_efficiency_report_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6749,6 +6955,7 @@ pub(crate) async fn get_workflow_efficiency_report_core(
 /// then each command calls the same canonical core any other transport would.
 /// The command name must already be allowlisted by the HTTP handler; an unknown
 /// name here is still rejected so no caller can select an unintended path.
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_command_core(
     svc: &WorkflowApplicationService,
     command: &str,
@@ -6961,7 +7168,9 @@ pub(crate) async fn workflow_command_core(
     }
 }
 
-#[cfg(test)]
+// The workflow command core is runtime-only, so its tests compile only in the
+// desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use serde_json::json;

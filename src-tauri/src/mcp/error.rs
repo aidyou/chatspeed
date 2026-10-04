@@ -1,3 +1,6 @@
+// Server-side session errors only exist when the runtime MCP server is
+// compiled; the desktop keeps just the client/desktop error surface.
+#[cfg(not(feature = "desktop"))]
 use crate::mcp::server::persistent_session::{EventIdParseError, SessionError};
 use rmcp::model::{ErrorCode, ErrorData};
 use rust_i18n::t;
@@ -57,6 +60,7 @@ impl From<McpError> for ErrorData {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl From<SessionError> for McpError {
     fn from(error: SessionError) -> Self {
         McpError::General(error.to_string())
@@ -87,12 +91,14 @@ impl From<crate::tools::ToolError> for McpError {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl From<EventIdParseError> for McpError {
     fn from(error: EventIdParseError) -> Self {
         McpError::General(error.to_string())
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl From<crate::mcp::server::persistent_session::LocalSessionWorkerError> for McpError {
     fn from(error: crate::mcp::server::persistent_session::LocalSessionWorkerError) -> Self {
         McpError::General(error.to_string())

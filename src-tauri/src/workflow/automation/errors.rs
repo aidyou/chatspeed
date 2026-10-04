@@ -10,25 +10,37 @@
 /// The set of stable automation error codes. Kept as `&'static str` constants so
 /// the HTTP envelope can reuse them verbatim as its `code` field.
 pub mod code {
+#[cfg(not(feature = "desktop"))]
     pub const INVALID_REQUEST: &str = "invalid_request";
+#[cfg(not(feature = "desktop"))]
     pub const NOT_FOUND: &str = "not_found";
+#[cfg(not(feature = "desktop"))]
     pub const CONFLICT: &str = "conflict";
+#[cfg(not(feature = "desktop"))]
     pub const REVISION_CONFLICT: &str = "revision_conflict";
+#[cfg(not(feature = "desktop"))]
     pub const PLAN_EXPIRED: &str = "plan_expired";
+#[cfg(not(feature = "desktop"))]
     pub const PERMISSION_EXPANSION: &str = "permission_expansion";
+#[cfg(not(feature = "desktop"))]
     pub const BUSY: &str = "busy";
+#[cfg(not(feature = "desktop"))]
     pub const CONFIRMATION_REQUIRED: &str = "confirmation_required";
+#[cfg(not(feature = "desktop"))]
     pub const NEEDS_RECONCILE: &str = "needs_reconcile";
+#[cfg(not(feature = "desktop"))]
     pub const INTERNAL: &str = "internal";
 }
 
 /// A typed automation error carrying a stable code and a human message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(not(feature = "desktop"))]
 pub struct AutomationError {
     code: &'static str,
     message: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl AutomationError {
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -94,10 +106,12 @@ impl AutomationError {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl std::fmt::Display for AutomationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl std::error::Error for AutomationError {}

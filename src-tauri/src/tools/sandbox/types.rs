@@ -165,6 +165,7 @@ pub struct SandboxMountPlan {
     pub access: WorkspaceAccess,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct ShellCommandStage {
@@ -172,6 +173,7 @@ pub struct ShellCommandStage {
     pub executable: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct ShellCommandAnalysis {
@@ -378,6 +380,7 @@ pub fn is_common_profile(profile: &SandboxProfileConfig) -> bool {
             .all(|pattern| is_catch_all_command_pattern(pattern))
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn enabled_common_profile<'a>(
     profiles: impl IntoIterator<Item = &'a SandboxProfileConfig>,
 ) -> Result<Option<&'a SandboxProfileConfig>, String> {
@@ -574,6 +577,7 @@ impl AgentSandboxConfig {
         images
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn from_json(raw: &str) -> Option<Self> {
         serde_json::from_str(raw).ok()
     }

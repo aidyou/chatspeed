@@ -2,21 +2,34 @@
 //!
 //! This module provides database operations for managing ReAct agents.
 
+#[cfg(not(feature = "desktop"))]
+use crate::db::MainStore;
+#[cfg(not(feature = "desktop"))]
+use crate::db::StoreError;
 use crate::db::ThinkingConfig;
-use crate::db::{MainStore, StoreError};
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::Row;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::{params, OptionalExtension};
+#[cfg(not(feature = "desktop"))]
 use rust_i18n::t;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 // Re-export ShellPolicyRule for backward compatibility
+#[cfg(not(feature = "desktop"))]
+use crate::tools::AgentSandboxConfig;
+use crate::tools::ShellExecutionMode;
 pub use crate::tools::ShellPolicyRule;
-use crate::tools::{AgentSandboxConfig, ShellExecutionMode};
 
+#[cfg(not(feature = "desktop"))]
 pub const SUB_AGENT_ROLE_EXPLORER: &str = "explorer";
+#[cfg(not(feature = "desktop"))]
 pub const SUB_AGENT_ROLE_FINAL_REVIEWER: &str = "final_reviewer";
+#[cfg(not(feature = "desktop"))]
 pub const SUB_AGENT_ROLE_CODE_IMPLEMENTER: &str = "code_implementer";
 
+// Sub-agent role validation runs inside the runtime workflow engine only.
+#[cfg(not(feature = "desktop"))]
 pub fn is_supported_sub_agent_role(role: &str) -> bool {
     matches!(
         role,
@@ -73,6 +86,7 @@ struct McpToolConfigPayload {
     auto_expand: Vec<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl McpToolConfig {
     pub fn normalize(&mut self) {
         deduplicate_tools(&mut self.available);
@@ -86,16 +100,19 @@ impl McpToolConfig {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn is_mcp_tool_name(tool: &str) -> bool {
     tool.contains(crate::tools::MCP_TOOL_NAME_SPLIT)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn deduplicate_tools(tools: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     tools.retain(|tool| seen.insert(tool.clone()));
 }
 
 /// Splits legacy mixed tool lists into ordinary tools and the canonical MCP permissions.
+#[cfg(not(feature = "desktop"))]
 pub fn normalize_agent_tool_config(
     available_tools: Option<Vec<String>>,
     auto_approve: Option<Vec<String>>,
@@ -147,6 +164,7 @@ pub fn normalize_agent_tool_config(
 /// Agent runtime configuration stored in workflow sessions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
 pub struct AgentConfig {
     /// Execution and communication style for primary-agent execution.
     pub personality: Option<String>,
@@ -183,6 +201,7 @@ pub struct AgentConfig {
     pub report_required_sections: Option<Vec<String>>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl AgentConfig {
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config = serde_json::from_str::<Self>(json).ok()?;
@@ -197,6 +216,7 @@ impl AgentConfig {
         Some(config)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn to_json(&self) -> String {
         let mut canonical = self.clone();
         let (available_tools, auto_approve, mcp_tools) = normalize_agent_tool_config(
@@ -225,6 +245,7 @@ impl AgentConfig {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn sync_legacy_final_audit_flag(&mut self) {
         let mode = self.normalized_final_review_mode().to_string();
         self.final_audit = Some(mode == "sub_agent_review");
@@ -400,6 +421,7 @@ impl Agent {
 
     /// Merges values from a JSON config string into this Agent instance
     /// The config JSON uses camelCase field names (from AgentConfig serialization)
+    #[cfg(not(feature = "desktop"))]
     pub fn merge_config(&mut self, config_json: &str) {
         if let Some(config) = AgentConfig::from_json(config_json) {
             let final_review_enabled = config.normalized_final_review_mode() == "sub_agent_review";
@@ -558,6 +580,7 @@ impl From<&Row<'_>> for Agent {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     /// Adds a new agent to the database.
     pub fn add_agent(&self, agent: &Agent) -> Result<String, StoreError> {
@@ -746,6 +769,9 @@ impl MainStore {
     }
 
     /// Gets an agent by ID on a dedicated reader worker.
+    // Runtime-only agent reads/writes; the desktop uses the synchronous variants
+    // that go through its own `MainStore` where a builtin policy needs them.
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn get_agent_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -774,6 +800,7 @@ impl MainStore {
     }
 
     /// Gets all agents on a dedicated reader worker.
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn get_all_agents_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
     ) -> Result<Vec<Agent>, StoreError> {
@@ -801,6 +828,7 @@ impl MainStore {
     }
 
     /// Gets child agents owned by the specified primary agent.
+    #[cfg(not(feature = "desktop"))]
     pub fn get_child_agents(&self, parent_agent_id: &str) -> Result<Vec<Agent>, StoreError> {
         let parent_agent_id = parent_agent_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
@@ -817,6 +845,7 @@ impl MainStore {
     }
 
     /// Gets child agents that may be selected through the general delegation tool.
+    #[cfg(not(feature = "desktop"))]
     pub fn get_delegatable_child_agents(
         &self,
         parent_agent_id: &str,
@@ -832,6 +861,7 @@ impl MainStore {
     }
 
     /// Gets an enabled child agent by its stable responsibility within one parent.
+    #[cfg(not(feature = "desktop"))]
     pub fn get_child_agent_by_sub_agent_role(
         &self,
         parent_agent_id: &str,
@@ -856,6 +886,7 @@ impl MainStore {
     }
 
     /// Updates the persisted ordering for agents on the writer worker.
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_agent_order_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         agent_ids: Vec<String>,
@@ -876,7 +907,7 @@ impl MainStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use tempfile::tempdir;

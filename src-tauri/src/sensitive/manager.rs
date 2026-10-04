@@ -23,10 +23,14 @@ use super::{
             },
         },
     },
-    i18n_support::ReplacementTextCache,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
 };
+#[cfg(not(feature = "desktop"))]
+use super::i18n_support::ReplacementTextCache;
+use super::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use super::traits::{adjust_to_char_boundary, FilterCandidate};
 use crate::error::Result;
+#[cfg(not(feature = "desktop"))]
 use log::error;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -113,6 +117,7 @@ impl FilterManager {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
     /// This is the main entry point for filtering text.
     pub fn filter_text(&self, text: &str, languages: &[&str], config: &SensitiveConfig) -> String {
         if !self.is_healthy || !config.enabled {
@@ -256,6 +261,7 @@ impl FilterManager {
         result
     }
 
+    #[cfg(not(feature = "desktop"))]
     /// Resolves conflicts among overlapping candidates.
     /// Memory efficiency: O(N) where N is number of candidates, independent of text length.
     fn resolve_conflicts(
@@ -302,10 +308,12 @@ impl FilterManager {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn ranges_overlap(a: std::ops::Range<usize>, b: std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
+#[cfg(not(feature = "desktop"))]
 fn find_priority(filter_type: &str) -> u32 {
     match filter_type {
         "CustomBlock" => 0,
@@ -338,6 +346,7 @@ fn find_priority(filter_type: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "desktop"))]
     use crate::sensitive::traits::FilterCandidate;
 
     #[test]
@@ -346,6 +355,7 @@ mod tests {
         assert!(manager.is_healthy);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_empty() {
         let manager = FilterManager::new();
@@ -354,6 +364,7 @@ mod tests {
         assert_eq!(result, "");
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_no_sensitive_info() {
         let manager = FilterManager::new();
@@ -363,6 +374,7 @@ mod tests {
         assert_eq!(result, text);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_multiple_replacements() {
         let manager = FilterManager::new();
@@ -381,6 +393,7 @@ mod tests {
         assert_ne!(result, text);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_unicode_boundary() {
         let manager = FilterManager::new();
@@ -394,6 +407,7 @@ mod tests {
         assert!(result.len() > 0);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_overlapping_matches() {
         let manager = FilterManager::new();
@@ -410,6 +424,7 @@ mod tests {
         assert!(!result.contains("test@example.com") || !result.contains("13812345678"));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_with_allowlist() {
         let manager = FilterManager::new();
@@ -426,6 +441,7 @@ mod tests {
         assert!(result.contains("[Email]"));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_with_custom_blocklist() {
         let manager = FilterManager::new();
@@ -444,6 +460,7 @@ mod tests {
         assert!(!result.contains("confidential"));
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_disabled() {
         let manager = FilterManager::new();
@@ -457,6 +474,7 @@ mod tests {
         assert_eq!(result, text);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_filter_text_common_disabled() {
         let manager = FilterManager::new();
@@ -480,6 +498,7 @@ mod tests {
         assert_ne!(result2, text2);
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_resolve_conflicts_basic() {
         let candidates = vec![
@@ -510,6 +529,7 @@ mod tests {
         assert_eq!(resolved.len(), 2); // One overlapping pair resolved to one, plus non-overlapping
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
     fn test_resolve_conflicts_same_confidence() {
         let candidates = vec![

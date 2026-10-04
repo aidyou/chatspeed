@@ -23,8 +23,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::State;
-use tauri::{command, AppHandle};
+use tauri::{command, AppHandle, Manager, State};
 
 // =================================================
 // About Configuration
@@ -57,6 +56,18 @@ pub async fn set_config(
     crate::runtime_data::set_config(supervisor.inner().as_ref(), key.to_string(), value.clone())
         .await?;
 
+    // The runtime owns the configuration; mirror the just-written value into the
+    // local cache so the synchronous readers (webview proxy, window geometry and
+    // tray shortcut hints) observe it without waiting for the next async load. A
+    // failed refresh is logged and never changes the successful write result.
+    if let Some(cache) = app.try_state::<Arc<crate::runtime_config::RuntimeConfigCache>>() {
+        if let Err(error) = cache.refresh(supervisor.inner().as_ref()).await {
+            log::warn!(
+                "Failed to refresh the runtime configuration cache after set_config: {error}"
+            );
+        }
+    }
+
     match key {
         CFG_INTERFACE_LANGUAGE => {
             let lang =
@@ -78,10 +89,22 @@ pub async fn set_config(
     Ok(())
 }
 
-/// Reloads the runtime configuration cache from the database.
+/// Reloads the runtime configuration and mirrors it into the local cache.
 #[command]
-pub async fn reload_config(supervisor: State<'_, Arc<RuntimeSupervisor>>) -> Result<(), String> {
-    crate::runtime_data::reload_config(supervisor.inner().as_ref()).await
+pub async fn reload_config(
+    app: tauri::AppHandle,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> Result<(), String> {
+    crate::runtime_data::reload_config(supervisor.inner().as_ref()).await?;
+
+    // Mirror the reloaded runtime configuration into the local cache so the
+    // synchronous readers observe the latest values. The command exists to
+    // propagate that configuration, so a failed refresh is surfaced instead of
+    // being reported as success; the runtime's own error is never masked.
+    if let Some(cache) = app.try_state::<Arc<crate::runtime_config::RuntimeConfigCache>>() {
+        cache.refresh(supervisor.inner().as_ref()).await?;
+    }
+    Ok(())
 }
 
 /// Returns the API-key encryption status.

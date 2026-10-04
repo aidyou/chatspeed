@@ -1,5 +1,7 @@
+#[cfg(not(feature = "desktop"))]
 use phf::phf_map;
 
+#[cfg(not(feature = "desktop"))]
 pub static BASE_URL: phf::Map<&'static str, &'static str> = phf_map! {
     "aliyuncs" => "https://dashscope.aliyuncs.com/compatible-mode/v1", // 阿里云
     "baichuan" => "https://api.baichuan-ai.com/v1", // 百川
@@ -35,6 +37,9 @@ pub const TOKENS_PROMPT: &str = "prompt";
 pub const TOKENS_COMPLETION: &str = "completion";
 pub const TOKENS_PER_SECOND: &str = "tokensPerSecond";
 
+// The bundled system prompts are consumed only by the desktop-free runtime chat
+// execution; the literals are kept byte-for-byte and merely cfg-gated.
+#[cfg(not(feature = "desktop"))]
 pub const SYSTEM_PROMPT: &str = r###"You are Chatspeed, an intelligent AI assistant.
 
 ## Core Capabilities
@@ -60,6 +65,7 @@ pub const SYSTEM_PROMPT: &str = r###"You are Chatspeed, an intelligent AI assist
 - For any query requiring current information, you MUST use available tools first before responding.
 "###;
 
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_USAGE_GUIDANCE: &str = r###"
 # Primary Objective: Leverage Available Tools to Achieve User Goals
 Your primary responsibility is to proactively utilize all available tools to best serve user needs and deliver accurate, current information.

@@ -13,7 +13,9 @@
 //!   `WorkflowApplicationService::automation_dispatch_due` directly instead of
 //!   reaching the service through an `AppHandle`;
 //! - the runtime-neutral chat-completion proxy launcher, so the runtime owns the
-//!   model backend its own sessions resolve against.
+//!   model backend its own sessions resolve against;
+//! - the runtime-owned Models.dev catalog refresh, whose snapshot the desktop
+//!   and the runtime's own profile resolution read.
 //!
 //! Nothing here links Tauri, Wry or a WebView. The desktop-only `WebSearch` and
 //! `WebFetch` tools are absent from the compiled runtime sources, so the runtime
@@ -23,6 +25,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::capability::CapabilityApplicationService;
 use crate::ccproxy::launcher::{self, CcproxyServer};
 use crate::db::MainStore;
+use crate::model_catalog_service::ModelsDevCatalogService;
 use crate::owner::RuntimeOwner;
 use crate::workflow::automation::service::normalize_datetime_for_db;
 use crate::workflow::react::application::WorkflowApplicationService;
@@ -34,6 +37,11 @@ use tokio::task::JoinHandle;
 
 /// Cadence of the runtime automation tick, matching the desktop scheduler.
 const AUTOMATION_TICK: Duration = Duration::from_secs(60);
+
+/// Cadence at which a failed Models.dev catalog refresh is retried, matching the
+/// desktop scheduler. A successful refresh is additionally gated by the
+/// service's persisted 24-hour freshness window.
+const CATALOG_REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
 /// Owns every long-lived task the runtime starts after its owner is assembled.
 ///
@@ -56,7 +64,12 @@ impl RuntimeBackground {
         let handles = vec![
             spawn_capability_reconcile(owner.service().capability().clone()),
             spawn_mcp_registration(owner.chat_state().clone(), owner.main_store().clone()),
-            spawn_automation_scheduler(owner.service().clone(), shutdown_rx),
+            spawn_automation_scheduler(owner.service().clone(), shutdown_rx.clone()),
+            spawn_models_dev_catalog_refresh(
+                owner.service().catalog().clone(),
+                owner.main_store().clone(),
+                shutdown_rx,
+            ),
         ];
 
         // The proxy is the runtime's own model backend. A bind failure is
@@ -163,6 +176,50 @@ fn spawn_automation_scheduler(
                         log::error!("[Runtime][automation][scheduler] dispatch_due failed: {error}");
                     }
                 }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Refreshes the runtime-owned Models.dev catalog on a bounded cadence.
+///
+/// The outbound proxy is re-read from the runtime store on every cycle, so a
+/// proxy change is honoured without restarting the runtime, and the task stops
+/// promptly when the runtime asks it to. A failed refresh keeps the last known
+/// snapshot; a successful one is gated by the service's 24-hour freshness.
+fn spawn_models_dev_catalog_refresh(
+    catalog: Arc<ModelsDevCatalogService>,
+    main_store: Arc<MainStore>,
+    mut shutdown: watch::Receiver<bool>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let proxy = crate::model_catalog_service::proxy_type_for_store(&main_store);
+            // Race the refresh against shutdown so a slow or unreachable
+            // metadata endpoint can never delay runtime shutdown: cancelling the
+            // refresh drops its single-flight guard, leaving the task stoppable
+            // mid-flight.
+            tokio::select! {
+                result = catalog.refresh(proxy) => {
+                    if let Err(error) = result {
+                        log::warn!(
+                            "[Runtime][catalog] Models.dev catalog refresh failed; keeping the last known snapshot: {error}"
+                        );
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(CATALOG_REFRESH_RETRY) => {}
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         break;

@@ -9,20 +9,33 @@
 //! 2. UI sink can tolerate partial state loss, but not final state
 //! 3. Executor must not be blocked by slow sinks
 
+// The runtime-only dispatcher machinery is gated out of the desktop build; the
+// desktop only consumes the `DispatcherMetricsSnapshot` wire DTOs below.
+#[cfg(not(feature = "desktop"))]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
+#[cfg(not(feature = "desktop"))]
 use std::time::Instant;
 
+#[cfg(not(feature = "desktop"))]
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use tokio::sync::mpsc;
 
+#[cfg(not(feature = "desktop"))]
 use super::error::WorkflowEngineError;
+#[cfg(not(feature = "desktop"))]
 use super::events::WorkflowEvent;
+#[cfg(not(feature = "desktop"))]
 use super::sinks::Sink;
+#[cfg(not(feature = "desktop"))]
 use super::sinks::SinkDeliveryGuarantee;
+#[cfg(not(feature = "desktop"))]
 use super::types::{ExecutionContext, GatewayPayload};
 
+#[cfg(not(feature = "desktop"))]
 fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
     match payload {
         GatewayPayload::Chunk { .. } => "chunk",
@@ -54,6 +67,7 @@ fn gateway_payload_name(payload: &GatewayPayload) -> &'static str {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
     match event {
         DispatchEvent::Terminal { .. }
@@ -76,6 +90,7 @@ fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn summarize_dispatch_event(event: &DispatchEvent) -> String {
     match event {
         DispatchEvent::Ui {
@@ -103,6 +118,7 @@ fn summarize_dispatch_event(event: &DispatchEvent) -> String {
 }
 
 /// Categories of events that can be dispatched to sinks.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DispatchEvent {
     /// UI event to be sent to the frontend via Tauri
@@ -119,6 +135,7 @@ pub enum DispatchEvent {
 }
 
 /// Wrapper for events with metadata for tracking and metrics.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone)]
 pub struct EventEnvelope {
     /// The actual event to dispatch
@@ -129,6 +146,7 @@ pub struct EventEnvelope {
     pub sequence: Option<u64>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl EventEnvelope {
     pub fn new(event: DispatchEvent) -> Self {
         Self {
@@ -145,6 +163,7 @@ impl EventEnvelope {
 }
 
 /// Metrics for dispatcher health monitoring.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Default)]
 pub struct DispatcherMetrics {
     /// Total events dispatched
@@ -159,6 +178,7 @@ pub struct DispatcherMetrics {
     pub per_sink: DashMap<String, Arc<SinkMetrics>>,
 }
 
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Default)]
 pub struct SinkMetrics {
     /// Approximate queue depth for this sink
@@ -175,6 +195,7 @@ pub struct SinkMetrics {
     pub total_latency_ms: AtomicU64,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl DispatcherMetrics {
     pub fn new() -> Self {
         Self::default()
@@ -255,6 +276,7 @@ pub struct SinkMetricsSnapshot {
 }
 
 /// Configuration for dispatcher behavior.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone)]
 pub struct DispatcherConfig {
     /// Maximum channel capacity for the dispatcher
@@ -267,6 +289,7 @@ pub struct DispatcherConfig {
     pub lag_warning_threshold_ms: u64,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Default for DispatcherConfig {
     fn default() -> Self {
         Self {
@@ -284,6 +307,7 @@ impl Default for DispatcherConfig {
 /// - Non-blocking: uses channels to decouple sender from sinks
 /// - Isolated: one sink failure doesn't affect others
 /// - Metrics: tracks dropped events and queue depth
+#[cfg(not(feature = "desktop"))]
 pub struct Dispatcher {
     /// Sender for the dispatcher channel
     tx: mpsc::Sender<EventEnvelope>,
@@ -293,6 +317,7 @@ pub struct Dispatcher {
     sequence_counter: AtomicU64,
 }
 
+#[cfg(not(feature = "desktop"))]
 struct SinkTarget {
     name: String,
     tx: mpsc::Sender<EventEnvelope>,
@@ -302,10 +327,12 @@ struct SinkTarget {
     accepts: Arc<dyn Fn(&DispatchEvent) -> bool + Send + Sync>,
 }
 
+#[cfg(not(feature = "desktop"))]
 lazy_static::lazy_static! {
     static ref DISPATCHER_REGISTRY: DashMap<String, Arc<Dispatcher>> = DashMap::new();
 }
 
+#[cfg(not(feature = "desktop"))]
 impl Dispatcher {
     /// Create a new dispatcher with the given sinks.
     ///
@@ -563,7 +590,9 @@ impl Dispatcher {
     }
 }
 
-#[cfg(test)]
+// The dispatch loop is runtime-only, so its tests compile only in the
+// desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;

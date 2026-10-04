@@ -1,12 +1,18 @@
 //! Proxy group manager
-use rusqlite::{params, Connection};
+#[cfg(not(feature = "desktop"))]
+use rusqlite::params;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(not(feature = "desktop"))]
 use crate::db::MainStore;
 
+#[cfg(not(feature = "desktop"))]
 use super::StoreError;
 
+#[cfg(not(feature = "desktop"))]
 pub const PROXY_GROUP_TABLE: &str = "proxy_group";
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -23,6 +29,7 @@ pub struct ProxyGroup {
     pub disabled: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     pub(crate) fn proxy_group_list(conn: &Connection) -> Result<Vec<ProxyGroup>, StoreError> {
         let mut stmt = conn.prepare(&format!(
@@ -65,6 +72,7 @@ impl MainStore {
         Ok(items)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn proxy_group_add(&self, item: &ProxyGroup) -> Result<i64, StoreError> {
         if item.name.to_lowercase() == "switch" {
             return Err(StoreError::InvalidData(
@@ -102,6 +110,7 @@ impl MainStore {
         Ok(id)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn proxy_group_update(&self, item: &ProxyGroup) -> Result<(), StoreError> {
         if item.name.to_lowercase() == "switch" {
             return Err(StoreError::InvalidData(
@@ -140,6 +149,7 @@ impl MainStore {
         Ok(())
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn proxy_group_batch_update(
         &self,
         ids: Vec<i64>,
@@ -210,6 +220,7 @@ impl MainStore {
         Ok(())
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn proxy_group_delete(&self, id: i64) -> Result<(), StoreError> {
         let _config_update_guard = self.config_update_lock.lock();
         let groups = self.db_runtime()?.write_blocking(move |conn| {

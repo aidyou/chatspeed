@@ -1,6 +1,9 @@
 pub mod backend;
+#[cfg(not(feature = "desktop"))]
 pub mod error;
 pub mod input;
+#[cfg(not(feature = "desktop"))]
 pub mod output;
+#[cfg(not(feature = "desktop"))]
 pub mod range_adapter;
 pub mod unified;

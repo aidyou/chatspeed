@@ -1,21 +1,30 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::FilterCandidate;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct ProjectFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl ProjectFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"(?:项目名称|工程名称|课题名称|项目|标段名称)[:：]\s*([^\n\r]+)"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed {
-                pattern: "zh_project_regex".to_string(),
-                message: e.to_string(),
-            })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex = Regex::new(r#"(?:项目名称|工程名称|课题名称|项目|标段名称)[:：]\s*([^\n\r]+)"#)
+                .map_err(|e| SensitiveError::RegexCompilationFailed {
+                    pattern: "zh_project_regex".to_string(),
+                    message: e.to_string(),
+                })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -23,9 +32,11 @@ impl SensitiveDataFilter for ProjectFilter {
     fn filter_type(&self) -> &'static str {
         "ChineseProject"
     }
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

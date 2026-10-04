@@ -11,15 +11,21 @@
 //! boolean presence bit and the config itself only as a fingerprint of its
 //! redacted form.
 
+#[cfg(not(feature = "desktop"))]
 use std::collections::BTreeMap;
 
+#[cfg(not(feature = "desktop"))]
 use serde::Serialize;
 
+#[cfg(not(feature = "desktop"))]
 use crate::capability::mcp::runtime::ObservedMcpRuntime;
+#[cfg(not(feature = "desktop"))]
 use crate::capability::operation::{canonical_request_hash, now_ms};
 use crate::capability::redaction;
 use crate::db::Mcp;
-use crate::mcp::client::{McpProtocolType, McpStatus};
+#[cfg(not(feature = "desktop"))]
+use crate::mcp::client::McpProtocolType;
+use crate::mcp::client::McpStatus;
 
 /// Removes secret values from a stored record while keeping the legacy
 /// editable wire shape.
@@ -60,6 +66,7 @@ pub fn public_runtime_status(status: &McpStatus) -> McpStatus {
 }
 
 /// What the persisted record says, as opposed to what the runtime does.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct McpDesiredView {
     /// `true` when the record is not disabled (the user wants it running).
@@ -68,6 +75,7 @@ pub struct McpDesiredView {
 }
 
 /// One observed runtime answer.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct McpRuntimeView {
     /// The observed state name, or `unknown` when nothing was observed.
@@ -79,6 +87,7 @@ pub struct McpRuntimeView {
 }
 
 /// Tool-list freshness for one server.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct McpToolsView {
     /// How many tools the runtime currently exposes, when observed.
@@ -93,6 +102,7 @@ pub struct McpToolsView {
 }
 
 /// The full read model of one MCP server.
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct McpServerView {
     pub id: i64,
@@ -117,16 +127,20 @@ pub struct McpServerView {
 }
 
 /// Drift code: the record wants the server running but nothing is observed.
+#[cfg(not(feature = "desktop"))]
 pub const DRIFT_DESIRED_BUT_NOT_RUNNING: &str = "desired_enabled_not_running";
 /// Drift code: the runtime is running while the record says disabled.
+#[cfg(not(feature = "desktop"))]
 pub const DRIFT_RUNNING_WHILE_DISABLED: &str = "running_while_disabled";
 /// Drift code: the record is enabled but the transport has no adapter.
+#[cfg(not(feature = "desktop"))]
 pub const DRIFT_UNSUPPORTED_TRANSPORT: &str = "unsupported_transport";
 
 /// Projects the persisted records and one runtime observation into read DTOs.
 ///
 /// `observation` is `None` when the runtime could not be asked at all, which
 /// is reported as `observed: false` rather than as a stopped server.
+#[cfg(not(feature = "desktop"))]
 pub fn project_mcp_servers(
     servers: &[Mcp],
     observation: Option<&BTreeMap<String, ObservedMcpRuntime>>,
@@ -159,6 +173,7 @@ pub fn project_mcp_servers(
 /// synthesized entry that proves absence, and `None` only when nothing was
 /// observed at all. Keeping this total means a single-server projection never
 /// needs to reach back into a collection.
+#[cfg(not(feature = "desktop"))]
 pub fn project_mcp_server(
     server: &Mcp,
     runtime_answer: Option<&ObservedMcpRuntime>,
@@ -229,6 +244,7 @@ pub fn project_mcp_server(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn classify_drift(
     desired: &McpDesiredView,
     runtime: &McpRuntimeView,
@@ -259,6 +275,7 @@ fn classify_drift(
 /// the secrets are redacted first. That is deliberate: drift detection is about
 /// the configuration ChatSpeed can describe, and secrets never enter a
 /// reported hash input verbatim.
+#[cfg(not(feature = "desktop"))]
 fn fingerprint(config: &crate::mcp::client::McpServerConfig) -> String {
     match serde_json::to_value(config) {
         Ok(value) => canonical_request_hash(&redaction::redact_json(&value)),
@@ -266,7 +283,7 @@ fn fingerprint(config: &crate::mcp::client::McpServerConfig) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::mcp::client::McpServerConfig;

@@ -2,12 +2,14 @@
 //!
 //! Recovery priority: Snapshot First, Event Replay Fallback.
 
+#[cfg(not(feature = "desktop"))]
 use crate::db::MainStore;
 use crate::workflow::react::events::{WorkflowEventRecord, WorkflowEventType};
 use crate::workflow::react::types::{
     EffectiveTaskObjective, ExecutionContext, PendingFinalReview, PendingTool, RuntimeState,
     SubAgentCompletion, WaitReason,
 };
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -27,12 +29,14 @@ pub enum RecoveryError {
 }
 
 #[derive(Debug)]
+#[cfg(not(feature = "desktop"))]
 pub enum RecoveryResult {
     SnapshotHit { context: ExecutionContext },
     ReplayFallback { context: ExecutionContext },
     SafeFailed { error: RecoveryError },
 }
 
+#[cfg(not(feature = "desktop"))]
 impl RecoveryResult {
     #[cfg(test)]
     pub fn is_success(&self) -> bool {
@@ -61,6 +65,7 @@ impl RecoveryResult {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl RecoveryError {
     pub fn is_empty_replay_history(&self) -> bool {
         matches!(self, RecoveryError::EmptyReplayHistory)
@@ -454,6 +459,7 @@ fn parse_wait_reason(s: &str) -> Result<WaitReason, RecoveryError> {
 
 /// Restore ExecutionContext for a session.
 /// Priority: snapshot first, event replay fallback, safe-failed state on error.
+#[cfg(not(feature = "desktop"))]
 pub fn restore_execution_context(main_store: Arc<MainStore>, session_id: &str) -> RecoveryResult {
     let snapshot_result = main_store.get_execution_context(session_id);
 
@@ -507,6 +513,7 @@ pub fn restore_execution_context(main_store: Arc<MainStore>, session_id: &str) -
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn replay_from_events(main_store: Arc<MainStore>, session_id: &str) -> RecoveryResult {
     log::info!(
         "[Workflow][session={}] workflow.replay.start - beginning event replay",
@@ -589,7 +596,9 @@ pub fn replay_events_to_execution_context(
     Ok(reducer.build())
 }
 
-#[cfg(test)]
+// The recovery path is runtime-only, so its tests compile only in the
+// desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

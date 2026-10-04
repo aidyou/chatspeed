@@ -26,6 +26,7 @@ impl ActiveWorkflowSessions {
         self.should_inhibit()
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn set_session_active(&mut self, session_id: &str, active: bool) -> bool {
         if active {
             self.session_ids.insert(session_id.to_string());
@@ -35,6 +36,7 @@ impl ActiveWorkflowSessions {
         self.should_inhibit()
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn remove_session(&mut self, session_id: &str) -> bool {
         self.session_ids.remove(session_id);
         self.should_inhibit()
@@ -47,6 +49,7 @@ impl WorkflowState {
     /// This deliberately excludes all waiting and terminal states. A workflow waiting for a
     /// user answer, approval, confirmation, or sub-agent result cannot continue by itself, so it
     /// must not keep the computer awake after the user leaves.
+    #[cfg(not(feature = "desktop"))]
     pub fn prevents_idle_sleep(&self) -> bool {
         matches!(self, Self::Thinking | Self::Executing | Self::Auditing)
     }
@@ -88,11 +91,13 @@ impl AssertionState {
         self.reconcile()
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn set_session_active(&mut self, session_id: &str, active: bool) -> Option<bool> {
         self.sessions.set_session_active(session_id, active);
         self.reconcile()
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn remove_session(&mut self, session_id: &str) -> Option<bool> {
         self.sessions.remove_session(session_id);
         self.reconcile()
@@ -136,6 +141,7 @@ impl IdleSleepInhibitor {
     ///
     /// Calling this for every state transition keeps concurrent sessions independent: the native
     /// assertion is released only after the last active session leaves a progressing state.
+    #[cfg(not(feature = "desktop"))]
     pub fn sync_workflow_state(&self, session_id: &str, state: &WorkflowState) {
         let mut shared_state = self.state.lock();
         if let Some(active) = shared_state
@@ -146,6 +152,7 @@ impl IdleSleepInhibitor {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn remove_workflow(&self, session_id: &str) {
         let mut state = self.state.lock();
         if let Some(active) = state.assertion.remove_session(session_id) {
@@ -325,7 +332,9 @@ impl Drop for PlatformIdleSleepAssertion {
     }
 }
 
-#[cfg(test)]
+// The inhibitor's session/state wiring is runtime-only, so its tests compile
+// only in the desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::{AssertionState, WorkflowState};
 

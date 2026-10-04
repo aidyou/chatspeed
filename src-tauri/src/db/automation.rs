@@ -1,6 +1,10 @@
+#[cfg(not(feature = "desktop"))]
 use crate::db::{MainStore, StoreError};
-use rusqlite::{params, OptionalExtension, Row, Transaction};
+use rusqlite::Row;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +55,7 @@ pub struct WorkflowAutomationRun {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowAutomationUpsert {
     pub id: String,
     pub title: String,
@@ -70,6 +75,7 @@ pub struct WorkflowAutomationUpsert {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowAutomationRunInsert {
     pub id: String,
     pub automation_id: String,
@@ -85,6 +91,7 @@ pub struct WorkflowAutomationRunInsert {
 
 /// Outcome of a compare-and-set mutation that must observe a specific revision.
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub enum CasOutcome {
     /// The row advanced and the new projection is returned.
     Updated(WorkflowAutomation),
@@ -96,6 +103,7 @@ pub enum CasOutcome {
 
 /// Outcome of an atomic scheduled-slot claim.
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub enum ClaimOutcome {
     /// This caller advanced the schedule and inserted the scheduled run.
     Claimed(WorkflowAutomationRun),
@@ -114,6 +122,7 @@ pub enum ClaimOutcome {
 /// pending-row insert share one write transaction, so two concurrent manual
 /// requests can never both observe "no active run" and overlap.
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub enum ManualClaimOutcome {
     /// No active run existed; this caller owns the newly inserted pending run.
     Claimed(WorkflowAutomationRun),
@@ -122,6 +131,7 @@ pub enum ManualClaimOutcome {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub enum DeleteAutomationOutcome {
     Deleted,
     NotFound,
@@ -129,6 +139,7 @@ pub enum DeleteAutomationOutcome {
 }
 /// Outcome of reserving a durable mutation receipt.
 #[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
 pub enum ReceiptOutcome {
     /// No prior receipt: the caller must execute the mutation and complete it.
     Proceed,
@@ -189,6 +200,7 @@ impl From<&Row<'_>> for WorkflowAutomationRun {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     fn delete_workflow_tree_tx(tx: &Transaction<'_>, id: &str) -> Result<(), StoreError> {
         let workflow_ids = {
@@ -912,6 +924,7 @@ impl MainStore {
 /// Whether a rusqlite error is a unique/primary-key constraint violation. Used
 /// to distinguish a durable scheduled-slot collision (`SlotTaken`) from a real
 /// store failure without matching on the full message.
+#[cfg(not(feature = "desktop"))]
 fn is_unique_constraint(error: &rusqlite::Error) -> bool {
     matches!(
         error,
@@ -920,7 +933,7 @@ fn is_unique_constraint(error: &rusqlite::Error) -> bool {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::db::workflow::WorkflowMessage;

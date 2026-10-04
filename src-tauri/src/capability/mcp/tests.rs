@@ -2096,7 +2096,16 @@ async fn reconcile_keeps_a_refresh_needs_reconcile_when_the_runtime_will_not_ans
 
 /// Reads a source file relative to the crate root.
 fn source(path: &str) -> String {
-    let full = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crate_root = if cfg!(feature = "desktop") {
+        manifest_dir.to_path_buf()
+    } else {
+        manifest_dir
+            .parent()
+            .expect("runtime-backend manifest has a src-tauri parent")
+            .to_path_buf()
+    };
+    let full = crate_root.join(path);
     std::fs::read_to_string(&full).unwrap_or_else(|error| {
         panic!("cannot read {path}: {error}");
     })

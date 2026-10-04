@@ -9,6 +9,7 @@ use crate::error::CliError;
 use crate::output::eprint_diagnostic;
 pub use chatspeed_contracts::ControlPlaneDiscovery;
 use chatspeed_contracts::DISCOVERY_FILE_NAME;
+use chatspeed_runtime_client::RuntimeLaunchConfig;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,15 +17,41 @@ use std::time::Duration;
 /// How long a freshly started runtime may take to become ready.
 const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Resolves the discovery file using the shared runtime-client priority.
-pub fn discovery_path(explicit: Option<&Path>) -> PathBuf {
-    chatspeed_runtime_client::discovery_path(explicit)
+/// Resolves the discovery file using the shared runtime-client resolver.
+///
+/// An explicit path always wins; otherwise the shared launch resolver decides
+/// the runtime directory (an explicit sandbox, the legacy home, or the
+/// build-profile default), failing closed when no platform directory is
+/// available instead of guessing a `.`-relative path.
+pub fn discovery_path(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
+    chatspeed_runtime_client::try_discovery_path(explicit).map_err(map_client_error)
 }
 
 /// Loads and validates the discovery document.
 pub fn load_discovery(explicit: Option<&Path>) -> Result<ControlPlaneDiscovery, CliError> {
-    let path = discovery_path(explicit);
+    let path = discovery_path(explicit)?;
     chatspeed_runtime_client::load_discovery(Some(&path)).map_err(map_client_error)
+}
+
+/// Builds the launch configuration a spawned runtime is started with.
+///
+/// With no explicit discovery path the shared resolver is used, so the spawned
+/// runtime gets the same runtime directory, database and application-data
+/// directory the client resolved. An explicit default-named path is the
+/// sandbox case: the runtime directory is the file's parent and the database and
+/// app-data live inside it. Every path is passed explicitly to the child, so an
+/// inherited environment or a cross-profile binary cannot redirect it.
+fn spawn_launch_config(explicit: Option<&Path>) -> Result<RuntimeLaunchConfig, CliError> {
+    match explicit {
+        None => chatspeed_runtime_client::resolve_launch_config()
+            .map_err(|error| CliError::discovery(format!("cannot resolve runtime paths: {error}"))),
+        Some(path) => {
+            let runtime_dir = path.parent().ok_or_else(|| {
+                CliError::discovery("cannot resolve runtime directory for spawn")
+            })?;
+            Ok(chatspeed_runtime_client::sandbox_launch_config(runtime_dir))
+        }
+    }
 }
 
 /// Resolves a ready client, starting the runtime only when that is legitimate.
@@ -53,12 +80,10 @@ pub async fn load_or_spawn(
             if !may_spawn(explicit, &error) {
                 return Err(error);
             }
-            let path = discovery_path(explicit);
-            let runtime_dir = path
-                .parent()
-                .ok_or_else(|| CliError::discovery("cannot resolve runtime directory for spawn"))?;
-            let mut child =
-                chatspeed_runtime_client::spawn_runtime(runtime_dir).map_err(map_client_error)?;
+            let config = spawn_launch_config(explicit)?;
+            let path = config.discovery_file();
+            let mut child = chatspeed_runtime_client::spawn_runtime_with_config(&config)
+                .map_err(map_client_error)?;
             let document = match chatspeed_runtime_client::wait_for_discovery(
                 Some(&path),
                 SPAWN_READY_TIMEOUT,
@@ -87,11 +112,14 @@ pub async fn load_or_spawn(
 ///
 /// Only a genuinely absent discovery document counts: an unreadable or malformed
 /// document that still exists must be reported, never silently worked around by
-/// starting a second runtime.
+/// starting a second runtime. A discovery path that cannot be resolved at all is
+/// not spawnable either.
 fn may_spawn(explicit: Option<&Path>, error: &CliError) -> bool {
     matches!(error, CliError::Discovery(_))
         && spawn_allowed(explicit)
-        && chatspeed_runtime_client::discovery_absent(&discovery_path(explicit))
+        && discovery_path(explicit)
+            .map(|path| chatspeed_runtime_client::discovery_absent(&path))
+            .unwrap_or(false)
 }
 
 /// Whether a spawned runtime could publish the requested discovery file.
@@ -109,7 +137,7 @@ mod tests {
     #[test]
     fn explicit_discovery_path_is_preserved() {
         let path = Path::new("/tmp/explicit.json");
-        assert_eq!(discovery_path(Some(path)), path);
+        assert_eq!(discovery_path(Some(path)).expect("explicit path"), path);
     }
 
     #[test]

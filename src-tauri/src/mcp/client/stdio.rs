@@ -98,7 +98,9 @@ impl StdioClient {
         })
     }
 
-    #[cfg(test)]
+    // Only the runtime test helper `ToolManager::register_test_mcp_tool` drives
+    // this hook, and that helper is itself runtime-only.
+    #[cfg(all(test, not(feature = "desktop")))]
     pub(crate) async fn set_test_status(&self, status: McpStatus) {
         self.core.set_status(status).await;
     }

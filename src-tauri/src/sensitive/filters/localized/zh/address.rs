@@ -1,26 +1,38 @@
 use crate::sensitive::error::SensitiveError;
-use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter};
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct AddressFilter {
+    #[cfg(not(feature = "desktop"))]
     context_regex: Regex,
+    #[cfg(not(feature = "desktop"))]
     pattern_regex: Regex,
 }
 
 impl AddressFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let context_regex = Regex::new(r#"(?:地址|住址|所在地|住所地|注册地址|通讯地址)[:：]\s*([^\n\s]+(?:省|市|区|县|街|路|号|大厦|层|室|单元|栋)[^\n\s]*)"#).map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "zh_address_context".to_string(), message: e.to_string() })?;
-        let pattern_regex = Regex::new(
-            r#"(?:\p{Han}{2,}(?:省|市|区|县))[\p{Han}0-9-]{2,}(?:路|街|道|号|院|大厦|广场|中心)"#,
-        )
-        .map_err(|e| SensitiveError::RegexCompilationFailed {
-            pattern: "zh_address_pattern".to_string(),
-            message: e.to_string(),
-        })?;
-        Ok(Self {
-            context_regex,
-            pattern_regex,
-        })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let context_regex = Regex::new(r#"(?:地址|住址|所在地|住所地|注册地址|通讯地址)[:：]\s*([^\n\s]+(?:省|市|区|县|街|路|号|大厦|层|室|单元|栋)[^\n\s]*)"#).map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "zh_address_context".to_string(), message: e.to_string() })?;
+            let pattern_regex = Regex::new(
+                r#"(?:\p{Han}{2,}(?:省|市|区|县))[\p{Han}0-9-]{2,}(?:路|街|道|号|院|大厦|广场|中心)"#,
+            )
+            .map_err(|e| SensitiveError::RegexCompilationFailed {
+                pattern: "zh_address_pattern".to_string(),
+                message: e.to_string(),
+            })?;
+            Ok(Self {
+                context_regex,
+                pattern_regex,
+            })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -28,9 +40,11 @@ impl SensitiveDataFilter for AddressFilter {
     fn filter_type(&self) -> &'static str {
         "ChineseAddress"
     }
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

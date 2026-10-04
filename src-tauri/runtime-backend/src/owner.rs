@@ -18,12 +18,17 @@ use crate::capability::CapabilityRecoveryReport;
 use crate::db::MainStore;
 use crate::libs::tsid::TsidGenerator;
 use crate::libs::window_channels::WindowChannels;
+use crate::terminal::{TerminalError, TerminalManager, TerminalOwner, TerminalSubscription};
 use crate::tools::ToolError;
 use crate::workflow::react::application::WorkflowApplicationService;
-use crate::workflow::react::client::http::server::RuntimeChatPlane;
+use crate::workflow::react::client::http::server::{RuntimeChatPlane, RuntimeTerminalPlane};
 use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
 use crate::workflow::react::manager::WorkflowManager;
 use crate::workflow::react::orchestrator::{DefaultSubAgentFactory, SubAgentFactory};
+use chatspeed_contracts::{
+    TerminalCreateRequest, TerminalResizeRequest, TerminalSessionMetadataDto, TerminalShellDto,
+    TerminalWriteRequest,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -81,6 +86,12 @@ pub struct RuntimeOwner {
     gateway: Arc<WorkflowRuntimeHub>,
     workflow_manager: Arc<WorkflowManager>,
     service: Arc<WorkflowApplicationService>,
+    /// The one interactive user terminal PTY owner (U-7).
+    ///
+    /// These are direct user terminals, not AI shell-tool executions, so the
+    /// manager is deliberately independent of the tool manager and
+    /// `shell_policy`.
+    terminal_manager: Arc<TerminalManager>,
 }
 
 impl RuntimeOwner {
@@ -140,12 +151,18 @@ impl RuntimeOwner {
             config.app_data_dir.clone(),
         ));
 
+        // The one interactive user terminal owner. It is created here, not
+        // lazily, so the runtime always owns exactly one PTY registry and its
+        // Drop releases every session on shutdown.
+        let terminal_manager = Arc::new(TerminalManager::new());
+
         Ok(Self {
             main_store,
             chat_state,
             gateway,
             workflow_manager,
             service,
+            terminal_manager,
         })
     }
 
@@ -207,14 +224,17 @@ impl RuntimeOwner {
 
     /// Registers the AppHandle-free core tool surface.
     ///
-    /// This is the file-system and search set. The desktop-only WebSearch and
-    /// WebFetch tools are excluded from the compiled runtime sources, so a
-    /// runtime that calls this can never advertise a tool it cannot run;
-    /// configured MCP servers are registered separately by
-    /// [`crate::background::RuntimeBackground`].
+    /// This is the file-system and search set. The fixed `web_fetch` /
+    /// `web_search` tools are no longer registered here as native tools: they are
+    /// exposed by the dedicated desktop loopback Web MCP provider, which the
+    /// runtime installs through the canonical `ToolManager` MCP path when the
+    /// desktop registers it against a live lease (AC-8). A runtime with no
+    /// registered provider therefore advertises no web tools at all instead of a
+    /// native tool that would have to fail closed. Configured MCP servers are
+    /// registered separately by [`crate::background::RuntimeBackground`].
     pub async fn register_core_tools(&self) -> Result<(), ToolError> {
-        self.chat_state
-            .tool_manager
+        let tool_manager = self.chat_state.tool_manager.clone();
+        tool_manager
             .clone()
             .register_core_tools(self.main_store.clone())
             .await
@@ -248,5 +268,96 @@ impl RuntimeOwner {
             main_store: self.main_store.clone(),
             chat_state: self.chat_state.clone(),
         })
+    }
+
+    /// The interactive terminal adapter the runtime mounts on its control plane.
+    pub fn terminal_plane(&self) -> Arc<OwnerTerminalPlane> {
+        Arc::new(OwnerTerminalPlane {
+            manager: self.terminal_manager.clone(),
+        })
+    }
+}
+
+/// Exposes the owner's single interactive terminal manager to the control plane.
+///
+/// The control-plane routes call the same PTY manager the owner assembled, so
+/// the HTTP surface adds an observer/control path to the one owner instead of a
+/// second PTY registry.
+pub struct OwnerTerminalPlane {
+    manager: Arc<TerminalManager>,
+}
+
+impl RuntimeTerminalPlane for OwnerTerminalPlane {
+    fn list_shells(&self) -> Vec<TerminalShellDto> {
+        self.manager.list_shells()
+    }
+
+    fn list_sessions(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Vec<TerminalSessionMetadataDto> {
+        self.manager.list_sessions(client_id, lease_id)
+    }
+
+    fn create(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        request: &TerminalCreateRequest,
+    ) -> Result<TerminalSessionMetadataDto, TerminalError> {
+        self.manager.create(
+            TerminalOwner {
+                client_id: client_id.to_string(),
+                lease_id: lease_id.to_string(),
+            },
+            request.cwd.as_deref(),
+            request.shell_path.as_deref(),
+            request.cols,
+            request.rows,
+        )
+    }
+
+    fn write(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+        request: &TerminalWriteRequest,
+    ) -> Result<(), TerminalError> {
+        self.manager.write(client_id, lease_id, session_id, &request.input)
+    }
+
+    fn resize(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+        request: &TerminalResizeRequest,
+    ) -> Result<(), TerminalError> {
+        self.manager
+            .resize(client_id, lease_id, session_id, request.cols, request.rows)
+    }
+
+    fn close(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+    ) -> Result<(), TerminalError> {
+        self.manager.close(client_id, lease_id, session_id)
+    }
+
+    fn subscribe(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        session_id: &str,
+    ) -> Result<Option<TerminalSubscription>, TerminalError> {
+        self.manager.subscribe(client_id, lease_id, session_id)
+    }
+
+    fn sweep_invalid_leases(&self, is_valid: &(dyn Fn(&str, &str) -> bool + Send + Sync)) {
+        self.manager.sweep_invalid_owners(is_valid);
     }
 }

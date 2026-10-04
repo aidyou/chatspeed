@@ -1,24 +1,33 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting Chinese Landline phone numbers.
 pub struct LandlineFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl LandlineFilter {
     /// Creates a new `LandlineFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"\b0\d{2,3}[-]?\d{7,8}\b"#).map_err(|e| {
-            SensitiveError::RegexCompilationFailed {
-                pattern: "zh_landline_regex".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex = Regex::new(r#"\b0\d{2,3}[-]?\d{7,8}\b"#).map_err(|e| {
+                SensitiveError::RegexCompilationFailed {
+                    pattern: "zh_landline_regex".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -27,10 +36,12 @@ impl SensitiveDataFilter for LandlineFilter {
         "ChineseLandline"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["zh", "zh-Hans", "zh-Hant"]
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -58,7 +69,7 @@ impl SensitiveDataFilter for LandlineFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

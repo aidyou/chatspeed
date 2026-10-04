@@ -1,11 +1,10 @@
 use super::types::{FullConfig, GenericContentRule};
 use super::webview_wrapper::WebviewScraper;
-use crate::constants::CFG_SCRAPER_DEBUG_MODE;
-use crate::db::MainStore;
+use crate::libs::webview_proxy::WebviewProxy;
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, EventId, Listener, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, EventId, Listener, WebviewWindow, Wry};
 use tokio::sync::{Mutex, Semaphore};
 
 // const MIN_POOL_SIZE: usize = 1;
@@ -81,16 +80,18 @@ impl ScraperPool {
     }
 
     /// Retrieves a webview from the pool or creates a new one if none are available.
-    async fn get(&self) -> Result<(WebViewResource, tokio::sync::OwnedSemaphorePermit)> {
+    ///
+    /// `debug_mode` and `proxy` come from the runtime configuration snapshot the
+    /// caller read for this scrape, so a setting changed since the last scrape is
+    /// seen by the webview this call creates or reuses.
+    async fn get(
+        &self,
+        debug_mode: bool,
+        proxy: Option<WebviewProxy>,
+    ) -> Result<(WebViewResource, tokio::sync::OwnedSemaphorePermit)> {
         // Acquire a permit, waiting if the pool is at max capacity
         let permit = self.semaphore.clone().acquire_owned().await?;
         let mut pool = self.pool.lock().await;
-
-        // Create a new webview if the pool is empty
-        let debug_mode = self
-            .app_handle
-            .state::<Arc<MainStore>>()
-            .get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         if let Some(mut resource) = pool.pop() {
             resource.last_used = Instant::now();
@@ -103,7 +104,7 @@ impl ScraperPool {
         } else {
             let webview = self
                 .scraper
-                .create_webview("about:blank", debug_mode, true)?;
+                .create_webview("about:blank", debug_mode, true, proxy)?;
             Ok((
                 WebViewResource {
                     webview: Arc::new(webview),
@@ -122,16 +123,12 @@ impl ScraperPool {
         &self,
         mut resource: WebViewResource,
         _permit: tokio::sync::OwnedSemaphorePermit,
+        debug_mode: bool,
     ) {
         // Clear old listeners before releasing back to the pool
         for listener_id in resource.listeners.drain(..) {
             resource.webview.unlisten(listener_id);
         }
-
-        let debug_mode = self
-            .app_handle
-            .state::<Arc<MainStore>>()
-            .get_config(CFG_SCRAPER_DEBUG_MODE, false);
 
         // Only navigate to blank page in debug mode or when pool is full
         // This preserves the performance benefit of webview pooling
@@ -196,23 +193,35 @@ impl ScraperPool {
         config: Option<FullConfig>,
         generic_content_rule: Option<GenericContentRule>,
     ) -> Result<String> {
-        let (mut resource, permit) = self.get().await?;
+        // Read the runtime configuration once per scrape. The runtime owns these
+        // values, so a debug/proxy the user just changed is seen by the webview
+        // this scrape creates; before the runtime publishes a snapshot the debug
+        // display stays off and no proxy is applied.
+        let snapshot = crate::runtime_config::current_or_load(&self.app_handle).await;
+        let debug_mode = snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.scraper_debug_mode());
+        let proxy = snapshot
+            .as_ref()
+            .and_then(|snapshot| WebviewProxy::from_snapshot(snapshot));
+
+        let (mut resource, permit) = self.get(debug_mode, proxy).await?;
 
         let (scrape_result, listeners) = self
             .scraper
-            .scrape(&resource.webview, url, config, generic_content_rule)
+            .scrape(&resource.webview, url, config, generic_content_rule, debug_mode)
             .await;
 
         resource.listeners = listeners; // Always assign listeners
 
         match scrape_result {
             Ok(result) => {
-                self.release(resource, permit).await;
+                self.release(resource, permit, debug_mode).await;
                 Ok(result)
             }
             Err(e) => {
                 // On error, we still need to release the resource
-                self.release(resource, permit).await;
+                self.release(resource, permit, debug_mode).await;
                 Err(e)
             }
         }

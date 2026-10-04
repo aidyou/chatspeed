@@ -16,136 +16,48 @@
 //! existing string errors; HTTP maps to status/code; the CLI maps to exit
 //! codes).
 
+// The wire DTOs and the domain error stay available in both crates through the
+// shared [`super::application_types`] module; this module keeps the old
+// `application::*` paths working for every existing call site.
+#[cfg(not(feature = "desktop"))]
+pub use super::application_types::{ApplicationError, ApplicationErrorKind, WorkflowEventsQuery};
+pub use super::application_types::{WorkflowCreateRequest, WorkflowStartRequest};
+
+// The orchestration service is runtime-only: the desktop reaches it exclusively
+// through the control plane, so its implementation and every import that feeds
+// it are compiled only in the desktop-free runtime backend.
+#[cfg(not(feature = "desktop"))]
 use crate::ai::interaction::chat_completion::ChatState;
+#[cfg(not(feature = "desktop"))]
 use crate::commands::workflow::{
     create_workflow_core, get_workflow_events_core, get_workflow_snapshot_core,
     list_workflows_core, workflow_signal_core, workflow_start_core, workflow_stop_core,
 };
+#[cfg(not(feature = "desktop"))]
 use crate::db::agent::{is_supported_sub_agent_role, normalize_agent_tool_config, McpToolConfig};
+#[cfg(not(feature = "desktop"))]
 use crate::db::{Agent, MainStore, Workflow};
+#[cfg(not(feature = "desktop"))]
 use crate::libs::tsid::TsidGenerator;
+#[cfg(not(feature = "desktop"))]
 use crate::tools::ShellExecutionMode;
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::client::http::client_bridge::ClientBridgeRegistry;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::client::hub::WorkflowRuntimeHub;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::events::WorkflowEventRecord;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::manager::WorkflowManager;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::orchestrator::SubAgentFactory;
 
-use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
 use std::path::PathBuf;
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
-/// Stable error classification for workflow application operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApplicationErrorKind {
-    /// A referenced entity does not exist.
-    NotFound,
-    /// The request is malformed or references an unusable entity.
-    InvalidInput,
-    /// The request conflicts with current state (e.g. duplicate idempotency
-    /// key with a different body).
-    Conflict,
-    /// The operation is not valid for the current workflow state.
-    State,
-    /// The runtime gateway rejected the operation (e.g. no live input route).
-    Gateway,
-    /// Any other failure (storage, tooling, unexpected errors).
-    Internal,
-}
-
-/// A workflow application error with a stable kind and a human-readable
-/// message. `Display` renders only the message so existing Tauri string errors
-/// stay byte-identical.
-#[derive(Debug, Clone)]
-pub struct ApplicationError {
-    pub kind: ApplicationErrorKind,
-    pub message: String,
-}
-
-impl ApplicationError {
-    pub fn new(kind: ApplicationErrorKind, message: impl Into<String>) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-        }
-    }
-
-    pub fn not_found(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::NotFound, message)
-    }
-
-    pub fn invalid_input(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::InvalidInput, message)
-    }
-
-    pub fn conflict(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::Conflict, message)
-    }
-
-    pub fn state(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::State, message)
-    }
-
-    pub fn gateway(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::Gateway, message)
-    }
-
-    pub fn internal(message: impl Into<String>) -> Self {
-        Self::new(ApplicationErrorKind::Internal, message)
-    }
-}
-
-impl std::fmt::Display for ApplicationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl From<String> for ApplicationError {
-    fn from(message: String) -> Self {
-        Self::internal(message)
-    }
-}
-
-impl From<&str> for ApplicationError {
-    fn from(message: &str) -> Self {
-        Self::internal(message)
-    }
-}
-
-/// Transport-neutral workflow creation request (HTTP canonical snake_case).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct WorkflowCreateRequest {
-    pub user_query: Option<String>,
-    pub agent_id: String,
-    pub allowed_paths: Option<serde_json::Value>,
-    pub auto_approve_plan: Option<bool>,
-    pub final_audit: Option<bool>,
-    pub inherited_agent_config: Option<String>,
-}
-
-/// Transport-neutral workflow start request (HTTP canonical snake_case).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct WorkflowStartRequest {
-    pub session_id: String,
-    pub agent_id: String,
-    pub initial_prompt: Option<String>,
-    pub initial_metadata: Option<serde_json::Value>,
-    pub initial_attached_context: Option<String>,
-    pub planning_mode: Option<bool>,
-}
-
-/// Explicitly bounded durable-events query. `after` is a durable DB event ID
-/// (never a live stream cursor); `limit` is capped by the store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct WorkflowEventsQuery {
-    pub session_id: String,
-    pub after: Option<i64>,
-    pub limit: Option<u32>,
-}
-
+#[cfg(not(feature = "desktop"))]
 /// The unique transport-neutral workflow application service.
 pub struct WorkflowApplicationService {
     pub(crate) main_store: Arc<MainStore>,
@@ -160,8 +72,18 @@ pub struct WorkflowApplicationService {
     /// here keeps exactly one instance alive for the desktop owner, so the
     /// in-process single-flight locks and the durable journal cannot diverge.
     pub(crate) capability: Arc<crate::capability::CapabilityApplicationService>,
+    /// The runtime-owned Models.dev catalog snapshot owner. The catalog data
+    /// commands and the background refresh both read this single instance, so
+    /// snapshot loading, refresh and profile fallback have one owner.
+    pub(crate) catalog: Arc<crate::model_catalog_service::ModelsDevCatalogService>,
+    /// The single live client WebView capability bridge registry.
+    ///
+    /// It is retained for compatibility with the bridge protocol tests, but
+    /// production web execution uses the loopback MCP provider instead.
+    pub(crate) bridge: Arc<ClientBridgeRegistry>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl WorkflowApplicationService {
     pub fn new(
         main_store: Arc<MainStore>,
@@ -193,6 +115,15 @@ impl WorkflowApplicationService {
                 ),
             ),
         );
+        // Load the catalog snapshot once, from the runtime's own application
+        // data directory, so the data-command reads and the background refresh
+        // share one owner instead of each reconstructing it.
+        let catalog = Arc::new(
+            crate::model_catalog_service::ModelsDevCatalogService::load_or_embedded(&app_data_dir),
+        );
+        // Retained for compatibility with the bridge protocol tests. Production
+        // web execution uses the desktop loopback MCP provider.
+        let bridge = Arc::new(ClientBridgeRegistry::with_defaults());
         Self {
             main_store,
             chat_state,
@@ -202,12 +133,26 @@ impl WorkflowApplicationService {
             workflow_manager,
             app_data_dir,
             capability,
+            catalog,
+            #[cfg(not(feature = "desktop"))]
+            bridge,
         }
     }
 
     /// The unique capability service, shared with the Tauri command layer.
     pub fn capability(&self) -> &Arc<crate::capability::CapabilityApplicationService> {
         &self.capability
+    }
+
+    /// The runtime-owned Models.dev catalog snapshot service.
+    pub fn catalog(&self) -> &Arc<crate::model_catalog_service::ModelsDevCatalogService> {
+        &self.catalog
+    }
+
+    /// Compatibility accessor for the legacy bridge protocol tests. Production
+    /// web calls do not use this registry.
+    pub fn bridge_registry(&self) -> Arc<ClientBridgeRegistry> {
+        self.bridge.clone()
     }
 
     /// Lists all agents from the same `MainStore` authority the UI uses.
@@ -392,6 +337,7 @@ impl WorkflowApplicationService {
 /// This is runtime-owned business logic. The desktop command wrappers only
 /// forward the raw agent over `/control/v1`, so normalization can never diverge
 /// between the desktop and any other client.
+#[cfg(not(feature = "desktop"))]
 fn prepare_agent_for_persistence(
     store: &MainStore,
     agent: &mut Agent,
@@ -402,6 +348,7 @@ fn prepare_agent_for_persistence(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<String> {
     let tools = raw
         .as_deref()
@@ -413,6 +360,7 @@ fn filter_tool_list_json(raw: Option<String>, blocked_tool: &str) -> Option<Stri
     Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn filter_git_inspection_tools_for_role(raw: Option<String>, role: Option<&str>) -> Option<String> {
     let tools = raw
         .as_deref()
@@ -430,6 +378,7 @@ fn filter_git_inspection_tools_for_role(raw: Option<String>, role: Option<&str>)
     Some(serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string()))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     agent.personality = agent
         .personality
@@ -517,6 +466,7 @@ fn sanitize_agent_for_persistence(agent: &mut Agent) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn validate_sandbox_scheme_reference(store: &MainStore, agent: &Agent) -> Result<(), String> {
     match agent.sandbox_execution_mode {
         ShellExecutionMode::HostOnly => {
@@ -547,6 +497,7 @@ fn validate_sandbox_scheme_reference(store: &MainStore, agent: &Agent) -> Result
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn validate_sub_agent_role(agent: &Agent) -> Result<(), String> {
     if agent.role.as_deref() == Some("child") && agent.parent_agent_id.is_none() {
         return Err("Child agents must belong to a primary agent".to_string());
@@ -559,7 +510,9 @@ fn validate_sub_agent_role(agent: &Agent) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
+// The service under test is runtime-only, so its tests compile only in the
+// desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::{sanitize_agent_for_persistence, validate_sandbox_scheme_reference};
     use crate::db::{Agent, MainStore, SandboxScheme};

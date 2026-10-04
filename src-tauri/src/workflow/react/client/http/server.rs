@@ -16,20 +16,20 @@ use super::sse;
 use crate::capability::mcp_service::McpServerView;
 use crate::db::{Agent, Mcp};
 use crate::mcp::client::McpStatus;
-use crate::workflow::react::application::{
-    ApplicationError, WorkflowApplicationService, WorkflowCreateRequest, WorkflowEventsQuery,
-    WorkflowStartRequest,
-};
+use crate::workflow::react::application::{ApplicationError, WorkflowApplicationService};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-#[cfg(not(feature = "desktop"))]
-use chatspeed_contracts::{
-    ClientCapabilityStatus, ClientLease, ClientLeaseRequest, ClientLeaseResponse,
+use chatspeed_contracts::workflow::{
+    WorkflowCreateRequest, WorkflowEventsQuery, WorkflowStartRequest,
 };
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
+#[cfg(all(test, not(feature = "desktop")))]
+use chatspeed_contracts::ClientCapabilityStatus;
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -37,7 +37,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 #[cfg(not(feature = "desktop"))]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
@@ -302,6 +302,22 @@ mod runtime_extension {
         /// a turn.
         pub chat:
             Option<Arc<dyn crate::workflow::react::client::http::chat_commands::RuntimeChatPlane>>,
+        /// Runtime-owned interactive terminal plane.
+        ///
+        /// `None` makes every terminal route answer a structured
+        /// `runtime_unavailable`; the runtime always supplies the manager it
+        /// assembled, so the routes are mounted but fail closed without an owner.
+        pub terminal: Option<
+            Arc<dyn crate::workflow::react::client::http::terminal_commands::RuntimeTerminalPlane>,
+        >,
+        /// Runtime-owned single-slot desktop Web MCP provider lifecycle (AC-8).
+        ///
+        /// `None` keeps the provider routes unmounted; the runtime always
+        /// supplies the plane it assembled, so a provider can only be registered
+        /// against a proven live lease.
+        pub web_provider: Option<
+            Arc<dyn crate::workflow::react::client::http::web_mcp_commands::RuntimeWebMcpPlane>,
+        >,
     }
 }
 
@@ -309,7 +325,15 @@ mod runtime_extension {
 pub use runtime_extension::{RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError};
 
 #[cfg(not(feature = "desktop"))]
+pub use crate::workflow::react::client::http::web_mcp_commands::{
+    RuntimeWebMcpPlane, WebProviderLeaseCheck,
+};
+
+#[cfg(not(feature = "desktop"))]
 pub use crate::workflow::react::client::http::chat_commands::{ChatStreamBroker, RuntimeChatPlane};
+
+#[cfg(not(feature = "desktop"))]
+pub use crate::workflow::react::client::http::terminal_commands::RuntimeTerminalPlane;
 
 /// Shared router state.
 #[derive(Clone)]
@@ -324,15 +348,22 @@ pub struct ControlPlaneState {
     /// Present only when this process owns the runtime chat executor.
     #[cfg(not(feature = "desktop"))]
     pub(crate) chat: Option<Arc<dyn RuntimeChatPlane>>,
+    /// Present only when this process owns the runtime interactive terminal.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) terminal: Option<Arc<dyn RuntimeTerminalPlane>>,
     /// Per-chat SSE fan-out owned by this process.
     #[cfg(not(feature = "desktop"))]
     pub(crate) chat_streams: Arc<ChatStreamBroker>,
-    /// Live client WebView capability bridges owned by this process.
-    ///
-    /// The registry is the runtime half of the client-pull bridge: it is the
-    /// single authority for which client capabilities are currently available.
+    /// Compatibility registry retained for the legacy bridge module, but never
+    /// mounted or swept in production.
     #[cfg(not(feature = "desktop"))]
     pub(crate) bridge: Arc<super::client_bridge::ClientBridgeRegistry>,
+    /// The single-slot desktop Web MCP provider lifecycle (AC-8).
+    ///
+    /// Present only when this process owns a runtime lease lifecycle, because a
+    /// provider can only be registered against a proven `tauri` lease.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) web_provider: Option<Arc<dyn super::web_mcp_commands::RuntimeWebMcpPlane>>,
 }
 
 /// Handle for a running control-plane server.
@@ -418,7 +449,7 @@ pub async fn start_with_discovery_dir(
     }
     #[cfg(not(feature = "desktop"))]
     {
-        start_inner(svc, discovery_dir, None, None).await
+        start_inner(svc, discovery_dir, None, None, None, None).await
     }
 }
 
@@ -439,6 +470,8 @@ pub async fn start_runtime_control_plane(
         Some(options.discovery_dir),
         Some(options.leases),
         options.chat,
+        options.terminal,
+        options.web_provider,
     )
     .await
 }
@@ -448,9 +481,16 @@ async fn start_inner(
     discovery_dir: Option<std::path::PathBuf>,
     #[cfg(not(feature = "desktop"))] runtime: Option<Arc<dyn RuntimeControlPlane>>,
     #[cfg(not(feature = "desktop"))] chat: Option<Arc<dyn RuntimeChatPlane>>,
+    #[cfg(not(feature = "desktop"))] terminal: Option<Arc<dyn RuntimeTerminalPlane>>,
+    #[cfg(not(feature = "desktop"))] web_provider: Option<Arc<dyn RuntimeWebMcpPlane>>,
 ) -> Result<ControlPlaneHandle, String> {
     let token = Arc::new(generate_token());
     let server_instance_id = Arc::new(svc.gateway.broker().server_instance_id().to_string());
+
+    // Retain the registry for legacy module compatibility. It is not mounted
+    // into the production router and is not part of the runtime sweeper.
+    #[cfg(not(feature = "desktop"))]
+    let bridge = svc.bridge_registry();
 
     let state = ControlPlaneState {
         svc,
@@ -462,17 +502,23 @@ async fn start_inner(
         #[cfg(not(feature = "desktop"))]
         chat,
         #[cfg(not(feature = "desktop"))]
+        terminal,
+        #[cfg(not(feature = "desktop"))]
         chat_streams: Arc::new(ChatStreamBroker::new()),
         #[cfg(not(feature = "desktop"))]
-        bridge: Arc::new(super::client_bridge::ClientBridgeRegistry::with_defaults()),
+        bridge,
+        #[cfg(not(feature = "desktop"))]
+        web_provider,
     };
 
-    // The lease sweeper prunes bridge sessions whose client lease is gone or
-    // expired, so a dead bridge fails its pending invocations instead of
-    // leaving them to time out. It needs the registry and the runtime lease
-    // lifecycle, both of which the router state also owns.
+    // The runtime sweeper owns terminal and provider lease cleanup. The legacy
+    // bridge registry is not part of the production lifecycle.
     #[cfg(not(feature = "desktop"))]
-    let (bridge_for_sweeper, runtime_for_sweeper) = (state.bridge.clone(), state.runtime.clone());
+    let (terminal_for_sweeper, runtime_for_sweeper, provider_for_sweeper) = (
+        state.terminal.clone(),
+        state.runtime.clone(),
+        state.web_provider.clone(),
+    );
 
     let router = build_router(state);
 
@@ -502,9 +548,10 @@ async fn start_inner(
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     #[cfg(not(feature = "desktop"))]
-    spawn_bridge_sweeper(
-        bridge_for_sweeper,
+    spawn_runtime_sweeper(
+        terminal_for_sweeper,
         runtime_for_sweeper,
+        provider_for_sweeper,
         shutdown_tx.subscribe(),
     );
     // Only a runtime owner needs to await full shutdown; the desktop app
@@ -549,40 +596,80 @@ async fn start_inner(
 // (Token material is only cloned into the discovery document and the router
 // state; it never enters log paths.)
 
-/// Interval between bridge lease/expiry sweeps.
+/// Interval between runtime lease/expiry sweeps.
 #[cfg(not(feature = "desktop"))]
-const BRIDGE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const RUNTIME_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Periodically drops bridge sessions whose lease is gone or whose session TTL
-/// elapsed, failing their pending invocations closed.
+/// Periodically drops bridge and terminal sessions whose lease is gone or whose
+/// session TTL elapsed.
 ///
-/// Without this, a pending invocation for a client that lost its lease (or
-/// vanished without unregistering) would only fail when its own deadline
-/// elapsed.
+/// Without this, a pending bridge invocation for a client that lost its lease
+/// (or vanished without unregistering) would only fail when its own deadline
+/// elapsed, and a user terminal started by a released lease would keep its PTY
+/// running forever. Both checks resolve the live lease through the same runtime
+/// authority the routes use.
 #[cfg(not(feature = "desktop"))]
-fn spawn_bridge_sweeper(
-    bridge: Arc<super::client_bridge::ClientBridgeRegistry>,
+fn spawn_runtime_sweeper(
+    terminal: Option<Arc<dyn RuntimeTerminalPlane>>,
     runtime: Option<Arc<dyn RuntimeControlPlane>>,
+    web_provider: Option<Arc<dyn RuntimeWebMcpPlane>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let Some(runtime) = runtime else {
         return;
     };
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(BRIDGE_SWEEP_INTERVAL);
+        let mut ticker = tokio::time::interval(RUNTIME_SWEEP_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    bridge.sweep_expired(Instant::now());
-                    bridge.sweep_invalid_leases(|client_id, lease_id| {
-                        runtime.validate_lease(client_id, lease_id).is_ok()
-                    });
+                    let is_valid =
+                        |client_id: &str, lease_id: &str| runtime.validate_lease(client_id, lease_id).is_ok();
+                    // Terminal sessions are bound to the registering lease, so a
+                    // released or expired lease tears them down here.
+                    if let Some(terminal) = terminal.as_ref() {
+                        terminal.sweep_invalid_leases(&is_valid);
+                    }
+                    // The desktop Web MCP provider is bound to its registering
+                    // lease, so a released or expired lease drops the slot here
+                    // instead of leaving the runtime dialing a dead provider.
+                    if let Some(provider) = web_provider.as_ref() {
+                        let check = ClosureLeaseCheck(&is_valid);
+                        provider.sweep_invalid_leases(&check).await;
+                    }
                 }
                 _ = shutdown.changed() => return,
             }
         }
     });
+}
+
+/// Adapter turning a plain lease-validity closure into the [`WebProviderLeaseCheck`]
+/// the provider sweep consumes.
+#[cfg(not(feature = "desktop"))]
+struct ClosureLeaseCheck<'a>(&'a (dyn Fn(&str, &str) -> bool + Send + Sync));
+
+#[cfg(not(feature = "desktop"))]
+impl WebProviderLeaseCheck for ClosureLeaseCheck<'_> {
+    fn is_valid(&self, client_id: &str, lease_id: &str) -> bool {
+        (self.0)(client_id, lease_id)
+    }
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+fn add_legacy_bridge_routes(router: Router<ControlPlaneState>) -> Router<ControlPlaneState> {
+    router
+        .merge(super::client_bridge::client_bridge_router())
+        .route(
+            "/control/v1/client-capabilities/{capability}/invoke",
+            post(invoke_client_capability),
+        )
+}
+
+#[cfg(any(not(test), feature = "desktop"))]
+fn add_legacy_bridge_routes(router: Router<ControlPlaneState>) -> Router<ControlPlaneState> {
+    router
 }
 
 fn build_router(state: ControlPlaneState) -> Router {
@@ -648,15 +735,13 @@ fn build_router(state: ControlPlaneState) -> Router {
             "/control/v1/capability-doctor/reconcile",
             post(reconcile_capability),
         )
-        // U-7 client WebView capability bridge. Additive and read-only: the
-        // fixed web capability registry plus a typed, allowlisted invocation
-        // that reports structured `unavailable`/`forbidden`. The runtime never
-        // links a WebView and exposes no generic RPC passthrough.
+        // Fixed desktop Web MCP provider lifecycle. The provider is the only
+        // production web execution path: it is registered with the runtime and
+        // reached through the canonical MCP client/tool registry. The legacy
+        // client-pull bridge is intentionally not mounted here; its types and
+        // unit tests remain as migration material, but no production request can
+        // enqueue web work through it.
         .route(CLIENT_CAPABILITIES_PATH, get(list_client_capabilities))
-        .route(
-            "/control/v1/client-capabilities/{capability}/invoke",
-            post(invoke_client_capability),
-        )
         // Phase 3 capability mutations. These are the only Skill mutation
         // routes: each one delegates to the same CapabilityApplicationService
         // the Tauri commands use, so the CLI cannot reach a second installer
@@ -748,11 +833,11 @@ fn build_router(state: ControlPlaneState) -> Router {
                 "/control/v1/clients/{client_id}/release",
                 post(release_client),
             )
-            // The client WebView capability bridge is mounted only when a
-            // runtime lease lifecycle exists, because every bridge request must
-            // prove a live lease. It stays under the same bearer middleware and
-            // body limit as every other route.
-            .merge(super::client_bridge::client_bridge_router())
+            .merge(add_legacy_bridge_routes(Router::new()))
+            // The desktop Web MCP provider lifecycle is mounted under the same
+            // bearer middleware: every call must additionally prove a live
+            // `tauri` lease, so the bearer token alone cannot install a provider.
+            .merge(super::web_mcp_commands::web_mcp_router())
     } else {
         router
     };
@@ -763,6 +848,15 @@ fn build_router(state: ControlPlaneState) -> Router {
     // It is merged before the auth/body-limit layers like every other route.
     #[cfg(not(feature = "desktop"))]
     let router = router.merge(crate::workflow::react::client::http::chat_commands::chat_router());
+
+    // The runtime interactive terminal surface follows the same rule: it is
+    // mounted in the desktop-free build and fails closed with
+    // `runtime_unavailable` when the process owns no terminal plane. Every
+    // terminal route additionally proves a live client lease, so the bearer
+    // token alone can never drive a user's shell.
+    #[cfg(not(feature = "desktop"))]
+    let router =
+        router.merge(crate::workflow::react::client::http::terminal_commands::terminal_router());
 
     router
         .layer(middleware::from_fn_with_state(
@@ -1183,7 +1277,7 @@ pub const CLIENT_CAPABILITY_ALLOWLIST: [&str; 2] = ["web_fetch", "web_search"];
 pub const CLIENT_BRIDGE_UNAVAILABLE: &str = "unavailable";
 
 /// How long an accepted bridge invocation may wait for the client's result.
-#[cfg(not(feature = "desktop"))]
+#[cfg(all(test, not(feature = "desktop")))]
 const CLIENT_CAPABILITY_INVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// One entry of the client WebView capability registry.
@@ -1244,16 +1338,22 @@ async fn list_client_capabilities() -> Response {
     }))
 }
 
-/// `GET /control/v1/client-capabilities` — the live capability registry.
-///
-/// A plane with no lease lifecycle cannot host a bridge, so it reports the
-/// static all-unavailable set; otherwise the registry reflects exactly what the
-/// live client bridge declares.
+/// The runtime-owned read-only compatibility view is retained for existing
+/// clients, but production web execution is not routed through this bridge.
+/// The live bridge projection is compiled only for protocol regression tests;
+/// production reports the fixed provider as unavailable unless its MCP status
+/// is queried through the canonical MCP surface.
 #[cfg(not(feature = "desktop"))]
 async fn list_client_capabilities(State(state): State<ControlPlaneState>) -> Response {
+    #[cfg(test)]
     let capabilities = if state.runtime.is_some() {
         state.bridge.capability_registry()
     } else {
+        client_capability_registry()
+    };
+    #[cfg(not(test))]
+    let capabilities = {
+        let _ = state;
         client_capability_registry()
     };
     snake_json_response(serde_json::to_value(ClientCapabilitiesResponse {
@@ -1266,7 +1366,7 @@ async fn list_client_capabilities(State(state): State<ControlPlaneState>) -> Res
 ///
 /// The desktop plane owns no bridge, so a valid request still answers the
 /// structured `unavailable` that no client can execute here.
-#[cfg(feature = "desktop")]
+#[cfg(all(test, feature = "desktop"))]
 async fn invoke_client_capability(Path(capability): Path<String>, body: String) -> Response {
     if let Err(response) = validate_client_capability_invoke(&capability, &body) {
         return response;
@@ -1285,7 +1385,7 @@ async fn invoke_client_capability(Path(capability): Path<String>, body: String) 
 /// result, and maps the client's terminal status onto the wire: `ok` returns the
 /// typed result, `error`/`cancelled` return a structured error, and a missing
 /// result before the deadline returns `504`.
-#[cfg(not(feature = "desktop"))]
+#[cfg(all(test, not(feature = "desktop")))]
 async fn invoke_client_capability(
     State(state): State<ControlPlaneState>,
     Path(capability): Path<String>,
@@ -1359,6 +1459,7 @@ async fn invoke_client_capability(
 }
 
 /// The structured `unavailable` response for a capability with no live bridge.
+#[cfg(test)]
 fn unavailable_client_capability_response(capability: &str) -> Response {
     dto::error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -1373,8 +1474,11 @@ fn unavailable_client_capability_response(capability: &str) -> Response {
 ///
 /// Returns the validated arguments object on success, or `Err(Response)` for a
 /// capability outside the allowlist (`forbidden`) or a body that violates the
-/// typed schema (`invalid_input`). Only the exact declared arguments are
-/// accepted, so the bridge can never become a generic RPC passthrough.
+/// typed schema (`invalid_input`). The typed gate itself is the shared
+/// [`chatspeed_contracts::validate_capability_arguments`], so the control plane,
+/// the desktop dispatcher and the desktop-free web tools accept exactly the same
+/// schema instead of maintaining divergent allowlists.
+#[cfg(test)]
 fn validate_client_capability_invoke(
     capability: &str,
     body: &str,
@@ -1395,156 +1499,19 @@ fn validate_client_capability_invoke(
         .as_object()
         .ok_or_else(|| invalid_invoke("the request body must be a JSON object".to_string()))?;
 
-    match capability {
-        "web_fetch" => {
-            reject_unknown_arguments(object, &["url", "format", "keep_link", "keep_image"])?;
-            required_non_empty_string(object, "url")?;
-            optional_enum_string(object, "format", &["markdown", "text", "links"])?;
-            optional_bool(object, "keep_link")?;
-            optional_bool(object, "keep_image")?;
-        }
-        // `web_search` mirrors the tool's real schema, so every declared
-        // argument is accepted and nothing else is.
-        _ => {
-            reject_unknown_arguments(
-                object,
-                &[
-                    "query",
-                    "page",
-                    "number",
-                    "time_period",
-                    "response_format",
-                    "provider",
-                ],
-            )?;
-            required_search_query(object)?;
-            optional_bounded_integer(object, "page", 1, u64::MAX)?;
-            optional_bounded_integer(object, "number", 1, 30)?;
-            optional_enum_string(object, "time_period", &["day", "week", "month", "year"])?;
-            optional_enum_string(object, "response_format", &["json", "xml"])?;
-            optional_string(object, "provider")?;
-        }
-    }
+    chatspeed_contracts::validate_capability_arguments(capability, object)
+        .map_err(|error| invalid_invoke(error.message))?;
     Ok(value)
 }
 
 /// Builds the `invalid_input` response for a malformed invocation body.
+#[cfg(test)]
 fn invalid_invoke(message: String) -> Response {
     dto::error_response(
         StatusCode::BAD_REQUEST,
         "invalid_input",
         format!("Invalid client capability request: {message}"),
     )
-}
-
-/// Rejects any argument outside the capability's declared schema.
-fn reject_unknown_arguments(
-    object: &serde_json::Map<String, serde_json::Value>,
-    allowed: &[&str],
-) -> Result<(), Response> {
-    if let Some(unknown) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(invalid_invoke(format!("unexpected argument `{unknown}`")));
-    }
-    Ok(())
-}
-
-/// Requires a non-empty string argument.
-fn required_non_empty_string(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<(), Response> {
-    match object.get(key) {
-        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Ok(()),
-        _ => Err(invalid_invoke(format!(
-            "`{key}` must be a non-empty string"
-        ))),
-    }
-}
-
-/// Requires a non-empty search query: a string, or a non-empty array of strings.
-fn required_search_query(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), Response> {
-    match object.get("query") {
-        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Ok(()),
-        Some(serde_json::Value::Array(values)) if !values.is_empty() => {
-            if values
-                .iter()
-                .all(|value| value.as_str().is_some_and(|text| !text.trim().is_empty()))
-            {
-                Ok(())
-            } else {
-                Err(invalid_invoke(
-                    "`query` array entries must be non-empty strings".to_string(),
-                ))
-            }
-        }
-        _ => Err(invalid_invoke(
-            "`query` must be a non-empty string or a non-empty array of strings".to_string(),
-        )),
-    }
-}
-
-/// Validates an optional string argument when present.
-fn optional_string(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<(), Response> {
-    match object.get(key) {
-        None => Ok(()),
-        Some(serde_json::Value::String(_)) => Ok(()),
-        Some(_) => Err(invalid_invoke(format!("`{key}` must be a string"))),
-    }
-}
-
-/// Validates an optional string argument against a closed enum when present.
-fn optional_enum_string(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    allowed: &[&str],
-) -> Result<(), Response> {
-    match object.get(key) {
-        None => Ok(()),
-        Some(serde_json::Value::String(value)) if allowed.contains(&value.as_str()) => Ok(()),
-        Some(_) => Err(invalid_invoke(format!(
-            "`{key}` must be one of {}",
-            allowed.join(", ")
-        ))),
-    }
-}
-
-/// Validates an optional boolean argument when present.
-fn optional_bool(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<(), Response> {
-    match object.get(key) {
-        None => Ok(()),
-        Some(serde_json::Value::Bool(_)) => Ok(()),
-        Some(_) => Err(invalid_invoke(format!("`{key}` must be a boolean"))),
-    }
-}
-
-/// Validates an optional integer argument within an inclusive range.
-fn optional_bounded_integer(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    min: u64,
-    max: u64,
-) -> Result<(), Response> {
-    match object.get(key) {
-        None => Ok(()),
-        Some(value)
-            if value
-                .as_u64()
-                .is_some_and(|value| (min..=max).contains(&value)) =>
-        {
-            Ok(())
-        }
-        Some(_) => Err(invalid_invoke(format!(
-            "`{key}` must be an integer between {min} and {max}"
-        ))),
-    }
 }
 
 /// `GET /control/v1/skill-targets` — the closed Skill install-target registry.
@@ -4779,12 +4746,20 @@ mod chat_route_tests {
     use crate::db::MainStore;
     use crate::libs::tsid::TsidGenerator;
     use crate::libs::window_channels::WindowChannels;
+    use crate::terminal::{TerminalError, TerminalSubscription};
     use crate::workflow::react::client::http::chat_commands::MODELS_LIST_PATH;
+    use crate::workflow::react::client::http::terminal_commands::{
+        TERMINAL_CREATE_PATH, TERMINAL_SESSIONS_PATH, TERMINAL_SHELLS_PATH,
+    };
     use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
     use crate::workflow::react::manager::WorkflowManager;
     use crate::workflow::react::orchestrator::{DefaultSubAgentFactory, SubAgentFactory};
     use chatspeed_contracts::{
         ChatStartRequest, ChatStartResponse, ChatStopRequest, ChatStopResponse, ListModelsRequest,
+    };
+    use chatspeed_contracts::{
+        TerminalCreateRequest, TerminalResizeRequest, TerminalSessionMetadataDto, TerminalShellDto,
+        TerminalWriteRequest,
     };
     use serde_json::json;
 
@@ -4877,6 +4852,260 @@ mod chat_route_tests {
         }
     }
 
+    /// In-memory terminal plane: proves the route/lease binding without spawning
+    /// a real PTY. The PTY core itself is covered by `crate::terminal` tests.
+    #[derive(Default)]
+    struct TestTerminalPlane {
+        sessions: std::sync::Mutex<Vec<TerminalSessionMetadataDto>>,
+        owners: std::sync::Mutex<HashMap<String, (String, String)>>,
+    }
+
+    impl TestTerminalPlane {
+        fn owned_by(&self, client_id: &str, lease_id: &str, session_id: &str) -> bool {
+            self.owners
+                .lock()
+                .unwrap()
+                .get(session_id)
+                .map(|owner| owner == &(client_id.to_string(), lease_id.to_string()))
+                .unwrap_or(false)
+        }
+
+        fn authorize(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            session_id: &str,
+        ) -> Result<(), TerminalError> {
+            if !self.owners.lock().unwrap().contains_key(session_id) {
+                return Err(TerminalError::SessionNotFound);
+            }
+            if !self.owned_by(client_id, lease_id, session_id) {
+                return Err(TerminalError::Forbidden("not the owner".to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    impl RuntimeTerminalPlane for TestTerminalPlane {
+        fn list_shells(&self) -> Vec<TerminalShellDto> {
+            vec![TerminalShellDto {
+                name: "bash".to_string(),
+                path: "/bin/bash".to_string(),
+                is_default: true,
+            }]
+        }
+
+        fn list_sessions(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+        ) -> Vec<TerminalSessionMetadataDto> {
+            let owners = self.owners.lock().unwrap();
+            self.sessions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|session| {
+                    owners
+                        .get(&session.session_id)
+                        .map(|owner| owner == &(client_id.to_string(), lease_id.to_string()))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        }
+
+        fn create(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            _request: &TerminalCreateRequest,
+        ) -> Result<TerminalSessionMetadataDto, TerminalError> {
+            let session_id = format!("session-{}", self.sessions.lock().unwrap().len() + 1);
+            self.owners
+                .lock()
+                .unwrap()
+                .insert(
+                    session_id.clone(),
+                    (client_id.to_string(), lease_id.to_string()),
+                );
+            let metadata = TerminalSessionMetadataDto {
+                session_id,
+                shell_name: "bash".to_string(),
+                shell_path: "/bin/bash".to_string(),
+                cwd: "/workspace".to_string(),
+                alive: true,
+            };
+            self.sessions.lock().unwrap().push(metadata.clone());
+            Ok(metadata)
+        }
+
+        fn write(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            session_id: &str,
+            _request: &TerminalWriteRequest,
+        ) -> Result<(), TerminalError> {
+            self.authorize(client_id, lease_id, session_id)
+        }
+
+        fn resize(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            session_id: &str,
+            _request: &TerminalResizeRequest,
+        ) -> Result<(), TerminalError> {
+            self.authorize(client_id, lease_id, session_id)
+        }
+
+        fn close(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            session_id: &str,
+        ) -> Result<(), TerminalError> {
+            if !self.owners.lock().unwrap().contains_key(session_id) {
+                // Explicit close is idempotent.
+                return Ok(());
+            }
+            if !self.owned_by(client_id, lease_id, session_id) {
+                return Err(TerminalError::Forbidden("not the owner".to_string()));
+            }
+            self.owners.lock().unwrap().remove(session_id);
+            self.sessions
+                .lock()
+                .unwrap()
+                .retain(|session| session.session_id != session_id);
+            Ok(())
+        }
+
+        fn subscribe(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            session_id: &str,
+        ) -> Result<Option<TerminalSubscription>, TerminalError> {
+            self.authorize(client_id, lease_id, session_id)?;
+            Ok(None)
+        }
+
+        fn sweep_invalid_leases(&self, _is_valid: &(dyn Fn(&str, &str) -> bool + Send + Sync)) {}
+    }
+
+    /// Test double for the single-slot desktop Web MCP provider plane.
+    ///
+    /// It reproduces the wire-relevant invariants (one slot, conflict for a
+    /// different live lease, idempotent same-lease re-registration) without a
+    /// database or a live MCP socket.
+    #[derive(Default)]
+    struct TestWebProviderPlane {
+        slot: std::sync::Mutex<Option<chatspeed_contracts::WebMcpProviderStatus>>,
+        generation: std::sync::atomic::AtomicU64,
+    }
+
+    #[async_trait::async_trait]
+    impl RuntimeWebMcpPlane for TestWebProviderPlane {
+        async fn register_provider(
+            &self,
+            registration: &chatspeed_contracts::WebMcpProviderRegistration,
+            lease: &chatspeed_contracts::ClientLease,
+            proof: &str,
+            instance_id: &str,
+        ) -> Result<
+            chatspeed_contracts::WebMcpProviderRegistrationResponse,
+            chatspeed_contracts::WebMcpProviderError,
+        > {
+            if let Err(error) = chatspeed_contracts::validate_web_mcp_port(registration.port) {
+                return Err(error);
+            }
+            let mut slot = self.slot.lock().unwrap();
+            if let Some(active) = slot.as_ref() {
+                let same_lease =
+                    active.client_id == lease.client_id && active.lease_id == lease.lease_id;
+                if same_lease
+                    && active.port == registration.port
+                    && active.instance_id == instance_id
+                {
+                    return Ok(chatspeed_contracts::WebMcpProviderRegistrationResponse {
+                        server_name: active.server_name.clone(),
+                        generation: active.generation,
+                        expires_at: active.expires_at.clone(),
+                    });
+                }
+                if !same_lease {
+                    return Err(chatspeed_contracts::WebMcpProviderError::new(
+                        chatspeed_contracts::WEB_MCP_CODE_CONFLICT,
+                        "provider slot held by another live lease",
+                    ));
+                }
+            }
+            let generation = self
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let status = chatspeed_contracts::WebMcpProviderStatus {
+                server_name: chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string(),
+                generation,
+                instance_id: instance_id.to_string(),
+                client_id: lease.client_id.clone(),
+                lease_id: lease.lease_id.clone(),
+                port: registration.port,
+                expires_at: lease.expires_at.clone(),
+            };
+            let _ = proof;
+            let response = chatspeed_contracts::WebMcpProviderRegistrationResponse {
+                server_name: status.server_name.clone(),
+                generation,
+                expires_at: status.expires_at.clone(),
+            };
+            *slot = Some(status);
+            Ok(response)
+        }
+
+        async fn unregister_provider(
+            &self,
+            lease: &chatspeed_contracts::ClientLease,
+            _proof: &str,
+        ) -> Result<(), chatspeed_contracts::WebMcpProviderError> {
+            let mut slot = self.slot.lock().unwrap();
+            match slot.as_ref() {
+                Some(active)
+                    if active.client_id == lease.client_id && active.lease_id == lease.lease_id =>
+                {
+                    *slot = None;
+                    Ok(())
+                }
+                Some(_) => Err(chatspeed_contracts::WebMcpProviderError::new(
+                    chatspeed_contracts::WEB_MCP_CODE_FORBIDDEN,
+                    "provider slot does not match this lease",
+                )),
+                None => Ok(()),
+            }
+        }
+
+        fn provider_status(&self) -> Option<chatspeed_contracts::WebMcpProviderStatus> {
+            self.slot.lock().unwrap().clone()
+        }
+
+        async fn sweep_invalid_leases(&self, is_valid: &dyn WebProviderLeaseCheck) {
+            let identity = self
+                .slot
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|active| (active.client_id.clone(), active.lease_id.clone()));
+            let Some((client_id, lease_id)) = identity else {
+                return;
+            };
+            if is_valid.is_valid(&client_id, &lease_id) {
+                return;
+            }
+            *self.slot.lock().unwrap() = None;
+        }
+    }
+
     struct TestPlane {
         handle: ControlPlaneHandle,
         token: String,
@@ -4921,12 +5150,16 @@ mod chat_route_tests {
                 chat_state: chat_state.clone(),
             }) as Arc<dyn RuntimeChatPlane>
         });
+        let terminal: Arc<dyn RuntimeTerminalPlane> = Arc::new(TestTerminalPlane::default());
+        let web_provider: Arc<dyn RuntimeWebMcpPlane> = Arc::new(TestWebProviderPlane::default());
         let handle = start_runtime_control_plane(
             svc,
             RuntimeControlPlaneOptions {
                 discovery_dir: dir.path().to_path_buf(),
                 leases,
                 chat,
+                terminal: Some(terminal),
+                web_provider: Some(web_provider),
             },
         )
         .await
@@ -4939,6 +5172,154 @@ mod chat_route_tests {
             token,
             _dir: dir,
         }
+    }
+
+    fn provider_headers(client_id: &str, lease_id: &str) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in [
+            (chatspeed_contracts::WEB_MCP_PROOF_HEADER, "proof-a"),
+            (chatspeed_contracts::WEB_MCP_CLIENT_HEADER, client_id),
+            (chatspeed_contracts::WEB_MCP_LEASE_HEADER, lease_id),
+            (chatspeed_contracts::WEB_MCP_INSTANCE_HEADER, "desktop-a"),
+        ] {
+            headers.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                reqwest::header::HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        headers
+    }
+
+    #[tokio::test]
+    async fn web_provider_routes_require_the_bearer_token() {
+        let plane = start_plane(false).await;
+        let http = reqwest::Client::new();
+        let responses = [
+            http.get(url(&plane, chatspeed_contracts::WEB_MCP_STATUS_PATH))
+                .send()
+                .await
+                .expect("status"),
+            http.post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+                .body("{\"port\":41234}")
+                .send()
+                .await
+                .expect("register"),
+            http.post(url(&plane, chatspeed_contracts::WEB_MCP_UNREGISTER_PATH))
+                .body("{}")
+                .send()
+                .await
+                .expect("unregister"),
+        ];
+        for response in responses {
+            assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn web_provider_register_requires_proof_headers_and_rejects_bad_bodies() {
+        let leases = Arc::new(TestLeases::with_lease("tauri-main", "tauri"));
+        let plane = start_plane_with_leases(leases, false).await;
+        let http = reqwest::Client::new();
+
+        // Bearer alone, without the header-only proof, is forbidden.
+        let missing_proof = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .body("{\"port\":41234}")
+            .send()
+            .await
+            .expect("missing proof");
+        assert_eq!(missing_proof.status(), reqwest::StatusCode::FORBIDDEN);
+
+        // An unknown body field is rejected (only the port is accepted).
+        let unknown_field = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-main", "lease-tauri-main"))
+            .body("{\"port\":41234,\"url\":\"http://evil.example/mcp\"}")
+            .send()
+            .await
+            .expect("unknown field");
+        assert_eq!(unknown_field.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        // Port 0 is not a usable authority.
+        let zero_port = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-main", "lease-tauri-main"))
+            .body("{\"port\":0}")
+            .send()
+            .await
+            .expect("zero port");
+        assert_eq!(zero_port.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn web_provider_second_live_desktop_conflicts_and_unregister_frees_the_slot() {
+        let leases = Arc::new(TestLeases {
+            leases: std::sync::Mutex::new(HashMap::from([
+                (
+                    "tauri-main".to_string(),
+                    ("lease-tauri-main".to_string(), "tauri".to_string()),
+                ),
+                (
+                    "tauri-other".to_string(),
+                    ("lease-tauri-other".to_string(), "tauri".to_string()),
+                ),
+            ])),
+        });
+        let plane = start_plane_with_leases(leases, false).await;
+        let http = reqwest::Client::new();
+
+        let ok = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-main", "lease-tauri-main"))
+            .body("{\"port\":41234}")
+            .send()
+            .await
+            .expect("register");
+        assert_eq!(ok.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = ok.json().await.expect("body");
+        assert_eq!(body["server_name"], chatspeed_contracts::WEB_MCP_SERVER_NAME);
+
+        let conflict = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-other", "lease-tauri-other"))
+            .body("{\"port\":41235}")
+            .send()
+            .await
+            .expect("conflict");
+        assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
+
+        let status = http
+            .get(url(&plane, chatspeed_contracts::WEB_MCP_STATUS_PATH))
+            .bearer_auth(&plane.token)
+            .send()
+            .await
+            .expect("status");
+        let status_body: serde_json::Value = status.json().await.expect("status body");
+        assert_eq!(status_body["client_id"], "tauri-main");
+        assert_eq!(status_body["port"], 41234);
+
+        let unregister = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_UNREGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-main", "lease-tauri-main"))
+            .body("{}")
+            .send()
+            .await
+            .expect("unregister");
+        assert_eq!(unregister.status(), reqwest::StatusCode::OK);
+
+        let after = http
+            .get(url(&plane, chatspeed_contracts::WEB_MCP_STATUS_PATH))
+            .bearer_auth(&plane.token)
+            .send()
+            .await
+            .expect("status after");
+        assert_eq!(after.status(), reqwest::StatusCode::NOT_FOUND);
     }
 
     fn url(plane: &TestPlane, path: &str) -> String {
@@ -4956,6 +5337,192 @@ mod chat_route_tests {
             metadata: Some(json!({"windowLabel": "main"})),
         })
         .expect("start body")
+    }
+
+    #[tokio::test]
+    async fn every_terminal_route_requires_the_bearer_token() {
+        let plane = start_plane(false).await;
+        let http = reqwest::Client::new();
+
+        let unauthorized = [
+            http.get(url(&plane, TERMINAL_SHELLS_PATH)).send(),
+            http.get(url(&plane, TERMINAL_SESSIONS_PATH)).send(),
+            http.post(url(&plane, TERMINAL_CREATE_PATH))
+                .body("{}")
+                .send(),
+            http.post(url(&plane, "/control/v1/terminal/session-1/write"))
+                .body("{}")
+                .send(),
+            http.post(url(&plane, "/control/v1/terminal/session-1/resize"))
+                .body("{}")
+                .send(),
+            http.post(url(&plane, "/control/v1/terminal/session-1/close"))
+                .body("{}")
+                .send(),
+            http.get(url(&plane, "/control/v1/terminal/session-1/stream"))
+                .send(),
+        ];
+        for response in unauthorized {
+            assert_eq!(
+                response.await.expect("request").status(),
+                reqwest::StatusCode::UNAUTHORIZED
+            );
+        }
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn terminal_routes_require_a_live_lease_proof() {
+        let plane = start_plane_with_leases(
+            Arc::new(TestLeases::with_lease("tauri-main", "tauri")),
+            false,
+        )
+        .await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        // The bearer token alone must never be enough to drive a user's shell.
+        let response = http
+            .get(url(&plane, TERMINAL_SHELLS_PATH))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+
+        // A stale lease proof is refused as well.
+        let response = http
+            .get(url(&plane, TERMINAL_SHELLS_PATH))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-main")
+            .header("x-terminal-lease", "stale-lease")
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+
+        // A live proof sees the typed shell list.
+        let response = http
+            .get(url(&plane, TERMINAL_SHELLS_PATH))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-main")
+            .header("x-terminal-lease", "lease-tauri-main")
+            .body("{}")
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let shells: Vec<TerminalShellDto> = response.json().await.expect("shell list");
+        assert_eq!(shells.len(), 1);
+        assert!(shells[0].is_default);
+
+        plane.handle.shutdown();
+    }
+
+    #[tokio::test]
+    async fn terminal_sessions_are_bound_to_the_calling_lease() {
+        let leases = Arc::new(TestLeases {
+            leases: std::sync::Mutex::new(HashMap::from([
+                (
+                    "tauri-main".to_string(),
+                    ("lease-tauri-main".to_string(), "tauri".to_string()),
+                ),
+                (
+                    "tauri-other".to_string(),
+                    ("lease-tauri-other".to_string(), "tauri".to_string()),
+                ),
+            ])),
+        });
+        let plane = start_plane_with_leases(leases, false).await;
+        let http = reqwest::Client::new();
+        let auth = format!("Bearer {}", plane.token);
+
+        let create = http
+            .post(url(&plane, TERMINAL_CREATE_PATH))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-main")
+            .header("x-terminal-lease", "lease-tauri-main")
+            .json(&TerminalCreateRequest {
+                cwd: Some("/workspace".to_string()),
+                shell_path: None,
+                cols: Some(120),
+                rows: None,
+            })
+            .send()
+            .await
+            .expect("create");
+        assert_eq!(create.status(), reqwest::StatusCode::OK);
+        let session: TerminalSessionMetadataDto = create.json().await.expect("session metadata");
+        assert_eq!(session.session_id, "session-1");
+        assert!(session.alive);
+
+        // Another live lease cannot list, write or stream the session.
+        let other_sessions: Vec<TerminalSessionMetadataDto> = http
+            .get(url(&plane, TERMINAL_SESSIONS_PATH))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-other")
+            .header("x-terminal-lease", "lease-tauri-other")
+            .body("{}")
+            .send()
+            .await
+            .expect("list")
+            .json()
+            .await
+            .expect("sessions");
+        assert!(other_sessions.is_empty());
+
+        let foreign_write = http
+            .post(url(&plane, "/control/v1/terminal/session-1/write"))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-other")
+            .header("x-terminal-lease", "lease-tauri-other")
+            .json(&TerminalWriteRequest {
+                input: "ls\n".to_string(),
+            })
+            .send()
+            .await
+            .expect("write");
+        assert_eq!(foreign_write.status(), reqwest::StatusCode::FORBIDDEN);
+
+        let foreign_stream = http
+            .get(url(&plane, "/control/v1/terminal/session-1/stream"))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-other")
+            .header("x-terminal-lease", "lease-tauri-other")
+            .send()
+            .await
+            .expect("stream");
+        assert_eq!(foreign_stream.status(), reqwest::StatusCode::FORBIDDEN);
+
+        // The owner can drive the session and retire it; close is idempotent.
+        let owner_write = http
+            .post(url(&plane, "/control/v1/terminal/session-1/write"))
+            .header("Authorization", &auth)
+            .header("x-terminal-client", "tauri-main")
+            .header("x-terminal-lease", "lease-tauri-main")
+            .json(&TerminalWriteRequest {
+                input: "ls\n".to_string(),
+            })
+            .send()
+            .await
+            .expect("write");
+        assert_eq!(owner_write.status(), reqwest::StatusCode::NO_CONTENT);
+
+        for _ in 0..2 {
+            let close = http
+                .post(url(&plane, "/control/v1/terminal/session-1/close"))
+                .header("Authorization", &auth)
+                .header("x-terminal-client", "tauri-main")
+                .header("x-terminal-lease", "lease-tauri-main")
+                .body("{}")
+                .send()
+                .await
+                .expect("close");
+            assert_eq!(close.status(), reqwest::StatusCode::NO_CONTENT);
+        }
+
+        plane.handle.shutdown();
     }
 
     #[tokio::test]

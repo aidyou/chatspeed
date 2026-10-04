@@ -5,10 +5,14 @@ pub const TOOL_BASH: &str = "bash";
 pub const TOOL_READ_FILE: &str = "read_file";
 pub const TOOL_WRITE_FILE: &str = "write_file";
 pub const TOOL_EDIT_FILE: &str = "edit_file";
+#[cfg(any(test, not(feature = "desktop")))]
 pub const TOOL_PLAN_NOTE: &str = "plan_note";
 /// Legacy planning-note names retained for replay and compatibility parsing.
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_PLAN_READ_NOTE: &str = "plan_read_note";
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_PLAN_WRITE_NOTE: &str = "plan_write_note";
+#[cfg(not(feature = "desktop"))]
 pub const TOOL_PLAN_EDIT_NOTE: &str = "plan_edit_note";
 pub const TOOL_LIST_DIR: &str = "list_dir";
 pub const TOOL_GLOB: &str = "glob";
@@ -46,6 +50,7 @@ pub const TOOL_MCP_TOOL_EXECUTE: &str = "mcp_tool_execute";
 /// Legacy workflow/chat tool name accepted for replay and compatibility.
 pub const TOOL_MCP_TOOL_LOAD_LEGACY: &str = "mcp_tool_load";
 
+#[cfg(not(feature = "desktop"))]
 pub fn is_planning_note_tool(name: &str) -> bool {
     name == TOOL_PLAN_NOTE
 }
@@ -54,6 +59,7 @@ pub fn is_mcp_tool_expand_tool(name: &str) -> bool {
     matches!(name, TOOL_MCP_TOOL_EXPAND | TOOL_MCP_TOOL_LOAD_LEGACY)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn is_mcp_tool_execute_tool(name: &str) -> bool {
     name == TOOL_MCP_TOOL_EXECUTE
 }
@@ -61,8 +67,10 @@ pub const TOOL_READ_HISTORY_MESSAGE: &str = "read_history_message";
 
 pub const MCP_TOOL_NAME_SPLIT: &str = "__MCP__";
 
+#[cfg(not(feature = "desktop"))]
 use phf::{phf_set, Set};
 
+#[cfg(any(test, not(feature = "desktop")))]
 pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
     matches!(
         name,
@@ -83,6 +91,7 @@ pub fn is_core_workflow_builtin_tool(name: &str) -> bool {
     )
 }
 
+#[cfg(any(test, not(feature = "desktop")))]
 pub fn is_auto_execute_workflow_tool(name: &str) -> bool {
     matches!(
         name,
@@ -155,6 +164,7 @@ mod tests {
 
 /// Read-only bash commands that require exact match (no arguments expected)
 /// Uses perfect hash function for O(1) lookup performance
+#[cfg(not(feature = "desktop"))]
 pub static READ_ONLY_BASH_CMDS_EXACT: Set<&'static str> = phf_set! {
     // File system listing and navigation
     "ls",
@@ -193,6 +203,7 @@ pub static READ_ONLY_BASH_CMDS_EXACT: Set<&'static str> = phf_set! {
 
 /// Read-only bash command prefixes that accept arguments
 /// Commands with trailing space prevent false matches (e.g., "cat " won't match "catch")
+#[cfg(not(feature = "desktop"))]
 pub const READ_ONLY_BASH_PREFIXES: &[&str] = &[
     // File content reading
     "cat ",

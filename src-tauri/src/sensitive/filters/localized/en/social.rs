@@ -1,18 +1,27 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::FilterCandidate;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct SocialFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl SocialFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"(?i)(?:WeChat|WhatsApp|Telegram|Skype|Twitter|Instagram|ID)[:：]?\s*([a-zA-Z0-9_-]{4,32})"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_social_regex".to_string(), message: e.to_string() })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex = Regex::new(r#"(?i)(?:WeChat|WhatsApp|Telegram|Skype|Twitter|Instagram|ID)[:：]?\s*([a-zA-Z0-9_-]{4,32})"#)
+                .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_social_regex".to_string(), message: e.to_string() })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -20,9 +29,11 @@ impl SensitiveDataFilter for SocialFilter {
     fn filter_type(&self) -> &'static str {
         "EnglishSocial"
     }
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["en"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

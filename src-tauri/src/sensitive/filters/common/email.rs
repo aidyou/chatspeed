@@ -1,25 +1,34 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting email addresses.
 pub struct EmailFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl EmailFilter {
     /// Creates a new `EmailFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex =
-            Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#).map_err(|e| {
-                SensitiveError::RegexCompilationFailed {
-                    pattern: "email_regex".to_string(),
-                    message: e.to_string(),
-                }
-            })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex =
+                Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#).map_err(|e| {
+                    SensitiveError::RegexCompilationFailed {
+                        pattern: "email_regex".to_string(),
+                        message: e.to_string(),
+                    }
+                })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -28,10 +37,12 @@ impl SensitiveDataFilter for EmailFilter {
         "Email"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         Vec::new() // Language-agnostic
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -59,7 +70,7 @@ impl SensitiveDataFilter for EmailFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

@@ -5,17 +5,23 @@
 //! never persisted here. ChatHub deliberately lives outside the `config` table
 //! and outside `MainStore`'s `ConfigCache` because it is independent state that
 //! must not be bundled into generic settings.
+#[cfg(not(feature = "desktop"))]
 use std::collections::HashSet;
 
+#[cfg(not(feature = "desktop"))]
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::db::{MainStore, StoreError};
+#[cfg(not(feature = "desktop"))]
+use crate::db::MainStore;
+use crate::db::StoreError;
 
+#[cfg(not(feature = "desktop"))]
 pub const CHAT_HUB_TABLE: &str = "chat_hubs";
 
 /// Maximum accepted length for a ChatHub display name.
+#[cfg(not(feature = "desktop"))]
 const MAX_NAME_LENGTH: usize = 200;
 /// Maximum accepted length for a ChatHub url or logo url.
 const MAX_URL_LENGTH: usize = 2048;
@@ -31,6 +37,7 @@ pub struct ChatHub {
     pub is_default: bool,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ChatHub {
     fn from_row(row: &Row<'_>) -> Result<Self, rusqlite::Error> {
         Ok(Self {
@@ -74,6 +81,7 @@ pub fn parse_chat_hub_url(raw: &str) -> Result<Url, StoreError> {
 }
 
 /// Validates and normalizes a ChatHub navigation url into its canonical string form.
+#[cfg(not(feature = "desktop"))]
 pub fn normalize_chat_hub_url(raw: &str) -> Result<String, StoreError> {
     Ok(parse_chat_hub_url(raw)?.to_string())
 }
@@ -107,6 +115,7 @@ pub fn normalize_chat_hub_logo(raw: &str) -> Result<String, StoreError> {
 }
 
 /// Validates and normalizes a ChatHub display name.
+#[cfg(not(feature = "desktop"))]
 pub fn normalize_chat_hub_name(raw: &str) -> Result<String, StoreError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -124,6 +133,7 @@ pub fn normalize_chat_hub_name(raw: &str) -> Result<String, StoreError> {
     Ok(trimmed.to_string())
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     pub(crate) fn chat_hub_list(conn: &Connection) -> Result<Vec<ChatHub>, StoreError> {
         let mut stmt = conn.prepare(&format!(
@@ -265,7 +275,7 @@ impl MainStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use tempfile::tempdir;

@@ -1,21 +1,30 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::FilterCandidate;
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 pub struct MobileFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl MobileFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let regex = Regex::new(r#"\b(?:\+?1[-\s.]?)?\(?\d{3}\)?[-\s.]?\d{3}[-\s.]?\d{4}\b"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed {
-                pattern: "en_mobile_regex".to_string(),
-                message: e.to_string(),
-            })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let regex = Regex::new(r#"\b(?:\+?1[-\s.]?)?\(?\d{3}\)?[-\s.]?\d{3}[-\s.]?\d{4}\b"#)
+                .map_err(|e| SensitiveError::RegexCompilationFailed {
+                    pattern: "en_mobile_regex".to_string(),
+                    message: e.to_string(),
+                })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -23,9 +32,11 @@ impl SensitiveDataFilter for MobileFilter {
     fn filter_type(&self) -> &'static str {
         "EnglishMobile"
     }
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         vec!["en"]
     }
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,

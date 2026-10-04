@@ -26,15 +26,46 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(not(feature = "desktop"))]
 use std::path::Path;
+#[cfg(not(feature = "desktop"))]
 use std::sync::{Arc, OnceLock};
 
+#[cfg(feature = "desktop")]
+use crate::ai::model_catalog::ResolvedModelProfile;
+#[cfg(feature = "desktop")]
+use crate::ai::traits::chat::ModelDetails;
+#[cfg(not(feature = "desktop"))]
+use crate::ai::transport::resolve as resolve_transport;
+#[cfg(not(feature = "desktop"))]
+use crate::ai::util::{
+    get_family_from_model_id, is_function_call_supported, is_image_input_supported,
+    is_reasoning_supported,
+};
+#[cfg(not(feature = "desktop"))]
 use crate::constants::{CFG_ACTIVE_PROXY_GROUP, CFG_INTERFACE_LANGUAGE};
-use crate::db::config_transfer::{self, ConfigCategory};
+#[cfg(not(feature = "desktop"))]
+use crate::db::config_transfer;
+use crate::db::config_transfer::ConfigCategory;
+#[cfg(not(feature = "desktop"))]
 use crate::db::runtime::DbRuntime;
-use crate::db::{MainStore, ModelConfig, ProxyGroup, SandboxScheme};
-use crate::sensitive::manager::{FilterManager, SensitiveConfig};
+#[cfg(not(feature = "desktop"))]
+use crate::db::MainStore;
+use crate::db::{ModelConfig, ProxyGroup, SandboxScheme};
+#[cfg(not(feature = "desktop"))]
+use crate::model_catalog_engine::resolve_model_profile_from_catalog_with_context;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::manager::FilterManager;
+use crate::sensitive::manager::SensitiveConfig;
+#[cfg(not(feature = "desktop"))]
 use crate::workflow::react::application::{ApplicationError, WorkflowApplicationService};
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::ChatProtocolDto;
+#[cfg(feature = "desktop")]
+use chatspeed_contracts::ModelsDevPresetProviderDto;
+use chatspeed_contracts::{
+    ModelDetailsDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
+};
 
 #[cfg(not(feature = "desktop"))]
 use crate::db::{BackupConfig, DbBackup};
@@ -53,6 +84,7 @@ use chatspeed_runtime_client::{ClientError, RuntimeClient};
 ///
 /// Public so both crates can reference the same list without a dead-code
 /// warning when the desktop-free backup path is compiled out.
+#[cfg(not(feature = "desktop"))]
 pub const MACHINE_SPECIFIC_CONFIG_KEYS: &[&str] = &[
     "backup_dir",
     crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY,
@@ -88,6 +120,7 @@ pub struct RestoreSettingResponse {
 /// The transport uses this to require an idempotency key only for mutations;
 /// every command is listed explicitly so the allowlist is a complete table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(feature = "desktop"))]
 pub enum DataCommandKind {
     /// A read that performs no durable mutation.
     Read,
@@ -96,6 +129,7 @@ pub enum DataCommandKind {
 }
 
 /// Returns the kind of a known data command, or `None` for an unknown command.
+#[cfg(not(feature = "desktop"))]
 pub fn data_command_kind(command: &str) -> Option<DataCommandKind> {
     use DataCommandKind::{Mutation, Read};
     let kind = match command {
@@ -153,6 +187,10 @@ pub fn data_command_kind(command: &str) -> Option<DataCommandKind> {
         "get_ccproxy_error_distribution_stats" => Read,
         "get_ccproxy_provider_token_usage_stats" => Read,
         "delete_ccproxy_stats" => Mutation,
+        // Models.dev catalog (runtime-owned snapshot).
+        "get_models_dev_providers" => Read,
+        "get_models_dev_provider_models" => Read,
+        "resolve_model_profile" => Read,
         // Configuration transfer.
         "export_config_package" => Mutation,
         "import_config_package" => Mutation,
@@ -189,6 +227,7 @@ pub fn data_command_kind(command: &str) -> Option<DataCommandKind> {
 /// malformed body is a stable `invalid_input` error. Responses keep the exact
 /// historical Tauri shapes (camelCase, opaque `Value` payloads preserved) so the
 /// desktop adapter can decode them back into its original Rust types.
+#[cfg(not(feature = "desktop"))]
 pub async fn dispatch_data_command(
     svc: &WorkflowApplicationService,
     command: &str,
@@ -264,6 +303,11 @@ pub async fn dispatch_data_command(
         }
         "delete_ccproxy_stats" => ccproxy_delete_core(svc, body).await,
 
+        // Models.dev catalog (runtime-owned snapshot).
+        "get_models_dev_providers" => get_models_dev_providers_core(svc),
+        "get_models_dev_provider_models" => get_models_dev_provider_models_core(svc, body),
+        "resolve_model_profile" => resolve_model_profile_core(svc, body),
+
         // Configuration transfer.
         "export_config_package" => config_transfer_export_core(svc, body),
         "import_config_package" => config_transfer_import_core(svc, body),
@@ -315,6 +359,7 @@ pub async fn dispatch_data_command(
 // ---------------------------------------------------------------------------
 
 /// Deserializes a typed request body, rejecting unknown fields.
+#[cfg(not(feature = "desktop"))]
 fn parse_body<T: DeserializeOwned>(body: Value) -> Result<T, ApplicationError> {
     serde_json::from_value(body).map_err(|error| {
         ApplicationError::invalid_input(format!("invalid data command body: {error}"))
@@ -322,21 +367,25 @@ fn parse_body<T: DeserializeOwned>(body: Value) -> Result<T, ApplicationError> {
 }
 
 /// Serializes a successful response into the exact historical wire shape.
+#[cfg(not(feature = "desktop"))]
 fn to_value<T: Serialize>(value: T) -> Result<Value, ApplicationError> {
     serde_json::to_value(value).map_err(|error| ApplicationError::internal(error.to_string()))
 }
 
 /// Maps a store failure to a stable internal application error.
+#[cfg(not(feature = "desktop"))]
 fn store_error(error: impl std::fmt::Display) -> ApplicationError {
     ApplicationError::internal(error.to_string())
 }
 
 /// Resolves the writer/reader runtime the store owns.
+#[cfg(not(feature = "desktop"))]
 fn db_runtime(svc: &WorkflowApplicationService) -> Result<Arc<DbRuntime>, ApplicationError> {
     svc.main_store.db_runtime().map_err(store_error)
 }
 
 /// The single in-process sensitive filter used by the message core.
+#[cfg(not(feature = "desktop"))]
 fn sensitive_filter_manager() -> &'static FilterManager {
     static MANAGER: OnceLock<FilterManager> = OnceLock::new();
     MANAGER.get_or_init(FilterManager::new)
@@ -345,6 +394,7 @@ fn sensitive_filter_manager() -> &'static FilterManager {
 /// Git review tools are instantiated with a session `PathGuard` only for child
 /// workflows. Metadata is exposed for agent configuration without registering
 /// executable instances globally.
+#[cfg(not(feature = "desktop"))]
 fn git_review_tool_metadata() -> Vec<Value> {
     vec![
         json!({
@@ -375,6 +425,7 @@ pub struct UpdateAgentOrderBody {
     pub agent_ids: Vec<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn get_available_tools_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Value, ApplicationError> {
@@ -393,6 +444,7 @@ async fn get_available_tools_core(
     Ok(json!(native_meta))
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn update_agent_order_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -443,6 +495,7 @@ pub struct SetActiveProxyGroupBody {
     pub name: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn proxy_group_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -452,6 +505,7 @@ fn proxy_group_add_core(
     Ok(json!(id))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn proxy_group_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -463,6 +517,7 @@ fn proxy_group_update_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn proxy_group_batch_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -482,6 +537,7 @@ fn proxy_group_batch_update_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn proxy_group_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -491,6 +547,7 @@ fn proxy_group_delete_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn get_active_proxy_group_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Value, ApplicationError> {
@@ -503,6 +560,7 @@ fn get_active_proxy_group_core(
     Ok(Value::String(name))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn set_active_proxy_group_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -551,6 +609,7 @@ pub struct SearchNotesBody {
     pub kw: String,
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -571,6 +630,7 @@ async fn note_add_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_get_tags_core(svc: &WorkflowApplicationService) -> Result<Value, ApplicationError> {
     let runtime = db_runtime(svc)?;
     let tags = MainStore::get_tags_with_runtime(runtime)
@@ -579,6 +639,7 @@ async fn note_get_tags_core(svc: &WorkflowApplicationService) -> Result<Value, A
     to_value(tags)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_get_notes_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -591,6 +652,7 @@ async fn note_get_notes_core(
     to_value(notes)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_get_note_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -603,6 +665,7 @@ async fn note_get_note_core(
     to_value(note)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -615,6 +678,7 @@ async fn note_delete_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn note_search_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -679,6 +743,7 @@ pub struct UpdateMessageMetadataBody {
     pub metadata: Value,
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn conversation_list_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Value, ApplicationError> {
@@ -689,6 +754,7 @@ async fn conversation_list_core(
     to_value(conversations)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn conversation_get_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -701,6 +767,7 @@ async fn conversation_get_core(
     to_value(conversation)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn messages_for_conversation_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -713,6 +780,7 @@ async fn messages_for_conversation_core(
     to_value(messages)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn conversation_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -725,6 +793,7 @@ async fn conversation_add_core(
     Ok(json!(id))
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn conversation_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -742,6 +811,7 @@ async fn conversation_update_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn conversation_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -754,6 +824,7 @@ async fn conversation_delete_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn message_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -796,6 +867,7 @@ async fn message_add_core(
     Ok(json!([id, final_content]))
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn message_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -808,6 +880,7 @@ async fn message_delete_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn message_update_metadata_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -839,6 +912,7 @@ pub struct SandboxSchemeIdBody {
 }
 
 /// Assigns a fresh TSID to every scheme item that has no client-supplied id.
+#[cfg(not(feature = "desktop"))]
 pub(crate) fn assign_missing_scheme_item_ids(
     scheme: &mut SandboxScheme,
     tsid_generator: &crate::libs::tsid::TsidGenerator,
@@ -860,6 +934,7 @@ pub(crate) fn assign_missing_scheme_item_ids(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sandbox_list_core(svc: &WorkflowApplicationService) -> Result<Value, ApplicationError> {
     let schemes = svc
         .main_store
@@ -868,6 +943,7 @@ fn sandbox_list_core(svc: &WorkflowApplicationService) -> Result<Value, Applicat
     to_value(schemes)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sandbox_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -882,6 +958,7 @@ fn sandbox_add_core(
     Ok(Value::String(scheme.id))
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sandbox_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -895,6 +972,7 @@ fn sandbox_update_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sandbox_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -917,6 +995,7 @@ pub struct SensitiveConfigBody {
     pub config: SensitiveConfig,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sensitive_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -959,6 +1038,7 @@ pub struct ChatHubOrderBody {
     pub hub_ids: Vec<i64>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn chat_hub_add_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -971,6 +1051,7 @@ fn chat_hub_add_core(
     to_value(hub)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn chat_hub_update_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -988,6 +1069,7 @@ fn chat_hub_update_core(
     to_value(hub)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn chat_hub_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -997,6 +1079,7 @@ fn chat_hub_delete_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn chat_hub_order_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1043,6 +1126,7 @@ pub struct ErrorStatsBody {
     pub backend_model: Option<String>,
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_daily_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1055,6 +1139,7 @@ async fn ccproxy_daily_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_grouped_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1067,6 +1152,7 @@ async fn ccproxy_grouped_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_grouped_range_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1086,6 +1172,7 @@ async fn ccproxy_grouped_range_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_today_cost_core(
     svc: &WorkflowApplicationService,
 ) -> Result<Value, ApplicationError> {
@@ -1096,6 +1183,7 @@ async fn ccproxy_today_cost_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_provider_by_date_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1108,6 +1196,7 @@ async fn ccproxy_provider_by_date_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_error_by_date_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1129,6 +1218,7 @@ async fn ccproxy_error_by_date_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_model_usage_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1141,6 +1231,7 @@ async fn ccproxy_model_usage_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_model_token_usage_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1153,6 +1244,7 @@ async fn ccproxy_model_token_usage_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_error_distribution_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1165,6 +1257,7 @@ async fn ccproxy_error_distribution_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_provider_token_usage_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1177,6 +1270,7 @@ async fn ccproxy_provider_token_usage_core(
     to_value(stats)
 }
 
+#[cfg(not(feature = "desktop"))]
 async fn ccproxy_delete_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1201,6 +1295,7 @@ pub struct ConfigTransferBody {
     pub categories: Vec<ConfigCategory>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn config_transfer_export_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1213,6 +1308,7 @@ fn config_transfer_export_core(
     to_value(preview)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn config_transfer_import_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1332,6 +1428,7 @@ pub struct SkillOrderBody {
     pub skill_ids: Vec<i64>,
 }
 
+#[cfg(not(feature = "desktop"))]
 fn set_config_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1358,11 +1455,13 @@ fn set_config_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn reload_config_core(svc: &WorkflowApplicationService) -> Result<Value, ApplicationError> {
     svc.main_store.reload_config().map_err(store_error)?;
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn activate_api_key_file_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1378,6 +1477,7 @@ fn activate_api_key_file_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn generate_api_key_file_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1393,6 +1493,7 @@ fn generate_api_key_file_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn get_ai_model_by_id_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1406,6 +1507,7 @@ fn get_ai_model_by_id_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn add_ai_model_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1436,6 +1538,7 @@ fn add_ai_model_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn update_ai_model_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1466,6 +1569,7 @@ fn update_ai_model_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn update_ai_model_order_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1477,6 +1581,7 @@ fn update_ai_model_order_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn delete_ai_model_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1486,6 +1591,7 @@ fn delete_ai_model_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn get_ai_skill_by_id_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1499,6 +1605,7 @@ fn get_ai_skill_by_id_core(
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 fn add_ai_skill_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1521,6 +1628,7 @@ fn add_ai_skill_core(
     to_value(skill)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn update_ai_skill_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1542,6 +1650,7 @@ fn update_ai_skill_core(
     to_value(skill)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn update_ai_skill_order_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1553,6 +1662,7 @@ fn update_ai_skill_order_core(
     Ok(Value::Null)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn delete_ai_skill_core(
     svc: &WorkflowApplicationService,
     body: Value,
@@ -1685,12 +1795,151 @@ fn get_all_backups_core(
 }
 
 // ---------------------------------------------------------------------------
+// Models.dev catalog cores (runtime-owned snapshot)
+// ---------------------------------------------------------------------------
+
+/// `get_models_dev_providers` — the runtime-owned provider presets.
+#[cfg(not(feature = "desktop"))]
+fn get_models_dev_providers_core(
+    svc: &WorkflowApplicationService,
+) -> Result<Value, ApplicationError> {
+    to_value(svc.catalog().preset_providers().providers.clone())
+}
+
+/// `get_models_dev_provider_models` — one provider's embedded catalog models.
+///
+/// The response keeps the historical camelCase `ModelDetails` shape so the
+/// desktop adapter can decode it back into its own model descriptor.
+#[cfg(not(feature = "desktop"))]
+fn get_models_dev_provider_models_core(
+    svc: &WorkflowApplicationService,
+    body: Value,
+) -> Result<Value, ApplicationError> {
+    let request: ModelsDevProviderModelsRequest = parse_body(body)?;
+    to_value(provider_models_from_catalog(
+        svc.catalog().snapshot().as_ref(),
+        &request.provider_id,
+    ))
+}
+
+/// Maps one provider's embedded catalog models to the historical wire shape.
+///
+/// Split from the command core so the mapping can be tested against an embedded
+/// catalog without assembling a full application service.
+#[cfg(not(feature = "desktop"))]
+fn provider_models_from_catalog(
+    catalog: &crate::model_catalog_engine::ModelsDevCatalog,
+    provider_id: &str,
+) -> Vec<ModelDetailsDto> {
+    catalog
+        .providers
+        .get(provider_id)
+        .map(|provider| {
+            provider
+                .models
+                .values()
+                .map(|model| ModelDetailsDto {
+                    id: model.id.clone(),
+                    name: model.name.clone(),
+                    protocol: ChatProtocolDto::OpenAI,
+                    max_input_tokens: model
+                        .limit
+                        .as_ref()
+                        .and_then(|limit| limit.input.map(|value| value as u32)),
+                    max_output_tokens: model
+                        .limit
+                        .as_ref()
+                        .and_then(|limit| limit.output.map(|value| value as u32)),
+                    description: None,
+                    last_updated: model
+                        .extra
+                        .get("last_updated")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    family: model.family.clone(),
+                    reasoning: model.reasoning,
+                    function_call: model.tool_call,
+                    image_input: model
+                        .modalities
+                        .as_ref()
+                        .map(|modalities| modalities.input.iter().any(|input| input == "image")),
+                    recommended_temperature: None,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// `resolve_model_profile` — catalog profile plus transport resolution.
+///
+/// The fallback heuristics that used to run inside the desktop command now run
+/// here, so the runtime is the single implementation of profile resolution and
+/// the desktop only forwards the resolved camelCase profile.
+#[cfg(not(feature = "desktop"))]
+fn resolve_model_profile_core(
+    svc: &WorkflowApplicationService,
+    body: Value,
+) -> Result<Value, ApplicationError> {
+    let request: ResolveModelProfileRequest = parse_body(body)?;
+    let metadata_map = request.metadata.as_ref().and_then(|value| {
+        value.as_object().map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_string()))
+                })
+                .collect()
+        })
+    });
+    let provider_id = request
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get("modelsDevProviderId").and_then(Value::as_str));
+    let mut profile = resolve_model_profile_from_catalog_with_context(
+        &svc.catalog().snapshot(),
+        &request.model_id,
+        provider_id,
+        request.base_url.as_deref(),
+    )
+    .map_err(|error| ApplicationError::internal(error.to_string()))?;
+    let normalized_model_id = request.model_id.trim().to_ascii_lowercase();
+    if profile.family.is_none() {
+        profile.family = get_family_from_model_id(&normalized_model_id);
+    }
+    if profile.capabilities.reasoning.is_none() && is_reasoning_supported(&normalized_model_id) {
+        profile.capabilities.reasoning = Some(true);
+    }
+    if profile.capabilities.function_call.is_none()
+        && is_function_call_supported(&normalized_model_id)
+    {
+        profile.capabilities.function_call = Some(true);
+    }
+    if profile.capabilities.image_input.is_none() && is_image_input_supported(&normalized_model_id)
+    {
+        profile.capabilities.image_input = Some(true);
+    }
+    if let Some((adapter, transport_id)) = resolve_transport(
+        &request.model_id,
+        request.base_url.as_deref(),
+        request.backend_protocol.as_deref(),
+        metadata_map.as_ref(),
+    )
+    .map_err(|error| ApplicationError::internal(error.to_string()))?
+    {
+        profile.thinking_adapter = Some(adapter);
+        profile.matched_transport_id = Some(transport_id);
+    }
+    to_value(profile)
+}
+
+// ---------------------------------------------------------------------------
 // Desktop transport adapters
 // ---------------------------------------------------------------------------
 
 /// Canonical control-plane route for data commands.
 #[cfg(feature = "desktop")]
-const DATA_COMMAND_ROUTE: &str = "/control/v1/data-commands";
+const DATA_COMMAND_ROUTE: &str = chatspeed_runtime_client::DATA_COMMANDS_PATH;
 
 /// Resolves the connected control-plane client, or fails when no lease is held.
 #[cfg(feature = "desktop")]
@@ -2557,7 +2806,56 @@ pub async fn get_all_backups(
     )
 }
 
-#[cfg(test)]
+/// `get_models_dev_providers` — the runtime-owned provider presets.
+#[cfg(feature = "desktop")]
+pub async fn list_models_dev_providers(
+    supervisor: &RuntimeSupervisor,
+) -> Result<Vec<ModelsDevPresetProviderDto>, String> {
+    let client = control_plane_client(supervisor).await?;
+    client
+        .models_dev_providers()
+        .await
+        .map_err(map_client_error)
+}
+
+/// `get_models_dev_provider_models` — one provider's embedded catalog models.
+#[cfg(feature = "desktop")]
+pub async fn list_models_dev_provider_models(
+    supervisor: &RuntimeSupervisor,
+    provider_id: String,
+) -> Result<Vec<ModelDetails>, String> {
+    let client = control_plane_client(supervisor).await?;
+    let models = client
+        .models_dev_provider_models(&ModelsDevProviderModelsRequest { provider_id })
+        .await
+        .map_err(map_client_error)?;
+    models.into_iter().map(model_details_from_wire).collect()
+}
+
+/// `resolve_model_profile` — resolves a profile against the runtime snapshot.
+#[cfg(feature = "desktop")]
+pub async fn resolve_model_profile(
+    supervisor: &RuntimeSupervisor,
+    request: ResolveModelProfileRequest,
+) -> Result<ResolvedModelProfile, String> {
+    let client = control_plane_client(supervisor).await?;
+    let value = client
+        .resolve_model_profile(&request)
+        .await
+        .map_err(map_client_error)?;
+    decode(value)
+}
+
+/// Decodes the runtime wire model descriptor back into the desktop domain type.
+#[cfg(feature = "desktop")]
+fn model_details_from_wire(model: ModelDetailsDto) -> Result<ModelDetails, String> {
+    let value = serde_json::to_value(&model).map_err(|error| error.to_string())?;
+    decode(value)
+}
+
+// The data-command cores are runtime-only, so their tests compile only in the
+// desktop-free runtime backend.
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -2580,7 +2878,47 @@ mod tests {
             data_command_kind("get_all_backups"),
             Some(DataCommandKind::Read)
         );
+        assert_eq!(
+            data_command_kind("get_models_dev_providers"),
+            Some(DataCommandKind::Read)
+        );
+        assert_eq!(
+            data_command_kind("get_models_dev_provider_models"),
+            Some(DataCommandKind::Read)
+        );
+        assert_eq!(
+            data_command_kind("resolve_model_profile"),
+            Some(DataCommandKind::Read)
+        );
         assert_eq!(data_command_kind("not_a_command"), None);
+    }
+
+    #[test]
+    fn embedded_catalog_provider_models_keep_the_canonical_shape() {
+        let dir = tempdir().expect("temporary directory");
+        let service = crate::model_catalog_service::ModelsDevCatalogService::load(dir.path())
+            .expect("catalog service");
+        let snapshot = service.snapshot();
+        let (provider_id, provider) = snapshot
+            .providers
+            .iter()
+            .find(|(_, provider)| !provider.models.is_empty())
+            .expect("a provider with models");
+        let expected_id = provider.models.keys().next().expect("a model id").clone();
+
+        let models = provider_models_from_catalog(snapshot.as_ref(), provider_id);
+        assert_eq!(models.len(), provider.models.len());
+
+        let model = models
+            .iter()
+            .find(|model| model.id == expected_id)
+            .expect("the provider model is present");
+        let value = serde_json::to_value(model).expect("serialize");
+        assert_eq!(value["id"], json!(expected_id));
+        assert_eq!(value["protocol"], json!("OpenAI"));
+        // The wire stays camelCase and omits optionals the core never fills.
+        assert!(value.get("functionCall").is_some());
+        assert!(value.get("recommendedTemperature").is_none());
     }
 
     #[tokio::test]

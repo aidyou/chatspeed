@@ -10,12 +10,16 @@
 //! persisted as a permanent fact.
 
 use std::collections::BTreeMap;
+#[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::capability::error::CapabilityError;
+#[cfg(not(feature = "desktop"))]
 use crate::capability::redaction;
-use crate::mcp::client::{McpServerConfig, McpStatus};
+use crate::mcp::client::McpServerConfig;
+#[cfg(not(feature = "desktop"))]
+use crate::mcp::client::McpStatus;
 
 /// One observed runtime answer for a single server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,16 +70,19 @@ impl McpRuntimePort for UnavailableRuntimePort {
 /// It only reads: it asks for the current status of every registered server and
 /// for the tool cache size. It never registers, starts, stops or calls a
 /// server, and it never forwards an error message that could carry a secret.
+#[cfg(not(feature = "desktop"))]
 pub struct ToolManagerRuntimePort {
     chat_state: Arc<crate::ai::interaction::chat_completion::ChatState>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ToolManagerRuntimePort {
     pub fn new(chat_state: Arc<crate::ai::interaction::chat_completion::ChatState>) -> Self {
         Self { chat_state }
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait::async_trait]
 impl McpRuntimePort for ToolManagerRuntimePort {
     async fn observed_runtime(
@@ -112,6 +119,7 @@ impl McpRuntimePort for ToolManagerRuntimePort {
 ///
 /// An `Error` variant is reported as `error` only: the underlying message is
 /// free text that may quote a command line, so it never enters a read model.
+#[cfg(not(feature = "desktop"))]
 fn status_name(status: &McpStatus) -> &'static str {
     match status {
         McpStatus::Starting => "starting",
@@ -198,10 +206,12 @@ impl McpRuntimeEffects for UnavailableRuntimeEffects {
 }
 
 /// The real effect port, driving the desktop `ToolManager`.
+#[cfg(not(feature = "desktop"))]
 pub struct ToolManagerRuntimeEffects {
     chat_state: Arc<crate::ai::interaction::chat_completion::ChatState>,
 }
 
+#[cfg(not(feature = "desktop"))]
 impl ToolManagerRuntimeEffects {
     pub fn new(chat_state: Arc<crate::ai::interaction::chat_completion::ChatState>) -> Self {
         Self { chat_state }
@@ -212,6 +222,7 @@ impl ToolManagerRuntimeEffects {
 ///
 /// A connect failure message can quote a command line or a URL with embedded
 /// credentials, so it is redacted before it can reach an operation record (AC-13).
+#[cfg(not(feature = "desktop"))]
 fn runtime_failure(action: &str, error: crate::tools::ToolError) -> CapabilityError {
     CapabilityError::new(
         crate::capability::error::code::INTERNAL,
@@ -222,6 +233,7 @@ fn runtime_failure(action: &str, error: crate::tools::ToolError) -> CapabilityEr
     )
 }
 
+#[cfg(not(feature = "desktop"))]
 #[async_trait::async_trait]
 impl McpRuntimeEffects for ToolManagerRuntimeEffects {
     async fn start(&self, config: McpServerConfig) -> Result<(), CapabilityError> {
@@ -293,7 +305,7 @@ impl McpRuntimeEffects for ToolManagerRuntimeEffects {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

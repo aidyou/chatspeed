@@ -43,11 +43,14 @@ mod logger;
 mod mcp;
 #[cfg(feature = "desktop")]
 mod runtime_web_bridge;
+#[cfg(feature = "desktop")]
+mod runtime_web_mcp_provider;
 mod scraper;
 mod search;
 mod sensitive;
 mod shortcut;
 mod terminal;
+mod runtime_terminal;
 mod tools;
 mod tray;
 mod updater;
@@ -75,7 +78,6 @@ use tauri_plugin_autostart::ManagerExt;
 
 // use commands::toolbar::*;
 use crate::error::AppError;
-use ai::model_catalog_updater::ModelsDevCatalogService;
 use commands::agent::*;
 use commands::capability::*;
 use commands::ccproxy::*;
@@ -748,11 +750,8 @@ pub async fn run() -> crate::error::Result<()> {
             let update_manager = Arc::new(UpdateManager::new(app.handle().clone()));
             app.manage(update_manager.clone());
 
-            // TerminalManager
-            // Owns workflow-window PTYs independently from the ReAct workflow runtime.
-            let terminal_manager = Arc::new(crate::terminal::TerminalManager::new(app.handle().clone()));
-            app.manage(terminal_manager);
-
+            // The runtime owns all interactive PTYs. Desktop terminal commands
+            // are typed RuntimeSupervisor adapters and keep no local process state.
             // ChatHubPageState
             // Owns the single ChatHub page docked inside the Workflow window.
             app.manage(chat_hub::ChatHubPageState::new());
@@ -771,14 +770,25 @@ pub async fn run() -> crate::error::Result<()> {
             let runtime_config_cache = Arc::new(crate::runtime_config::RuntimeConfigCache::new());
             app.manage(runtime_config_cache.clone());
             {
-                let runtime_dir = crate::runtime_client::default_runtime_dir();
                 let app_handle = app.handle().clone();
                 let supervisor = runtime_supervisor.clone();
                 let cache = runtime_config_cache.clone();
                 tauri::async_runtime::spawn(async move {
+                    // Resolve the typed launch configuration in the background so
+                    // a missing platform directory never blocks the first paint;
+                    // it is reported as unavailable instead of a `.`-relative
+                    // fallback.
+                    let launch_config = match crate::runtime_client::default_launch_config() {
+                        Ok(config) => config,
+                        Err(error) => {
+                            log::warn!("[RuntimeSupervisor] unavailable: {}", error);
+                            return;
+                        }
+                    };
+                    let runtime_dir = launch_config.runtime_dir().to_path_buf();
                     if let Err(error) = supervisor
                         .connect_or_start(
-                            &runtime_dir,
+                            &launch_config,
                             crate::runtime_client::DESKTOP_CLIENT_ID,
                         )
                         .await
@@ -796,16 +806,20 @@ pub async fn run() -> crate::error::Result<()> {
                         runtime_dir
                     );
 
-                    // Open the client WebView capability bridge. Only the desktop
-                    // owns the Tauri WebView, so the runtime reaches `web_fetch`
-                    // and `web_search` exclusively through this client-pull
-                    // session. A failure is reported and leaves web capabilities
-                    // unavailable; it never starts a second runtime or a local
-                    // fallback.
-                    match crate::runtime_web_bridge::start(app_handle.clone(), &supervisor).await {
-                        Ok(()) => log::info!("[RuntimeWebBridge] client capability bridge started"),
+                    // Start the dedicated desktop Web MCP provider and register
+                    // it with the runtime. The runtime reaches `web_fetch` and
+                    // `web_search` as an ordinary MCP server, so the fixed web
+                    // tools stay on the canonical ToolManager path. A failure is
+                    // reported and leaves web capabilities unavailable; it never
+                    // starts a second runtime or a local fallback.
+                    match crate::runtime_web_mcp_provider::start(app_handle.clone(), &supervisor)
+                        .await
+                    {
+                        Ok(()) => {
+                            log::info!("[WebMcpProvider] loopback Web MCP provider started")
+                        }
                         Err(error) => {
-                            log::warn!("[RuntimeWebBridge] bridge unavailable: {}", error)
+                            log::warn!("[WebMcpProvider] provider unavailable: {}", error)
                         }
                     }
 
@@ -936,9 +950,9 @@ pub async fn run() -> crate::error::Result<()> {
 /// Applies the runtime-owned startup configuration to local desktop side effects.
 ///
 /// The values live in the runtime configuration; the desktop only mirrors the
-/// client-side consequences (interface locale, autostart registration, the
-/// idle-sleep inhibitor and the Models.dev catalog refresh) and never opens a
-/// database.
+/// client-side consequences (interface locale, autostart registration and the
+/// idle-sleep inhibitor) and never opens a database. The Models.dev catalog is
+/// owned and refreshed by the runtime.
 async fn apply_runtime_startup_config(
     app: &tauri::AppHandle,
     supervisor: Arc<crate::runtime_client::RuntimeSupervisor>,
@@ -987,48 +1001,6 @@ async fn apply_runtime_startup_config(
     let workflow_prevent_idle_sleep = snapshot.get_bool(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false);
     crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
         .set_enabled(workflow_prevent_idle_sleep);
-
-    spawn_models_dev_catalog(app.clone(), supervisor, snapshot.proxy_type());
-}
-
-/// Starts the Models.dev catalog refresh off the startup critical path.
-///
-/// The catalog snapshot is a desktop-side cache; only the outbound proxy it
-/// refreshes through comes from the runtime configuration, so the proxy is
-/// re-read on each cadence instead of being copied out of a local store.
-fn spawn_models_dev_catalog(
-    app: tauri::AppHandle,
-    supervisor: Arc<crate::runtime_client::RuntimeSupervisor>,
-    initial_proxy: crate::ai::network::ProxyType,
-) {
-    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || {
-        let catalog_service = match ModelsDevCatalogService::load(&app_data_dir) {
-            Ok(service) => service,
-            Err(error) => {
-                log::error!("Failed to initialize Models.dev catalog service: {}", error);
-                return;
-            }
-        };
-        app.manage(catalog_service.clone());
-        tauri::async_runtime::spawn(async move {
-            let mut proxy_type = initial_proxy;
-            loop {
-                if let Err(error) = catalog_service.refresh(proxy_type.clone()).await {
-                    log::warn!(
-                        "Models.dev catalog refresh failed; keeping last known snapshot: {}",
-                        error
-                    );
-                }
-                // Refresh failures are retried on a bounded hourly cadence; successful
-                // refreshes are gated by the service's persisted 24-hour timestamp.
-                tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
-                if let Ok(snapshot) = crate::runtime_config::load(supervisor.as_ref()).await {
-                    proxy_type = snapshot.proxy_type();
-                }
-            }
-        });
-    });
 }
 
 /// Restores the saved geometry of the windows created during setup.

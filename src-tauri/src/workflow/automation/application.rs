@@ -74,15 +74,6 @@ impl AutomationApplicationService {
         Ok(row.as_ref().map(to_view))
     }
 
-    /// Legacy camelCase row reads for the existing Tauri editor wire (INV-9).
-    /// They are read-only observations over the same store authority; every
-    /// *mutation* still resolves to the canonical facade methods.
-    pub(crate) fn list_rows(&self) -> Result<Vec<WorkflowAutomation>, AutomationError> {
-        self.store()
-            .list_workflow_automations()
-            .map_err(|e| AutomationError::internal(e.to_string()))
-    }
-
     pub(crate) fn get_row(
         &self,
         automation_id: &str,
@@ -500,41 +491,6 @@ impl AutomationApplicationService {
             AutomationMutationOutcome::Applied,
             &created,
         ))
-    }
-
-    /// Legacy editor save adapter. It creates when the id is absent or the row
-    /// does not exist yet, and compare-and-set updates an existing row using its
-    /// current revision — preserving the historical camelCase request/return wire
-    /// while every write still flows through the facade internals (INV-2/INV-9).
-    pub(crate) fn compat_save(
-        &self,
-        request: &WorkflowAutomationRequest,
-    ) -> Result<WorkflowAutomation, AutomationError> {
-        let spec = request_to_spec(request);
-        self.validate_spec(&spec)?;
-        let provided = request
-            .id
-            .clone()
-            .map(|id| id.trim().to_string())
-            .filter(|id| !id.is_empty());
-        let result = match provided.as_deref() {
-            Some(id) if self.get_row(id)?.is_some() => {
-                let revision = self
-                    .get_row(id)?
-                    .ok_or_else(|| AutomationError::not_found(format!("Automation {id}")))?
-                    .revision;
-                self.update_existing(id, &spec, revision)?
-            }
-            Some(id) => self.insert_with_id(&spec, id.to_string())?,
-            None => self.insert_new(&spec)?,
-        };
-        let automation_id = result
-            .automation
-            .as_ref()
-            .map(|view| view.automation_id.clone())
-            .ok_or_else(|| AutomationError::internal("save produced no automation"))?;
-        self.get_row(&automation_id)?
-            .ok_or_else(|| AutomationError::internal("saved automation disappeared"))
     }
 
     fn update_existing(
@@ -1062,25 +1018,6 @@ fn spec_to_request(spec: &AutomationSpec, id: Option<String>) -> WorkflowAutomat
         continuous_context: spec.continuous_context,
         self_review: spec.self_review,
         enabled: spec.enabled,
-    }
-}
-
-/// Converts a legacy camelCase editor request into the canonical spec so the
-/// compat save adapter can share the facade's single write path (INV-2).
-fn request_to_spec(request: &WorkflowAutomationRequest) -> AutomationSpec {
-    AutomationSpec {
-        title: request.title.clone(),
-        prompt: request.prompt.clone(),
-        prompt_file_path: request.prompt_file_path.clone(),
-        agent_id: request.agent_id.clone(),
-        agent_config: request.agent_config.clone(),
-        allowed_paths: request.allowed_paths.clone(),
-        shell_config: request.shell_config.clone(),
-        schedule_kind: request.schedule_kind.clone(),
-        schedule_config: request.schedule_config.clone(),
-        continuous_context: request.continuous_context,
-        self_review: request.self_review,
-        enabled: request.enabled,
     }
 }
 

@@ -24,20 +24,22 @@
 //!   desktop compatibility adapter, not a plugin API.
 //!
 //! Requests use the canonical snake_case HTTP DTOs from
-//! [`crate::workflow::react::application`]. Responses from the original routes
+//! [`chatspeed_contracts::workflow`]. Responses from the original routes
 //! are converted back to the historical Tauri camelCase wire so existing
 //! frontend callers keep the same JSON shape.
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Map, Value};
 
+use chatspeed_contracts::workflow::{
+    WorkflowCreateRequest, WorkflowStartRequest, WORKFLOW_EVENTS_MAX_LIMIT,
+};
 use chatspeed_runtime_client::{ClientError, RuntimeClient};
 
 use crate::commands::workflow::{WorkflowContextFrameResult, WorkspaceFile};
-use crate::db::{MainStore, Workflow, WorkflowEfficiencyReport, WorkflowMessage};
+use crate::db::{Workflow, WorkflowEfficiencyReport, WorkflowMessage};
 use crate::runtime_client::{RuntimeSupervisor, RuntimeUnavailable};
 use crate::tools::ShellExecutionMode;
-use crate::workflow::react::application::{WorkflowCreateRequest, WorkflowStartRequest};
 use crate::workflow::react::dispatcher::DispatcherMetricsSnapshot;
 use crate::workflow::react::events::WorkflowEventRecord;
 use crate::workflow::react::skills::SkillManifest;
@@ -157,7 +159,7 @@ pub async fn get_workflow_events(
     supervisor: &RuntimeSupervisor,
     session_id: &str,
 ) -> Result<Vec<WorkflowEventRecord>, String> {
-    const PAGE_LIMIT: u32 = MainStore::WORKFLOW_EVENTS_MAX_LIMIT;
+    const PAGE_LIMIT: u32 = WORKFLOW_EVENTS_MAX_LIMIT;
     let client = control_plane_client(supervisor).await?;
     let base = format!(
         "{WORKFLOWS_ROUTE}/{}/events",

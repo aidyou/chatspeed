@@ -1,3 +1,7 @@
+// The `Gateway` output trait is implemented only by the in-process runtime hub;
+// the desktop reaches the runtime over the control plane and never links it.
+#![cfg(not(feature = "desktop"))]
+
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::types::GatewayPayload;
 

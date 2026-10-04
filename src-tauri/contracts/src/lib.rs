@@ -10,15 +10,20 @@ pub mod chat;
 pub mod discovery;
 pub mod error;
 pub mod lease;
+pub mod model_catalog;
 pub mod protocol;
 pub mod sse;
+pub mod terminal;
+pub mod web_mcp;
+pub mod workflow;
 
 pub use bridge::{
-    ClientBridgeCancelRequest, ClientBridgeCapability, ClientBridgeDeclaration,
-    ClientBridgeRegistration, ClientBridgeRegistrationResponse, ClientBridgeUnregisterRequest,
-    ClientBridgeWorkEnvelope, ClientCapabilityError, ClientCapabilityInvocation,
-    ClientCapabilityResult, ClientCapabilityStatus, BRIDGE_CAPABILITY_ALLOWLIST,
-    BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
+    validate_capability_arguments, ClientBridgeCancelRequest, ClientBridgeCapability,
+    ClientBridgeDeclaration, ClientBridgeRegistration, ClientBridgeRegistrationResponse,
+    ClientBridgeUnregisterRequest, ClientBridgeWorkEnvelope, ClientCapabilityError,
+    ClientCapabilityInvocation, ClientCapabilityResult, ClientCapabilityStatus,
+    BRIDGE_CAPABILITY_ALLOWLIST, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
+    WEB_FETCH_ARGUMENTS, WEB_SEARCH_ARGUMENTS,
 };
 pub use chat::{
     ChatProtocolDto, ChatResponseDto, ChatStartRequest, ChatStartResponse, ChatStopRequest,
@@ -28,8 +33,28 @@ pub use chat::{
 pub use discovery::{ControlPlaneDiscovery, CONTROL_PLANE_HOST, DISCOVERY_FILE_NAME};
 pub use error::{ErrorDetail, ErrorEnvelope};
 pub use lease::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
+pub use model_catalog::{
+    ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
+};
 pub use protocol::{MetaResponse, PROTOCOL_MAJOR, PROTOCOL_VERSION, SCHEMA_VERSION};
 pub use sse::{ResetError, ResetRequired, StreamEnvelope, STREAM_SCHEMA_VERSION};
+pub use terminal::{
+    TerminalCloseRequest, TerminalCreateRequest, TerminalExitEvent, TerminalListSessionsRequest,
+    TerminalListShellsRequest, TerminalOutputEvent, TerminalResizeRequest,
+    TerminalSessionMetadataDto, TerminalShellDto, TerminalStreamEnvelope, TerminalStreamEvent,
+    TerminalWriteRequest, TERMINAL_SCHEMA_VERSION,
+};
+pub use web_mcp::{
+    validate_web_mcp_port, web_mcp_endpoint, WebMcpProviderError, WebMcpProviderRegistration,
+    WebMcpProviderRegistrationResponse, WebMcpProviderStatus, WEB_MCP_ALIASES,
+    WEB_MCP_CLIENT_HEADER, WEB_MCP_CODE_CONFLICT, WEB_MCP_CODE_FORBIDDEN,
+    WEB_MCP_CODE_INVALID_PORT, WEB_MCP_CODE_LEASE_INVALID, WEB_MCP_CODE_UNAVAILABLE,
+    WEB_MCP_ENDPOINT_PATH, WEB_MCP_INSTANCE_HEADER, WEB_MCP_LEASE_HEADER,
+    WEB_MCP_LOOPBACK_HOST, WEB_MCP_PROOF_HEADER, WEB_MCP_PROTOCOL_VERSION,
+    WEB_MCP_REGISTER_PATH, WEB_MCP_SCHEMA_VERSION, WEB_MCP_SERVER_NAME, WEB_MCP_STATUS_PATH,
+    WEB_MCP_UNREGISTER_PATH,
+};
+pub use workflow::{WorkflowCreateRequest, WorkflowEventsQuery, WorkflowStartRequest};
 
 #[cfg(test)]
 mod fixtures {

@@ -2,7 +2,9 @@ use crate::db::{error::StoreError, runtime::DbRuntime, ProxyGroup};
 
 use log::error;
 use parking_lot::{Condvar, Mutex as ParkingMutex, RwLock};
-use rusqlite::{params, Connection, OpenFlags, Result};
+#[cfg(not(feature = "desktop"))]
+use rusqlite::params;
+use rusqlite::{Connection, OpenFlags, Result};
 
 use rust_i18n::t;
 use serde_json::Value;
@@ -76,6 +78,7 @@ impl Config {
     /// # Returns
     ///
     /// Returns an `Arc<Vec<AiModel>>` containing the AI models.
+    #[cfg(not(feature = "desktop"))]
     pub fn get_ai_models(&self) -> Result<Vec<AiModel>, StoreError> {
         if self.api_keys_locked {
             return Err(StoreError::InvalidData(
@@ -107,6 +110,7 @@ impl Config {
     /// # Returns
     ///
     /// Returns an `Arc<Vec<AiSkill>>` containing the AI skills.
+    #[cfg(not(feature = "desktop"))]
     pub fn get_ai_skills(&self) -> Vec<AiSkill> {
         self.ai_skills.clone()
     }
@@ -165,6 +169,7 @@ impl Config {
         self.mcps = mcps;
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_proxy_groups(&self) -> Vec<ProxyGroup> {
         self.proxy_groups.clone()
     }
@@ -206,6 +211,7 @@ impl ConfigCache {
         self.inner.read().get_setting(key).cloned()
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn settings(&self) -> HashMap<String, Value> {
         self.inner.read().settings.clone()
     }
@@ -214,11 +220,12 @@ impl ConfigCache {
         self.inner.read().get_ai_model_by_id(id)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_ai_models(&self) -> Result<Vec<AiModel>, StoreError> {
         self.inner.read().get_ai_models()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(feature = "desktop")))]
     pub fn api_keys_locked(&self) -> bool {
         self.inner.read().api_keys_locked
     }
@@ -227,6 +234,7 @@ impl ConfigCache {
         self.inner.read().get_ai_skill_by_id(id)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_ai_skills(&self) -> Vec<AiSkill> {
         self.inner.read().get_ai_skills()
     }
@@ -239,6 +247,7 @@ impl ConfigCache {
         self.inner.read().get_mcp_by_id(id)
     }
 
+    #[cfg(not(feature = "desktop"))]
     pub fn get_proxy_groups(&self) -> Vec<ProxyGroup> {
         self.inner.read().get_proxy_groups()
     }
@@ -480,6 +489,7 @@ impl MainStore {
         })
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn restore_machine_specific_config(
         &self,
         key: &str,
@@ -541,6 +551,7 @@ impl MainStore {
     /// Performs a rollback-safe restoration of the database.
     /// It preserves machine-specific configurations from the current database,
     /// replaces the physical file, and reloads everything.
+    #[cfg(not(feature = "desktop"))]
     pub fn atomic_restore<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         temp_db_path: P,
@@ -861,10 +872,12 @@ impl MainStore {
 #[cfg(test)]
 mod tests {
     use super::MainStore;
+    #[cfg(not(feature = "desktop"))]
     use crate::db::api_key_crypto::API_KEY_FILE_CONFIG_KEY;
     use serde_json::json;
     use std::sync::{Arc, Barrier};
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[tokio::test]
     async fn checkpoint_resumes_runtime_submissions() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -904,6 +917,7 @@ mod tests {
         assert_eq!(table_count, 1);
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn runtime_lookup_waits_until_restore_publishes_a_replacement() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -920,6 +934,7 @@ mod tests {
         waiting_lookup.join().unwrap().unwrap();
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn checkpoint_waits_for_the_exclusive_maintenance_lock() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -976,6 +991,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn atomic_restore_replaces_an_existing_database() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1003,6 +1019,7 @@ mod tests {
         assert!(!staged_path.exists());
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn atomic_restore_recovers_the_original_database_when_installation_fails() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1025,6 +1042,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn missing_v2_key_file_opens_the_database_in_locked_state() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1056,6 +1074,7 @@ mod tests {
         assert!(reopened.config.get_ai_models().is_err());
     }
 
+    #[cfg(all(test, not(feature = "desktop")))]
     #[test]
     fn atomic_restore_preserves_the_local_api_key_file_path() {
         let temp_dir = tempfile::tempdir().unwrap();

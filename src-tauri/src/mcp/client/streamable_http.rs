@@ -28,11 +28,32 @@ use super::{
 /// - Executing remote tool calls
 pub struct StreamableHttpClient {
     core: McpClientCore,
+    /// Upper bound on transport reconnect attempts for this client.
+    ///
+    /// Ordinary servers keep the historical long retry budget; the dedicated
+    /// desktop Web MCP provider uses a single attempt so a dead provider fails
+    /// its in-flight call immediately instead of silently reconnecting.
+    max_retries: usize,
+    /// Base backoff between reconnect attempts.
+    retry_base_duration: Duration,
 }
 
 impl StreamableHttpClient {
     /// Creates a new HTTP Protocol of MCP client instance with given configuration
     pub fn new(config: McpServerConfig) -> McpClientResult<Self> {
+        Self::with_retry(config, 120, Duration::from_secs(2))
+    }
+
+    /// Creates a streamable HTTP client with an explicit, bounded retry budget.
+    ///
+    /// The dedicated desktop Web MCP provider uses this so a dead or released
+    /// provider is never silently reconnected: it is reached once and then fails
+    /// closed as unavailable.
+    pub fn with_retry(
+        config: McpServerConfig,
+        max_retries: usize,
+        retry_base_duration: Duration,
+    ) -> McpClientResult<Self> {
         if config.protocol_type != McpProtocolType::StreamableHttp {
             return Err(McpError::ClientConfigError(
                 t!(
@@ -52,6 +73,8 @@ impl StreamableHttpClient {
 
         Ok(StreamableHttpClient {
             core: McpClientCore::new(config),
+            max_retries,
+            retry_base_duration,
         })
     }
 
@@ -124,8 +147,8 @@ impl McpClient for StreamableHttpClient {
 
         let http_client = self.build_http_client_async().await?;
         let mut retry_config = ExponentialBackoff::default();
-        retry_config.max_times = Some(120);
-        retry_config.base_duration = Duration::from_secs(2);
+        retry_config.max_times = Some(self.max_retries);
+        retry_config.base_duration = self.retry_base_duration;
 
         let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url);
         transport_config.retry_config = Arc::new(retry_config);

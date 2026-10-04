@@ -4,6 +4,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
 pub struct WorkflowAutomationShellConfig {
     pub command: Option<String>,
     #[serde(default, alias = "file_path")]
@@ -41,6 +42,7 @@ pub struct WorkflowAutomationRunNowResult {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg(not(feature = "desktop"))]
 pub struct DailyScheduleConfig {
     #[serde(default)]
     pub time: Option<String>,
@@ -54,6 +56,7 @@ pub struct DailyScheduleConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg(not(feature = "desktop"))]
 pub struct IntervalScheduleConfig {
     #[serde(alias = "interval_hours")]
     pub interval_minutes: u32,
@@ -66,6 +69,7 @@ pub struct IntervalScheduleConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg(not(feature = "desktop"))]
 pub struct OnceScheduleConfig {
     pub run_at: String,
 }
@@ -80,13 +84,16 @@ pub struct OnceScheduleConfig {
 
 /// Current plan-schema version. A `draft` records it so `apply` can reject a
 /// plan produced by an incompatible build rather than misinterpreting it.
+#[cfg(not(feature = "desktop"))]
 pub const AUTOMATION_PLAN_VERSION: &str = "automation-plan-v1";
 
 /// The actor-scope prefix for a mutation made over the control plane, so a CLI
 /// retry and a desktop click with the same idempotency key never collide with
 /// each other's durable receipt.
+#[cfg(not(feature = "desktop"))]
 pub const AUTOMATION_ACTOR_SCOPE_CONTROL_PLANE: &str = "control-plane";
 /// The actor-scope prefix for a mutation made from the desktop/Tauri layer.
+#[cfg(not(feature = "desktop"))]
 pub const AUTOMATION_ACTOR_SCOPE_DESKTOP: &str = "desktop";
 
 /// Explicit, persistable automation configuration. Permission-bearing fields

@@ -3,6 +3,10 @@
 pub mod ai_temp;
 pub mod fs;
 pub mod lang;
+// The TSID generator backs runtime-only identifiers (workflow sessions, shell
+// output files); no desktop path constructs one, so the desktop crate does not
+// compile it.
+#[cfg(not(feature = "desktop"))]
 pub mod tsid;
 pub mod util;
 // Desktop-only: wraps Tauri webview handles, which the desktop-free runtime

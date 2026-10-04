@@ -1,12 +1,12 @@
 //! Shared sandbox scheme persistence.
 
+#[cfg(not(feature = "desktop"))]
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    db::{MainStore, StoreError},
-    tools::SandboxSchemeConfig,
-};
+#[cfg(not(feature = "desktop"))]
+use crate::db::MainStore;
+use crate::{db::StoreError, tools::SandboxSchemeConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +36,7 @@ impl SandboxScheme {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 impl MainStore {
     pub fn add_sandbox_scheme(&self, scheme: &SandboxScheme) -> Result<String, StoreError> {
         scheme.validate()?;
@@ -172,6 +173,7 @@ impl MainStore {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn scheme_reference_names(
     conn: &rusqlite::Connection,
     id: &str,
@@ -184,7 +186,7 @@ fn scheme_reference_names(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::{

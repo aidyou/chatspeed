@@ -2,14 +2,17 @@
 //!
 //! This module deliberately keeps configuration transfer separate from full database backups.
 
+#[cfg(not(feature = "desktop"))]
+use std::io::Write;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Write,
     path::Path,
 };
 
+#[cfg(not(feature = "desktop"))]
 use chrono::Utc;
+#[cfg(not(feature = "desktop"))]
 use rusqlite::{
     params,
     types::{Value as SqlValue, ValueRef},
@@ -124,6 +127,10 @@ pub fn category_closure(
     categories
 }
 
+// Configuration package export/import and its row helpers are runtime-only; the
+// desktop keeps only the DTOs and `inspect_config_package`, which runs on the
+// richer runtime implementation.
+#[cfg(not(feature = "desktop"))]
 pub fn export_config_package(
     conn: &Connection,
     path: impl AsRef<Path>,
@@ -227,6 +234,7 @@ pub fn inspect_config_package(path: impl AsRef<Path>) -> Result<ConfigTransferPr
     validate_package(&package)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn read_config_package(path: impl AsRef<Path>) -> Result<ConfigTransferPackage, StoreError> {
     let package: ConfigTransferPackage = serde_json::from_slice(&fs::read(path)?)?;
     validate_package(&package)?;
@@ -985,12 +993,14 @@ fn required_columns(category: ConfigCategory) -> &'static [&'static str] {
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn string_field_set(rows: &[BTreeMap<String, Value>], field: &str) -> BTreeSet<String> {
     rows.iter()
         .filter_map(|row| row.get(field)?.as_str().map(ToString::to_string))
         .collect()
 }
 
+#[cfg(not(feature = "desktop"))]
 fn read_rows(conn: &Connection, sql: &str) -> Result<Vec<BTreeMap<String, Value>>, StoreError> {
     let mut statement = conn.prepare(sql)?;
     let names: Vec<String> = statement
@@ -1022,6 +1032,7 @@ fn read_rows(conn: &Connection, sql: &str) -> Result<Vec<BTreeMap<String, Value>
         .map_err(StoreError::from)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn read_package_rows(
     conn: &Connection,
     category: ConfigCategory,
@@ -1038,6 +1049,7 @@ fn read_package_rows(
         .collect())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn read_config(conn: &Connection, keys: &[&str]) -> Result<BTreeMap<String, Value>, StoreError> {
     let mut output = BTreeMap::new();
     let mut statement = conn.prepare("SELECT value FROM config WHERE key = ?1")?;
@@ -1052,6 +1064,7 @@ fn read_config(conn: &Connection, keys: &[&str]) -> Result<BTreeMap<String, Valu
     Ok(output)
 }
 
+#[cfg(not(feature = "desktop"))]
 pub fn import_config_package(
     store: &super::MainStore,
     path: impl AsRef<Path>,
@@ -1082,6 +1095,7 @@ pub fn import_config_package(
     Ok(result)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn import_in_transaction(
     transaction: &Transaction<'_>,
     package: &ConfigTransferPackage,
@@ -1191,6 +1205,7 @@ fn import_in_transaction(
     Ok(result)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn sanitize_missing_agent_parents(transaction: &Transaction<'_>) -> Result<(), StoreError> {
     transaction.execute(
         "UPDATE agents
@@ -1202,6 +1217,7 @@ fn sanitize_missing_agent_parents(transaction: &Transaction<'_>) -> Result<(), S
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn replace_auto_table(
     transaction: &Transaction<'_>,
     table: &str,
@@ -1215,6 +1231,7 @@ fn replace_auto_table(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn replace_config(
     transaction: &Transaction<'_>,
     keys: &[&str],
@@ -1232,6 +1249,7 @@ fn replace_config(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn protected_agent_ids(transaction: &Transaction<'_>) -> Result<BTreeSet<String>, StoreError> {
     let mut ids = BTreeSet::new();
     for sql in [
@@ -1263,6 +1281,7 @@ fn protected_agent_ids(transaction: &Transaction<'_>) -> Result<BTreeSet<String>
     }
 }
 
+#[cfg(not(feature = "desktop"))]
 fn retained_agent_ids(
     transaction: &Transaction<'_>,
     protected_agents: &BTreeSet<String>,
@@ -1279,6 +1298,7 @@ fn retained_agent_ids(
     Ok(ids)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn protected_sandbox_ids(
     transaction: &Transaction<'_>,
     retained_agents: &BTreeSet<String>,
@@ -1304,6 +1324,7 @@ fn protected_sandbox_ids(
     Ok(output)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn replace_sandbox_schemes(
     transaction: &Transaction<'_>,
     payload: &TablePayload,
@@ -1345,6 +1366,7 @@ fn replace_sandbox_schemes(
     Ok(preserved_count)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn replace_agents(
     transaction: &Transaction<'_>,
     payload: &TablePayload,
@@ -1387,6 +1409,7 @@ fn replace_agents(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn insert_row(
     transaction: &Transaction<'_>,
     table: &str,
@@ -1424,6 +1447,7 @@ fn insert_row(
     Ok(())
 }
 
+#[cfg(not(feature = "desktop"))]
 fn upsert_row(
     transaction: &Transaction<'_>,
     table: &str,
@@ -1466,12 +1490,14 @@ fn upsert_row(
     insert_row(transaction, table, row)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn table_columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>, StoreError> {
     let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
     Ok(rows.collect::<Result<BTreeSet<_>, _>>()?)
 }
 
+#[cfg(not(feature = "desktop"))]
 fn json_to_sql(value: &Value) -> Result<SqlValue, StoreError> {
     Ok(match value {
         Value::Null => SqlValue::Null,
@@ -1492,6 +1518,7 @@ fn json_to_sql(value: &Value) -> Result<SqlValue, StoreError> {
     })
 }
 
+#[cfg(not(feature = "desktop"))]
 fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), StoreError> {
     let parent = path.parent().ok_or_else(|| {
         StoreError::InvalidData("configuration package path has no parent directory".into())
@@ -1506,7 +1533,7 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), StoreError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

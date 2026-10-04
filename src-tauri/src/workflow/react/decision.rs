@@ -51,7 +51,7 @@ const COMPLETION_DECISION_INSTRUCTIONS: &str = concat!(
 
 /// Where a completion-report candidate came from, as far as the program can prove.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompletionReportOrigin {
+pub enum CompletionReportOrigin {
     /// The `summary` argument of the current `complete_workflow` call.
     ThisCallSummary,
     /// Assistant text written in the same turn as the current `complete_workflow` call.
@@ -84,7 +84,7 @@ impl CompletionReportOrigin {
 
 /// One candidate report the task-completion decision may publish.
 #[derive(Debug, Clone)]
-pub(crate) struct CompletionReportCandidate {
+pub struct CompletionReportCandidate {
     pub content: String,
     pub origin: CompletionReportOrigin,
 }

@@ -1,27 +1,36 @@
-use crate::sensitive::{
-    error::SensitiveError,
-    traits::{adjust_to_char_boundary, FilterCandidate, SensitiveDataFilter},
-};
+use crate::sensitive::error::SensitiveError;
+use crate::sensitive::traits::SensitiveDataFilter;
+#[cfg(not(feature = "desktop"))]
+use crate::sensitive::traits::{adjust_to_char_boundary, FilterCandidate};
+#[cfg(not(feature = "desktop"))]
 use regex::Regex;
 
 /// A filter for detecting IPv4 and IPv6 addresses.
 pub struct IpAddressFilter {
+    #[cfg(not(feature = "desktop"))]
     regex: Regex,
 }
 
 impl IpAddressFilter {
     /// Creates a new `IpAddressFilter` and pre-compiles its regex.
     pub fn new() -> Result<Self, SensitiveError> {
-        let ipv4_pattern = r#"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"#;
-        let ipv6_pattern = r#"(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}"#;
-        let regex =
-            Regex::new(&format!(r#"\b(?:{}|{})\b"#, ipv4_pattern, ipv6_pattern)).map_err(|e| {
-                SensitiveError::RegexCompilationFailed {
-                    pattern: "ip_address_regex".to_string(),
-                    message: e.to_string(),
-                }
-            })?;
-        Ok(Self { regex })
+        #[cfg(not(feature = "desktop"))]
+        {
+            let ipv4_pattern = r#"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"#;
+            let ipv6_pattern = r#"(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}"#;
+            let regex =
+                Regex::new(&format!(r#"\b(?:{}|{})\b"#, ipv4_pattern, ipv6_pattern)).map_err(|e| {
+                    SensitiveError::RegexCompilationFailed {
+                        pattern: "ip_address_regex".to_string(),
+                        message: e.to_string(),
+                    }
+                })?;
+            Ok(Self { regex })
+        }
+        #[cfg(feature = "desktop")]
+        {
+            Ok(Self {})
+        }
     }
 }
 
@@ -30,10 +39,12 @@ impl SensitiveDataFilter for IpAddressFilter {
         "IPAddress"
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn supported_languages(&self) -> Vec<&'static str> {
         Vec::new() // Language-agnostic
     }
 
+    #[cfg(not(feature = "desktop"))]
     fn filter(
         &self,
         text: &str,
@@ -61,7 +72,7 @@ impl SensitiveDataFilter for IpAddressFilter {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
 

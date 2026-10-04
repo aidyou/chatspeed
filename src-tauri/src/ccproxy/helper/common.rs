@@ -1,5 +1,5 @@
 use crate::{
-    ai::{model_catalog::resolve_transport, network::ProxyType, util::get_proxy_type_for_key},
+    ai::{network::ProxyType, util::get_proxy_type_for_key},
     ccproxy::{
         errors::{CCProxyError, ProxyResult},
         helper::{proxy_rotator::GlobalApiKey, CC_PROXY_ROTATOR},
@@ -9,6 +9,7 @@ use crate::{
     commands::chat::setup_chat_proxy,
     constants::CFG_CHAT_COMPLETION_PROXY,
     db::{AiModel, MainStore, ProxyGroup},
+    model_catalog_engine::resolve_transport,
 };
 use indexmap::IndexMap;
 use reqwest::Client;

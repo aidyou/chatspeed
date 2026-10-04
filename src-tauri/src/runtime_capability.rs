@@ -299,22 +299,15 @@ pub async fn mcp_update_tool_status(
 // Client WebView capability bridge (U-7)
 // ---------------------------------------------------------------------------
 
-/// The runtime's client WebView capability registry and its bridge status.
-///
-/// The runtime owns the contract; the desktop never decides for itself whether
-/// a WebView tool is available. The registry reports `available` only while a
-/// live, lease-bound Tauri bridge declares the capability; otherwise it remains
-/// `unavailable` and the invocation fails closed.
+/// Legacy compatibility read for clients that still display the old capability
+/// inventory. Runtime workflow execution does not use this route; it uses the
+/// canonical MCP registry.
 pub async fn client_capabilities(supervisor: &RuntimeSupervisor) -> CapResult<Value> {
     get_value(supervisor, CLIENT_CAPABILITIES_ROUTE).await
 }
 
-/// Invokes one allowlisted client WebView capability with a typed request.
-///
-/// The request must match the capability's declared schema; the runtime refuses
-/// a non-web/unknown capability (`forbidden`) and answers `unavailable` while no
-/// client bridge is declared. The desktop forwards the runtime's structured
-/// error instead of executing a local second WebView tool.
+#[cfg(test)]
+/// Legacy typed bridge invocation retained only for protocol regression tests.
 pub async fn invoke_client_capability(
     supervisor: &RuntimeSupervisor,
     capability: &str,
