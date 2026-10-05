@@ -25,7 +25,45 @@ use crate::capability::redaction;
 use crate::db::Mcp;
 #[cfg(not(feature = "desktop"))]
 use crate::mcp::client::McpProtocolType;
+#[cfg(not(feature = "desktop"))]
+use crate::mcp::client::McpServerConfig;
 use crate::mcp::client::McpStatus;
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::WEB_MCP_SERVER_NAME;
+
+/// Builds the safe, read-only legacy record for the live desktop Web MCP
+/// provider. The endpoint and proof are intentionally absent: they are
+/// ephemeral runtime state and must never cross the desktop list wire.
+#[cfg(not(feature = "desktop"))]
+pub fn web_provider_record(observed: Option<&ObservedMcpRuntime>) -> Mcp {
+    Mcp {
+        id: WEB_MCP_VIRTUAL_ID,
+        name: WEB_MCP_SERVER_NAME.to_string(),
+        description: "ChatSpeed desktop Web MCP provider".to_string(),
+        config: McpServerConfig {
+            name: WEB_MCP_SERVER_NAME.to_string(),
+            protocol_type: McpProtocolType::StreamableHttp,
+            ..Default::default()
+        },
+        disabled: !observed.map(|value| is_running_state(&value.state)).unwrap_or(false),
+        status: observed.map(|value| match value.state.as_str() {
+            "running" => McpStatus::Running,
+            "connected" => McpStatus::Connected,
+            "starting" => McpStatus::Starting,
+            "error" => McpStatus::Error(redaction::REDACTED.to_string()),
+            _ => McpStatus::Stopped,
+        }),
+    }
+}
+
+/// Stable in-memory identity for the Web MCP compatibility row. It is rejected
+/// by every durable CRUD operation and is never written to SQLite.
+pub const WEB_MCP_VIRTUAL_ID: i64 = -1;
+
+#[cfg(not(feature = "desktop"))]
+fn is_running_state(state: &str) -> bool {
+    matches!(state, "running" | "connected")
+}
 
 /// Removes secret values from a stored record while keeping the legacy
 /// editable wire shape.
@@ -307,6 +345,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn web_provider_record_is_secret_free_and_ephemeral() {
+        let observed = ObservedMcpRuntime {
+            state: "connected".to_string(),
+            cached_tool_count: 2,
+        };
+        let record = web_provider_record(Some(&observed));
+        let serialized = serde_json::to_string(&record).expect("serialize");
+        assert_eq!(record.id, WEB_MCP_VIRTUAL_ID);
+        assert_eq!(record.name, WEB_MCP_SERVER_NAME);
+        assert!(record.config.url.is_none());
+        assert!(record.config.bearer_token.is_none());
+        assert!(!serialized.contains("127.0.0.1"));
+        assert!(!serialized.contains("proof"));
+        assert!(!record.disabled);
+    }
     #[test]
     fn the_projection_never_carries_a_secret_value() {
         let servers = vec![server(1, "weather", false, McpProtocolType::Stdio)];

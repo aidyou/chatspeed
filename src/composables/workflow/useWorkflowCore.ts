@@ -1382,10 +1382,12 @@ export function useWorkflowCore({
                     clearPendingApprovalEntry(sessionId, payload.tool_call_id)
                     workflowStore.resolvePendingTool(sessionId, payload.tool_call_id)
                     workflowStore.clearApprovalSubmission(sessionId, payload.tool_call_id)
+                    const errorDetail = payload.error_details || payload.errorDetails
+                    const detailedError = errorDetail?.message || payload.error
                     workflowStore.finalizeToolExecution(
                         payload.tool_call_id,
                         false,
-                        payload.error,
+                        detailedError,
                         payload.error_type
                     )
                 } else if (payload.type === 'task_completed') {

@@ -159,6 +159,22 @@ const loading = ref(false)
 const result = ref(null)
 const error = ref(null)
 
+const displayValue = value => {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const displayError = value => {
+  if (value instanceof FrontendAppError) return value.toFormattedString()
+  if (value instanceof Error) return value.message
+  return displayValue(value)
+}
+
 const content = computed(() => {
   if (!result.value) return null
 
@@ -209,15 +225,15 @@ const runTest = async () => {
       query: keyword.value,
       page: Number(page.value || 1),
       number: Number(number.value || 10),
-      time_period: timePeriod.value || ''
+      time_period: timePeriod.value || undefined
     }
   }
 
   try {
     const response = await invokeWrapper('test_scrape', { requestData: params })
-    result.value = requestType.value === 'search' ? response : JSON.parse(response)
+    result.value = requestType.value === 'search' ? displayValue(response) : JSON.parse(response)
   } catch (e) {
-    error.value = e
+    error.value = displayError(e)
     if (e instanceof FrontendAppError) {
       showMessage('Test Failed: ' + e.toFormattedString(), 'error')
       console.error('Scraper test failed:', e.originalError)
@@ -255,7 +271,7 @@ const runWebFetchTest = async () => {
     const response = await invokeWrapper('test_scrape', { requestData: params })
     result.value = JSON.parse(response)
   } catch (e) {
-    error.value = e
+    error.value = displayError(e)
     if (e instanceof FrontendAppError) {
       showMessage('WebFetch Test Failed: ' + e.toFormattedString(), 'error')
       console.error('WebFetch test failed:', e.originalError)

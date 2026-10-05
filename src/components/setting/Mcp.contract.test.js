@@ -1,9 +1,157 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import test from 'node:test'
+import { createPinia, defineStore, setActivePinia } from 'pinia'
+import { reactive, ref } from 'vue'
 
 const component = readFileSync(new URL('./Mcp.vue', import.meta.url), 'utf8')
 const store = readFileSync(new URL('../../stores/mcp.js', import.meta.url), 'utf8')
+
+// Run the actual Pinia store with only the desktop transport and projection mocked.
+const createStoreFixture = async ({ listStatus } = {}) => {
+  const calls = []
+  let runtime = { observed: true, state: 'stopped' }
+  let desiredEnabled = false
+  let projectionError = null
+  let projectionGate = null
+  const views = () => [{
+    id: 1,
+    name: 'weather',
+    desired: { enabled: desiredEnabled },
+    runtime: { ...runtime },
+    tools: { freshness: 'observed', count: 2 }
+  }]
+  const capability = { mcpViews: {} }
+  capability.loadMcpServers = async () => {
+    if (projectionGate) await projectionGate
+    if (projectionError) throw projectionError
+    const result = views()
+    capability.mcpViews = Object.fromEntries(result.map(view => [view.id, view]))
+    return result
+  }
+  setActivePinia(createPinia())
+  const useStore = runInNewContext(
+    store.replace(/^import .*;?\n/gm, '').replace('export const useMcpStore', 'const useMcpStore') + '\nuseMcpStore',
+    {
+      defineStore, reactive, ref,
+      console: { debug() {}, log() {}, warn() {}, error() {} },
+      FrontendAppError: class extends Error {},
+      getCurrentWebviewWindow: () => ({ label: 'settings' }),
+      useCapabilityStore: () => capability,
+      sendSyncState: (...args) => calls.push(['sync', ...args]),
+      invokeWrapper: async (command, payload) => {
+        calls.push([command, payload])
+        if (command === 'list_mcp_servers') {
+          return [{ id: 1, name: 'weather', disabled: !desiredEnabled, status: listStatus ?? runtime.state, config: {} }]
+        }
+        if (command === 'enable_mcp_server' || command === 'restart_mcp_server') {
+          desiredEnabled = true
+          runtime = { observed: true, state: 'running' }
+        } else if (command === 'disable_mcp_server') {
+          desiredEnabled = false
+          runtime = { observed: true, state: 'stopped' }
+        } else if (command === 'get_mcp_server_tools') {
+          return [{ name: 'forecast' }, { name: 'temperature' }]
+        }
+      }
+    }
+  )
+  const mcp = useStore()
+  await mcp.fetchMcpServers()
+  return {
+    mcp, capability, calls,
+    setRuntime: value => { runtime = value },
+    setProjectionError: value => { projectionError = value },
+    setProjectionGate: value => { projectionGate = value }
+  }
+}
+
+test('enable updates the status and expansion gate without a legacy status or self-sync event', async () => {
+  const { mcp, capability } = await createStoreFixture()
+  assert.equal(mcp.servers[0].status, 'stopped')
+  await mcp.enableMcpServer(1)
+  assert.equal(mcp.servers[0].status, 'running')
+  assert.equal(mcp.servers[0].disabled, false)
+  assert.equal(capability.mcpViews[1].tools.count, 2)
+  // Exercise the page's actual expansion handler, not only the store lookup.
+  const start = component.indexOf('const toggleServerToolsExpansion = ')
+  const end = component.indexOf('\n/**', start)
+  assert.ok(start > -1 && end > start)
+  const expand = runInNewContext(
+    component.slice(start, end) + '\ntoggleServerToolsExpansion',
+    { mcpStore: mcp }
+  )
+  await expand(mcp.servers[0])
+  assert.equal(mcp.getOrInitServerUiState(1).expanded, true)
+  assert.equal(mcp.serverTools[1].length, 2)
+})
+
+test('enable waits for the observed state before reporting completion', async () => {
+  const fixture = await createStoreFixture()
+  let release
+  fixture.setProjectionGate(new Promise(resolve => { release = resolve }))
+  let settled = false
+  const operation = fixture.mcp.enableMcpServer(1).then(() => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  release()
+  await operation
+  assert.equal(fixture.mcp.servers[0].status, 'running')
+})
+
+test('disable collapses tools and restart re-reads the observed status', async () => {
+  const { mcp } = await createStoreFixture()
+  await mcp.enableMcpServer(1)
+  await mcp.fetchMcpServerTools(1)
+  mcp.getOrInitServerUiState(1).expanded = true
+  await mcp.disableMcpServer(1)
+  assert.equal(mcp.servers[0].status, 'stopped')
+  assert.equal(mcp.servers[0].disabled, true)
+  assert.equal(mcp.getOrInitServerUiState(1).expanded, false)
+  assert.equal(mcp.serverTools[1], undefined)
+  await mcp.enableMcpServer(1)
+  mcp.servers[0].status = 'stopped'
+  await mcp.restartMcpServer(1)
+  assert.equal(mcp.servers[0].status, 'running')
+})
+
+test('fact refresh handles another window and never invents an unobserved running state', async () => {
+  const fixture = await createStoreFixture()
+  fixture.setRuntime({ observed: true, state: 'running' })
+  await fixture.mcp.refreshCapabilityFacts()
+  assert.equal(fixture.mcp.servers[0].status, 'running')
+  fixture.setRuntime({ observed: false, state: 'running' })
+  await fixture.mcp.refreshCapabilityFacts()
+  assert.equal(fixture.mcp.servers[0].status, null)
+})
+
+test('list refresh cannot overwrite a newer runtime observation with its older status', async () => {
+  const fixture = await createStoreFixture({ listStatus: 'stopped' })
+  fixture.setRuntime({ observed: true, state: 'running' })
+  await fixture.mcp.fetchMcpServers()
+  assert.equal(fixture.mcp.servers[0].status, 'running')
+  assert.ok(Array.isArray(fixture.mcp.servers[0].config.disabled_tools))
+})
+
+test('tool refresh re-reads runtime state and preserves an unchanged running row', async () => {
+  const { mcp } = await createStoreFixture()
+  await mcp.enableMcpServer(1)
+  await mcp.fetchMcpServerTools(1)
+  mcp.getOrInitServerUiState(1).expanded = true
+  await mcp.refreshMcpTools(1)
+  assert.equal(mcp.servers[0].status, 'running')
+  assert.equal(mcp.serverTools[1].length, 2)
+  assert.equal(mcp.getOrInitServerUiState(1).expanded, true)
+})
+
+test('projection failure remains contained without assuming enable means running', async () => {
+  const fixture = await createStoreFixture()
+  fixture.setProjectionError(new Error('runtime unavailable'))
+  await fixture.mcp.enableMcpServer(1)
+  assert.equal(fixture.mcp.servers[0].status, 'stopped')
+  assert.equal(fixture.mcp.error, null)
+})
 
 const locales = ['en', 'zh-Hans', 'zh-Hant'].map(name => ({
   name,
@@ -68,6 +216,23 @@ test('the three locales expose the same MCP copy structure', () => {
   for (const locale of locales.slice(1)) {
     assert.equal(shape(locale), base, `${locale.name} diverged from en`)
   }
+})
+
+test('the server switch exposes visible feedback while a state change is pending', () => {
+  assert.match(
+    component,
+    /:disabled="mcpStore\.getOrInitServerUiState\(server\.id\)\.loading"/
+  )
+  assert.match(
+    component,
+    /:loading="mcpStore\.getOrInitServerUiState\(server\.id\)\.loading"/
+  )
+  assert.doesNotMatch(component, /mcp-switch-loading|mcp-switch-spin/)
+  assert.match(component, /class="mcp-server-switch"/)
+  assert.match(
+    component,
+    /:deep\(\.mcp-server-switch\.is-loading\)\s*\{\s*opacity: 1;\s*\.el-switch__action\s*\{\s*background-color: var\(--cs-bg-elevated-color\);\s*color: var\(--cs-text-color-primary\);\s*\.el-icon\s*\{\s*color: var\(--cs-text-color-primary\);/
+  )
 })
 
 test('the page reports observed facts through the capability projection', () => {

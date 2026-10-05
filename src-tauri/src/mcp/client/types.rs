@@ -383,10 +383,9 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
         // Check the `is_error` field from rmcp::model::CallToolResult
         // If `is_error` is Some(true), it indicates a tool execution error.
         if call_tool_result.is_error.unwrap_or(false) {
-            // Serialize the content as the error message if an error occurred.
-            let error_content_str = serde_json::to_string(&call_tool_result.content)
-                .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e));
-            return Err(McpError::ClientCallError(error_content_str));
+            return Err(McpError::ClientCallError(encode_call_error_message(
+                &call_tool_result,
+            )));
         }
 
         serde_json::to_value(call_tool_result).map_err(|e| {
@@ -401,5 +400,58 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
             Some(obj) => Some(obj.clone()),
             None => None,
         }
+    }
+}
+
+/// Encodes the message carried by `McpError::ClientCallError` for an `is_error`
+/// `CallToolResult`.
+///
+/// A provider that reports a structured error (`{"code","message"}`) has its
+/// `structured_content` preserved as a JSON object so the stable provider code
+/// survives the string-only error variant. Ordinary MCP servers, which only
+/// send `content`, keep the previous array-shaped fallback; the two forms stay
+/// distinguishable because `content` always serializes to a JSON array.
+#[cfg(not(feature = "desktop"))]
+fn encode_call_error_message(result: &rmcp::model::CallToolResult) -> String {
+    if let Some(structured) = result.structured_content.as_ref() {
+        return serde_json::to_string(structured)
+            .unwrap_or_else(|e| format!("Failed to serialize structured error content: {}", e));
+    }
+    serde_json::to_string(&result.content)
+        .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e))
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+mod tests {
+    use super::encode_call_error_message;
+    use rmcp::model::{CallToolResult, IntoContents};
+    use serde_json::json;
+
+    // A provider's structured error must survive `ClientCallError` so the
+    // manager can read the stable code; the raw message rides along internally
+    // and is never echoed to the caller.
+    #[test]
+    fn structured_call_error_preserves_provider_code() {
+        let result = CallToolResult::structured_error(
+            json!({"code": "timeout", "message": "https://user:pass@example.com token=abc"}),
+        );
+        let message = encode_call_error_message(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&message).expect("json object");
+        assert_eq!(
+            parsed.get("code").and_then(|code| code.as_str()),
+            Some("timeout")
+        );
+        assert!(parsed.get("message").is_some(), "message stays internal");
+    }
+
+    // Ordinary MCP servers, which only send `content`, keep the array fallback
+    // so their existing error shape is unchanged.
+    #[test]
+    fn content_only_call_error_keeps_array_fallback() {
+        let result = CallToolResult::error("raw provider failure".to_string().into_contents());
+        let message = encode_call_error_message(&result);
+        let parsed: serde_json::Value = serde_json::from_str(&message).expect("json array");
+        assert!(parsed.is_array(), "content fallback stays an array");
+        assert!(parsed.get("code").is_none());
     }
 }

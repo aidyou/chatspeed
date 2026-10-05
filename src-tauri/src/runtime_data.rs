@@ -434,6 +434,21 @@ async fn get_available_tools_core(
         .tool_manager
         .get_all_native_tool_metadata()
         .await;
+    let mcp_meta = svc
+        .chat_state
+        .tool_manager
+        .get_mcp_tool_specs(None)
+        .await
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "id": tool.canonical_name,
+                "name": tool.declaration.name,
+                "category": "MCP",
+                "scope": tool.declaration.scope.unwrap_or(crate::tools::ToolScope::Both),
+            })
+        });
+    native_meta.extend(mcp_meta);
     native_meta.extend(git_review_tool_metadata());
     native_meta.sort_by(|left, right| {
         left["id"]

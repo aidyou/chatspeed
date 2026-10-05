@@ -263,13 +263,9 @@ fn runtime_failure(action: &str, error: crate::tools::ToolError) -> CapabilityEr
     )
 }
 
-/// Maps an MCP tool-call failure onto a capability error without ever echoing
-/// the tool's own error content.
-///
 /// The MCP client folds a tool's `is_error` result and a transport failure into
-/// one free-text message that can quote arbitrary server output, so an execution
-/// failure is reported generically. Only the ownership and disabled validation
-/// failures — which carry a name, never content — keep a specific refusal.
+/// a bounded detail before this mapper is called. That detail contains only the
+/// generic message or an allowlisted provider code, never raw provider text.
 #[cfg(not(feature = "desktop"))]
 fn call_tool_failure(error: crate::tools::ToolError) -> CapabilityError {
     use crate::capability::error::code;
@@ -286,8 +282,10 @@ fn call_tool_failure(error: crate::tools::ToolError) -> CapabilityError {
             code::RUNTIME_UNAVAILABLE,
             format!("the MCP server '{name}' is not registered with the runtime"),
         ),
-        // A real invocation failure is deliberately not forwarded: its message
-        // can quote the MCP tool's raw error content.
+        // `invoke_mcp_tool` has already reduced this detail to the generic
+        // message plus an optional allowlisted provider code. Preserve that
+        // diagnostic signal without forwarding arbitrary MCP error content.
+        ToolError::ExecutionFailed(detail) => CapabilityError::new(code::INTERNAL, detail),
         _ => CapabilityError::new(code::INTERNAL, "the MCP tool call failed"),
     }
 }
@@ -381,6 +379,18 @@ impl McpRuntimeEffects for ToolManagerRuntimeEffects {
 #[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_failure_preserves_the_bounded_provider_code() {
+        let error = call_tool_failure(crate::tools::ToolError::ExecutionFailed(
+            "the MCP tool call failed (config_unavailable)".to_string(),
+        ));
+        assert_eq!(error.code(), crate::capability::error::code::INTERNAL);
+        assert_eq!(
+            error.message,
+            "the MCP tool call failed (config_unavailable)"
+        );
+    }
 
     #[test]
     fn an_error_status_never_reports_its_message() {

@@ -60,6 +60,7 @@
                 :enterable="false"
                 transition="none">
                 <el-switch
+                  class="mcp-server-switch"
                   :disabled="mcpStore.getOrInitServerUiState(server.id).loading"
                   :model-value="!server.disabled"
                   :loading="mcpStore.getOrInitServerUiState(server.id).loading"
@@ -84,11 +85,11 @@
                 :hide-after="0"
                 :enterable="false"
                 transition="none"
-                :disabled="server.disabled">
+                :disabled="server.disabled || server.id === -1">
                 <span
                   class="icon"
-                  :class="{ disabled: server.disabled }"
-                  @click="restartMcpServer(server)">
+                  :class="{ disabled: server.disabled || server.id === -1 }"
+                  @click="server.id === -1 ? null : restartMcpServer(server)">
                   <cs name="restart" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
@@ -98,8 +99,12 @@
                 placement="top"
                 :hide-after="0"
                 :enterable="false"
-                transition="none">
-                <span class="icon" @click="openEditDialog(server)">
+                transition="none"
+                :disabled="server.id === -1">
+                <span
+                  class="icon"
+                  :class="{ disabled: server.id === -1 }"
+                  @click="server.id === -1 ? null : openEditDialog(server)">
                   <cs name="edit" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
@@ -108,8 +113,12 @@
                 placement="top"
                 :hide-after="0"
                 :enterable="false"
-                transition="none">
-                <span class="icon" @click="handleDeleteServerConfirmation(server)">
+                transition="none"
+                :disabled="server.id === -1">
+                <span
+                  class="icon"
+                  :class="{ disabled: server.id === -1 }"
+                  @click="server.id === -1 ? null : handleDeleteServerConfirmation(server)">
                   <cs name="trash" size="16px" color="secondary" />
                 </span>
               </el-tooltip>
@@ -137,6 +146,7 @@
                 <div class="tool-actions">
                   <el-switch
                     size="small"
+                    :disabled="server.id === -1"
                     :model-value="!(server?.config?.disabled_tools || []).includes(tool.name)"
                     @update:model-value="toggleDisableTool(server.id, tool)" />
                 </div>
@@ -769,6 +779,7 @@ const handleSubmit = async () => {
 // Server List Actions
 // =================================================
 const handleDeleteServerConfirmation = server => {
+  if (server.id === -1) return
   serverToOperateOn.value = server
   ElMessageBox.confirm(
     t('settings.mcp.confirmDelete', { name: server.name || '' }),
@@ -805,6 +816,7 @@ const executeDeleteServer = async () => {
 }
 
 const toggleServerStatus = async server => {
+  if (server.id === -1) return
   const uiState = mcpStore.getOrInitServerUiState(server.id)
   if (uiState.loading) {
     return
@@ -838,6 +850,7 @@ const toggleServerStatus = async server => {
 }
 
 const restartMcpServer = async server => {
+  if (server.id === -1) return
   const uiState = mcpStore.getOrInitServerUiState(server.id)
   if (uiState.loading || server.disabled) return
   uiState.loading = true
@@ -1340,6 +1353,19 @@ const trimQuotes = str => {
           display: flex;
           align-items: center;
           margin-left: 10px;
+
+          :deep(.mcp-server-switch.is-loading) {
+            opacity: 1;
+
+            .el-switch__action {
+              background-color: var(--cs-bg-elevated-color);
+              color: var(--cs-text-color-primary);
+
+              .el-icon {
+                color: var(--cs-text-color-primary);
+              }
+            }
+          }
 
           .icon.disabled {
             cursor: not-allowed;

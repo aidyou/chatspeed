@@ -21,7 +21,6 @@ use crate::tools::{
     TOOL_SKILL, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT,
 };
 use crate::workflow::react::policy::ApprovalLevel;
-use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::{
     child_tasks::{render_call_mode_sub_agent_tool_result, SubAgentResolution},
     compression::{CompressionMode, ContextCompressor},
@@ -2633,19 +2632,9 @@ impl WorkflowExecutor {
             scope_allowed && config_allowed
         };
 
-        // 1. Register Web tool
-        if self.policy.allowed_categories.contains(&ToolCategory::Web) {
-            if is_allowed(WEB_SEARCH_TOOL) {
-                if let Ok(ws) = self.global_tool_manager.get_tool(WEB_SEARCH_TOOL).await {
-                    tm.register_tool(ws.clone()).await?;
-                }
-            }
-            if is_allowed(WEB_FETCH_TOOL) {
-                if let Ok(wf) = self.global_tool_manager.get_tool(WEB_FETCH_TOOL).await {
-                    tm.register_tool(wf.clone()).await?;
-                }
-            }
-        }
+        // Desktop Web is exposed only by the live `chatspeed_web` MCP provider.
+        // Do not copy WebView-backed capabilities from the global native tool map:
+        // that would create a second owner and advertise web tools without a provider.
 
         // 2. Native FS & Search Tools
         if self
@@ -3906,10 +3895,6 @@ impl WorkflowExecutor {
                                     // Ensure tool_args is an object (parse if it's a JSON string from fallback)
                                     let tool_args_obj =
                                         Self::normalize_tool_arguments_value(tool_args.clone());
-                                    let enriched_args = Self::enrich_tool_arguments_with_call_id(
-                                        &tool_args_obj,
-                                        &tool_call_id,
-                                    );
 
                                     self.append_tool_started_event(
                                         &tool_call_id,
@@ -3941,6 +3926,11 @@ impl WorkflowExecutor {
                                         .is_none_or(|canonical_name| {
                                             self.is_mcp_tool_allowed(canonical_name)
                                         });
+                                    let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                                        &tool_args_obj,
+                                        &tool_call_id,
+                                        canonical_mcp_tool_name.is_some(),
+                                    );
                                     let tool_manager = self.tool_manager.clone();
                                     let global_tool_manager = self.global_tool_manager.clone();
                                     let tool_name_for_call = tool_name.clone();
@@ -4451,8 +4441,6 @@ impl WorkflowExecutor {
                             // Ensure tool_args is an object (parse if it's a JSON string from fallback)
                             let tool_args_obj =
                                 Self::normalize_tool_arguments_value(tool_args.clone());
-                            let enriched_args =
-                                Self::enrich_tool_arguments_with_call_id(&tool_args_obj, signal_id);
 
                             self.append_tool_started_event(signal_id, &tool_name, &tool_args_obj)
                                 .await;
@@ -4481,6 +4469,11 @@ impl WorkflowExecutor {
                                     .is_none_or(|canonical_name| {
                                         self.is_mcp_tool_allowed(canonical_name)
                                     });
+                            let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                                &tool_args_obj,
+                                signal_id,
+                                canonical_mcp_tool_name.is_some(),
+                            );
                             let tool_manager = self.tool_manager.clone();
                             let global_tool_manager = self.global_tool_manager.clone();
                             let tool_name_for_call = tool_name.clone();
@@ -5659,6 +5652,7 @@ impl WorkflowExecutor {
     fn enrich_tool_arguments_with_call_id(
         args: &serde_json::Value,
         tool_call_id: &str,
+        is_mcp: bool,
     ) -> serde_json::Value {
         let mut enriched_args = match args {
             serde_json::Value::Object(map) => serde_json::Value::Object(map.clone()),
@@ -5666,8 +5660,10 @@ impl WorkflowExecutor {
                 "__raw_arguments": other.clone()
             }),
         };
-        enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
-            serde_json::json!(tool_call_id);
+        if !is_mcp {
+            enriched_args[crate::constants::INTERNAL_PARAM_TOOL_CALL_ID] =
+                serde_json::json!(tool_call_id);
+        }
         enriched_args
     }
 
@@ -5813,10 +5809,12 @@ impl WorkflowExecutor {
     }
 
     fn tool_error_details(error: &crate::tools::ToolError) -> Option<serde_json::Value> {
-        match error {
-            crate::tools::ToolError::SandboxFailure(failure) => serde_json::to_value(failure).ok(),
-            _ => None,
-        }
+        let message = crate::capability::redaction::redact_text(&error.to_string());
+        let bounded: String = message.chars().take(1600).collect();
+        Some(serde_json::json!({
+            "error_type": Self::tool_error_type(error),
+            "message": bounded,
+        }))
     }
 
     fn tool_error_type(error: &crate::tools::ToolError) -> &'static str {
@@ -6487,8 +6485,11 @@ impl WorkflowExecutor {
                 let gtm_clone = gtm.clone();
                 let semaphore_clone = semaphore.clone();
 
-                // Inject internal tool_call_id for streaming tools
-                let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
+                let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                    &args,
+                    &id,
+                    canonical_mcp_tool_name.is_some(),
+                );
 
                 tool_futures.push_back(async move {
                     let _permit = semaphore_clone.acquire().await.ok();
@@ -6573,9 +6574,6 @@ impl WorkflowExecutor {
             self.append_tool_started_event(&id, &name, &args).await;
             self.dispatch_tool_started_payload(&id, &name, &args).await;
 
-            // Inject internal tool_call_id for streaming tools
-            let enriched_args = Self::enrich_tool_arguments_with_call_id(&args, &id);
-
             let execution_started_at = Instant::now();
             let session_mcp_tool_name = self.tool_manager.resolve_mcp_tool_name(&name).await;
             let mcp_uses_session_manager = session_mcp_tool_name.is_some();
@@ -6586,6 +6584,11 @@ impl WorkflowExecutor {
             let mcp_tool_allowed = canonical_mcp_tool_name
                 .as_ref()
                 .is_none_or(|canonical_name| self.is_mcp_tool_allowed(canonical_name));
+            let enriched_args = Self::enrich_tool_arguments_with_call_id(
+                &args,
+                &id,
+                canonical_mcp_tool_name.is_some(),
+            );
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();

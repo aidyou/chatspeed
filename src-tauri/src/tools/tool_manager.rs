@@ -22,6 +22,8 @@ use crate::db::MainStore;
 use crate::mcp::client::{
     McpClient, McpProtocolType, McpServerConfig, McpStatus, StdioClient, StreamableHttpClient,
 };
+#[cfg(not(feature = "desktop"))]
+use crate::mcp::McpError;
 use crate::tools::error::ToolError;
 #[cfg(not(feature = "desktop"))]
 use crate::tools::MCP_TOOL_NAME_SPLIT;
@@ -716,7 +718,7 @@ impl ToolManager {
         let tools = self.tools.read().await;
         let mut meta = Vec::new();
         for (registry_name, tool) in tools.iter() {
-            if tool.category() == ToolCategory::Mcp && tool.tool_calling_spec().disabled {
+            if tool.category() == ToolCategory::Mcp {
                 continue;
             }
             meta.push(json!({
@@ -922,13 +924,14 @@ impl ToolManager {
             .map_err(|error| {
                 // The client folds a tool's own error content and a transport
                 // failure into one message: it is redacted before it can be
-                // logged and never handed back to the caller.
+                // logged and reduced to an allowlisted code for the caller, so
+                // neither the provider message nor any raw content is exposed.
                 log::warn!(
                     "MCP tool call on server '{}' failed: {}",
                     server_name,
                     crate::capability::redaction::redact_text(&error.to_string())
                 );
-                ToolError::ExecutionFailed("the MCP tool call failed".to_string())
+                ToolError::ExecutionFailed(mcp_call_error_detail(&error))
             })
     }
 
@@ -1162,74 +1165,110 @@ impl ToolManager {
             return Err(error);
         }
 
-        // 4. Each MCP finishes independently: list its tools and register the
-        // completed snapshot as soon as this server is ready. The generation guard
-        // prevents a late result from a stopped/restarted server from being applied.
+        // 4. The dedicated desktop Web MCP provider must finish its first tool
+        // discovery before registration returns: desktop startup can create the
+        // Vue windows immediately afterwards, and the first available-tools read
+        // must not race an event emitted before the UI listener exists.
+        // Ordinary configured MCP servers retain asynchronous discovery so one
+        // slow server never delays the control plane.
         let tool_manager_arc = self.clone();
         let client_arc_for_task = client_arc.clone();
         let server_name_for_task = name.clone();
         let config_for_task = client_arc.config().await.clone();
-
-        tokio::spawn(async move {
-            let status = client_arc_for_task.status().await;
-            if status != McpStatus::Connected && status != McpStatus::Running {
-                log::warn!(
-                    "MCP server {} is not running (status: {:?}) after start attempt. Skipping tool listing.",
-                    server_name_for_task,
-                    status
-                );
-                return;
-            }
-
-            let tools_result = client_arc_for_task.list_tools().await;
-            let declarations = match tools_result {
-                Ok(tools) => {
-                    let disabled_tool_names = config_for_task.disabled_tools.unwrap_or_default();
-                    Some(
-                        tools
-                            .into_iter()
-                            .map(|mut tool_decl| {
-                                tool_decl.disabled = disabled_tool_names.contains(&tool_decl.name);
-                                tool_decl
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                }
-                Err(error) => {
-                    log::error!(
-                        "Failed to list tools for MCP server {}: {}",
-                        server_name_for_task,
-                        error
-                    );
-                    None
-                }
-            };
-
-            if let Err(error) = tool_manager_arc
-                .register_mcp_server_inner(
+        if provider_max_retries.is_some() {
+            tool_manager_arc
+                .discover_and_register_mcp_tools(
                     client_arc_for_task,
                     registration_generation,
-                    declarations,
+                    config_for_task,
+                    true,
                 )
-                .await
-            {
-                log::debug!(
-                    "Discarded MCP server {} discovery result for generation {}: {}",
-                    server_name_for_task,
-                    registration_generation,
+                .await?;
+        } else {
+            tokio::spawn(async move {
+                if let Err(error) = tool_manager_arc
+                    .discover_and_register_mcp_tools(
+                        client_arc_for_task,
+                        registration_generation,
+                        config_for_task,
+                        false,
+                    )
+                    .await
+                {
+                    log::debug!(
+                        "Discarded MCP server {} discovery result for generation {}: {}",
+                        server_name_for_task,
+                        registration_generation,
+                        error
+                    );
+                } else {
+                    log::info!(
+                        "MCP server {} tools registered for generation {}",
+                        server_name_for_task,
+                        registration_generation
+                    );
+                }
+            });
+        }
+
+        // 5. Return after this server is connected and, for the reserved Web
+        // provider, its initial tool snapshot has been committed.
+        Ok(())
+    }
+
+    /// Lists and commits one MCP server's tool snapshot.
+    async fn discover_and_register_mcp_tools(
+        &self,
+        client: Arc<dyn McpClient>,
+        generation: u64,
+        config: McpServerConfig,
+        fail_closed: bool,
+    ) -> Result<(), ToolError> {
+        let server_name = client.name().await;
+        let status = client.status().await;
+        if status != McpStatus::Connected && status != McpStatus::Running {
+            let error = ToolError::Initialization(format!(
+                "MCP server {} is not running (status: {:?})",
+                server_name, status
+            ));
+            if fail_closed {
+                return Err(error);
+            }
+            log::warn!("{}", error);
+            return Ok(());
+        }
+
+        let declarations = match client.list_tools().await {
+            Ok(tools) => {
+                let disabled_tool_names = config.disabled_tools.unwrap_or_default();
+                Some(
+                    tools
+                        .into_iter()
+                        .map(|mut tool_decl| {
+                            tool_decl.disabled = disabled_tool_names.contains(&tool_decl.name);
+                            tool_decl
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+            Err(error) => {
+                if fail_closed {
+                    return Err(ToolError::Initialization(format!(
+                        "Failed to list tools for MCP server {}: {}",
+                        server_name, error
+                    )));
+                }
+                log::error!(
+                    "Failed to list tools for MCP server {}: {}",
+                    server_name,
                     error
                 );
-            } else {
-                log::info!(
-                    "MCP server {} tools registered for generation {}",
-                    server_name_for_task,
-                    registration_generation
-                );
+                None
             }
-        });
+        };
 
-        // 5. Return after this server is connected and its independent discovery task is queued.
-        Ok(())
+        self.register_mcp_server_inner(client, generation, declarations)
+            .await
     }
 
     /// Makes a started client visible to the runtime before its tool list is read.
@@ -1595,11 +1634,83 @@ impl ToolManager {
     }
 }
 
+/// Builds a bounded, redacted caller-facing detail for a failed MCP tool call.
+///
+/// Provider diagnostics are useful for repairing a custom MCP server, so keep
+/// the provider's actual detail instead of collapsing every failure to one
+/// generic sentence. JSON diagnostics go through the shared recursive redactor;
+/// plain text goes through the text redactor. Both forms are length-bounded.
+#[cfg(not(feature = "desktop"))]
+fn mcp_call_error_detail(error: &McpError) -> String {
+    const MAX_DETAIL_CHARS: usize = 1600;
+    let raw_detail = match error {
+        McpError::ClientCallError(detail)
+        | McpError::ClientConfigError(detail)
+        | McpError::ClientStartError(detail)
+        | McpError::ClientStopError(detail)
+        | McpError::ClientStatusError(detail)
+        | McpError::ServerInitializationError(detail)
+        | McpError::ServerToolExecutionError(detail)
+        | McpError::ServerInternalError(detail)
+        | McpError::ServerUnknownError(detail)
+        | McpError::Io(detail)
+        | McpError::Serialization(detail)
+        | McpError::Store(detail)
+        | McpError::StateChangeFailed(detail)
+        | McpError::Timeout(detail)
+        | McpError::General(detail) => detail,
+        McpError::ServerToolNotFound(name) | McpError::NotFound(name) => name,
+    };
+    let detail = serde_json::from_str::<Value>(raw_detail)
+        .map(|value| crate::capability::redaction::bounded_redacted_json(&value, MAX_DETAIL_CHARS).to_string())
+        .unwrap_or_else(|_| crate::capability::redaction::redact_text(raw_detail));
+    let bounded: String = detail.chars().take(MAX_DETAIL_CHARS).collect();
+    format!("MCP tool call failed: {bounded}")
+}
+
 #[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
     use crate::tools::{ToolCallResult, ToolCategory, ToolScope};
     use serde_json::json;
+
+    // A structured provider error is classified down to its allowlisted code,
+    // and the provider's own message (which may carry a URL or credential) is
+    // never echoed into the caller-facing detail.
+    #[test]
+    fn structured_provider_code_is_surfaced_without_provider_text() {
+        let message = json!({
+            "code": "config_unavailable",
+            "message": "https://user:secret@example.com token=abc123",
+        })
+        .to_string();
+        let detail = mcp_call_error_detail(&McpError::ClientCallError(message));
+        assert!(detail.starts_with("MCP tool call failed:"));
+        assert!(detail.contains("config_unavailable"));
+        assert!(detail.contains("[redacted]"));
+        assert!(!detail.contains("example.com"));
+        assert!(!detail.contains("abc123"));
+    }
+
+    // Provider diagnostics remain visible, but are bounded and redacted.
+    #[test]
+    fn provider_error_detail_is_visible_without_secrets() {
+        let detail = mcp_call_error_detail(&McpError::ClientCallError(
+            json!({"code": "provider_private_code", "message": "raw provider failure"}).to_string(),
+        ));
+        assert!(detail.contains("provider_private_code"));
+        assert!(detail.contains("raw provider failure"));
+        assert_eq!(
+            mcp_call_error_detail(&McpError::Timeout("timed out".to_string())),
+            "MCP tool call failed: timed out"
+        );
+    }
+
+    #[test]
+    fn provider_error_detail_is_bounded() {
+        let detail = mcp_call_error_detail(&McpError::General("x".repeat(5000)));
+        assert!(detail.chars().count() <= 1622);
+    }
 
     // A mock tool for testing
     struct MockTool {
@@ -2441,7 +2552,10 @@ mod tests {
             );
             assert_eq!(
                 search,
-                format!("{}{split}web_search", chatspeed_contracts::WEB_MCP_SERVER_NAME)
+                format!(
+                    "{}{split}web_search",
+                    chatspeed_contracts::WEB_MCP_SERVER_NAME
+                )
             );
 
             let result = manager

@@ -82,7 +82,24 @@ export const useMcpStore = defineStore('mcp', () => {
    */
   const refreshCapabilityFacts = async () => {
     try {
-      await useCapabilityStore().loadMcpServers();
+      const views = await useCapabilityStore().loadMcpServers();
+      // The badges, status label and tool-expansion gate must use the same
+      // runtime observation, even when no legacy desktop event is emitted.
+      for (const server of servers.value) {
+        const view = views.find(item => item.id === server.id);
+        if (!view) continue;
+        const status = view.runtime?.observed === true ? view.runtime.state ?? null : null;
+        if (server.status !== status || status !== 'running') {
+          delete serverTools.value[server.id];
+        }
+        server.status = status;
+        if (typeof view.desired?.enabled === 'boolean') {
+          server.disabled = !view.desired.enabled;
+        }
+        if (status !== 'running' && serverUiStates.value[server.id]) {
+          serverUiStates.value[server.id].expanded = false;
+        }
+      }
     } catch (projectionError) {
       console.warn('MCP capability projection unavailable:', projectionError);
     }
@@ -96,10 +113,6 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       const fetchedServers = await invokeWrapper('list_mcp_servers');
-      // The legacy list is the editable record; the capability projection is what
-      // the runtime actually observed. Refreshing both here means the badges can
-      // never lag behind a mutation the list already reflects (AC-12).
-      await refreshCapabilityFacts();
       servers.value = fetchedServers.map(server => {
         // Ensure server.config exists and disabled_tools is an array
         const config = server.config || {}; // Defensive, though McpServer type implies config exists
@@ -114,6 +127,9 @@ export const useMcpStore = defineStore('mcp', () => {
           },
         };
       });
+      // Overlay the latest runtime observation after installing the editable
+      // records, so an older list response cannot overwrite a refreshed status.
+      await refreshCapabilityFacts();
       console.debug(servers.value)
     } catch (err) {
       await _handleError(err);
@@ -231,7 +247,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: false } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: false } });
-      refreshCapabilityFacts();
+      await refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -251,7 +267,7 @@ export const useMcpStore = defineStore('mcp', () => {
       // Local state update handled by handleSyncStateUpdate or by receiving its own sync event
       // For direct local update: handleSyncStateUpdate({ event: 'update', data: { id, disabled: true } });
       sendSyncState('mcp', label, { event: 'update', data: { id, disabled: true } });
-      refreshCapabilityFacts();
+      await refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -264,10 +280,7 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invokeWrapper('restart_mcp_server', { id });
-      refreshCapabilityFacts();
-
-      // Restart might change status, but we don't get the new status back synchronously here.
-      // Rely on status updates pushed from backend or a periodic refresh if needed.
+      await refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {
@@ -280,7 +293,7 @@ export const useMcpStore = defineStore('mcp', () => {
     error.value = null;
     try {
       await invokeWrapper('refresh_mcp_server', { id });
-      refreshCapabilityFacts();
+      await refreshCapabilityFacts();
     } catch (err) {
       await _handleError(err);
     } finally {

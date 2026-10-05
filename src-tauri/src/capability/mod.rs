@@ -298,7 +298,25 @@ impl CapabilityApplicationService {
                 None
             }
         };
-        Ok(project_mcp_servers(&servers, observation.as_ref()))
+        let mut views = project_mcp_servers(&servers, observation.as_ref());
+        if !servers
+            .iter()
+            .any(|server| server.name == chatspeed_contracts::WEB_MCP_SERVER_NAME)
+        {
+            if let Some(web_runtime) = observation
+                .as_ref()
+                .and_then(|entries| entries.get(chatspeed_contracts::WEB_MCP_SERVER_NAME))
+            {
+                let web_record = mcp_service::web_provider_record(Some(web_runtime));
+                views.push(mcp_service::project_mcp_server(
+                    &web_record,
+                    Some(web_runtime),
+                    Some(operation::now_ms()),
+                ));
+                views.sort_by(|left, right| left.name.cmp(&right.name));
+            }
+        }
+        Ok(views)
     }
 
     /// One MCP server by name.

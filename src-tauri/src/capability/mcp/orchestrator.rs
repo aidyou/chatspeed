@@ -767,6 +767,9 @@ impl CapabilityApplicationService {
 
     /// The cached tool list of one server, without invoking anything (AC-11).
     pub async fn mcp_tools(&self, id: i64) -> Result<McpToolsSnapshot, CapabilityError> {
+        if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+            return Ok(self.tools_snapshot(chatspeed_contracts::WEB_MCP_SERVER_NAME).await);
+        }
         let record = self.require_server(id).await?;
         Ok(self.tools_snapshot(&record.name).await)
     }
@@ -780,11 +783,15 @@ impl CapabilityApplicationService {
         &self,
         id: i64,
     ) -> Result<Vec<crate::ai::traits::chat::MCPToolDeclaration>, CapabilityError> {
-        let record = self.require_server(id).await?;
+        let name = if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+            chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string()
+        } else {
+            self.require_server(id).await?.name
+        };
         let timing = self.mcp_timing();
         with_timeout(
             timing.status_timeout,
-            self.mcp_effects().list_tools(&record.name),
+            self.mcp_effects().list_tools(&name),
         )
         .await
         .map_err(|_| {
@@ -795,21 +802,41 @@ impl CapabilityApplicationService {
         })?
     }
 
-    /// Every persisted record with secret values removed, keeping the legacy
-    /// editable `Mcp` wire shape the desktop MCP page depends on. This is the
-    /// only list the desktop adapter may return.
+    /// Every persisted record with secret values removed, plus the live desktop
+    /// Web MCP provider as a read-only in-memory compatibility record. The
+    /// provider record is never written to SQLite and contains no endpoint or
+    /// proof token.
     pub async fn mcp_records_redacted(&self) -> Result<Vec<Mcp>, CapabilityError> {
-        Ok(self
+        let mut records: Vec<Mcp> = self
             .mcp_repository()
             .list()?
             .iter()
             .map(redact_record_secrets)
-            .collect())
+            .collect();
+        if !records
+            .iter()
+            .any(|record| record.name == chatspeed_contracts::WEB_MCP_SERVER_NAME)
+        {
+            if let Ok(Some(observed)) = self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await {
+                records.push(crate::capability::mcp_service::web_provider_record(Some(
+                    &observed,
+                )));
+            }
+        }
+        records.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(records)
     }
 
-    /// One persisted record by id with secret values removed, for the command
-    /// returns that hand the edited `Mcp` back to the page.
+    /// One persisted record, or the live read-only Web MCP compatibility record.
     pub async fn mcp_record_redacted(&self, id: i64) -> Result<Option<Mcp>, CapabilityError> {
+        if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+            return Ok(match self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await {
+                Ok(Some(observed)) => Some(crate::capability::mcp_service::web_provider_record(
+                    Some(&observed),
+                )),
+                Ok(None) | Err(_) => None,
+            });
+        }
         Ok(self
             .mcp_repository()
             .get(id)?
@@ -1292,10 +1319,20 @@ impl CapabilityApplicationService {
             ));
         }
 
-        let record = self.require_server(id).await?;
-        if record.disabled {
-            return Err(CapabilityError::refused(
-                "a disabled MCP server cannot run tools; enable it first",
+        let (server_name, virtual_web) = if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+            (chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string(), true)
+        } else {
+            let record = self.require_server(id).await?;
+            if record.disabled {
+                return Err(CapabilityError::refused(
+                    "a disabled MCP server cannot run tools; enable it first",
+                ));
+            }
+            (record.name, false)
+        };
+        if virtual_web && !matches!(tool, "web_fetch" | "web_search") {
+            return Err(CapabilityError::invalid_request(
+                "the desktop Web MCP provider exposes only web_fetch and web_search",
             ));
         }
 
@@ -1303,7 +1340,7 @@ impl CapabilityApplicationService {
         // unknown answer are both refused, because neither authorizes a call
         // (INV-7). An unknown answer propagates its own error, so a caller can
         // tell "not running" from "the runtime is unavailable".
-        match self.observe(&record.name).await? {
+        match self.observe(&server_name).await? {
             Some(observed) if is_running(&observed.state) => {}
             Some(_) | None => {
                 return Err(CapabilityError::refused(
@@ -1315,7 +1352,7 @@ impl CapabilityApplicationService {
         let timing = self.mcp_timing();
         with_timeout(
             timing.effect_timeout,
-            self.mcp_effects().call_tool(&record.name, tool, arguments),
+            self.mcp_effects().call_tool(&server_name, tool, arguments),
         )
         .await
         .map_err(|_| {
@@ -1387,6 +1424,11 @@ impl CapabilityApplicationService {
     }
 
     async fn require_server(&self, id: i64) -> Result<Mcp, CapabilityError> {
+        if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+            return Err(CapabilityError::refused(
+                "the desktop Web MCP provider is read-only and cannot be changed",
+            ));
+        }
         self.mcp_repository().get(id)?.ok_or_else(|| {
             CapabilityError::new(code::NOT_FOUND, format!("no MCP record with id {id}"))
         })

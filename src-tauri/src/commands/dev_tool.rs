@@ -9,10 +9,16 @@
 //! this legacy diagnostic command fails closed rather than invoking the removed
 //! client-pull bridge or creating a second executor.
 
-use tauri::{command, AppHandle, Wry};
+use std::sync::Arc;
+
+use serde_json::{Map, Value};
+use tauri::{command, AppHandle, Manager, Wry};
 
 use crate::{
+    capability::mcp_service::WEB_MCP_VIRTUAL_ID,
     error::{AppError, Result},
+    runtime_capability,
+    runtime_client::RuntimeSupervisor,
     scraper::{
         engine::run as run_scraper,
         types::{ContentOptions, ScrapeRequest},
@@ -70,14 +76,67 @@ pub async fn test_scrape(
                     message: e.to_string(),
                 })
         }
-        // Runtime workflow web calls use the fixed loopback MCP provider. This
-        // legacy diagnostic command has no direct tool invocation path and fails
-        // closed rather than reaching the retired client-pull bridge.
-        "web_fetch" | "search" => Err(AppError::General {
-            message: "Web tools are available only through the runtime MCP provider".to_string(),
-        }),
+        // The desktop WebView hosts these capabilities only as the fixed MCP
+        // provider. The diagnostic adapter therefore uses the runtime's normal
+        // MCP call route with the in-memory provider identity; it never invokes
+        // WebView code directly and never creates a second tool owner.
+        "web_fetch" | "search" => {
+            let tool_name = if request_type == "web_fetch" {
+                "web_fetch"
+            } else {
+                "web_search"
+            };
+            let arguments = web_mcp_arguments(tool_name, &request_data)?;
+            let supervisor = app_handle
+                .try_state::<Arc<RuntimeSupervisor>>()
+                .ok_or_else(|| AppError::General {
+                    message: "The runtime MCP provider is unavailable".to_string(),
+                })?;
+            runtime_capability::mcp_call(
+                supervisor.inner().as_ref(),
+                WEB_MCP_VIRTUAL_ID,
+                tool_name,
+                &arguments,
+            )
+            .await
+            .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
+            .map_err(|error| AppError::General {
+                message: error.redacted_message(),
+            })
+        }
         _ => Err(AppError::General {
             message: "Invalid request type".to_string(),
         }),
     }
+}
+
+/// Converts the legacy scraper-test payload to the fixed provider MCP schema.
+fn web_mcp_arguments(tool_name: &str, request_data: &Value) -> Result<Value> {
+    let mut arguments = Map::new();
+    if tool_name == "web_fetch" {
+        let url = request_data["url"]
+            .as_str()
+            .ok_or_else(|| AppError::General {
+                message: "Missing 'url' for web_fetch request".to_string(),
+            })?;
+        arguments.insert("url".to_string(), Value::String(url.to_string()));
+        for key in ["format", "keep_link", "keep_image"] {
+            if let Some(value) = request_data.get(key) {
+                arguments.insert(key.to_string(), value.clone());
+            }
+        }
+    } else {
+        let query = request_data["query"]
+            .as_str()
+            .ok_or_else(|| AppError::General {
+                message: "Missing 'query' for web_search request".to_string(),
+            })?;
+        arguments.insert("query".to_string(), Value::String(query.to_string()));
+        for key in ["provider", "page", "number", "time_period"] {
+            if let Some(value) = request_data.get(key) {
+                arguments.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    Ok(Value::Object(arguments))
 }
