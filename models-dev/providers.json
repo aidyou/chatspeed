@@ -355,7 +355,7 @@
       "documentationUrl": "https://blueclaw.network",
       "id": "blueclaw",
       "logo": "https://models.dev/logos/blueclaw.svg",
-      "modelCount": 2,
+      "modelCount": 1,
       "name": "Blue Claw",
       "protocol": "openai",
       "responses": false
@@ -463,7 +463,7 @@
       "documentationUrl": "https://www.coralbricks.ai/docs",
       "id": "coralbricks",
       "logo": "https://models.dev/logos/coralbricks.svg",
-      "modelCount": 3,
+      "modelCount": 5,
       "name": "CoralBricks",
       "protocol": "openai",
       "responses": false
@@ -473,7 +473,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 109,
+      "modelCount": 103,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 438,
+      "modelCount": 439,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -2079,7 +2079,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 403,
+      "modelCount": 402,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2308,9 +2308,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "e2b31e120fcbe40684e736f437239faac4b8a80bcd0dea21af3a3286554a8e1d",
-    "generatedAt": "2026-10-04T09:50:28Z",
+    "catalogSha256": "3a07985582911ccbf7201ad90fb7d605e49a6190c59b90f532b424e020a58114",
+    "generatedAt": "2026-10-05T10:29:24Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "ced5fda697afe5b97e9b5536edb5200c4a6cbc01"
+    "revision": "0b48d996ad66d910a01720679320f2f8a921ba7d"
   }
 }
