@@ -59,6 +59,7 @@ const MCP_RESTART_ROUTE: &str = "/control/v1/mcp-restart";
 const MCP_REFRESH_ROUTE: &str = "/control/v1/mcp-refresh";
 const MCP_TOOL_DECLARATIONS_ROUTE: &str = "/control/v1/mcp-tool-declarations";
 const MCP_TOOL_STATUS_ROUTE: &str = "/control/v1/mcp-tool-status";
+const MCP_CALL_ROUTE: &str = "/control/v1/mcp-call";
 
 /// Read-only client WebView capability bridge route (U-7).
 #[cfg(test)]
@@ -294,6 +295,25 @@ pub async fn mcp_update_tool_status(
     let body = json!({ "id": id, "tool_name": tool_name, "disabled": disabled });
     post_idempotent(supervisor, MCP_TOOL_STATUS_ROUTE, &body, &new_key()).await?;
     mcp_get_record(supervisor, id).await
+}
+
+/// Manually invokes one MCP tool and returns the runtime's exact JSON result.
+///
+/// Non-durable: a manual invocation is a one-shot user action, so no idempotency
+/// key is sent and no journal is touched. The runtime validates the record, the
+/// runtime state, the tool ownership and the disabled flag before the call.
+pub async fn mcp_call(
+    supervisor: &RuntimeSupervisor,
+    id: i64,
+    tool_name: &str,
+    arguments: &Value,
+) -> CapResult<Value> {
+    let client = control_plane_client(supervisor).await?;
+    let body = json!({ "id": id, "tool_name": tool_name, "arguments": arguments });
+    client
+        .post(MCP_CALL_ROUTE, &body)
+        .await
+        .map_err(map_client_error)
 }
 
 // ---------------------------------------------------------------------------

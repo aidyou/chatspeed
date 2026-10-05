@@ -23,7 +23,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 #[cfg(test)]
-use crate::ai::network::ProxyType;
+use crate::ai::network::types::ProxyType;
 use crate::constants::{
     CFG_ASSISTANT_WINDOW_SIZE, CFG_PROXY_SWITCHER_WINDOW_SIZE, CFG_SCRAPER_DEBUG_MODE,
     CFG_WINDOW_POSITION, CFG_WINDOW_SIZE, CFG_WORKFLOW_WINDOW_POSITION, CFG_WORKFLOW_WINDOW_SIZE,

@@ -1269,6 +1269,63 @@ impl CapabilityApplicationService {
         })
     }
 
+    /// Manually invokes one enabled tool of one running MCP server.
+    ///
+    /// This is deliberately **not** durable: a manual invocation is a one-shot
+    /// user action, so it opens no journal, carries no idempotency key and is
+    /// never replayed. The service validates the record, the desired/observed
+    /// runtime state and the argument shape, then hands the request to the
+    /// runtime owner, which resolves the tool, proves it belongs to the server
+    /// and is enabled, and only then performs the call. The exact serialized MCP
+    /// result is returned unchanged (AC-11).
+    pub async fn mcp_call(
+        &self,
+        id: i64,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, CapabilityError> {
+        // Tool arguments are a JSON object; anything else is a client bug and is
+        // refused before the runtime is consulted.
+        if !arguments.is_object() {
+            return Err(CapabilityError::invalid_request(
+                "MCP tool arguments must be a JSON object",
+            ));
+        }
+
+        let record = self.require_server(id).await?;
+        if record.disabled {
+            return Err(CapabilityError::refused(
+                "a disabled MCP server cannot run tools; enable it first",
+            ));
+        }
+
+        // Only a server the runtime proves up is called: a proven absence and an
+        // unknown answer are both refused, because neither authorizes a call
+        // (INV-7). An unknown answer propagates its own error, so a caller can
+        // tell "not running" from "the runtime is unavailable".
+        match self.observe(&record.name).await? {
+            Some(observed) if is_running(&observed.state) => {}
+            Some(_) | None => {
+                return Err(CapabilityError::refused(
+                    "the MCP server is not running; enable it first",
+                ));
+            }
+        }
+
+        let timing = self.mcp_timing();
+        with_timeout(
+            timing.effect_timeout,
+            self.mcp_effects().call_tool(&record.name, tool, arguments),
+        )
+        .await
+        .map_err(|_| {
+            CapabilityError::new(
+                code::EFFECT_STATE_UNKNOWN,
+                "the MCP tool call did not answer in time; the effect state is unknown",
+            )
+        })?
+    }
+
     // ------------------------------------------------------------- internals
 
     /// Opens a durable operation for one MCP resource.

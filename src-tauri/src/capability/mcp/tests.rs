@@ -136,6 +136,8 @@ struct FakeRuntime {
     /// The states the runtime reports, by server name.
     states: Mutex<HashMap<String, String>>,
     tools: Mutex<HashMap<String, Vec<String>>>,
+    /// The exact value a manual tool invocation answers with.
+    call_result: Mutex<Option<Value>>,
     /// Effect log, e.g. `start:weather`, used to prove ordering and absence.
     calls: Mutex<Vec<String>>,
     start_result: Mutex<Option<String>>,
@@ -322,6 +324,21 @@ impl McpRuntimeEffects for FakeRuntime {
     ) -> Result<(), CapabilityError> {
         self.record_call(&format!("tool_state:{server}:{tool}:{disabled}"));
         Ok(())
+    }
+
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, CapabilityError> {
+        self.record_call(&format!("call_tool:{server}:{tool}"));
+        self.record_call(&format!("call_args:{arguments}"));
+        self.call_result
+            .lock()
+            .expect("call_result")
+            .clone()
+            .ok_or_else(|| CapabilityError::new(code::INTERNAL, "no scripted call result"))
     }
 
     async fn observe(&self, name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError> {
@@ -1568,6 +1585,149 @@ async fn uninstall_of_an_unknown_id_is_not_found() {
         .expect("unknown id");
     assert_eq!(error.code(), code::NOT_FOUND);
     assert_eq!(fixture.repository.delete_calls.load(Ordering::SeqCst), 0);
+}
+
+// ----------------------------------------------------------- manual call
+
+/// A valid manual invocation returns exactly what the runtime produced, with the
+/// arguments passed through unchanged, and opens no durable operation: a manual
+/// call is a one-shot action, never a journaled mutation (AC-11).
+#[tokio::test]
+async fn a_manual_call_returns_the_runtime_result_unchanged_and_journals_nothing() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    fixture.runtime.set_state("weather", "running");
+    let result = json!({
+        "content": [{ "type": "text", "text": "22C" }],
+        "structuredContent": { "temperatureC": 22, "camelKey": true },
+        "isError": false,
+    });
+    *fixture.runtime.call_result.lock().expect("call_result") = Some(result.clone());
+
+    let arguments = json!({ "city": "Kyiv", "units": "metric" });
+    let returned = fixture
+        .service
+        .mcp_call(id, "forecast", arguments.clone())
+        .await
+        .expect("a running server runs the tool");
+    // The exact value crosses the boundary: keys and nesting are untouched.
+    assert_eq!(returned, result);
+    assert_eq!(
+        fixture.runtime.calls(),
+        vec![
+            "call_tool:weather:forecast".to_string(),
+            format!("call_args:{arguments}"),
+        ]
+    );
+    // Manual invocation is non-durable: no operation row is opened.
+    assert!(
+        fixture
+            .service
+            .repository()
+            .list_by_resource(CapabilityKind::Mcp, "mcp:weather", 10)
+            .expect("operations")
+            .is_empty(),
+        "a manual call must not open a durable operation"
+    );
+}
+
+/// A disabled server, a server the runtime does not prove running, an unknown
+/// id and malformed arguments are all refused before the runtime performs any
+/// call (AC-11/INV-7).
+#[tokio::test]
+async fn a_manual_call_refuses_invalid_requests_without_invoking() {
+    // Disabled desired state.
+    let disabled = fixture();
+    let id = disabled.repository.seed(record("weather", 1, true));
+    disabled.runtime.set_state("weather", "running");
+    let error = disabled
+        .service
+        .mcp_call(id, "forecast", json!({}))
+        .await
+        .err()
+        .expect("a disabled server is refused");
+    assert_eq!(error.code(), code::REFUSED);
+    assert!(disabled.runtime.calls().is_empty());
+
+    // Enabled but the runtime reports it stopped / starting / error: none of
+    // these authorizes a call.
+    for state in ["stopped", "starting", "error"] {
+        let fixture = fixture();
+        let id = fixture.repository.seed(record("weather", 1, false));
+        fixture.runtime.set_state("weather", state);
+        let error = fixture
+            .service
+            .mcp_call(id, "forecast", json!({}))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{state} must be refused"));
+        assert_eq!(error.code(), code::REFUSED, "state {state}");
+        assert!(fixture.runtime.calls().is_empty(), "state {state}");
+    }
+
+    // Enabled but the runtime does not know the server at all.
+    let absent = fixture();
+    let id = absent.repository.seed(record("weather", 1, false));
+    let error = absent
+        .service
+        .mcp_call(id, "forecast", json!({}))
+        .await
+        .err()
+        .expect("an unregistered runtime server is refused");
+    assert_eq!(error.code(), code::REFUSED);
+    assert!(absent.runtime.calls().is_empty());
+
+    // Unknown record id.
+    let unknown = fixture();
+    let error = unknown
+        .service
+        .mcp_call(4242, "forecast", json!({}))
+        .await
+        .err()
+        .expect("an unknown id is refused");
+    assert_eq!(error.code(), code::NOT_FOUND);
+    assert!(unknown.runtime.calls().is_empty());
+
+    // Arguments that are not a JSON object.
+    let malformed = fixture();
+    let id = malformed.repository.seed(record("weather", 1, false));
+    malformed.runtime.set_state("weather", "running");
+    for arguments in [json!(null), json!([1, 2]), json!("text"), json!(7)] {
+        let error = malformed
+            .service
+            .mcp_call(id, "forecast", arguments.clone())
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{arguments} must be refused"));
+        assert_eq!(error.code(), code::INVALID_REQUEST);
+    }
+    assert!(malformed.runtime.calls().is_empty());
+}
+
+/// The runtime owner's ownership/disabled refusal is surfaced unchanged, so a
+/// tool that belongs to another server or is turned off is never reported as a
+/// successful call (INV-1).
+#[tokio::test]
+async fn a_manual_call_surfaces_the_runtime_ownership_refusal() {
+    let fixture = fixture();
+    let id = fixture.repository.seed(record("weather", 1, false));
+    fixture.runtime.set_state("weather", "connected");
+    // No scripted result: the fake answers with a stable refusal, which must
+    // travel back to the caller rather than be swallowed.
+    let error = fixture
+        .service
+        .mcp_call(id, "someone_elses_tool", json!({}))
+        .await
+        .err()
+        .expect("the runtime refusal propagates");
+    assert_eq!(error.code(), code::INTERNAL);
+    assert_eq!(
+        fixture.runtime.calls(),
+        vec![
+            "call_tool:weather:someone_elses_tool".to_string(),
+            "call_args:{}".to_string(),
+        ]
+    );
 }
 
 // ----------------------------------------------------------- tools/refresh

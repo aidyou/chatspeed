@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 #[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::capability::error::CapabilityError;
 #[cfg(not(feature = "desktop"))]
@@ -161,6 +163,25 @@ pub trait McpRuntimeEffects: Send + Sync {
         disabled: bool,
     ) -> Result<(), CapabilityError>;
 
+    /// Invokes one enabled tool that belongs to a running server and returns the
+    /// runtime's serialized tool result unchanged.
+    ///
+    /// The runtime owner resolves the requested name (an internal tool name or
+    /// one of the aliases it assigned), proves the tool belongs to `server` and
+    /// is enabled, and only then reaches the MCP client. A name that belongs to
+    /// another server, an alias with no owner, and a disabled tool are all
+    /// refused before any invocation, so a manual call can never cross a server
+    /// boundary or run a disabled tool (INV-1/AC-11).
+    ///
+    /// The result is never re-encoded: the caller sees exactly what the MCP
+    /// server produced.
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, CapabilityError>;
+
     /// One-shot observation of a single server, used to confirm an effect.
     async fn observe(&self, name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError>;
 }
@@ -199,6 +220,15 @@ impl McpRuntimeEffects for UnavailableRuntimeEffects {
         Err(runtime_unavailable())
     }
 
+    async fn call_tool(
+        &self,
+        _server: &str,
+        _tool: &str,
+        _arguments: Value,
+    ) -> Result<Value, CapabilityError> {
+        Err(runtime_unavailable())
+    }
+
     async fn observe(&self, _name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError> {
         // Unknown, not absent: absence would be proof that nothing is running.
         Err(runtime_unavailable())
@@ -231,6 +261,35 @@ fn runtime_failure(action: &str, error: crate::tools::ToolError) -> CapabilityEr
             redaction::redact_text(&error.to_string())
         ),
     )
+}
+
+/// Maps an MCP tool-call failure onto a capability error without ever echoing
+/// the tool's own error content.
+///
+/// The MCP client folds a tool's `is_error` result and a transport failure into
+/// one free-text message that can quote arbitrary server output, so an execution
+/// failure is reported generically. Only the ownership and disabled validation
+/// failures — which carry a name, never content — keep a specific refusal.
+#[cfg(not(feature = "desktop"))]
+fn call_tool_failure(error: crate::tools::ToolError) -> CapabilityError {
+    use crate::capability::error::code;
+    use crate::tools::ToolError;
+    match error {
+        ToolError::FunctionNotFound(name) => CapabilityError::new(
+            code::NOT_FOUND,
+            format!("MCP tool '{name}' does not exist on this server"),
+        ),
+        ToolError::Config(message) | ToolError::Security(message) => {
+            CapabilityError::new(code::REFUSED, redaction::redact_text(&message))
+        }
+        ToolError::McpServerNotFound(name) => CapabilityError::new(
+            code::RUNTIME_UNAVAILABLE,
+            format!("the MCP server '{name}' is not registered with the runtime"),
+        ),
+        // A real invocation failure is deliberately not forwarded: its message
+        // can quote the MCP tool's raw error content.
+        _ => CapabilityError::new(code::INTERNAL, "the MCP tool call failed"),
+    }
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -280,6 +339,20 @@ impl McpRuntimeEffects for ToolManagerRuntimeEffects {
             .disable_mcp_tool(server, tool, disabled)
             .await
             .map_err(|error| runtime_failure("change the tool state", error))
+    }
+
+    async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, CapabilityError> {
+        self.chat_state
+            .tool_manager
+            .clone()
+            .invoke_mcp_tool(server, tool, arguments)
+            .await
+            .map_err(call_tool_failure)
     }
 
     async fn observe(&self, name: &str) -> Result<Option<ObservedMcpRuntime>, CapabilityError> {

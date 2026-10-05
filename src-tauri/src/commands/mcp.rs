@@ -12,11 +12,12 @@
 //! unchanged, and the live status now comes from the runtime's own observation
 //! rather than a client-local tool manager.
 //!
-//! The one command that cannot be served this way is `run_mcp_tool`: the runtime
-//! capability facade deliberately never invokes MCP tools (AC-11), so there is
-//! no typed route for a manual invocation. It fails closed with an explicit
-//! "unavailable" error instead of silently reaching a second owner (see the
-//! command docs below).
+//! `run_mcp_tool` is the one command that is deliberately non-durable: a manual
+//! invocation reaches the runtime owner through the fixed `/control/v1/mcp-call`
+//! route, opens no journal and carries no idempotency key, and the exact MCP
+//! result is returned unchanged. The runtime validates the record, the runtime
+//! state, the tool ownership and the disabled flag before any call reaches the
+//! MCP server (AC-11).
 
 use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::capability::error::{code, CapabilityError};
@@ -300,20 +301,23 @@ pub async fn update_mcp_tool_status(
 
 /// Manually invoke an MCP tool (manual execution / testing).
 ///
-/// This is deliberately unavailable: the runtime capability facade never
-/// invokes MCP tools (AC-11), so there is no typed control-plane route for a
-/// manual invocation, and the desktop no longer owns an MCP runtime to call one
-/// locally. The command fails closed with a stable error instead of silently
-/// reaching a second owner; a future approved `mcp-call` route can restore it.
+/// The invocation is delegated to the runtime owner through the fixed
+/// `/control/v1/mcp-call` route, which validates the record, the runtime state,
+/// the tool ownership and the disabled flag before any call reaches the MCP
+/// server. The runtime's exact JSON result is returned unchanged.
+///
+/// A manual invocation is deliberately non-durable: it opens no journal and
+/// carries no idempotency key, so a retry runs again instead of replaying.
 #[tauri::command]
-pub async fn run_mcp_tool(id: i64, tool_name: &str, arguments: Value) -> Result<Value> {
-    // The arguments are part of the preserved command contract but are not
-    // evaluated: there is no route to send them to.
-    let _ = arguments;
-    Err(AppError::Mcp(McpError::General(format!(
-        "manual MCP tool invocation is unavailable: the runtime control plane does not expose an \
-         `mcp-call` route (server {id}, tool '{tool_name}')"
-    ))))
+pub async fn run_mcp_tool(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    id: i64,
+    tool_name: String,
+    arguments: Value,
+) -> Result<Value> {
+    runtime_capability::mcp_call(supervisor.inner().as_ref(), id, &tool_name, &arguments)
+        .await
+        .map_err(legacy_error)
 }
 
 #[cfg(test)]

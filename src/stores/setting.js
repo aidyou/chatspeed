@@ -55,7 +55,6 @@ const defaultSettings = {
   proxyUsername: '',
   proxyPassword: '',
   // other settings
-  wordSelectionToolbar: false,
   autoStart: false,
   autoUpdate: true,
   workflowPreventIdleSleep: false,
@@ -224,33 +223,6 @@ export const useSettingStore = defineStore('setting', () => {
     })
   }
 
-  const setTextMonitor = start => {
-    return new Promise((resolve, reject) => {
-      if (start) {
-        invokeWrapper('start_text_monitor', { force: true })
-          .then(() => {
-            setSetting('wordSelectionToolbar', true).then(resolve)
-          })
-          .catch(err => {
-            settings.value.wordSelectionToolbar = false
-            invokeWrapper('open_text_selection_permission_settings')
-            reject(
-              i18n.global.t('settings.general.startWordSelectionToolbarFailed', { error: err.message || String(err) })
-            )
-          })
-      } else {
-        invokeWrapper('stop_text_monitor')
-          .then(() => {
-            setSetting('wordSelectionToolbar', false).then(resolve)
-          })
-          .catch(err => {
-            settings.value.wordSelectionToolbar = true
-            reject(i18n.global.t('settings.general.stopWordSelectionToolbarFailed', { error: err.message || String(err) }))
-          })
-      }
-    })
-  }
-
   const reloadConfig = () => {
     return new Promise((resolve, reject) => {
       invokeWrapper('reload_config')
@@ -314,7 +286,6 @@ export const useSettingStore = defineStore('setting', () => {
     settings,
     setSetting,
     updateSettingStore,
-    setTextMonitor,
     reloadConfig,
     updateTray,
     env,

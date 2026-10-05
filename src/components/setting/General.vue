@@ -845,14 +845,6 @@
   <div class="card">
     <div class="title">{{ $t('settings.general.advancedSettings') }}</div>
     <div class="list">
-      <!--<div class="item">
-        <div class="label">{{ $t('settings.general.wordSelectionToolbar') }}</div>
-        <div class="value">
-          <el-switch
-            v-model="settings.wordSelectionToolbar"
-            @change="onWordSelectionToolbarChange" />
-        </div>
-      </div>-->
       <div class="item">
         <div class="label">{{ $t('settings.general.autoStart') }}</div>
         <div class="value">

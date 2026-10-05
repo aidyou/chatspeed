@@ -235,44 +235,6 @@ onMounted(async () => {
 
   window.addEventListener('keydown', handleShortcut)
 
-  // Listen for permission requests
-  // await listen('accessibility-permission-required', () => {
-  //   ElMessageBox.confirm(
-  //     'This app needs accessibility permission to monitor text selection. Would you like to open System Settings?',
-  //     'Permission Required',
-  //     {
-  //       confirmButtonText: 'Open Settings',
-  //       cancelButtonText: 'Cancel',
-  //       type: 'warning'
-  //     }
-  //   )
-  //     .then(() => {
-  //       // Call backend to open system settings
-  //       invoke('open_accessibility_settings').catch(err => {
-  //         ElMessage.error(`Failed to open settings: ${err}`)
-  //       })
-  //     })
-  //     .catch(() => {
-  //       ElMessage.info('You can grant permission later in System Settings')
-  //     })
-  // })
-
-  // Listen for permission errors
-  // await listen('accessibility-error', event => {
-  //   ElMessage.error({
-  //     message: `Accessibility error: ${event.payload}`,
-  //     duration: 0,
-  //     showClose: true
-  //   })
-  // })
-  // Listen for monitoring errors
-  // await listen('text-monitor-error', event => {
-  //   ElMessage.error({
-  //     message: `Monitor error: ${event.payload}`,
-  //     duration: 0,
-  //     showClose: true
-  //   })
-  // })
 })
 
 onUnmounted(() => {

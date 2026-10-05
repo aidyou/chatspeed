@@ -780,6 +780,10 @@ fn build_router(state: ControlPlaneState) -> Router {
             "/control/v1/mcp-tool-status",
             post(set_capability_mcp_tool_status),
         )
+        // Manual tool invocation. Deliberately non-durable: it opens no journal
+        // and needs no `Idempotency-Key`, and it returns the exact MCP result so
+        // the caller sees what the server produced (AC-11).
+        .route("/control/v1/mcp-call", post(call_capability_mcp_tool))
         // Phase 3D local automation surface. Additive: every route resolves to
         // the same `AutomationApplicationService` the Tauri commands and the
         // scheduler use, so HTTP, the `cs` CLI and the desktop can never
@@ -2073,6 +2077,54 @@ async fn set_capability_mcp_tool_status(
         }
     })
     .await
+}
+
+/// `POST /control/v1/mcp-call` — manually invokes one cached tool of one running
+/// server.
+///
+/// Deliberately non-durable and non-idempotent: a manual invocation is a
+/// one-shot action, so the route opens no journal and requires no
+/// `Idempotency-Key`. The shared service validates the record, the runtime state,
+/// the tool ownership and the disabled flag before the call, and the exact
+/// serialized MCP result is returned unchanged — re-casing it to the snake_case
+/// wire would corrupt the tool payload (AC-11).
+async fn call_capability_mcp_tool(
+    State(state): State<ControlPlaneState>,
+    body: String,
+) -> Response {
+    let request: McpCallRequest = match serde_json::from_str(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                format!("Invalid MCP call request: {error}"),
+            );
+        }
+    };
+    match state
+        .svc
+        .capability()
+        .mcp_call(request.id, &request.tool_name, request.arguments)
+        .await
+    {
+        // Bypass the snake_case normalizer on purpose: the MCP result is opaque
+        // and must reach the caller byte-for-byte.
+        Ok(result) => Json(result).into_response(),
+        Err(error) => dto::capability_error_response(&error),
+    }
+}
+
+/// The explicit manual MCP invocation request body.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpCallRequest {
+    id: i64,
+    tool_name: String,
+    /// Defaults to `null`, which the service refuses as a non-object argument
+    /// document.
+    #[serde(default)]
+    arguments: serde_json::Value,
 }
 
 /// Overlays the runtime's observed status onto the secret-free records.
@@ -3408,6 +3460,80 @@ mod tests {
             .await
             .expect("request without auth");
         assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    }
+
+    /// The manual invocation route is mounted, bearer-protected and delegates to
+    /// the shared service. It needs no `Idempotency-Key` (a manual call is
+    /// one-shot and non-durable) and it refuses an invalid request before the
+    /// runtime is consulted (AC-11).
+    #[tokio::test]
+    async fn manual_mcp_call_route_is_non_durable_and_validates_before_the_runtime() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        // The route sits behind the same bearer middleware as the rest.
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-call"))
+            .json(&serde_json::json!({ "id": 1, "tool_name": "t", "arguments": {} }))
+            .send()
+            .await
+            .expect("unauthenticated");
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        // Install a server, always disabled.
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-install"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "cli-mcp-call-install")
+            .json(&serde_json::json!({
+                "name": "call-fixture",
+                "type": "stdio",
+                "command": "/bin/echo",
+                "args": ["x"],
+            }))
+            .send()
+            .await
+            .expect("install");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let installed: serde_json::Value = response.json().await.expect("install json");
+        let id = installed["result"]["id"].as_i64().expect("record id");
+
+        // A disabled server is refused, and the route needs no idempotency key.
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-call"))
+            .header("Authorization", &auth)
+            .json(&serde_json::json!({ "id": id, "tool_name": "t", "arguments": {} }))
+            .send()
+            .await
+            .expect("disabled call");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+        let body: serde_json::Value = response.json().await.expect("error json");
+        assert_eq!(body["error"]["code"], "refused");
+
+        // An unknown id is a structured 404.
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-call"))
+            .header("Authorization", &auth)
+            .json(&serde_json::json!({ "id": 999_999, "tool_name": "t", "arguments": {} }))
+            .send()
+            .await
+            .expect("unknown id");
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+        let body: serde_json::Value = response.json().await.expect("error json");
+        assert_eq!(body["error"]["code"], "not_found");
+
+        // Arguments that are not a JSON object are refused as an invalid request.
+        let response = http
+            .post(auth_url(&app, "/control/v1/mcp-call"))
+            .header("Authorization", &auth)
+            .json(&serde_json::json!({ "id": id, "tool_name": "t", "arguments": [1, 2] }))
+            .send()
+            .await
+            .expect("bad arguments");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.expect("error json");
+        assert_eq!(body["error"]["code"], "invalid_request");
     }
 
     /// Reads the per-instance bearer token from the discovery document.

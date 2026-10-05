@@ -587,8 +587,6 @@
       "showMenuButtonTooltip": "在对话聊天窗口的右上角显示菜单按钮",
       "showTodayCostStats": "显示当日消费统计",
       "showTodayCostStatsTooltip": "在任务标题栏中显示当日累积消费金额，并每 5 秒自动刷新",
-      "startWordSelectionToolbarFailed": "启动AI划词工具栏失败: {error}",
-      "stopWordSelectionToolbarFailed": "停止AI划词工具栏失败: {error}",
       "systemTheme": "跟随系统",
       "terminalColorScheme": "终端配色",
       "terminalColorSchemeAuto": "跟随界面",

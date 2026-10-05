@@ -1278,21 +1278,3 @@ fn current_saved_window_position(
 
     None
 }
-
-// fn setup_text_monitor(state: State<Arc<Mutex<TextMonitorManager>>>) -> Result<(), String> {
-//     let monitor = state.get_mut();
-//     // Process received events in a new async task
-//     tauri::async_runtime::spawn(async move {
-//         while let Ok(event) = rx.recv().await {
-//             // Process selected text
-//             println!("Selected text: {}", event.text);
-
-//             // Send event to frontend
-//             if let Err(e) = app_handle.emit("text-selected", &event) {
-//                 eprintln!("Failed to emit text event: {}", e);
-//             }
-//         }
-//     });
-
-//     Ok(())
-// }

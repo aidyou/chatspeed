@@ -282,6 +282,25 @@ fn scope_allows(tool_scope: ToolScope, scope_filter: Option<ToolScope>) -> bool 
     }
 }
 
+/// Refuses a disabled tool and otherwise returns a copy of its declaration.
+///
+/// Disabled MCP tools stay canonically addressable for management, so the
+/// registry lookup alone does not prove a tool may run; this is the gate that
+/// keeps a manual invocation from running one the user turned off.
+#[cfg(not(feature = "desktop"))]
+fn owned_enabled(
+    server_name: &str,
+    declaration: &MCPToolDeclaration,
+) -> Result<MCPToolDeclaration, ToolError> {
+    if declaration.disabled {
+        return Err(ToolError::Security(format!(
+            "MCP tool '{}' on server '{}' is disabled",
+            declaration.name, server_name
+        )));
+    }
+    Ok(declaration.clone())
+}
+
 #[cfg(not(feature = "desktop"))]
 #[derive(Clone)]
 pub struct McpToolSpec {
@@ -878,6 +897,77 @@ impl ToolManager {
             )));
         }
         Ok(declaration)
+    }
+
+    /// Invokes one tool owned by `server_name` and returns the MCP runtime's
+    /// serialized tool result unchanged.
+    ///
+    /// The requested name may be the internal tool name or one of the public
+    /// aliases the manager assigned. Ownership is enforced here: a name that
+    /// does not resolve to a tool of `server_name`, an alias owned by another
+    /// server, and a disabled tool are all refused before the MCP client is
+    /// reached, so a manual invocation can never run the wrong server's tool
+    /// (INV-1/AC-11).
+    pub(crate) async fn invoke_mcp_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<Value, ToolError> {
+        let declaration = self.resolve_owned_mcp_tool(server_name, tool_name).await?;
+        let client = self.get_mcp_server(server_name).await?;
+        client
+            .call(&declaration.name, arguments)
+            .await
+            .map_err(|error| {
+                // The client folds a tool's own error content and a transport
+                // failure into one message: it is redacted before it can be
+                // logged and never handed back to the caller.
+                log::warn!(
+                    "MCP tool call on server '{}' failed: {}",
+                    server_name,
+                    crate::capability::redaction::redact_text(&error.to_string())
+                );
+                ToolError::ExecutionFailed("the MCP tool call failed".to_string())
+            })
+    }
+
+    /// Resolves a requested tool name to a declaration owned by `server_name`.
+    ///
+    /// An exact internal name of the server wins; otherwise a public alias or
+    /// canonical name is resolved and its owning server is checked against
+    /// `server_name`. A name that belongs elsewhere is refused rather than
+    /// silently invoked on the requested server (INV-1).
+    async fn resolve_owned_mcp_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+    ) -> Result<MCPToolDeclaration, ToolError> {
+        let declarations = self
+            .mcp_tools
+            .read()
+            .await
+            .get(server_name)
+            .cloned()
+            .ok_or_else(|| ToolError::McpServerNotFound(server_name.to_string()))?;
+
+        if let Some(declaration) = declarations.iter().find(|decl| decl.name == tool_name) {
+            return owned_enabled(server_name, declaration);
+        }
+
+        if let Some(canonical) = self.resolve_mcp_tool_name(tool_name).await {
+            let prefix = format!("{server_name}{MCP_TOOL_NAME_SPLIT}");
+            if let Some(internal) = canonical.strip_prefix(&prefix) {
+                if let Some(declaration) = declarations.iter().find(|decl| decl.name == internal) {
+                    return owned_enabled(server_name, declaration);
+                }
+            }
+            return Err(ToolError::Config(format!(
+                "the MCP tool '{tool_name}' does not belong to server '{server_name}'"
+            )));
+        }
+
+        Err(ToolError::FunctionNotFound(tool_name.to_string()))
     }
 
     // =================================================
@@ -1684,6 +1774,112 @@ mod tests {
             .await
             .expect_err("the reserved provider name must be rejected");
         assert!(matches!(error, ToolError::Config(_)), "{error}");
+    }
+
+    /// A manual invocation reaches the MCP client only for a tool that belongs
+    /// to the requested server and is enabled; the exact internal name and the
+    /// distinct public alias both resolve to that server's tool.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn invoke_mcp_tool_reaches_the_client_only_for_an_owned_enabled_tool() {
+        let manager = Arc::new(ToolManager::new());
+        manager
+            .register_test_mcp_tool("alpha", "get_weather", json!({ "type": "object" }))
+            .await
+            .expect("alpha tool");
+        manager
+            .register_test_mcp_tool("beta", "get_weather", json!({ "type": "object" }))
+            .await
+            .expect("beta tool");
+
+        // The internal name of an owned tool passes validation. No live child is
+        // connected in this test, so reaching the client is proven by the
+        // execution error rather than by a successful result.
+        let error = manager
+            .invoke_mcp_tool("alpha", "get_weather", json!({ "city": "Kyiv" }))
+            .await
+            .expect_err("no live child is connected");
+        assert!(
+            matches!(error, ToolError::ExecutionFailed(_)),
+            "an owned internal name must reach the client: {error}"
+        );
+
+        // beta's colliding tool gets the distinct `beta_get_weather` alias, which
+        // must resolve to beta's tool and reach beta's client.
+        let error = manager
+            .invoke_mcp_tool("beta", "beta_get_weather", json!({}))
+            .await
+            .expect_err("no live child is connected");
+        assert!(
+            matches!(error, ToolError::ExecutionFailed(_)),
+            "an owned alias must reach the client: {error}"
+        );
+    }
+
+    /// A tool that belongs to another server, an unowned name and an unknown
+    /// server are refused before any MCP client is reached (INV-1).
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn invoke_mcp_tool_refuses_a_tool_not_owned_by_the_requested_server() {
+        let manager = Arc::new(ToolManager::new());
+        manager
+            .register_test_mcp_tool("alpha", "get_weather", json!({}))
+            .await
+            .expect("alpha tool");
+        manager
+            .register_test_mcp_tool("beta", "get_weather", json!({}))
+            .await
+            .expect("beta tool");
+
+        // beta's canonical name may not be routed through alpha.
+        let error = manager
+            .invoke_mcp_tool("alpha", "beta__MCP__get_weather", json!({}))
+            .await
+            .expect_err("a foreign canonical name is refused");
+        assert!(matches!(error, ToolError::Config(_)), "{error}");
+
+        // beta's distinct public alias is foreign to alpha too.
+        let error = manager
+            .invoke_mcp_tool("alpha", "beta_get_weather", json!({}))
+            .await
+            .expect_err("a foreign alias is refused");
+        assert!(matches!(error, ToolError::Config(_)), "{error}");
+
+        // An unowned name has no canonical tool at all.
+        let error = manager
+            .invoke_mcp_tool("alpha", "nope", json!({}))
+            .await
+            .expect_err("an unowned name is refused");
+        assert!(matches!(error, ToolError::FunctionNotFound(_)), "{error}");
+
+        // A server the manager does not hold is refused, not guessed.
+        let error = manager
+            .invoke_mcp_tool("ghost", "get_weather", json!({}))
+            .await
+            .expect_err("an unknown server is refused");
+        assert!(matches!(error, ToolError::McpServerNotFound(_)), "{error}");
+    }
+
+    /// A disabled tool stays addressable for management, so the invocation gate
+    /// must refuse it explicitly rather than run it.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn invoke_mcp_tool_refuses_a_disabled_tool() {
+        let manager = Arc::new(ToolManager::new());
+        manager
+            .register_test_mcp_tool("alpha", "get_weather", json!({}))
+            .await
+            .expect("alpha tool");
+        manager
+            .disable_mcp_tool("alpha", "get_weather", true)
+            .await
+            .expect("disable the tool");
+
+        let error = manager
+            .invoke_mcp_tool("alpha", "get_weather", json!({}))
+            .await
+            .expect_err("a disabled tool is refused");
+        assert!(matches!(error, ToolError::Security(_)), "{error}");
     }
 
     #[cfg(not(feature = "desktop"))]
