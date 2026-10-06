@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 291,
+      "modelCount": 292,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -961,7 +961,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 397,
+      "modelCount": 395,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1315,7 +1315,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 600,
+      "modelCount": 609,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1469,7 +1469,7 @@
       "documentationUrl": "https://opencode.ai/docs/go",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 33,
+      "modelCount": 34,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1490,7 +1490,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 390,
+      "modelCount": 388,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2079,7 +2079,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 402,
+      "modelCount": 405,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2160,7 +2160,7 @@
       "documentationUrl": "https://docs.wandb.ai/inference",
       "id": "wandb",
       "logo": "https://models.dev/logos/wandb.svg",
-      "modelCount": 29,
+      "modelCount": 20,
       "name": "CoreWeave",
       "protocol": "openai",
       "responses": false
@@ -2308,9 +2308,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "3a07985582911ccbf7201ad90fb7d605e49a6190c59b90f532b424e020a58114",
-    "generatedAt": "2026-10-05T10:29:24Z",
+    "catalogSha256": "9edb225348d883df72e4f6a5218827e2ff8cd431c2e360c3b70f042a70ead4c5",
+    "generatedAt": "2026-10-06T10:21:12Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "0b48d996ad66d910a01720679320f2f8a921ba7d"
+    "revision": "57db42544885e5298fdaf68538b5559b7c19818e"
   }
 }
