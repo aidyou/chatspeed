@@ -342,8 +342,7 @@ mod debug_path_tests {
         // The live static must resolve from the compile-time manifest instead of
         // the process working directory, so a `cargo test` launched from any
         // directory lands on the same repository `dev_data`.
-        let expected =
-            dev_repository_root(Path::new(env!("CARGO_MANIFEST_DIR"))).join("dev_data");
+        let expected = dev_repository_root(Path::new(env!("CARGO_MANIFEST_DIR"))).join("dev_data");
         assert_eq!(get_static_var(&STORE_DIR), expected);
     }
 

@@ -6,9 +6,9 @@ use crate::ai::error::AiError;
 use crate::ai::interaction::constants::{
     TOKENS, TOKENS_COMPLETION, TOKENS_PER_SECOND, TOKENS_PROMPT, TOKENS_TOTAL,
 };
+use crate::ccproxy::ChatProtocol;
 #[cfg(not(feature = "desktop"))]
 use crate::db::ThinkingConfig;
-use crate::ccproxy::ChatProtocol;
 #[cfg(not(feature = "desktop"))]
 use crate::tools::ToolScope;
 
@@ -19,9 +19,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[cfg(not(feature = "desktop"))]
 use serde_json::json;
 use serde_json::Value;
-use std::{default::Default, fmt::Display};
 #[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
+use std::{default::Default, fmt::Display};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -242,7 +242,6 @@ fn owns_session(session: &TerminalSession, client_id: &str, lease_id: &str) -> b
     session.owner.client_id == client_id && session.owner.lease_id == lease_id
 }
 
-
 impl TerminalManager {
     /// Creates an empty manager with its own event broker.
     pub fn new() -> Self {
@@ -274,7 +273,11 @@ impl TerminalManager {
     ///
     /// A replacement lease for the same client id cannot attach to sessions
     /// created by the old lease.
-    pub fn list_sessions(&self, client_id: &str, lease_id: &str) -> Vec<TerminalSessionMetadataDto> {
+    pub fn list_sessions(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Vec<TerminalSessionMetadataDto> {
         self.sessions
             .lock()
             .sessions
@@ -1434,8 +1437,13 @@ mod tests {
             client_id: "client-a".to_string(),
             lease_id: "client-a-new-lease".to_string(),
         };
-        assert_eq!(manager.list_sessions("client-a", &old_lease.lease_id).len(), 1);
-        assert!(manager.list_sessions("client-a", &new_lease.lease_id).is_empty());
+        assert_eq!(
+            manager.list_sessions("client-a", &old_lease.lease_id).len(),
+            1
+        );
+        assert!(manager
+            .list_sessions("client-a", &new_lease.lease_id)
+            .is_empty());
         assert!(matches!(
             manager.write("client-a", &new_lease.lease_id, &session_id, "ls\n"),
             Err(TerminalError::Forbidden(_))

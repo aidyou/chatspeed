@@ -14,6 +14,6 @@ pub mod server;
 pub mod sse;
 #[cfg(not(feature = "desktop"))]
 pub mod terminal_commands;
-pub mod workflow_commands;
 #[cfg(not(feature = "desktop"))]
 pub mod web_mcp_commands;
+pub mod workflow_commands;

@@ -1537,7 +1537,10 @@ mod tests {
         let run_now_body = adapter_src
             .split("pub async fn automation_run_now(")
             .nth(1)
-            .and_then(|rest| rest.split("/// Produces the side-effect-free draft plan").next())
+            .and_then(|rest| {
+                rest.split("/// Produces the side-effect-free draft plan")
+                    .next()
+            })
             .expect("automation_run_now body");
         assert!(
             run_now_body.contains("{AUTOMATIONS_ROUTE}/{}/run")
@@ -1610,7 +1613,8 @@ mod tests {
             .split("pub async fn automation_run(")
             .nth(1)
             .and_then(|rest| {
-                rest.split("pub async fn automation_run_with_receipt(").next()
+                rest.split("pub async fn automation_run_with_receipt(")
+                    .next()
             })
             .expect("automation_run body");
         assert!(

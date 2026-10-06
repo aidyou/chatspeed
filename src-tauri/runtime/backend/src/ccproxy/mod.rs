@@ -39,11 +39,11 @@ pub use router::routes;
 #[cfg(not(feature = "desktop"))]
 pub use types::claude;
 #[cfg(not(feature = "desktop"))]
-pub use types::openai;
-#[cfg(not(feature = "desktop"))]
 pub use types::gemini;
+#[cfg(not(feature = "desktop"))]
+pub use types::openai;
 // The desktop keeps only the wire protocol enum; the proxy engine config and
 // stream format are runtime-owned.
+pub use types::ChatProtocol;
 #[cfg(not(feature = "desktop"))]
 pub use types::{ChatCompletionProxyConfig, StreamFormat};
-pub use types::ChatProtocol;

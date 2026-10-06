@@ -2,9 +2,9 @@
 use crate::ai::interaction::chat_completion::ChatState;
 #[cfg(not(feature = "desktop"))]
 use crate::db::agent::normalize_agent_tool_config;
-use crate::db::{Workflow, WorkflowEfficiencyReport, WorkflowMessage};
 #[cfg(not(feature = "desktop"))]
 use crate::db::{Agent, AgentConfig, MainStore, WorkflowSnapshot};
+use crate::db::{Workflow, WorkflowEfficiencyReport, WorkflowMessage};
 #[cfg(not(feature = "desktop"))]
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::react::application::WorkflowCreateRequest;
@@ -18,9 +18,9 @@ use crate::workflow::react::child_tasks::get_sub_agent_registry;
 use crate::workflow::react::client::hub::WorkflowRuntimeHub;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::dispatcher::DispatcherMetricsSnapshot;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::dispatcher::Dispatcher;
+use crate::workflow::react::dispatcher::DispatcherMetricsSnapshot;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::engine::WorkflowExecutor;
 #[cfg(not(feature = "desktop"))]
@@ -57,11 +57,11 @@ use crate::workflow::react::security::workspace_walk_builder;
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::signals::{stash_runtime_signal, SignalType};
-use crate::workflow::react::types::{WaitReason, WorkflowState};
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::types::{
     ExecutionContext, GatewayPayload, RuntimeState, StepType, SubAgentCompletion, WorkflowSignal,
 };
+use crate::workflow::react::types::{WaitReason, WorkflowState};
 #[cfg(not(feature = "desktop"))]
 use chrono::{DateTime, Local};
 #[cfg(not(feature = "desktop"))]
@@ -69,9 +69,9 @@ use glob::glob;
 #[cfg(not(feature = "desktop"))]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 #[cfg(not(feature = "desktop"))]
 use serde_json::json;
+use serde_json::Value;
 #[cfg(not(feature = "desktop"))]
 use std::fs;
 #[cfg(not(feature = "desktop"))]
@@ -1933,7 +1933,6 @@ fn build_resolved_workflow_config(
     Ok(config.to_json())
 }
 
-
 #[cfg(not(feature = "desktop"))]
 pub(crate) async fn list_workflows_core(
     svc: &WorkflowApplicationService,
@@ -1943,7 +1942,6 @@ pub(crate) async fn list_workflows_core(
         .await
         .map_err(|e| ApplicationError::internal(e.to_string()))
 }
-
 
 #[cfg(not(feature = "desktop"))]
 fn terminal_workflow_state(runtime_state: &RuntimeState) -> Option<WorkflowState> {
@@ -2585,8 +2583,6 @@ fn reconcile_child_workflows_for_parent(
     reconcile_child_workflows(store, child_workflows)
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowContextFrameResult {
@@ -2833,8 +2829,6 @@ async fn finalize_manual_clear_context_state(
     Ok(())
 }
 
-
-
 #[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_snapshot_core(
     svc: &WorkflowApplicationService,
@@ -2962,15 +2956,6 @@ pub(crate) async fn get_workflow_snapshot_core(
 
     Ok(snapshot_json)
 }
-
-
-
-
-
-
-
-
-
 
 // ==========================================
 // 3. ReAct Runtime Control Commands
@@ -4057,7 +4042,6 @@ pub(crate) async fn workflow_start_core(
     Ok(session_id)
 }
 
-
 #[cfg(not(feature = "desktop"))]
 async fn run_terminal_manual_compression(
     app_data_dir: PathBuf,
@@ -4140,7 +4124,6 @@ async fn run_terminal_manual_compression(
         .await
         .map_err(|error| error.to_string())
 }
-
 
 #[cfg(not(feature = "desktop"))]
 pub(crate) async fn workflow_signal_core(
@@ -4778,8 +4761,6 @@ pub(crate) async fn workflow_signal_core(
     )))
 }
 
-
-
 /// Terminal workflow statuses that no longer have a live executor to consume a
 /// stop signal. See CONSTITUTION.md §5.3: stop stays actionable during active
 /// execution, waiting, retry/backoff windows, and temporary signal drains; only
@@ -4906,9 +4887,6 @@ pub(crate) async fn workflow_stop_core(
     }
 }
 
-
-
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkspaceFile {
     pub name: String,
@@ -4919,26 +4897,9 @@ pub struct WorkspaceFile {
     pub score: i32,
 }
 
-
 use crate::workflow::react::skills::SkillManifest;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::skills::SkillScanner;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[cfg(not(feature = "desktop"))]
 pub(crate) async fn get_workflow_events_core(
@@ -4949,9 +4910,6 @@ pub(crate) async fn get_workflow_events_core(
         .list_workflow_events_after(&query.session_id, query.after, query.limit)
         .map_err(|e| ApplicationError::internal(e.to_string()))
 }
-
-
-
 
 // ==========================================
 // 9. Canonical workflow command cores + allowlisted dispatch

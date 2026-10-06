@@ -8,11 +8,11 @@ use crate::tools::{
     TOOL_READ_FILE, TOOL_SUBMIT_PLAN, TOOL_SUBMIT_RESULT, TOOL_TODO_CREATE, TOOL_TODO_LIST,
     TOOL_TODO_UPDATE, TOOL_WRITE_FILE,
 };
-use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
 };
 use crate::workflow::react::security::PathGuard;
+use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};

@@ -31,11 +31,8 @@ pub async fn list_models_dev_provider_models(
     supervisor: State<'_, Arc<RuntimeSupervisor>>,
     provider_id: String,
 ) -> Result<Vec<ModelDetails>, String> {
-    crate::runtime_data::list_models_dev_provider_models(
-        supervisor.inner().as_ref(),
-        provider_id,
-    )
-    .await
+    crate::runtime_data::list_models_dev_provider_models(supervisor.inner().as_ref(), provider_id)
+        .await
 }
 
 /// Resolve the catalog profile for a model against the runtime snapshot.

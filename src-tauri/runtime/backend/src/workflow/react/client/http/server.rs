@@ -26,10 +26,10 @@ use axum::{Json, Router};
 use chatspeed_contracts::workflow::{
     WorkflowCreateRequest, WorkflowEventsQuery, WorkflowStartRequest,
 };
-#[cfg(not(feature = "desktop"))]
-use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
 #[cfg(all(test, not(feature = "desktop")))]
 use chatspeed_contracts::ClientCapabilityStatus;
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -3223,12 +3223,11 @@ mod tests {
         let (app, _env) = spawn_test_app().await;
         let http = client();
         let auth = format!("Bearer {}", auth_token(&app));
-        let fixture =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new("src-tauri")))
-                .expect("crate manifest must live under src-tauri")
-                .join("fixtures/mcp_stdio.py");
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new("src-tauri")))
+            .expect("crate manifest must live under src-tauri")
+            .join("fixtures/mcp_stdio.py");
         let response = http
             .post(auth_url(&app, "/control/v1/mcp-install"))
             .header("Authorization", &auth)
@@ -4371,8 +4370,7 @@ mod tests {
         let runtime_dir = app.runtime_dir();
         let path = discovery::discovery_path_in(&runtime_dir);
         assert!(path.exists());
-        let document =
-            discovery::read_discovery_in(&runtime_dir).expect("discovery document");
+        let document = discovery::read_discovery_in(&runtime_dir).expect("discovery document");
         assert_eq!(document.protocol_version, "1");
         assert_eq!(document.server_instance_id, app.handle.server_instance_id);
         assert_eq!(document.port, app.handle.port);
@@ -5034,13 +5032,10 @@ mod chat_route_tests {
             _request: &TerminalCreateRequest,
         ) -> Result<TerminalSessionMetadataDto, TerminalError> {
             let session_id = format!("session-{}", self.sessions.lock().unwrap().len() + 1);
-            self.owners
-                .lock()
-                .unwrap()
-                .insert(
-                    session_id.clone(),
-                    (client_id.to_string(), lease_id.to_string()),
-                );
+            self.owners.lock().unwrap().insert(
+                session_id.clone(),
+                (client_id.to_string(), lease_id.to_string()),
+            );
             let metadata = TerminalSessionMetadataDto {
                 session_id,
                 shell_name: "bash".to_string(),
@@ -5393,7 +5388,10 @@ mod chat_route_tests {
             .expect("register");
         assert_eq!(ok.status(), reqwest::StatusCode::OK);
         let body: serde_json::Value = ok.json().await.expect("body");
-        assert_eq!(body["server_name"], chatspeed_contracts::WEB_MCP_SERVER_NAME);
+        assert_eq!(
+            body["server_name"],
+            chatspeed_contracts::WEB_MCP_SERVER_NAME
+        );
 
         let conflict = http
             .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))

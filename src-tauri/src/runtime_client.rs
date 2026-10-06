@@ -552,12 +552,13 @@ impl RuntimeSupervisor {
             stream,
             cancel_rx,
         ));
-        connection
-            .workflow_streams
-            .insert(session_id.clone(), WorkflowStreamHandle {
+        connection.workflow_streams.insert(
+            session_id.clone(),
+            WorkflowStreamHandle {
                 cancel: cancel_tx,
                 reader,
-            });
+            },
+        );
         log::info!(
             "[RuntimeSupervisor] workflow event stream established for session {session_id}"
         );
@@ -1191,7 +1192,10 @@ mod tests {
     #[cfg(feature = "desktop")]
     #[test]
     fn workflow_event_name_matches_the_frontend_listener_contract() {
-        assert_eq!(workflow_event_name("session-1"), "workflow://event/session-1");
+        assert_eq!(
+            workflow_event_name("session-1"),
+            "workflow://event/session-1"
+        );
     }
 
     #[cfg(feature = "desktop")]

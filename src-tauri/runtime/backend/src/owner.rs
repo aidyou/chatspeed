@@ -291,11 +291,7 @@ impl RuntimeTerminalPlane for OwnerTerminalPlane {
         self.manager.list_shells()
     }
 
-    fn list_sessions(
-        &self,
-        client_id: &str,
-        lease_id: &str,
-    ) -> Vec<TerminalSessionMetadataDto> {
+    fn list_sessions(&self, client_id: &str, lease_id: &str) -> Vec<TerminalSessionMetadataDto> {
         self.manager.list_sessions(client_id, lease_id)
     }
 
@@ -324,7 +320,8 @@ impl RuntimeTerminalPlane for OwnerTerminalPlane {
         session_id: &str,
         request: &TerminalWriteRequest,
     ) -> Result<(), TerminalError> {
-        self.manager.write(client_id, lease_id, session_id, &request.input)
+        self.manager
+            .write(client_id, lease_id, session_id, &request.input)
     }
 
     fn resize(

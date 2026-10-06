@@ -337,7 +337,9 @@ mod tests {
 
         assert!(WebviewProxy::from_snapshot(&RuntimeConfigSnapshot::default()).is_none());
         assert!(WebviewProxy::from_snapshot(&snapshot("none", "http://127.0.0.1:7890")).is_none());
-        assert!(WebviewProxy::from_snapshot(&snapshot("system", "http://127.0.0.1:7890")).is_none());
+        assert!(
+            WebviewProxy::from_snapshot(&snapshot("system", "http://127.0.0.1:7890")).is_none()
+        );
         assert!(WebviewProxy::from_snapshot(&snapshot("http", "")).is_none());
 
         let proxy = WebviewProxy::from_snapshot(&snapshot("http", "http://127.0.0.1:7890"))

@@ -934,11 +934,9 @@ impl RuntimeClient {
         if value.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(value)
-            .map(Some)
-            .map_err(|error| {
-                ClientError::Serialization(format!("unexpected response body: {error}"))
-            })
+        serde_json::from_value(value).map(Some).map_err(|error| {
+            ClientError::Serialization(format!("unexpected response body: {error}"))
+        })
     }
 
     /// Starts one chat turn on the runtime owner.
@@ -1453,9 +1451,10 @@ impl BridgeEventStream {
         let Some(data) = next_frame_data(&mut self.buffer) else {
             return Ok(None);
         };
-        let envelope = serde_json::from_str::<ClientBridgeWorkEnvelope>(&data).map_err(|error| {
-            ClientError::Serialization(format!("invalid bridge stream envelope: {error}"))
-        })?;
+        let envelope =
+            serde_json::from_str::<ClientBridgeWorkEnvelope>(&data).map_err(|error| {
+                ClientError::Serialization(format!("invalid bridge stream envelope: {error}"))
+            })?;
         Ok(Some(envelope))
     }
 }
@@ -3524,7 +3523,10 @@ mod tests {
             )
             .await
             .expect("register");
-        assert_eq!(response.server_name, chatspeed_contracts::WEB_MCP_SERVER_NAME);
+        assert_eq!(
+            response.server_name,
+            chatspeed_contracts::WEB_MCP_SERVER_NAME
+        );
         assert_eq!(response.generation, 2);
 
         client
@@ -3548,10 +3550,7 @@ mod tests {
             assert_eq!(request.web_client.as_deref(), Some("tauri-main"));
             assert_eq!(request.web_lease.as_deref(), Some("lease-1"));
             assert_eq!(request.web_instance.as_deref(), Some("desktop-instance"));
-            assert_eq!(
-                request.authorization.as_deref(),
-                Some("Bearer test-token")
-            );
+            assert_eq!(request.authorization.as_deref(), Some("Bearer test-token"));
             // The proof never appears in the URL or the body.
             assert!(!request.path.contains("provider-proof"));
             assert!(!request.body.contains("provider-proof"));

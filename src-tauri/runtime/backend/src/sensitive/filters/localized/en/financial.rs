@@ -1,6 +1,6 @@
 use crate::sensitive::error::SensitiveError;
-use crate::sensitive::traits::SensitiveDataFilter;
 use crate::sensitive::traits::FilterCandidate;
+use crate::sensitive::traits::SensitiveDataFilter;
 use regex::Regex;
 
 pub struct FinancialFilter {

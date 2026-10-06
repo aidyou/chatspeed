@@ -81,11 +81,11 @@ pub use skill::*;
 #[cfg(not(feature = "desktop"))]
 pub use todo_manager::*;
 #[cfg(not(feature = "desktop"))]
-pub use tool_manager::{NativeToolResult, ToolDefinition};
-#[cfg(not(feature = "desktop"))]
 pub use tool_manager::ToolManager;
 #[cfg(not(feature = "desktop"))]
-pub use types::ToolScope;
+pub use tool_manager::{NativeToolResult, ToolDefinition};
 pub use types::ToolCallResult;
 #[cfg(not(feature = "desktop"))]
 pub use types::ToolCategory;
+#[cfg(not(feature = "desktop"))]
+pub use types::ToolScope;

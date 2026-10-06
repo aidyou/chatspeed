@@ -8,7 +8,6 @@
 use chatspeed_runtime_backend::ai;
 // The built-in agent synchronization is transport-neutral, so the desktop
 // re-exports the runtime backend's canonical file.
-use chatspeed_runtime_backend::owner::builtin_agents;
 /// The Phase 3 capability-management contract: one transport-neutral
 /// application service owns every Agent Skill and MCP mutation, backed by the
 /// runtime-owned journal. It never opens its own database connection and never
@@ -16,6 +15,7 @@ use chatspeed_runtime_backend::owner::builtin_agents;
 /// HTTP and CLI adapters delegate to it through the control plane.
 pub use chatspeed_runtime_backend::capability;
 use chatspeed_runtime_backend::ccproxy;
+use chatspeed_runtime_backend::owner::builtin_agents;
 pub mod chat_hub;
 mod commands;
 use chatspeed_runtime_backend::constants;
@@ -44,8 +44,8 @@ mod runtime_agent;
 // `runtime_data` holds the desktop transport adapters for the runtime-owned data
 // commands. The transport-neutral command cores and their request bodies live in
 // the runtime backend (`chatspeed_runtime_backend::data::runtime_data`).
-mod runtime_data;
 mod http;
+mod runtime_data;
 // `libs` re-exports the runtime backend helpers and adds the desktop-only
 // Tauri/Wry-bound `webview_proxy` adapter.
 mod libs;
@@ -58,9 +58,9 @@ mod runtime_web_mcp_provider;
 mod scraper;
 mod search;
 use chatspeed_runtime_backend::sensitive;
+mod runtime_terminal;
 mod shortcut;
 mod terminal;
-mod runtime_terminal;
 // `tools` re-exports the runtime backend tool contracts and adds the
 // WebView-backed `web_fetch`/`web_search` implementations.
 mod tools;

@@ -45,7 +45,9 @@ pub fn web_provider_record(observed: Option<&ObservedMcpRuntime>) -> Mcp {
             protocol_type: McpProtocolType::StreamableHttp,
             ..Default::default()
         },
-        disabled: !observed.map(|value| is_running_state(&value.state)).unwrap_or(false),
+        disabled: !observed
+            .map(|value| is_running_state(&value.state))
+            .unwrap_or(false),
         status: observed.map(|value| match value.state.as_str() {
             "running" => McpStatus::Running,
             "connected" => McpStatus::Connected,

@@ -1,9 +1,9 @@
 #[cfg(not(feature = "desktop"))]
 use indexmap::IndexMap;
 use rust_i18n::t;
-use std::{fmt::Display, str::FromStr};
 #[cfg(not(feature = "desktop"))]
 use std::{collections::HashMap, fmt};
+use std::{fmt::Display, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 #[cfg(not(feature = "desktop"))]

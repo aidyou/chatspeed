@@ -10,25 +10,25 @@
 /// The set of stable automation error codes. Kept as `&'static str` constants so
 /// the HTTP envelope can reuse them verbatim as its `code` field.
 pub mod code {
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const INVALID_REQUEST: &str = "invalid_request";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const NOT_FOUND: &str = "not_found";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const CONFLICT: &str = "conflict";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const REVISION_CONFLICT: &str = "revision_conflict";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const PLAN_EXPIRED: &str = "plan_expired";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const PERMISSION_EXPANSION: &str = "permission_expansion";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const BUSY: &str = "busy";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const CONFIRMATION_REQUIRED: &str = "confirmation_required";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const NEEDS_RECONCILE: &str = "needs_reconcile";
-#[cfg(not(feature = "desktop"))]
+    #[cfg(not(feature = "desktop"))]
     pub const INTERNAL: &str = "internal";
 }
 

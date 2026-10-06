@@ -1,26 +1,22 @@
-use super::{
-    filters::{
-        common::{
-            credit_card::CreditCardFilter, email::EmailFilter,
-            international_credit_card::InternationalCreditCardFilter, ip_address::IpAddressFilter,
+use super::filters::{
+    common::{
+        credit_card::CreditCardFilter, email::EmailFilter,
+        international_credit_card::InternationalCreditCardFilter, ip_address::IpAddressFilter,
+    },
+    localized::{
+        en::{
+            address::AddressFilter as EnAddressFilter, company::CompanyFilter as EnCompanyFilter,
+            financial::FinancialFilter as EnFinancialFilter,
+            mobile::MobileFilter as EnMobileFilter, name::NameFilter as EnNameFilter,
+            project::ProjectFilter as EnProjectFilter, social::SocialFilter as EnSocialFilter,
+            ssn::SsnFilter,
         },
-        localized::{
-            en::{
-                address::AddressFilter as EnAddressFilter,
-                company::CompanyFilter as EnCompanyFilter,
-                financial::FinancialFilter as EnFinancialFilter,
-                mobile::MobileFilter as EnMobileFilter, name::NameFilter as EnNameFilter,
-                project::ProjectFilter as EnProjectFilter, social::SocialFilter as EnSocialFilter,
-                ssn::SsnFilter,
-            },
-            zh::{
-                address::AddressFilter as ZhAddressFilter,
-                company::CompanyFilter as ZhCompanyFilter,
-                financial::FinancialFilter as ZhFinancialFilter, id_card::IdCardFilter,
-                landline::LandlineFilter, mobile::MobileFilter as ZhMobileFilter,
-                name::NameFilter as ZhNameFilter, project::ProjectFilter as ZhProjectFilter,
-                social::SocialFilter as ZhSocialFilter, unionpay::UnionPayFilter,
-            },
+        zh::{
+            address::AddressFilter as ZhAddressFilter, company::CompanyFilter as ZhCompanyFilter,
+            financial::FinancialFilter as ZhFinancialFilter, id_card::IdCardFilter,
+            landline::LandlineFilter, mobile::MobileFilter as ZhMobileFilter,
+            name::NameFilter as ZhNameFilter, project::ProjectFilter as ZhProjectFilter,
+            social::SocialFilter as ZhSocialFilter, unionpay::UnionPayFilter,
         },
     },
 };

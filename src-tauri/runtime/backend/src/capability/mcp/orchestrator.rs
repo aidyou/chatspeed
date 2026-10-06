@@ -768,7 +768,9 @@ impl CapabilityApplicationService {
     /// The cached tool list of one server, without invoking anything (AC-11).
     pub async fn mcp_tools(&self, id: i64) -> Result<McpToolsSnapshot, CapabilityError> {
         if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
-            return Ok(self.tools_snapshot(chatspeed_contracts::WEB_MCP_SERVER_NAME).await);
+            return Ok(self
+                .tools_snapshot(chatspeed_contracts::WEB_MCP_SERVER_NAME)
+                .await);
         }
         let record = self.require_server(id).await?;
         Ok(self.tools_snapshot(&record.name).await)
@@ -789,17 +791,14 @@ impl CapabilityApplicationService {
             self.require_server(id).await?.name
         };
         let timing = self.mcp_timing();
-        with_timeout(
-            timing.status_timeout,
-            self.mcp_effects().list_tools(&name),
-        )
-        .await
-        .map_err(|_| {
-            CapabilityError::new(
-                code::RUNTIME_UNAVAILABLE,
-                "the runtime did not answer the tool list in time",
-            )
-        })?
+        with_timeout(timing.status_timeout, self.mcp_effects().list_tools(&name))
+            .await
+            .map_err(|_| {
+                CapabilityError::new(
+                    code::RUNTIME_UNAVAILABLE,
+                    "the runtime did not answer the tool list in time",
+                )
+            })?
     }
 
     /// Every persisted record with secret values removed, plus the live desktop
@@ -817,7 +816,8 @@ impl CapabilityApplicationService {
             .iter()
             .any(|record| record.name == chatspeed_contracts::WEB_MCP_SERVER_NAME)
         {
-            if let Ok(Some(observed)) = self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await {
+            if let Ok(Some(observed)) = self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await
+            {
                 records.push(crate::capability::mcp_service::web_provider_record(Some(
                     &observed,
                 )));
@@ -830,12 +830,14 @@ impl CapabilityApplicationService {
     /// One persisted record, or the live read-only Web MCP compatibility record.
     pub async fn mcp_record_redacted(&self, id: i64) -> Result<Option<Mcp>, CapabilityError> {
         if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
-            return Ok(match self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await {
-                Ok(Some(observed)) => Some(crate::capability::mcp_service::web_provider_record(
-                    Some(&observed),
-                )),
-                Ok(None) | Err(_) => None,
-            });
+            return Ok(
+                match self.observe(chatspeed_contracts::WEB_MCP_SERVER_NAME).await {
+                    Ok(Some(observed)) => Some(
+                        crate::capability::mcp_service::web_provider_record(Some(&observed)),
+                    ),
+                    Ok(None) | Err(_) => None,
+                },
+            );
         }
         Ok(self
             .mcp_repository()
@@ -1319,7 +1321,8 @@ impl CapabilityApplicationService {
             ));
         }
 
-        let (server_name, virtual_web) = if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID {
+        let (server_name, virtual_web) = if id == crate::capability::mcp_service::WEB_MCP_VIRTUAL_ID
+        {
             (chatspeed_contracts::WEB_MCP_SERVER_NAME.to_string(), true)
         } else {
             let record = self.require_server(id).await?;

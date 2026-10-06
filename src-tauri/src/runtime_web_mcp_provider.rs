@@ -81,7 +81,8 @@ fn provider_tools() -> Vec<ProviderTool> {
         },
         ProviderTool {
             name: "web_search",
-            description: "Search the web for up-to-date information beyond the model knowledge cutoff.",
+            description:
+                "Search the web for up-to-date information beyond the model knowledge cutoff.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -134,16 +135,25 @@ impl WebMcpHandler {
                         CallToolResult::structured(payload)
                     } else {
                         CallToolResult::success(
-                            payload.as_str().unwrap_or_default().to_string().into_contents(),
+                            payload
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string()
+                                .into_contents(),
                         )
                     }
                 }
                 ClientCapabilityStatus::Error | ClientCapabilityStatus::Cancelled => {
-                    let error = result.error.unwrap_or(chatspeed_contracts::ClientCapabilityError {
-                        code: "capability_error".to_string(),
-                        message: "the client capability failed".to_string(),
-                    });
-                    CallToolResult::structured_error(json!({"code": error.code, "message": error.message}))
+                    let error =
+                        result
+                            .error
+                            .unwrap_or(chatspeed_contracts::ClientCapabilityError {
+                                code: "capability_error".to_string(),
+                                message: "the client capability failed".to_string(),
+                            });
+                    CallToolResult::structured_error(
+                        json!({"code": error.code, "message": error.message}),
+                    )
                 }
             },
             Err(_) => CallToolResult::structured_error(json!({
@@ -159,9 +169,11 @@ impl ServerHandler for WebMcpHandler {
         let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.server_info = Implementation::new("Chatspeed Web MCP Provider", env!("CARGO_PKG_VERSION"));
-        info.instructions =
-            Some("Dedicated loopback provider exposing exactly web_fetch and web_search.".to_string());
+        info.server_info =
+            Implementation::new("Chatspeed Web MCP Provider", env!("CARGO_PKG_VERSION"));
+        info.instructions = Some(
+            "Dedicated loopback provider exposing exactly web_fetch and web_search.".to_string(),
+        );
         info
     }
 
@@ -192,9 +204,11 @@ impl ServerHandler for WebMcpHandler {
         let capability = match name {
             "web_fetch" | "web_search" => name,
             other => {
-                return Ok(CallToolResponse::Complete(CallToolResult::structured_error(
-                    json!({"code": "unknown_tool", "message": format!("`{other}` is not a provider tool")}),
-                )))
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(
+                        json!({"code": "unknown_tool", "message": format!("`{other}` is not a provider tool")}),
+                    ),
+                ))
             }
         };
         let arguments = request.arguments.unwrap_or_default();
@@ -214,11 +228,7 @@ struct ProviderAuth {
 
 /// Rejects any request that does not present the proof token, or that carries a
 /// browser `Origin` other than the provider's own loopback origin.
-async fn require_proof(
-    State(auth): State<ProviderAuth>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn require_proof(State(auth): State<ProviderAuth>, request: Request, next: Next) -> Response {
     if let Some(origin) = request
         .headers()
         .get(header::ORIGIN)
@@ -296,7 +306,12 @@ impl WebMcpProviderHandle {
         let _ = self.task.await;
         if let Err(error) = self
             .client
-            .unregister_web_mcp_provider(&self.client_id, &self.lease_id, &self.instance_id, &self.token)
+            .unregister_web_mcp_provider(
+                &self.client_id,
+                &self.lease_id,
+                &self.instance_id,
+                &self.token,
+            )
             .await
         {
             log::debug!("[WebMcpProvider] unregistering the provider failed: {error}");

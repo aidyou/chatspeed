@@ -121,7 +121,8 @@ pub struct ModelCost {
 const EMBEDDED_CATALOG: &str = include_str!("../../../../assets/model_catalog/model_catalog.json");
 const EMBEDDED_TRANSPORT_CATALOG: &str =
     include_str!("../../../../assets/model_catalog/transport_catalog.json");
-const EMBEDDED_MODELS_DEV_CATALOG: &str = include_str!("../../../../assets/models_dev/catalog.json");
+const EMBEDDED_MODELS_DEV_CATALOG: &str =
+    include_str!("../../../../assets/models_dev/catalog.json");
 const EMBEDDED_MODELS_DEV_PROVIDERS: &str =
     include_str!("../../../../assets/models_dev/providers.json");
 pub const MODELS_DEV_CACHE_IDLE_TTL: Duration = Duration::from_secs(15 * 60);

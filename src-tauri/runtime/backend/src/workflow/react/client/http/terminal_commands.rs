@@ -91,11 +91,7 @@ pub trait RuntimeTerminalPlane: Send + Sync + 'static {
     /// The shells offered for an interactive terminal.
     fn list_shells(&self) -> Vec<TerminalShellDto>;
     /// The sessions owned by `client_id`.
-    fn list_sessions(
-        &self,
-        client_id: &str,
-        lease_id: &str,
-    ) -> Vec<TerminalSessionMetadataDto>;
+    fn list_sessions(&self, client_id: &str, lease_id: &str) -> Vec<TerminalSessionMetadataDto>;
     /// Opens a session bound to `(client_id, lease_id)`.
     fn create(
         &self,
@@ -120,12 +116,8 @@ pub trait RuntimeTerminalPlane: Send + Sync + 'static {
         request: &TerminalResizeRequest,
     ) -> Result<(), TerminalError>;
     /// Retires a session owned by `client_id`; repeating it is harmless.
-    fn close(
-        &self,
-        client_id: &str,
-        lease_id: &str,
-        session_id: &str,
-    ) -> Result<(), TerminalError>;
+    fn close(&self, client_id: &str, lease_id: &str, session_id: &str)
+        -> Result<(), TerminalError>;
     /// Subscribes to a session's typed event stream.
     ///
     /// `Ok(None)` means the session is owned but no longer broadcastable.

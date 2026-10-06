@@ -31,11 +31,9 @@ use std::time::{Duration, Instant};
 use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
 use chatspeed_runtime_backend::background::RuntimeBackground;
 use chatspeed_runtime_backend::owner::{RuntimeOwner, RuntimeOwnerConfig};
+use chatspeed_runtime_backend::web_provider::{ToolManagerProviderInstaller, WebProviderRegistry};
 use chatspeed_runtime_backend::workflow::react::client::http::server::{
     self, RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError, RuntimeWebMcpPlane,
-};
-use chatspeed_runtime_backend::web_provider::{
-    ToolManagerProviderInstaller, WebProviderRegistry,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -953,11 +951,9 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
             // The desktop registers its loopback Web MCP provider onto this
             // single lease-bound slot; the runtime reaches it as an ordinary MCP
             // server, so the fixed web tools stay on the canonical tool path.
-            web_provider: Some(
-                Arc::new(WebProviderRegistry::new(Arc::new(
-                    ToolManagerProviderInstaller::new(owner.chat_state().clone()),
-                ))) as Arc<dyn RuntimeWebMcpPlane>,
-            ),
+            web_provider: Some(Arc::new(WebProviderRegistry::new(Arc::new(
+                ToolManagerProviderInstaller::new(owner.chat_state().clone()),
+            ))) as Arc<dyn RuntimeWebMcpPlane>),
         },
     )
     .await

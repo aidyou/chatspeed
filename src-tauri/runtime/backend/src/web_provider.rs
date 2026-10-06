@@ -29,8 +29,7 @@ use async_trait::async_trait;
 use chatspeed_contracts::{
     validate_web_mcp_port, web_mcp_endpoint, ClientLease, WebMcpProviderError,
     WebMcpProviderRegistration, WebMcpProviderRegistrationResponse, WebMcpProviderStatus,
-    WEB_MCP_CODE_CONFLICT, WEB_MCP_CODE_FORBIDDEN, WEB_MCP_CODE_UNAVAILABLE,
-    WEB_MCP_SERVER_NAME,
+    WEB_MCP_CODE_CONFLICT, WEB_MCP_CODE_FORBIDDEN, WEB_MCP_CODE_UNAVAILABLE, WEB_MCP_SERVER_NAME,
 };
 use tokio::sync::Mutex;
 
@@ -308,11 +307,7 @@ impl RuntimeWebMcpPlane for WebProviderRegistry {
         if is_valid.is_valid(&client_id, &lease_id) {
             return;
         }
-        let removed = self
-            .active
-            .write()
-            .expect("provider lock poisoned")
-            .take();
+        let removed = self.active.write().expect("provider lock poisoned").take();
         if let Some(active) = removed {
             self.drop_slot(active).await;
         }
@@ -483,7 +478,10 @@ mod tests {
             .expect_err("second desktop must conflict");
         assert_eq!(error.code, WEB_MCP_CODE_CONFLICT);
         // The incumbent is untouched and no second install happened.
-        assert_eq!(registry.provider_status().expect("status").client_id, "tauri-main");
+        assert_eq!(
+            registry.provider_status().expect("status").client_id,
+            "tauri-main"
+        );
         assert_eq!(installer.installs.load(Ordering::SeqCst), 1);
     }
 

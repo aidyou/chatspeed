@@ -6,9 +6,9 @@
 //! desktop and runtime crates. What stays here is the runtime-only domain error,
 //! which is not a transport-neutral wire type.
 
-pub use chatspeed_contracts::workflow::{WorkflowCreateRequest, WorkflowStartRequest};
 #[cfg(not(feature = "desktop"))]
 pub use chatspeed_contracts::workflow::WorkflowEventsQuery;
+pub use chatspeed_contracts::workflow::{WorkflowCreateRequest, WorkflowStartRequest};
 
 /// Stable error classification for workflow application operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

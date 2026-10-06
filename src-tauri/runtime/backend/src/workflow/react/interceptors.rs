@@ -21,12 +21,12 @@ use crate::workflow::react::file_preview::{
     render_preview_details_text,
 };
 use crate::workflow::react::observation::{ObservationReinforcer, ReinforcedResult};
-use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 use crate::workflow::react::orchestrator::spawn_call_sub_agent;
 use crate::workflow::react::policy::{ApprovalLevel, ExecutionPhase};
 use crate::workflow::react::types::{
     GatewayPayload, PendingCompletionReport, StepType, SubAgentCompletion, WorkflowState,
 };
+use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SmartApprovalDecision {

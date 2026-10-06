@@ -209,7 +209,13 @@ impl ScraperPool {
 
         let (scrape_result, listeners) = self
             .scraper
-            .scrape(&resource.webview, url, config, generic_content_rule, debug_mode)
+            .scrape(
+                &resource.webview,
+                url,
+                config,
+                generic_content_rule,
+                debug_mode,
+            )
             .await;
 
         resource.listeners = listeners; // Always assign listeners
