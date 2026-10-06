@@ -15,7 +15,7 @@ use crate::{
         engine,
         types::{ContentOptions, ScrapeRequest},
     },
-    tools::{error::ToolError, web_config::WebToolConfig, ToolCallResult},
+    tools::{web_config::WebToolConfig, ToolCallResult, ToolError},
 };
 
 const DIRECT_TEXT_FETCH_EXTENSIONS: &[&str] = &[

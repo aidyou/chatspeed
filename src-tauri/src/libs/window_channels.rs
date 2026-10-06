@@ -1,3 +1,12 @@
+//! Retained desktop-only Tauri window-channel registry (unwired).
+//!
+//! This was the desktop's per-window chat stream registry. Chat execution moved
+//! into the standalone runtime, which publishes its stream over the control
+//! plane, so nothing constructs this registry any more and it is no longer
+//! declared in `libs/mod.rs`. It is kept in the desktop crate — the only crate
+//! allowed to link Tauri — as a retained source in case the window channels are
+//! rewired; the desktop-free runtime must never carry it.
+
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;

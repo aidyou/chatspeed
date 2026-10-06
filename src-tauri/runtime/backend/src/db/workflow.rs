@@ -1,0 +1,7173 @@
+//! Workflow database operations
+//!
+//! This module provides database operations for managing workflows and their messages.
+
+#[cfg(not(feature = "desktop"))]
+use crate::db::{MainStore, StoreError};
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::events::WorkflowEvent;
+use crate::workflow::react::events::WorkflowEventRecord;
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::replay::replay_events_to_execution_context;
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::types::{ExecutionContext, RuntimeState, WaitReason};
+#[cfg(not(feature = "desktop"))]
+use rusqlite::params;
+#[cfg(not(feature = "desktop"))]
+use rusqlite::OptionalExtension;
+use rusqlite::Row;
+use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "desktop"))]
+use serde_json::json;
+use serde_json::Value;
+#[cfg(not(feature = "desktop"))]
+use std::collections::{HashMap, HashSet};
+
+#[cfg(not(feature = "desktop"))]
+fn estimate_ai_context_tokens(messages: &[WorkflowAiContextMessage]) -> usize {
+    messages
+        .iter()
+        .map(|message| {
+            let mut total =
+                crate::ccproxy::utils::token_estimator::estimate_tokens(&message.message);
+            if let Some(reasoning) = message.reasoning.as_deref() {
+                total += crate::ccproxy::utils::token_estimator::estimate_tokens(reasoning);
+            }
+            total
+        })
+        .sum::<f64>()
+        .round() as usize
+}
+
+#[cfg(not(feature = "desktop"))]
+fn restore_execution_context_from_manual_clear_marker(
+    marker: Option<&WorkflowMessage>,
+    fallback_execution_context: Option<&ExecutionContext>,
+    session_id: &str,
+    remaining_segment_id: i32,
+    remaining_context_messages: &[WorkflowAiContextMessage],
+) -> ExecutionContext {
+    let metadata = marker.and_then(|message| message.metadata.as_ref());
+    let mut restored_context = metadata
+        .and_then(|value| value.get("previous_execution_context"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ExecutionContext>(value).ok())
+        .or_else(|| fallback_execution_context.cloned())
+        .unwrap_or_else(|| ExecutionContext {
+            session_id: session_id.to_string(),
+            state: RuntimeState::Pending,
+            wait_reason: None,
+            queued_user_messages: Vec::new(),
+            current_segment_id: remaining_segment_id,
+            current_step: 0,
+            max_steps: 100,
+            pending_tools: Vec::new(),
+            last_action_summary: None,
+            current_context_tokens: None,
+            max_context_tokens: None,
+            last_event_id: None,
+            version: ExecutionContext::CURRENT_VERSION.to_string(),
+            waiting_on_sub_agent_id: None,
+            awaiting_user_tool_call_id: None,
+            effective_task_objective: None,
+            sub_agent_sessions: Vec::new(),
+            pending_sub_agent_completions: Vec::new(),
+            pending_final_review: None,
+            pending_completion_reports: Vec::new(),
+            removed_queued_user_message_ids: Vec::new(),
+        });
+
+    restored_context.session_id = session_id.to_string();
+    restored_context.current_segment_id = metadata
+        .and_then(|value| value.get("previous_segment_id"))
+        .and_then(Value::as_i64)
+        .map(|value| value as i32)
+        .unwrap_or(remaining_segment_id);
+    restored_context.current_context_tokens = Some(
+        metadata
+            .and_then(|value| value.get("previous_context_tokens"))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_else(|| estimate_ai_context_tokens(remaining_context_messages)),
+    );
+    restored_context.max_context_tokens = metadata
+        .and_then(|value| value.get("previous_max_context_tokens"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .or(restored_context.max_context_tokens);
+
+    restored_context
+}
+
+// =================================================
+//  Structs
+// =================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Workflow {
+    pub id: Option<String>,
+    #[serde(default)]
+    pub is_automation_run: bool,
+    pub parent_session_id: Option<String>,
+    pub title: Option<String>,
+    pub user_query: String,
+    pub todo_list: Option<String>,
+    #[serde(default = "default_workflow_status")]
+    pub status: String,
+    pub wait_reason: Option<String>,
+    pub agent_id: String,
+    pub agent_config: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+fn default_workflow_status() -> String {
+    "pending".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowMessage {
+    /// Durable workflow transcript history.
+    /// This is the authoritative message record for audit, replay fallback,
+    /// UI rendering, and semantic reporting.
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub role: String,
+    pub message: String,
+    pub reasoning: Option<String>,
+    pub message_kind: String,
+    pub message_subtype: Option<String>,
+    pub segment_id: i32,
+    pub source_event_type: Option<String>,
+    pub metadata: Option<Value>,
+    pub attached_context: Option<String>,
+    pub step_type: Option<String>,
+    pub step_index: i32,
+    #[serde(default)]
+    pub is_error: bool,
+    pub error_type: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
+pub struct WorkflowAiContextMessage {
+    /// AI-only projected context cache.
+    /// This is derived from `WorkflowMessage` using explicit projection rules
+    /// and exists only to feed the LLM efficiently.
+    /// It is rebuildable and must not be used as recovery, UI, or reporting authority.
+    pub id: Option<i64>,
+    pub session_id: String,
+    pub segment_id: i32,
+    pub role: String,
+    pub message: String,
+    pub reasoning: Option<String>,
+    pub message_kind: String,
+    pub message_subtype: Option<String>,
+    pub metadata: Option<Value>,
+    pub source_message_id: Option<i64>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(not(feature = "desktop"))]
+pub struct WorkflowSnapshot {
+    /// Snapshot payload returned to commands/UI.
+    /// Transcript authority comes from `messages`; runtime recovery authority
+    /// comes separately from `workflow_snapshots` via `ExecutionContext`.
+    pub workflow: Workflow,
+    pub messages: Vec<WorkflowMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
+pub struct WorkflowMessageWindow {
+    pub messages: Vec<WorkflowMessage>,
+    pub before_message_id: Option<i64>,
+    pub hidden_completed_task_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(not(feature = "desktop"))]
+pub struct WorkflowMessagePage {
+    pub messages: Vec<WorkflowMessage>,
+    pub before_message_id: Option<i64>,
+    pub hidden_message_count: usize,
+    pub hidden_completed_task_count: usize,
+    pub has_more_in_current_task: bool,
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_completed_workflow_task_boundary(message: &WorkflowMessage) -> bool {
+    if message.role != "tool" || message.is_error {
+        return false;
+    }
+    let Some(metadata) = message.metadata.as_ref() else {
+        return false;
+    };
+    let tool_name = metadata
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            metadata
+                .get("tool_call")
+                .and_then(|call| call.get("name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            metadata
+                .get("tool_call")
+                .and_then(|call| call.get("function"))
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default();
+    if tool_name != "complete_workflow" {
+        return false;
+    }
+    let execution_status = metadata
+        .get("execution_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let approval_status = metadata
+        .get("approval_status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let review_display_state = metadata
+        .get("review_display_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    approval_status != "rejected"
+        && review_display_state != "final_review_rejected"
+        && (execution_status.is_empty() || execution_status == "completed")
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_workflow_ui_task_boundary(message: &WorkflowMessage) -> bool {
+    is_completed_workflow_task_boundary(message) || is_manual_clear_context_message(message)
+}
+
+#[cfg(not(feature = "desktop"))]
+struct WorkflowUiMessagePageSelection {
+    messages: Vec<WorkflowMessage>,
+    has_more_in_current_task: bool,
+}
+
+#[cfg(not(feature = "desktop"))]
+fn select_workflow_ui_message_page(
+    messages_descending: Vec<WorkflowMessage>,
+    message_limit: usize,
+    recent_only: bool,
+) -> WorkflowUiMessagePageSelection {
+    let page_limit = message_limit.max(1);
+    let mut messages = messages_descending
+        .into_iter()
+        .take(page_limit.saturating_add(1))
+        .collect::<Vec<_>>();
+    messages.reverse();
+
+    if recent_only {
+        // A recent page shows the active task, or the latest completed task when no
+        // task is active. Older completed tasks belong to earlier pages and must not
+        // leak into the current UI projection.
+        let last_manual_clear = messages.iter().rposition(is_manual_clear_context_message);
+        let last_completed = messages
+            .iter()
+            .rposition(is_completed_workflow_task_boundary);
+        let start = match (last_manual_clear, last_completed) {
+            (Some(clear), _) if clear + 1 < messages.len() => clear + 1,
+            (Some(clear), _) => messages
+                .iter()
+                .take(clear)
+                .rposition(is_completed_workflow_task_boundary)
+                .map_or(0, |boundary| boundary + 1),
+            (None, Some(completed)) if completed + 1 < messages.len() => completed + 1,
+            (None, Some(completed)) => messages
+                .iter()
+                .take(completed)
+                .rposition(is_completed_workflow_task_boundary)
+                .map_or(0, |boundary| boundary + 1),
+            (None, None) => 0,
+        };
+        messages.drain(..start);
+    } else {
+        // Keep boundary markers with the older page when they are at the oldest
+        // edge. This prevents a page from starting with an orphan completion or
+        // clear-context marker.
+        while messages.first().is_some_and(is_workflow_ui_task_boundary) {
+            messages.remove(0);
+        }
+    }
+
+    let has_more_in_current_task = messages.len() > page_limit
+        && messages
+            .first()
+            .is_some_and(|message| !is_workflow_ui_task_boundary(message));
+
+    if messages.len() > page_limit {
+        messages.drain(..messages.len() - page_limit);
+    }
+
+    WorkflowUiMessagePageSelection {
+        messages,
+        has_more_in_current_task,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencyMetrics {
+    pub total_tool_calls: u32,
+    pub search_calls: u32,
+    pub read_calls: u32,
+    pub edit_calls: u32,
+    pub verification_calls: u32,
+    pub no_match_searches: u32,
+    pub parallel_search_rounds: u32,
+    pub parallel_read_rounds: u32,
+    pub repeated_read_files: u32,
+    pub repeated_read_events: u32,
+    pub batch_edit_rounds: u32,
+    pub pre_edit_read_coverage: u32,
+    pub convergence_score: u32,
+    pub execution_score: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencySessionReport {
+    pub session_id: String,
+    pub parent_session_id: Option<String>,
+    pub title: Option<String>,
+    pub user_query: String,
+    pub status: String,
+    pub metrics: WorkflowEfficiencyMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEfficiencyReport {
+    pub root_session_id: String,
+    pub main_agent: WorkflowEfficiencySessionReport,
+    pub sub_agents: Vec<WorkflowEfficiencySessionReport>,
+}
+
+// =================================================
+//  From Row Implementations
+// =================================================
+
+impl From<&Row<'_>> for Workflow {
+    fn from(row: &Row<'_>) -> Self {
+        Self {
+            id: row.get("id").ok(),
+            is_automation_run: row
+                .get::<_, Option<i64>>("is_automation_run")
+                .map(|value| value == Some(1))
+                .unwrap_or(false),
+            parent_session_id: row.get("parent_session_id").ok(),
+            title: row.get("title").ok(),
+            user_query: row.get("user_query").unwrap_or_default(),
+            todo_list: row.get("todo_list").ok(),
+            status: row.get("status").unwrap_or_else(|_| "pending".to_string()),
+            wait_reason: row.get("wait_reason").ok(),
+            agent_id: row.get("agent_id").unwrap_or_default(),
+            agent_config: row.get("agent_config").ok(),
+            created_at: row.get("created_at").ok(),
+            updated_at: row.get("updated_at").ok(),
+        }
+    }
+}
+
+impl WorkflowMessage {
+    pub(crate) fn normalize_classification(mut self) -> Self {
+        if self.message_kind == "message"
+            && self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("type"))
+                .and_then(Value::as_str)
+                == Some("summary")
+        {
+            self.message_kind = "summary".to_string();
+        }
+
+        if self.message_subtype.is_none() {
+            self.message_subtype = self
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("subtype"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string);
+        }
+
+        if self.role == "system" && self.message.trim() == "MANUAL_CLEAR_CONTEXT" {
+            self.message_kind = "summary".to_string();
+            self.message_subtype = Some("manual_clear_context".to_string());
+            self.message.clear();
+        }
+
+        self
+    }
+}
+
+impl From<&Row<'_>> for WorkflowMessage {
+    fn from(row: &Row<'_>) -> Self {
+        let metadata_str: Option<String> = row.get("metadata").ok();
+        let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
+        Self {
+            id: row.get("id").ok(),
+            session_id: row.get("session_id").unwrap_or_default(),
+            role: row.get("role").unwrap_or_default(),
+            message: row.get("message").unwrap_or_default(),
+            reasoning: row.get("reasoning").ok(),
+            message_kind: row
+                .get("message_kind")
+                .unwrap_or_else(|_| "message".to_string()),
+            message_subtype: row.get("message_subtype").ok(),
+            segment_id: row.get("segment_id").unwrap_or(1),
+            source_event_type: row.get("source_event_type").ok(),
+            metadata,
+            attached_context: row.get("attached_context").ok(),
+            step_type: row.get("step_type").ok(),
+            step_index: row.get("step_index").unwrap_or_default(),
+            is_error: row
+                .get::<_, Option<i32>>("is_error")
+                .map(|v| v == Some(1))
+                .unwrap_or(false),
+            error_type: row.get("error_type").ok(),
+            created_at: row.get("created_at").ok(),
+        }
+        .normalize_classification()
+    }
+}
+
+impl From<&Row<'_>> for WorkflowEventRecord {
+    fn from(row: &Row<'_>) -> Self {
+        let event_data_str: String = row.get("event_data").unwrap_or_default();
+        let event_data: Value = serde_json::from_str(&event_data_str).unwrap_or(Value::Null);
+
+        Self {
+            id: row.get("id").unwrap_or_default(),
+            session_id: row.get("session_id").unwrap_or_default(),
+            event_type: row.get("event_type").unwrap_or_default(),
+            event_version: row.get("event_version").unwrap_or_default(),
+            event_data,
+            created_at: row.get("created_at").unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(feature = "desktop"))]
+enum RewindPhase {
+    Preserve,
+    Planning,
+    Implementation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg(not(feature = "desktop"))]
+struct TailRewindPlan {
+    kind: &'static str,
+    delete_message_boundary_id: Option<i64>,
+    event_boundary_id: Option<i64>,
+    phase: RewindPhase,
+    message_metadata_updates: Vec<(i64, Value)>,
+}
+
+#[cfg(not(feature = "desktop"))]
+fn message_tool_name(message: &WorkflowMessage) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_name"))
+        .and_then(Value::as_str)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn message_tool_call_id(message: &WorkflowMessage) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_call_id"))
+        .and_then(Value::as_str)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn message_approval_status(message: &WorkflowMessage) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("approval_status"))
+        .and_then(Value::as_str)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn message_execution_status(message: &WorkflowMessage) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("execution_status"))
+        .and_then(Value::as_str)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_tool_observation_message(message: &WorkflowMessage) -> bool {
+    message.role == "tool"
+        && message.step_type.as_deref() == Some("observe")
+        && message_tool_call_id(message).is_some()
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_pending_submit_plan_message(message: &WorkflowMessage) -> bool {
+    message.role == "tool"
+        && message_tool_name(message) == Some(crate::tools::TOOL_SUBMIT_PLAN)
+        && message_approval_status(message) == Some("pending")
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_manual_clear_context_message(message: &WorkflowMessage) -> bool {
+    message.role == "system"
+        && message.message_kind == "summary"
+        && message.message_subtype.as_deref() == Some("manual_clear_context")
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_user_input_wait_event(event: &WorkflowEventRecord) -> bool {
+    event.event_type == "wait_entered"
+        && event.event_data["wait_reason"].as_str() == Some("user_input")
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_approval_wait_event_for_tool(event: &WorkflowEventRecord, tool_call_id: &str) -> bool {
+    if event.event_type != "wait_entered"
+        || event.event_data["wait_reason"].as_str() != Some("approval")
+    {
+        return false;
+    }
+
+    event.event_data["pending_tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|tool| tool["tool_call_id"].as_str() == Some(tool_call_id))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn approval_requested_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type == "approval_requested"
+                && event.event_data["tool_call_id"].as_str() == Some(tool_call_id)
+        })
+        .map(|event| event.id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn approval_resolved_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type == "approval_resolved"
+                && event.event_data["tool_call_id"].as_str() == Some(tool_call_id)
+        })
+        .map(|event| event.id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn tool_started_event_id(events: &[WorkflowEventRecord], tool_call_id: &str) -> Option<i64> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type == "tool_started"
+                && event.event_data["tool_call_id"].as_str() == Some(tool_call_id)
+        })
+        .map(|event| event.id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn latest_approval_submitted_message<'a>(
+    messages: &'a [WorkflowMessage],
+    tool_call_id: &str,
+) -> Option<&'a WorkflowMessage> {
+    messages.iter().rev().find(|message| {
+        is_tool_observation_message(message)
+            && message_tool_call_id(message) == Some(tool_call_id)
+            && message_execution_status(message) == Some("approval_submitted")
+    })
+}
+
+#[cfg(not(feature = "desktop"))]
+fn latest_approved_plan_summary_message(messages: &[WorkflowMessage]) -> Option<&WorkflowMessage> {
+    messages.iter().rev().find(|message| {
+        message.id.is_some()
+            && message.role == "system"
+            && message.message_kind == "summary"
+            && message.message_subtype.as_deref() == Some("approved_plan")
+    })
+}
+
+#[cfg(not(feature = "desktop"))]
+fn pending_approval_event_boundary(
+    events: &[WorkflowEventRecord],
+    tool_call_id: &str,
+) -> Option<i64> {
+    let approval_requested_id = approval_requested_event_id(events, tool_call_id);
+    let wait_entered_id = events
+        .iter()
+        .rev()
+        .find(|event| is_approval_wait_event_for_tool(event, tool_call_id))
+        .map(|event| event.id);
+
+    match (wait_entered_id, approval_requested_id) {
+        (Some(wait), Some(requested)) => Some(wait.min(requested)),
+        (Some(wait), None) => Some(wait),
+        (None, Some(requested)) => Some(requested),
+        (None, None) => None,
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn approval_tool_rewind_event_boundary(
+    events: &[WorkflowEventRecord],
+    tool_call_id: &str,
+) -> Option<i64> {
+    pending_approval_event_boundary(events, tool_call_id)
+        .or_else(|| approval_resolved_event_id(events, tool_call_id))
+        .or_else(|| tool_started_event_id(events, tool_call_id))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn reverted_pending_approval_metadata(message: &WorkflowMessage) -> Option<Value> {
+    let mut metadata = message.metadata.clone()?;
+    metadata["approval_status"] = Value::String("pending".to_string());
+    metadata["execution_status"] = Value::String("pending_approval".to_string());
+    metadata["summary"] = Value::String(rust_i18n::t!("workflow.awaiting_approval").to_string());
+    if let Some(object) = metadata.as_object_mut() {
+        object.remove("hide_approval_details");
+    }
+    Some(metadata)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_rewindable_user_message(message: &WorkflowMessage) -> bool {
+    message.role == "user"
+        && message.step_type.as_deref() != Some("observe")
+        && message.message_kind != "runtime_observation"
+        && !message.metadata.as_ref().is_some_and(|metadata| {
+            metadata
+                .get("runtime_observation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+}
+
+#[cfg(not(feature = "desktop"))]
+fn wait_event_matches_ask_user_tool_call(event: &WorkflowEventRecord, tool_call_id: &str) -> bool {
+    event.event_data["awaiting_user_tool_call_id"]
+        .as_str()
+        .is_none_or(|waiting_tool_call_id| waiting_tool_call_id == tool_call_id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn latest_unanswered_user_input_wait_event_id(
+    events: &[WorkflowEventRecord],
+    tool_call_id: &str,
+) -> Option<i64> {
+    let latest_wait = events.iter().rev().find(|event| {
+        is_user_input_wait_event(event)
+            && wait_event_matches_ask_user_tool_call(event, tool_call_id)
+    })?;
+    let resumed = events
+        .iter()
+        .rev()
+        .any(|event| event.id > latest_wait.id && event.event_type == "user_input_received");
+    if resumed {
+        None
+    } else {
+        Some(latest_wait.id)
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn latest_answered_user_input_wait_event_ids(
+    events: &[WorkflowEventRecord],
+    tool_call_id: Option<&str>,
+) -> Option<(i64, i64)> {
+    let latest_wait = events.iter().rev().find(|event| {
+        is_user_input_wait_event(event)
+            && tool_call_id.is_none_or(|tool_call_id| {
+                wait_event_matches_ask_user_tool_call(event, tool_call_id)
+            })
+    })?;
+    let latest_resume = events
+        .iter()
+        .rev()
+        .find(|event| event.id > latest_wait.id && event.event_type == "user_input_received")?;
+    Some((latest_wait.id, latest_resume.id))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn answered_ask_user_event_id_for_message(
+    events: &[WorkflowEventRecord],
+    message: &WorkflowMessage,
+    legacy_tool_call_id: Option<&str>,
+) -> Option<i64> {
+    if !is_rewindable_user_message(message) {
+        return None;
+    }
+
+    let metadata = message.metadata.as_ref();
+    let is_canonical_answer = metadata
+        .and_then(|metadata| metadata.get("ask_user_response"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let canonical_tool_call_id = metadata
+        .and_then(|metadata| metadata.get("tool_call_id"))
+        .and_then(Value::as_str);
+
+    if is_canonical_answer {
+        return canonical_tool_call_id.and_then(|tool_call_id| {
+            latest_answered_user_input_wait_event_ids(events, Some(tool_call_id))
+                .map(|(_, resume_event_id)| resume_event_id)
+        });
+    }
+
+    // Historical answer rows did not persist a structured ask_user association. Restrict this
+    // compatibility path to a direct preceding ask_user observation and a matching durable
+    // user_input_received event; new rows must use the canonical metadata above.
+    let legacy_tool_call_id = legacy_tool_call_id?;
+    let (_, resume_event_id) =
+        latest_answered_user_input_wait_event_ids(events, Some(legacy_tool_call_id))?;
+    (metadata.is_none()
+        && events.iter().any(|event| {
+            event.id == resume_event_id
+                && event.event_data["content"].as_str() == Some(message.message.as_str())
+        }))
+    .then_some(resume_event_id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn latest_user_input_event_id_for_message(
+    events: &[WorkflowEventRecord],
+    message: &WorkflowMessage,
+) -> Option<i64> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type == "user_input_received"
+                && event.event_data["content"].as_str() == Some(message.message.as_str())
+        })
+        .map(|event| event.id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn assistant_batch_message_id_for_tool_call(
+    messages: &[WorkflowMessage],
+    tool_call_id: &str,
+) -> Option<i64> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.id.is_some()
+                && message.role == "assistant"
+                && message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("tool_calls"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|tool_calls| {
+                        tool_calls.iter().any(|tool_call| {
+                            tool_call
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .or_else(|| tool_call.get("tool_call_id").and_then(Value::as_str))
+                                == Some(tool_call_id)
+                        })
+                    })
+        })
+        .and_then(|message| message.id)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn determine_tail_rewind_plan(
+    messages: &[WorkflowMessage],
+    events: &[WorkflowEventRecord],
+) -> Option<TailRewindPlan> {
+    let latest_pending_submit_plan = messages
+        .iter()
+        .rev()
+        .find(|message| message.id.is_some() && is_pending_submit_plan_message(message));
+
+    for (index, message) in messages
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, message)| message.id.is_some())
+    {
+        if is_manual_clear_context_message(message) {
+            return Some(TailRewindPlan {
+                kind: "manual_clear_context",
+                delete_message_boundary_id: Some(message.id?),
+                event_boundary_id: None,
+                phase: RewindPhase::Preserve,
+                message_metadata_updates: Vec::new(),
+            });
+        }
+
+        if is_rewindable_user_message(message) {
+            let preceding_ask_user_tool_call_id = messages[..index]
+                .iter()
+                .rev()
+                .find(|candidate| {
+                    message_tool_name(candidate) == Some(crate::tools::TOOL_ASK_USER)
+                        && candidate.step_type.as_deref() == Some("observe")
+                })
+                .and_then(message_tool_call_id);
+            if let Some(event_boundary_id) = answered_ask_user_event_id_for_message(
+                events,
+                message,
+                preceding_ask_user_tool_call_id,
+            ) {
+                return Some(TailRewindPlan {
+                    kind: "ask_user_answered",
+                    delete_message_boundary_id: Some(message.id?),
+                    event_boundary_id: Some(event_boundary_id),
+                    phase: RewindPhase::Preserve,
+                    message_metadata_updates: Vec::new(),
+                });
+            }
+
+            return Some(TailRewindPlan {
+                kind: "user_message",
+                delete_message_boundary_id: Some(message.id?),
+                // Continuation messages append runtime events after a prior
+                // terminal state. Trim those events together with the
+                // message so replay restores the state shown by the tail.
+                event_boundary_id: latest_user_input_event_id_for_message(events, message),
+                phase: RewindPhase::Preserve,
+                message_metadata_updates: Vec::new(),
+            });
+        }
+
+        if !is_tool_observation_message(message) {
+            continue;
+        }
+
+        let tool_call_id = match message_tool_call_id(message) {
+            Some(id) => id,
+            None => continue,
+        };
+        let tool_name = message_tool_name(message);
+        let approval_status = message_approval_status(message);
+        let execution_status = message_execution_status(message);
+
+        if tool_name == Some(crate::tools::TOOL_ASK_USER) {
+            if let Some(wait_event_id) =
+                latest_unanswered_user_input_wait_event_id(events, tool_call_id)
+            {
+                let delete_boundary_id =
+                    assistant_batch_message_id_for_tool_call(messages, tool_call_id).or(message.id);
+                return Some(TailRewindPlan {
+                    kind: "ask_user_wait",
+                    delete_message_boundary_id: delete_boundary_id,
+                    event_boundary_id: Some(wait_event_id),
+                    phase: if latest_pending_submit_plan.is_some() {
+                        RewindPhase::Planning
+                    } else {
+                        RewindPhase::Implementation
+                    },
+                    message_metadata_updates: Vec::new(),
+                });
+            }
+            continue;
+        }
+
+        if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN)
+            && approval_status == Some("approved")
+            && execution_status != Some("approval_submitted")
+        {
+            if let Some(event_boundary_id) = approval_resolved_event_id(events, tool_call_id) {
+                let delete_boundary_id = latest_approved_plan_summary_message(messages)
+                    .and_then(|message| message.id)
+                    .unwrap_or(message.id?);
+                return Some(TailRewindPlan {
+                    kind: "approved_submit_plan",
+                    delete_message_boundary_id: Some(delete_boundary_id),
+                    event_boundary_id: Some(event_boundary_id),
+                    phase: RewindPhase::Planning,
+                    message_metadata_updates: Vec::new(),
+                });
+            }
+        }
+
+        if approval_status == Some("pending") {
+            return Some(TailRewindPlan {
+                kind: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    "pending_submit_plan"
+                } else {
+                    "pending_approval_tool"
+                },
+                delete_message_boundary_id: Some(message.id?),
+                event_boundary_id: pending_approval_event_boundary(events, tool_call_id),
+                phase: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    RewindPhase::Planning
+                } else {
+                    RewindPhase::Implementation
+                },
+                message_metadata_updates: Vec::new(),
+            });
+        }
+
+        if approval_status == Some("approved") && execution_status == Some("approval_submitted") {
+            let delete_boundary_id = if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                latest_approved_plan_summary_message(messages).and_then(|message| message.id)
+            } else {
+                latest_approval_submitted_message(messages, tool_call_id)
+                    .and_then(|message| message.id)
+                    .or(message.id)
+            };
+            return Some(TailRewindPlan {
+                kind: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    "approved_submit_plan_waiting_execution"
+                } else {
+                    "approved_tool_waiting_execution"
+                },
+                delete_message_boundary_id: delete_boundary_id,
+                event_boundary_id: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    approval_resolved_event_id(events, tool_call_id)
+                } else {
+                    approval_tool_rewind_event_boundary(events, tool_call_id)
+                },
+                phase: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    RewindPhase::Planning
+                } else {
+                    RewindPhase::Implementation
+                },
+                message_metadata_updates: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    reverted_pending_approval_metadata(message)
+                        .and_then(|metadata| message.id.map(|id| (id, metadata)))
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+
+        if approval_status == Some("approved")
+            && tool_name != Some(crate::tools::TOOL_SUBMIT_PLAN)
+            && message_execution_status(message) == Some("completed")
+        {
+            if let Some(event_boundary_id) =
+                approval_tool_rewind_event_boundary(events, tool_call_id)
+            {
+                let delete_boundary_id = latest_approval_submitted_message(messages, tool_call_id)
+                    .and_then(|submitted_message| submitted_message.id)
+                    .unwrap_or(message.id?);
+                return Some(TailRewindPlan {
+                    kind: "approved_tool_completed",
+                    delete_message_boundary_id: Some(delete_boundary_id),
+                    event_boundary_id: Some(event_boundary_id),
+                    phase: RewindPhase::Implementation,
+                    message_metadata_updates: Vec::new(),
+                });
+            }
+        }
+
+        if let Some(event_boundary_id) = tool_started_event_id(events, tool_call_id) {
+            return Some(TailRewindPlan {
+                kind: if approval_status == Some("approved") {
+                    if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                        "approved_submit_plan_completed"
+                    } else {
+                        "approved_tool_completed"
+                    }
+                } else {
+                    "completed_tool"
+                },
+                delete_message_boundary_id: Some(message.id?),
+                event_boundary_id: Some(event_boundary_id),
+                phase: if tool_name == Some(crate::tools::TOOL_SUBMIT_PLAN) {
+                    RewindPhase::Planning
+                } else {
+                    RewindPhase::Implementation
+                },
+                message_metadata_updates: Vec::new(),
+            });
+        }
+    }
+
+    None
+}
+
+#[cfg(not(feature = "desktop"))]
+fn prune_removed_tool_calls_from_assistant_message(
+    message: &WorkflowMessage,
+    removed_tool_call_ids: &HashSet<String>,
+) -> Option<Option<Value>> {
+    if message.role != "assistant" || removed_tool_call_ids.is_empty() {
+        return None;
+    }
+
+    let mut metadata = message.metadata.clone()?;
+    let tool_calls = metadata
+        .get_mut("tool_calls")
+        .and_then(|value| value.as_array_mut())?;
+    let before_len = tool_calls.len();
+
+    tool_calls.retain(|call| {
+        let call_id = call
+            .get("id")
+            .and_then(|value| value.as_str())
+            .or_else(|| call.get("tool_call_id").and_then(|value| value.as_str()));
+
+        match call_id {
+            Some(id) => !removed_tool_call_ids.contains(id),
+            None => true,
+        }
+    });
+
+    if tool_calls.len() == before_len {
+        return None;
+    }
+
+    if tool_calls.is_empty() {
+        // The assistant message and its tool calls are emitted as one interaction batch.
+        // Once every tool call in that batch is rewound, the assistant batch itself
+        // should disappear instead of leaving detached narration behind.
+        return Some(None);
+    }
+
+    let has_text = !message.message.trim().is_empty()
+        || message
+            .reasoning
+            .as_ref()
+            .is_some_and(|reasoning| !reasoning.trim().is_empty());
+    let has_tool_calls = metadata
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+        .is_some_and(|calls| !calls.is_empty());
+
+    if !has_text && !has_tool_calls {
+        return Some(None);
+    }
+
+    Some(Some(metadata))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn execution_context_to_workflow_status(context: &ExecutionContext) -> String {
+    match context.state {
+        RuntimeState::Pending => "pending".to_string(),
+        RuntimeState::Running => "thinking".to_string(),
+        RuntimeState::Stopping => "stopping".to_string(),
+        RuntimeState::Waiting => match context.wait_reason {
+            Some(WaitReason::Confirmation) => "paused".to_string(),
+            Some(WaitReason::UserInput) => "awaiting_user".to_string(),
+            Some(WaitReason::Approval) => "awaiting_approval".to_string(),
+            Some(WaitReason::SubAgent) => "awaiting_sub_agent".to_string(),
+            None => "pending".to_string(),
+        },
+        RuntimeState::Completed => "completed".to_string(),
+        RuntimeState::Failed => "error".to_string(),
+        RuntimeState::Cancelled => "cancelled".to_string(),
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn sanitize_wait_reason_for_runtime_state(
+    session_id: &str,
+    state: &RuntimeState,
+    wait_reason: &mut Option<WaitReason>,
+) -> bool {
+    if wait_reason.is_some() && *state != RuntimeState::Waiting {
+        log::warn!(
+            "[Workflow][session={}] snapshot.sanitize - clearing stale wait_reason={:?} for non-waiting state={:?}",
+            session_id,
+            wait_reason,
+            state
+        );
+        *wait_reason = None;
+        return true;
+    }
+
+    false
+}
+
+#[cfg(not(feature = "desktop"))]
+fn update_agent_config_phase(
+    agent_config: Option<&str>,
+    phase: RewindPhase,
+) -> Result<String, StoreError> {
+    if phase == RewindPhase::Preserve {
+        if let Some(agent_config) = agent_config {
+            if !agent_config.trim().is_empty() {
+                return Ok(agent_config.to_string());
+            }
+        }
+    }
+
+    let mut config = agent_config
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+
+    let phase_value = match phase {
+        RewindPhase::Planning => Some("planning"),
+        RewindPhase::Implementation => Some("implementation"),
+        RewindPhase::Preserve => None,
+    };
+
+    if let Some(phase_value) = phase_value {
+        config["phase"] = json!(phase_value);
+    }
+
+    serde_json::to_string(&config).map_err(StoreError::from)
+}
+
+#[cfg(not(feature = "desktop"))]
+impl From<&Row<'_>> for WorkflowAiContextMessage {
+    fn from(row: &Row<'_>) -> Self {
+        let metadata_str: Option<String> = row.get("metadata").ok();
+        let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
+
+        Self {
+            id: row.get("id").ok(),
+            session_id: row.get("session_id").unwrap_or_default(),
+            segment_id: row.get("segment_id").unwrap_or_default(),
+            role: row.get("role").unwrap_or_default(),
+            message: row.get("message").unwrap_or_default(),
+            reasoning: row.get("reasoning").ok(),
+            message_kind: row
+                .get("message_kind")
+                .unwrap_or_else(|_| "message".to_string()),
+            message_subtype: row.get("message_subtype").ok(),
+            metadata,
+            source_message_id: row.get("source_message_id").ok(),
+            created_at: row.get("created_at").ok(),
+        }
+    }
+}
+
+// =================================================
+//  MainStore Implementation
+// =================================================
+
+#[cfg(not(feature = "desktop"))]
+impl MainStore {
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow_efficiency_report(
+        &self,
+        session_id: &str,
+    ) -> Result<WorkflowEfficiencyReport, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let root_workflow: Workflow = conn.query_row(
+                "SELECT * FROM workflows WHERE id = ?1",
+                params![session_id],
+                |row| Ok(Workflow::from(row)),
+            )?;
+            let mut statement = conn.prepare(
+                "WITH RECURSIVE workflow_tree AS (
+                    SELECT * FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.* FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )
+                SELECT * FROM workflow_tree
+                ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at ASC, id ASC",
+            )?;
+            let rows = statement.query_map(params![session_id], |row| Ok(Workflow::from(row)))?;
+            let mut reports = Vec::new();
+            for workflow in rows {
+                let workflow = workflow?;
+                let messages = Self::list_workflow_messages_for_session(
+                    conn,
+                    workflow.id.as_deref().unwrap_or_default(),
+                )?;
+                reports.push(WorkflowEfficiencySessionReport {
+                    session_id: workflow.id.clone().unwrap_or_default(),
+                    parent_session_id: workflow.parent_session_id.clone(),
+                    title: workflow.title.clone(),
+                    user_query: workflow.user_query.clone(),
+                    status: workflow.status.clone(),
+                    metrics: compute_efficiency_metrics(&messages),
+                });
+            }
+            let main_agent = reports
+                .iter()
+                .find(|report| report.session_id == session_id)
+                .cloned()
+                .unwrap_or_else(|| WorkflowEfficiencySessionReport {
+                    session_id: session_id.clone(),
+                    parent_session_id: root_workflow.parent_session_id.clone(),
+                    title: root_workflow.title.clone(),
+                    user_query: root_workflow.user_query.clone(),
+                    status: root_workflow.status.clone(),
+                    metrics: WorkflowEfficiencyMetrics::default(),
+                });
+            let sub_agents = reports
+                .into_iter()
+                .filter(|report| report.session_id != session_id)
+                .collect();
+            Ok(WorkflowEfficiencyReport {
+                root_session_id: session_id,
+                main_agent,
+                sub_agents,
+            })
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    fn list_workflow_messages_for_session(
+        conn: &rusqlite::Connection,
+        session_id: &str,
+    ) -> Result<Vec<WorkflowMessage>, StoreError> {
+        let mut stmt = conn.prepare(
+            "SELECT *
+             FROM workflow_messages
+             WHERE session_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row?);
+        }
+        Ok(messages)
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn create_workflow_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        user_query: String,
+        agent_id: String,
+        agent_config: Option<String>,
+        parent_session_id: Option<String>,
+    ) -> Result<Workflow, StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
+                )?;
+                conn.query_row("SELECT * FROM workflows WHERE id = ?1", params![id], |row| {
+                    Ok(Workflow::from(row))
+                })
+                .map_err(StoreError::from)
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn create_workflow(
+        &self,
+        id: &str,
+        user_query: &str,
+        agent_id: &str,
+        agent_config: Option<String>,
+        parent_session_id: Option<&str>,
+    ) -> Result<Workflow, StoreError> {
+        let id = id.to_string();
+        let user_query = user_query.to_string();
+        let agent_id = agent_id.to_string();
+        let parent_session_id = parent_session_id.map(ToString::to_string);
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflows (id, parent_session_id, user_query, agent_id, agent_config, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, parent_session_id, user_query, agent_id, agent_config, "pending"],
+            )?;
+            conn.query_row("SELECT * FROM workflows WHERE id = ?1", params![id], |row| {
+                Ok(Workflow::from(row))
+            })
+            .map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn list_workflows_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+    ) -> Result<Vec<Workflow>, StoreError> {
+        runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'subagent\\_%' ESCAPE '\\' AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY updated_at DESC, created_at DESC",
+                )?;
+                let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+            })
+            .await
+    }
+
+    #[cfg(test)]
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE parent_session_id IS NULL AND id NOT LIKE 'subagent\\_%' ESCAPE '\\' AND id NOT LIKE 'task\\_%' ESCAPE '\\' ORDER BY updated_at DESC, created_at DESC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflows
+                 WHERE parent_session_id IS NOT NULL
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_child_workflows_with_pending_approvals(&self) -> Result<Vec<Workflow>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT child.* FROM workflows AS child
+                 INNER JOIN workflows AS parent ON parent.id = child.parent_session_id
+                 WHERE child.status IN ('awaiting_approval', 'awaiting_auto_approval')
+                   AND parent.status NOT IN ('completed', 'failed', 'error', 'cancelled')
+                 ORDER BY child.created_at ASC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_child_workflows_for_parent(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<Workflow>, StoreError> {
+        let parent_session_id = parent_session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflows
+                 WHERE parent_session_id = ?1
+                 ORDER BY created_at ASC",
+            )?;
+            let rows =
+                statement.query_map(params![parent_session_id], |row| Ok(Workflow::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn delete_workflow_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                let transaction = conn.transaction()?;
+                let tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
+                    SELECT id, 0 FROM workflows WHERE id = ?1
+                    UNION ALL
+                    SELECT workflows.id, workflow_tree.depth + 1
+                    FROM workflows
+                    JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+                )";
+                let workflow_ids = {
+                    let mut statement = transaction.prepare(&format!(
+                        "{tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
+                    ))?;
+                    let rows = statement
+                        .query_map(params![id], |row| row.get::<_, String>(0))?;
+                    let ids = rows.collect::<Result<Vec<_>, _>>()?;
+                    ids
+                };
+                for table in [
+                    "workflow_context_messages",
+                    "workflow_messages",
+                    "workflow_snapshots",
+                ] {
+                    transaction.execute(
+                        &format!(
+                            "{tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                        ),
+                        params![id],
+                    )?;
+                }
+                if let Err(error) = transaction.execute(
+                    &format!(
+                        "{tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
+                    ),
+                    params![id],
+                ) {
+                    log::error!(
+                        "[Workflow][session={}] Failed to delete workflow events (non-fatal, continuing): {}",
+                        id,
+                        error
+                    );
+                }
+                for workflow_id in workflow_ids {
+                    transaction.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+                }
+                transaction.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(test)]
+    pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let tree_cte = "WITH RECURSIVE workflow_tree(id, depth) AS (
+                SELECT id, 0 FROM workflows WHERE id = ?1
+                UNION ALL
+                SELECT workflows.id, workflow_tree.depth + 1
+                FROM workflows JOIN workflow_tree ON workflows.parent_session_id = workflow_tree.id
+            )";
+            let workflow_ids = {
+                let mut statement = transaction.prepare(&format!(
+                    "{tree_cte} SELECT id FROM workflow_tree ORDER BY depth DESC"
+                ))?;
+                let rows = statement.query_map(params![id], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for table in [
+                "workflow_context_messages",
+                "workflow_messages",
+                "workflow_snapshots",
+            ] {
+                transaction.execute(
+                    &format!(
+                        "{tree_cte} DELETE FROM {table} WHERE session_id IN (SELECT id FROM workflow_tree)"
+                    ),
+                    params![id],
+                )?;
+            }
+            if let Err(error) = transaction.execute(
+                &format!(
+                    "{tree_cte} DELETE FROM workflow_events WHERE session_id IN (SELECT id FROM workflow_tree)"
+                ),
+                params![id],
+            ) {
+                log::error!(
+                    "[Workflow][session={id}] Failed to delete workflow events (non-fatal, continuing): {error}"
+                );
+            }
+            for workflow_id in workflow_ids {
+                transaction.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn delete_last_message(&self, session_id: &str) -> Result<bool, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let workflow_row: Option<(Option<String>,)> = conn
+                .query_row(
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
+                    params![session_id],
+                    |row| Ok((row.get(0)?,)),
+                )
+                .optional()?;
+            let Some((agent_config,)) = workflow_row else {
+                return Ok(false);
+            };
+            let messages = {
+                let mut statement = conn.prepare(
+                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowMessage::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if messages.is_empty() {
+                return Ok(false);
+            }
+            let events = {
+                let mut statement = conn.prepare(
+                    "SELECT id, session_id, event_type, event_version, event_data, created_at
+                     FROM workflow_events WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowEventRecord::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+
+        let Some(plan) = determine_tail_rewind_plan(&messages, &events) else {
+            return Ok(false);
+        };
+
+        log::info!(
+            "[Workflow][session={}][phase=rewind] Deleting tail interaction kind={} message_boundary={:?} event_boundary={:?}",
+            session_id,
+            plan.kind,
+            plan.delete_message_boundary_id,
+            plan.event_boundary_id
+        );
+
+        let remaining_segment_id = match plan.delete_message_boundary_id {
+            Some(boundary_id) => messages
+                .iter()
+                .filter(|message| message.id.unwrap_or_default() < boundary_id)
+                .map(|message| message.segment_id)
+                .max()
+                .unwrap_or(1),
+            None => messages
+                .iter()
+                .map(|message| message.segment_id)
+                .max()
+                .unwrap_or(1),
+        };
+        let removed_tool_call_ids: HashSet<String> = messages
+            .iter()
+            .filter(|message| {
+                plan.delete_message_boundary_id
+                    .is_some_and(|boundary_id| message.id.unwrap_or_default() >= boundary_id)
+            })
+            .filter_map(message_tool_call_id)
+            .map(ToOwned::to_owned)
+            .collect();
+        let remaining_events: Vec<WorkflowEventRecord> = events
+            .iter()
+            .filter(|event| {
+                plan.event_boundary_id
+                    .map_or(true, |boundary| event.id < boundary)
+            })
+            .cloned()
+            .collect();
+
+        let updated_agent_config = update_agent_config_phase(agent_config.as_deref(), plan.phase)?;
+        let preserve_manual_clear_context = plan.kind == "manual_clear_context";
+        let current_execution_context = if preserve_manual_clear_context {
+            let context_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            context_json
+                .map(|context_json| serde_json::from_str(&context_json))
+                .transpose()?
+        } else {
+            None
+        };
+        let deleted_manual_clear_marker = if preserve_manual_clear_context {
+            plan.delete_message_boundary_id.and_then(|boundary_id| {
+                messages
+                    .iter()
+                    .find(|message| message.id == Some(boundary_id))
+                    .cloned()
+            })
+        } else {
+            None
+        };
+        let rebuilt_snapshot = if remaining_events.is_empty() {
+            None
+        } else {
+            let mut rebuilt_context =
+                replay_events_to_execution_context(&session_id, &remaining_events)
+                    .map_err(|error| StoreError::InvalidData(error.to_string()))?;
+            rebuilt_context.current_segment_id = remaining_segment_id;
+
+            let context_json = serde_json::to_string(&rebuilt_context)?;
+            let state_str = rebuilt_context.state.to_string();
+            let wait_reason_str = rebuilt_context
+                .wait_reason
+                .as_ref()
+                .map(|wait_reason| wait_reason.to_string());
+            let sub_agent_sessions_json =
+                serde_json::to_string(&rebuilt_context.sub_agent_sessions)?;
+            let workflow_status = execution_context_to_workflow_status(&rebuilt_context);
+
+            Some((
+                context_json,
+                rebuilt_context.version,
+                state_str,
+                wait_reason_str,
+                rebuilt_context.waiting_on_sub_agent_id.clone(),
+                sub_agent_sessions_json,
+                workflow_status,
+            ))
+        };
+
+        let tx = conn.transaction()?;
+
+        if preserve_manual_clear_context {
+            tx.execute(
+                "DELETE FROM workflow_context_messages
+                 WHERE session_id = ?1 AND segment_id > ?2",
+                params![session_id, remaining_segment_id],
+            )?;
+        } else {
+            tx.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1",
+                params![session_id],
+            )?;
+        }
+
+        if let Some(boundary_id) = plan.delete_message_boundary_id {
+            tx.execute(
+                "DELETE FROM workflow_messages
+                 WHERE session_id = ?1 AND id >= ?2",
+                params![session_id, boundary_id],
+            )?;
+        }
+
+        for (message_id, metadata) in &plan.message_metadata_updates {
+            let metadata_json = serde_json::to_string(metadata)?;
+            tx.execute(
+                "UPDATE workflow_messages SET metadata = ?2 WHERE id = ?1",
+                params![message_id, metadata_json],
+            )?;
+        }
+
+        if !removed_tool_call_ids.is_empty() {
+            for assistant_message in messages.iter().filter(|message| {
+                plan.delete_message_boundary_id.is_some_and(|boundary_id| {
+                    message.id.unwrap_or_default() < boundary_id && message.role == "assistant"
+                })
+            }) {
+                let Some(message_id) = assistant_message.id else {
+                    continue;
+                };
+
+                match prune_removed_tool_calls_from_assistant_message(
+                    assistant_message,
+                    &removed_tool_call_ids,
+                ) {
+                    Some(Some(metadata)) => {
+                        let metadata_json = serde_json::to_string(&metadata)?;
+                        tx.execute(
+                            "UPDATE workflow_messages SET metadata = ?2 WHERE id = ?1",
+                            params![message_id, metadata_json],
+                        )?;
+                    }
+                    Some(None) => {
+                        tx.execute(
+                            "DELETE FROM workflow_messages WHERE id = ?1",
+                            params![message_id],
+                        )?;
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        if let Some(event_boundary_id) = plan.event_boundary_id {
+            tx.execute(
+                "DELETE FROM workflow_events
+                 WHERE session_id = ?1 AND id >= ?2",
+                params![session_id, event_boundary_id],
+            )?;
+        }
+
+        if remaining_events.is_empty() {
+            if preserve_manual_clear_context {
+                let remaining_context_messages: Vec<WorkflowAiContextMessage> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT * FROM workflow_context_messages
+                         WHERE session_id = ?1 AND segment_id = ?2
+                         ORDER BY id ASC",
+                    )?;
+                    let rows = stmt
+                        .query_map(params![session_id, remaining_segment_id], |row| {
+                            Ok(WorkflowAiContextMessage::from(row))
+                        })?;
+                    rows.collect::<Result<Vec<_>, _>>()?
+                };
+                let restored_context = restore_execution_context_from_manual_clear_marker(
+                    deleted_manual_clear_marker.as_ref(),
+                    current_execution_context.as_ref(),
+                    &session_id,
+                    remaining_segment_id,
+                    &remaining_context_messages,
+                );
+                let context_json = serde_json::to_string(&restored_context)?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO workflow_snapshots
+                     (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                    params![
+                        session_id,
+                        context_json,
+                        restored_context.version,
+                        restored_context.state.to_string(),
+                        restored_context
+                            .wait_reason
+                            .as_ref()
+                            .map(WaitReason::to_string),
+                        restored_context.waiting_on_sub_agent_id.clone(),
+                        serde_json::to_string(&restored_context.sub_agent_sessions)?,
+                    ],
+                )?;
+                tx.execute(
+                    "UPDATE workflows
+                     SET status = ?2,
+                         agent_config = ?3,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?1",
+                    params![
+                        session_id,
+                        execution_context_to_workflow_status(&restored_context),
+                        updated_agent_config,
+                    ],
+                )?;
+                tx.commit()?;
+                return Ok(true);
+            } else {
+                tx.execute(
+                    "DELETE FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id],
+                )?;
+            }
+            tx.execute(
+                "UPDATE workflows
+                 SET status = 'pending',
+                     agent_config = ?2,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                params![session_id, updated_agent_config],
+            )?;
+            tx.commit()?;
+            return Ok(true);
+        }
+
+        let Some((
+            context_json,
+            version,
+            state_str,
+            wait_reason_str,
+            waiting_on_sub_agent_id,
+            sub_agent_sessions_json,
+            workflow_status,
+        )) = rebuilt_snapshot
+        else {
+            return Ok(false);
+        };
+
+        tx.execute(
+            "INSERT OR REPLACE INTO workflow_snapshots
+             (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+            params![
+                session_id,
+                context_json,
+                version,
+                state_str,
+                wait_reason_str,
+                waiting_on_sub_agent_id,
+                sub_agent_sessions_json,
+            ],
+        )?;
+
+        tx.execute(
+            "UPDATE workflows
+             SET status = ?2,
+                 agent_config = ?3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            params![session_id, workflow_status, updated_agent_config],
+        )?;
+
+        tx.commit()?;
+        Ok(true)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_recent_workflow_message_page(
+        &self,
+        session_id: &str,
+        message_limit: usize,
+    ) -> Result<WorkflowMessagePage, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let total_message_count = conn.query_row(
+                "SELECT COUNT(*) FROM workflow_messages WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            let query_limit = message_limit.max(1).saturating_add(1) as i64;
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1
+                 ORDER BY id DESC
+                 LIMIT ?2",
+            )?;
+            let rows = statement.query_map(params![session_id, query_limit], |row| {
+                Ok(WorkflowMessage::from(row))
+            })?;
+            let descending = rows.collect::<Result<Vec<_>, _>>()?;
+            let selection = select_workflow_ui_message_page(descending, message_limit, true);
+            let has_more_in_current_task = selection.has_more_in_current_task;
+            let messages = selection.messages;
+
+            Ok(WorkflowMessagePage {
+                // The selector returns messages oldest-first. The cursor must
+                // point at the oldest displayed row so the next page moves back
+                // by the whole page instead of repeating all but one message.
+                before_message_id: messages.first().and_then(|message| message.id),
+                hidden_message_count: total_message_count.saturating_sub(messages.len()),
+                hidden_completed_task_count: 0,
+                has_more_in_current_task,
+                messages,
+            })
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_earlier_workflow_message_page(
+        &self,
+        session_id: &str,
+        before_message_id: i64,
+        message_limit: usize,
+    ) -> Result<WorkflowMessagePage, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let total_message_count = conn.query_row(
+                "SELECT COUNT(*) FROM workflow_messages
+                 WHERE session_id = ?1 AND id < ?2",
+                params![session_id, before_message_id],
+                |row| row.get::<_, i64>(0),
+            )? as usize;
+            let query_limit = message_limit.max(1).saturating_add(1) as i64;
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1 AND id < ?2
+                 ORDER BY id DESC
+                 LIMIT ?3",
+            )?;
+            let rows = statement
+                .query_map(params![session_id, before_message_id, query_limit], |row| {
+                    Ok(WorkflowMessage::from(row))
+                })?;
+            let descending = rows.collect::<Result<Vec<_>, _>>()?;
+            let selection = select_workflow_ui_message_page(descending, message_limit, false);
+            let has_more_in_current_task = selection.has_more_in_current_task;
+            let messages = selection.messages;
+
+            Ok(WorkflowMessagePage {
+                before_message_id: messages
+                    .first()
+                    .and_then(|message| message.id)
+                    .or(Some(before_message_id)),
+                hidden_message_count: total_message_count.saturating_sub(messages.len()),
+                hidden_completed_task_count: 0,
+                has_more_in_current_task,
+                messages,
+            })
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow_message_window(
+        &self,
+        session_id: &str,
+        before_message_id: Option<i64>,
+        initial_visible_group_count: usize,
+    ) -> Result<WorkflowMessageWindow, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_messages
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id < ?2)
+                 ORDER BY id DESC",
+            )?;
+            let rows = statement.query_map(params![session_id, before_message_id], |row| {
+                Ok(WorkflowMessage::from(row))
+            })?;
+            let mut messages = Vec::new();
+            let mut completion_count = 0usize;
+            let mut target_completion_count = if before_message_id.is_some() {
+                1
+            } else {
+                initial_visible_group_count.max(1)
+            };
+            for message in rows {
+                let message = message?;
+                if is_completed_workflow_task_boundary(&message) {
+                    if completion_count >= target_completion_count {
+                        // A manual clear-context marker visually belongs after this
+                        // completion. Keep the adjacent boundary together instead of
+                        // starting the next task window with an orphan divider.
+                        if messages.last().is_some_and(is_manual_clear_context_message) {
+                            messages.push(message);
+                        }
+                        break;
+                    }
+                    if before_message_id.is_none() && completion_count == 0 && !messages.is_empty()
+                    {
+                        target_completion_count =
+                            initial_visible_group_count.saturating_sub(1).max(1);
+                    }
+                    completion_count += 1;
+                }
+                messages.push(message);
+            }
+            messages.reverse();
+            let next_before_message_id = messages.first().and_then(|message| message.id);
+            let hidden_completed_task_count = if let Some(oldest_message_id) =
+                next_before_message_id
+            {
+                let mut count_statement = conn.prepare(
+                    "SELECT metadata, role, is_error FROM workflow_messages
+                     WHERE session_id = ?1 AND id < ?2
+                     ORDER BY id ASC",
+                )?;
+                let rows =
+                    count_statement.query_map(params![session_id, oldest_message_id], |row| {
+                        Ok(WorkflowMessage {
+                            id: None,
+                            session_id: String::new(),
+                            role: row.get(1)?,
+                            message: String::new(),
+                            reasoning: None,
+                            message_kind: String::new(),
+                            message_subtype: None,
+                            segment_id: 0,
+                            source_event_type: None,
+                            metadata: row
+                                .get::<_, Option<String>>(0)?
+                                .and_then(|value| serde_json::from_str(&value).ok()),
+                            attached_context: None,
+                            step_type: None,
+                            step_index: 0,
+                            is_error: row.get(2)?,
+                            error_type: None,
+                            created_at: None,
+                        })
+                    })?;
+                let mut count = 0usize;
+                for message in rows {
+                    if is_completed_workflow_task_boundary(&message?) {
+                        count += 1;
+                    }
+                }
+                count
+            } else {
+                0
+            };
+            Ok(WorkflowMessageWindow {
+                messages,
+                before_message_id: next_before_message_id,
+                hidden_completed_task_count,
+            })
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow_for_ui(&self, id: &str) -> Result<Workflow, StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut workflow: Workflow = conn.query_row(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
+                params![id],
+                |row| Ok(Workflow::from(row)),
+            )?;
+            let snapshot = conn
+                .query_row(
+                    "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .ok();
+            workflow.wait_reason = snapshot.and_then(|(state, wait_reason)| {
+                (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+            });
+            Ok(workflow)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn get_workflow_snapshot_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+    ) -> Result<WorkflowSnapshot, StoreError> {
+        runtime
+            .read(move |conn| {
+                let transaction = conn.transaction()?;
+                let mut workflow: Workflow = transaction.query_row(
+                    "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
+                    params![id],
+                    |row| Ok(Workflow::from(row)),
+                )?;
+                let snapshot_state_and_wait_reason: Option<(Option<String>, Option<String>)> = transaction
+                    .query_row(
+                        "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                        params![id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .ok();
+                workflow.wait_reason = snapshot_state_and_wait_reason.and_then(|(state, wait_reason)| {
+                    (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+                });
+                let mut statement = transaction.prepare(
+                    "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
+                let messages = rows.collect::<Result<Vec<_>, _>>()?;
+                Ok(WorkflowSnapshot { workflow, messages })
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow_snapshot(&self, id: &str) -> Result<WorkflowSnapshot, StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let mut workflow: Workflow = transaction.query_row(
+                "SELECT workflows.*, EXISTS(SELECT 1 FROM workflow_automation_runs WHERE workflow_session_id = workflows.id) AS is_automation_run FROM workflows WHERE workflows.id = ?1",
+                params![id],
+                |row| Ok(Workflow::from(row)),
+            )?;
+            let snapshot = transaction
+                .query_row(
+                    "SELECT state, wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![id],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .ok();
+            workflow.wait_reason = snapshot.and_then(|(state, wait_reason)| {
+                (state.as_deref() == Some("waiting")).then_some(wait_reason).flatten()
+            });
+            let mut statement = transaction
+                .prepare("SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id ASC")?;
+            let rows = statement.query_map(params![id], |row| Ok(WorkflowMessage::from(row)))?;
+            Ok(WorkflowSnapshot {
+                workflow,
+                messages: rows.collect::<Result<Vec<_>, _>>()?,
+            })
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow_message_by_id_and_role(
+        &self,
+        session_id: &str,
+        message_id: i64,
+        role: &str,
+    ) -> Result<Option<WorkflowMessage>, StoreError> {
+        let session_id = session_id.to_string();
+        let role = role.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflow_messages WHERE session_id = ?1 AND id = ?2 AND role = ?3",
+                params![session_id, message_id, role],
+                |row| Ok(WorkflowMessage::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_tail_rewind_kind(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<&'static str>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let messages = {
+                let mut statement = transaction.prepare(
+                    "SELECT
+                        id,
+                        '' AS session_id,
+                        role,
+                        message,
+                        NULL AS reasoning,
+                        message_kind,
+                        message_subtype,
+                        segment_id,
+                        source_event_type,
+                        metadata,
+                        NULL AS attached_context,
+                        step_type,
+                        step_index,
+                        is_error,
+                        error_type,
+                        NULL AS created_at
+                     FROM workflow_messages
+                     WHERE session_id = ?1
+                     ORDER BY id ASC",
+                )?;
+                let rows = statement
+                    .query_map(params![session_id], |row| Ok(WorkflowMessage::from(row)))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let events = {
+                let mut statement = transaction.prepare(
+                    "SELECT
+                        id,
+                        '' AS session_id,
+                        event_type,
+                        '' AS event_version,
+                        event_data,
+                        NULL AS created_at
+                     FROM workflow_events
+                     WHERE session_id = ?1
+                       AND event_type IN (
+                           'wait_entered',
+                           'user_input_received',
+                           'approval_requested',
+                           'approval_resolved',
+                           'tool_started'
+                       )
+                     ORDER BY id ASC",
+                )?;
+                let rows = statement.query_map(params![session_id], |row| {
+                    Ok(WorkflowEventRecord::from(row))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            Ok(determine_tail_rewind_plan(&messages, &events).map(|plan| plan.kind))
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_workflow(&self, id: &str) -> Result<Option<Workflow>, StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflows WHERE id = ?1",
+                params![id],
+                |row| Ok(Workflow::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn add_workflow_message_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        msg: WorkflowMessage,
+    ) -> Result<WorkflowMessage, StoreError> {
+        let metadata_json = msg
+            .metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    params![msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json, msg.attached_context, msg.step_type, msg.step_index, if msg.is_error { 1 } else { 0 }, msg.error_type],
+                )?;
+                let mut persisted = msg;
+                persisted.id = Some(conn.last_insert_rowid());
+                conn.execute("UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1", params![persisted.session_id])?;
+                Ok(persisted)
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn add_workflow_message(
+        &self,
+        msg: &WorkflowMessage,
+    ) -> Result<WorkflowMessage, StoreError> {
+        let msg = msg.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json = msg
+                .metadata
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
+            conn.execute(
+                "INSERT INTO workflow_messages (session_id, role, message, reasoning, message_kind, message_subtype, segment_id, source_event_type, metadata, attached_context, step_type, step_index, is_error, error_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    msg.session_id, msg.role, msg.message, msg.reasoning, msg.message_kind,
+                    msg.message_subtype, msg.segment_id, msg.source_event_type, metadata_json,
+                    msg.attached_context, msg.step_type, msg.step_index,
+                    if msg.is_error { 1 } else { 0 }, msg.error_type,
+                ],
+            )?;
+            conn.execute(
+                "UPDATE workflows SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                params![msg.session_id],
+            )?;
+            let mut persisted = msg;
+            persisted.id = Some(conn.last_insert_rowid());
+            Ok(persisted)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn workflow_current_task_run_id(&self, session_id: &str) -> Result<String, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let completed_count: i64 = conn.query_row(
+                "SELECT COUNT(1) FROM workflow_events
+                 WHERE session_id = ?1 AND event_type = 'task_completed'",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            Ok(format!("{session_id}:task:{}", completed_count + 1))
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn workflow_task_phase_started_at_ms(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let started_at: Option<String> = conn.query_row(
+                "SELECT MAX(created_at) FROM workflow_events
+                     WHERE session_id = ?1 AND event_type = 'task_completed'",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            let started_at = started_at.or_else(|| {
+                conn.query_row(
+                    "SELECT created_at FROM workflows WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            });
+            Ok(started_at.and_then(|value| {
+                chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|timestamp| timestamp.and_utc().timestamp_millis())
+            }))
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn workflow_started_at_ms(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let created_at: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM workflows WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(created_at.and_then(|value| {
+                chrono::NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                    .ok()
+                    .map(|timestamp| timestamp.and_utc().timestamp_millis())
+            }))
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn attach_usage_summary_to_tool_call(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        usage_summary: &Value,
+    ) -> Result<bool, StoreError> {
+        let session_id = session_id.to_string();
+        let tool_call_id = tool_call_id.to_string();
+        let usage_summary = usage_summary.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json: Option<String> = conn
+                .query_row(
+                    "SELECT metadata FROM workflow_messages
+                     WHERE session_id = ?1
+                       AND json_extract(metadata, '$.tool_call_id') = ?2
+                     ORDER BY id DESC LIMIT 1",
+                    params![session_id, tool_call_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(metadata_json) = metadata_json else {
+                return Ok(false);
+            };
+            let mut metadata: Value = serde_json::from_str(&metadata_json)?;
+            metadata["usage_summary"] = usage_summary;
+            let metadata_json = serde_json::to_string(&metadata)?;
+            conn.execute(
+                "UPDATE workflow_messages SET metadata = ?1
+                 WHERE session_id = ?2
+                   AND json_extract(metadata, '$.tool_call_id') = ?3",
+                params![metadata_json, session_id, tool_call_id],
+            )?;
+            Ok(true)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_message_metadata(
+        &self,
+        message_id: i64,
+        metadata: &Value,
+    ) -> Result<(), StoreError> {
+        let metadata_json = serde_json::to_string(metadata)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflow_messages SET metadata = ?1 WHERE id = ?2",
+                params![metadata_json, message_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn add_workflow_ai_context_message(
+        &self,
+        msg: &WorkflowAiContextMessage,
+    ) -> Result<WorkflowAiContextMessage, StoreError> {
+        let msg = msg.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let metadata_json = msg.metadata.as_ref().map(serde_json::to_string).transpose()?;
+            conn.execute(
+                "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, reasoning, message_kind, message_subtype, metadata, source_message_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![msg.session_id, msg.segment_id, msg.role, msg.message, msg.reasoning, msg.message_kind, msg.message_subtype, metadata_json, msg.source_message_id],
+            )?;
+            let mut persisted = msg;
+            persisted.id = Some(conn.last_insert_rowid());
+            Ok(persisted)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn delete_workflow_ai_context_segment(
+        &self,
+        session_id: &str,
+        segment_id: i32,
+    ) -> Result<(), StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "DELETE FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = ?2",
+                params![session_id, segment_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn update_workflow_status_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        status: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows
+                     SET status = ?1,
+                         updated_at = CASE
+                             WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP
+                             ELSE updated_at
+                         END
+                     WHERE id = ?2",
+                    params![status, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_status(&self, id: &str, status: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let status = status.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows
+                 SET status = ?1,
+                     updated_at = CASE WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END
+                 WHERE id = ?2",
+                params![status, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn update_workflow_title_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        title: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET title = ?1, updated_at = CASE WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                    params![title, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let title = title.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET title = ?1, updated_at = CASE WHEN title IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![title, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn update_workflow_title_and_query_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        title: String,
+        user_query: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET title = ?1, user_query = ?2, updated_at = CASE WHEN title IS NOT ?1 OR user_query IS NOT ?2 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?3",
+                    params![title, user_query, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn update_workflow_query_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        user_query: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET user_query = ?1, updated_at = CASE WHEN user_query IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                    params![user_query, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_query(&self, id: &str, user_query: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let user_query = user_query.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET user_query = ?1, updated_at = CASE WHEN user_query IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![user_query, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn update_workflow_todo_list_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        id: String,
+        todo_list: String,
+    ) -> Result<(), StoreError> {
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "UPDATE workflows SET todo_list = ?1, updated_at = CASE WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                    params![todo_list, id],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(test)]
+    pub fn update_workflow_todo_list(&self, id: &str, todo_list: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let todo_list = todo_list.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET todo_list = ?1, updated_at = CASE WHEN todo_list IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![todo_list, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_agent_config(
+        &self,
+        id: &str,
+        agent_config: &str,
+    ) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let agent_config = agent_config.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET agent_config = ?1, updated_at = CASE WHEN agent_config IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![agent_config, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_agent_id(&self, id: &str, agent_id: &str) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let agent_id = agent_id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "UPDATE workflows SET agent_id = ?1, updated_at = CASE WHEN agent_id IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END WHERE id = ?2",
+                params![agent_id, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_todo_list_for_workflow(&self, id: &str) -> Result<Vec<Value>, StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let todo_list = conn
+                .query_row(
+                    "SELECT todo_list FROM workflows WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(todo_list
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_default())
+        })
+    }
+
+    // ExecutionContext Snapshot Operations
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn latest_workflow_message_segment_id(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<i32>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT MAX(segment_id) FROM workflow_messages WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<i32>>(0),
+            )
+            .map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_execution_context(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ExecutionContext>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let context_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(context_json) = context_json else { return Ok(None); };
+            let mut context: ExecutionContext = serde_json::from_str(&context_json)?;
+            let _ = sanitize_wait_reason_for_runtime_state(
+                &session_id, &context.state, &mut context.wait_reason,
+            );
+            log::trace!(
+                "[Workflow][session={}] snapshot.read - state={:?}, wait_reason={:?}, pending_tools={}",
+                session_id, context.state, context.wait_reason, context.pending_tools.len()
+            );
+            Ok(Some(context))
+        })
+    }
+
+    #[cfg(all(test, not(feature = "desktop")))]
+    pub(crate) async fn upsert_execution_context_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        ctx: ExecutionContext,
+    ) -> Result<(), StoreError> {
+        let context_json = serde_json::to_string(&ctx)?;
+        let state_str = ctx.state.to_string();
+        let wait_reason_str = ctx.wait_reason.as_ref().map(|reason| reason.to_string());
+        let sub_agent_sessions_json = serde_json::to_string(&ctx.sub_agent_sessions)?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO workflow_snapshots
+                     (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                    params![
+                        ctx.session_id,
+                        context_json,
+                        ctx.version,
+                        state_str,
+                        wait_reason_str,
+                        ctx.waiting_on_sub_agent_id,
+                        sub_agent_sessions_json,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn upsert_execution_context(&self, ctx: &ExecutionContext) -> Result<(), StoreError> {
+        let ctx = ctx.clone();
+        let context_json = serde_json::to_string(&ctx)?;
+        let state = ctx.state.to_string();
+        let wait_reason = ctx.wait_reason.as_ref().map(ToString::to_string);
+        let sub_agent_sessions = serde_json::to_string(&ctx.sub_agent_sessions)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    ctx.session_id, context_json, ctx.version, state, wait_reason,
+                    ctx.waiting_on_sub_agent_id, sub_agent_sessions,
+                ],
+            )?;
+            log::info!(
+                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
+                ctx.session_id, ctx.state, ctx.wait_reason, ctx.pending_tools.len()
+            );
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn upsert_execution_context_preserving_concurrent_completions(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> Result<bool, StoreError> {
+        let mut ctx = ctx.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let existing_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![ctx.session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+
+            if let Some(existing_json) = existing_json {
+                let existing: ExecutionContext = serde_json::from_str(&existing_json)?;
+                if existing.current_segment_id > ctx.current_segment_id {
+                    log::warn!(
+                        "[Workflow][session={}] snapshot.write_rejected - stale_segment={}, current_segment={}",
+                        ctx.session_id,
+                        ctx.current_segment_id,
+                        existing.current_segment_id
+                    );
+                    return Ok(false);
+                }
+
+                if existing.current_segment_id == ctx.current_segment_id {
+                    for existing_completion in existing.pending_sub_agent_completions {
+                        if let Some(incoming_completion) = ctx
+                            .pending_sub_agent_completions
+                            .iter_mut()
+                            .find(|completion| {
+                                completion.sub_agent_id == existing_completion.sub_agent_id
+                            })
+                        {
+                            incoming_completion.consumed |= existing_completion.consumed;
+                        } else {
+                            ctx.pending_sub_agent_completions.push(existing_completion);
+                        }
+                    }
+                    let terminal_ids = ctx
+                        .pending_sub_agent_completions
+                        .iter()
+                        .map(|completion| completion.sub_agent_id.as_str())
+                        .collect::<HashSet<_>>();
+                    ctx.sub_agent_sessions
+                        .retain(|sub_agent_id| !terminal_ids.contains(sub_agent_id.as_str()));
+                }
+            }
+
+            let context_json = serde_json::to_string(&ctx)?;
+            let state = ctx.state.to_string();
+            let wait_reason = ctx.wait_reason.as_ref().map(ToString::to_string);
+            let sub_agent_sessions = serde_json::to_string(&ctx.sub_agent_sessions)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    ctx.session_id,
+                    context_json,
+                    ctx.version,
+                    state,
+                    wait_reason,
+                    ctx.waiting_on_sub_agent_id,
+                    sub_agent_sessions,
+                ],
+            )?;
+            log::info!(
+                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}, concurrent_completions_preserved=true",
+                ctx.session_id,
+                ctx.state,
+                ctx.wait_reason,
+                ctx.pending_tools.len()
+            );
+            Ok(true)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn persist_sub_agent_completion(
+        &self,
+        expected_parent_segment_id: Option<i32>,
+        completion: &crate::workflow::react::types::SubAgentCompletion,
+    ) -> Result<bool, StoreError> {
+        let mut completion = completion.clone();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let existing_json = conn
+                .query_row(
+                    "SELECT context_json FROM workflow_snapshots WHERE session_id = ?1",
+                    params![completion.parent_session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let mut context = existing_json
+                .map(|json| serde_json::from_str::<ExecutionContext>(&json))
+                .transpose()?
+                .unwrap_or_else(|| ExecutionContext {
+                    session_id: completion.parent_session_id.clone(),
+                    state: RuntimeState::Waiting,
+                    wait_reason: Some(WaitReason::SubAgent),
+                    queued_user_messages: Vec::new(),
+                    current_segment_id: 1,
+                    current_step: 0,
+                    max_steps: 0,
+                    pending_tools: Vec::new(),
+                    last_action_summary: None,
+                    current_context_tokens: None,
+                    max_context_tokens: None,
+                    last_event_id: None,
+                    version: ExecutionContext::CURRENT_VERSION.to_string(),
+                    waiting_on_sub_agent_id: Some(completion.sub_agent_id.clone()),
+                    awaiting_user_tool_call_id: None,
+                    effective_task_objective: None,
+                    sub_agent_sessions: vec![completion.sub_agent_id.clone()],
+                    pending_sub_agent_completions: Vec::new(),
+                    pending_final_review: None,
+                    pending_completion_reports: Vec::new(),
+                    removed_queued_user_message_ids: Vec::new(),
+                });
+
+            if expected_parent_segment_id
+                .is_some_and(|segment_id| segment_id != context.current_segment_id)
+            {
+                log::info!(
+                    "[Workflow][session={}][parent={}][phase=sub_agent_completion] Ignoring completion from cleared parent segment {:?}; current segment is {}",
+                    completion.sub_agent_id,
+                    completion.parent_session_id,
+                    expected_parent_segment_id,
+                    context.current_segment_id
+                );
+                return Ok(false);
+            }
+
+            context
+                .sub_agent_sessions
+                .retain(|sub_agent_id| sub_agent_id != &completion.sub_agent_id);
+            if context.waiting_on_sub_agent_id.as_deref()
+                == Some(completion.sub_agent_id.as_str())
+                && context.wait_reason != Some(WaitReason::SubAgent)
+            {
+                context.waiting_on_sub_agent_id = None;
+            }
+            completion.consumed |= context
+                .pending_sub_agent_completions
+                .iter()
+                .find(|existing| existing.sub_agent_id == completion.sub_agent_id)
+                .is_some_and(|existing| existing.consumed);
+            context
+                .pending_sub_agent_completions
+                .retain(|existing| existing.sub_agent_id != completion.sub_agent_id);
+            context.pending_sub_agent_completions.push(completion);
+
+            let context_json = serde_json::to_string(&context)?;
+            let state = context.state.to_string();
+            let wait_reason = context.wait_reason.as_ref().map(ToString::to_string);
+            let sub_agent_sessions = serde_json::to_string(&context.sub_agent_sessions)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_snapshots
+                 (session_id, context_json, version, state, wait_reason, waiting_on_sub_agent_id, sub_agent_sessions, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, CURRENT_TIMESTAMP)",
+                params![
+                    context.session_id,
+                    context_json,
+                    context.version,
+                    state,
+                    wait_reason,
+                    context.waiting_on_sub_agent_id,
+                    sub_agent_sessions,
+                ],
+            )?;
+            Ok(true)
+        })
+    }
+
+    // Workflow Event Operations
+
+    #[cfg(all(test, not(feature = "desktop")))]
+    pub(crate) async fn append_workflow_event_with_runtime(
+        runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
+        event: WorkflowEvent,
+    ) -> Result<i64, StoreError> {
+        let event_type = event.event_type.as_str().to_string();
+        let event_data = serde_json::to_string(&event.event_data)?;
+        runtime
+            .write(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![event.session_id, event_type, event.version, event_data],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+            .await
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn append_workflow_event(&self, event: &WorkflowEvent) -> Result<i64, StoreError> {
+        let event = event.clone();
+        let event_type = event.event_type.as_str().to_string();
+        let event_data = serde_json::to_string(&event.event_data)?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![event.session_id, event_type, event.version, event_data],
+            )?;
+            let event_id = conn.last_insert_rowid();
+            log::info!(
+                "[Workflow][session={}] event.append - type={:?}, event_id={}",
+                event.session_id,
+                event.event_type,
+                event_id
+            );
+            Ok(event_id)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_child_reconciliation_state(
+        &self,
+        parent_session_id: &str,
+        child_id: &str,
+    ) -> Result<(bool, bool, bool), StoreError> {
+        let parent_session_id = parent_session_id.to_string();
+        let child_id = child_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let (has_terminal_event, is_background, has_background_projection):
+                (bool, bool, bool) = conn.query_row(
+                "SELECT
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_events
+                        WHERE session_id = ?1
+                          AND event_type IN ('sub_agent_completed', 'sub_agent_failed', 'sub_agent_interrupted')
+                          AND json_extract(event_data, '$.sub_agent_id') = ?2
+                          AND json_type(event_data, '$.result.usage_summary') = 'object'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_events
+                        WHERE session_id = ?1
+                          AND event_type = 'sub_agent_started'
+                          AND json_extract(event_data, '$.sub_agent_id') = ?2
+                          AND json_extract(event_data, '$.execution_mode') = 'background'
+                    ),
+                    EXISTS(
+                        SELECT 1
+                        FROM workflow_messages
+                        WHERE session_id = ?1
+                          AND source_event_type = 'sub_agent_completed'
+                          AND json_extract(metadata, '$.sub_agent_id') = ?2
+                          AND json_extract(metadata, '$.execution_mode') = 'background'
+                    )",
+                params![parent_session_id, child_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            Ok((has_terminal_event, is_background, has_background_projection))
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_workflow_events(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<WorkflowEventRecord>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, session_id, event_type, event_version, event_data, created_at
+                 FROM workflow_events
+                 WHERE session_id = ?1
+                 ORDER BY id ASC",
+            )?;
+            let rows = statement.query_map(params![session_id], |row| {
+                Ok(WorkflowEventRecord::from(row))
+            })?;
+            let events = rows.collect::<Result<Vec<_>, _>>()?;
+            log::info!(
+                "[Workflow][session={}] event.list - count={}",
+                session_id,
+                events.len()
+            );
+            Ok(events)
+        })
+    }
+
+    /// Bounded durable-events query for transport adapters.
+    ///
+    /// Returns events with durable ID strictly greater than `after`, in
+    /// ascending ID order, capped at `limit` (default 200, maximum
+    /// `chatspeed_contracts::workflow::WORKFLOW_EVENTS_MAX_LIMIT`). `after` is a
+    /// durable DB event ID; live stream cursors must never be passed here.
+    #[cfg(not(feature = "desktop"))]
+    pub fn list_workflow_events_after(
+        &self,
+        session_id: &str,
+        after: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<Vec<WorkflowEventRecord>, StoreError> {
+        const DEFAULT_LIMIT: u32 = 200;
+        let limit = limit
+            .unwrap_or(DEFAULT_LIMIT)
+            .min(chatspeed_contracts::workflow::WORKFLOW_EVENTS_MAX_LIMIT);
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let mut statement = conn.prepare(
+                "SELECT id, session_id, event_type, event_version, event_data, created_at
+                 FROM workflow_events
+                 WHERE session_id = ?1 AND (?2 IS NULL OR id > ?2)
+                 ORDER BY id ASC
+                 LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![session_id, after, limit as i64], |row| {
+                Ok(WorkflowEventRecord::from(row))
+            })?;
+            let events = rows.collect::<Result<Vec<_>, _>>()?;
+            log::info!(
+                "[Workflow][session={}] event.list_after - count={}, after={:?}, limit={}",
+                session_id,
+                events.len(),
+                after,
+                limit
+            );
+            Ok(events)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn latest_workflow_event_type(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT event_type
+                 FROM workflow_events
+                 WHERE session_id = ?1
+                 ORDER BY id DESC
+                 LIMIT 1",
+                params![session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn get_last_event_id(&self, session_id: &str) -> Result<Option<i64>, StoreError> {
+        let session_id = session_id.to_string();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT MAX(id) FROM workflow_events WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(StoreError::from)
+        })
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn compute_efficiency_metrics(messages: &[WorkflowMessage]) -> WorkflowEfficiencyMetrics {
+    let mut metrics = WorkflowEfficiencyMetrics::default();
+    let mut read_counts: HashMap<String, u32> = HashMap::new();
+    let mut seen_read_files: HashSet<String> = HashSet::new();
+    let mut edited_files: HashSet<String> = HashSet::new();
+    let mut read_before_edit_files: HashSet<String> = HashSet::new();
+
+    for message in messages {
+        if message.role == "assistant" {
+            let tool_calls = extract_tool_calls_from_metadata(message.metadata.as_ref());
+            let search_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_search_tool(&tool_call.name))
+                .count();
+            let read_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_read_tool(&tool_call.name))
+                .count();
+            let edit_count = tool_calls
+                .iter()
+                .filter(|tool_call| is_edit_tool(&tool_call.name))
+                .count();
+
+            if search_count >= 2 {
+                metrics.parallel_search_rounds += 1;
+            }
+            if read_count >= 2 {
+                metrics.parallel_read_rounds += 1;
+            }
+            if edit_count >= 2 {
+                metrics.batch_edit_rounds += 1;
+            }
+            continue;
+        }
+
+        if message.role != "tool" {
+            continue;
+        }
+
+        let tool_name = extract_tool_name(message.metadata.as_ref());
+        if matches!(
+            tool_name.as_deref(),
+            Some("complete_workflow" | "answer_user")
+        ) {
+            continue;
+        }
+
+        metrics.total_tool_calls += 1;
+
+        if let Some(tool_name) = tool_name.as_deref() {
+            if is_search_tool(tool_name) {
+                metrics.search_calls += 1;
+                if message.message.contains("[No matches found]") {
+                    metrics.no_match_searches += 1;
+                }
+            }
+
+            if is_read_tool(tool_name) {
+                metrics.read_calls += 1;
+                for path in extract_paths_for_tool(message, tool_name) {
+                    let count = read_counts.entry(path.clone()).or_insert(0);
+                    *count += 1;
+                    seen_read_files.insert(path);
+                }
+            }
+
+            if is_edit_tool(tool_name) {
+                metrics.edit_calls += 1;
+                for path in extract_paths_for_tool(message, tool_name) {
+                    if seen_read_files.contains(&path) {
+                        read_before_edit_files.insert(path.clone());
+                    }
+                    edited_files.insert(path);
+                }
+            }
+
+            if is_verification_tool(tool_name, message.metadata.as_ref()) {
+                metrics.verification_calls += 1;
+            }
+        }
+    }
+
+    metrics.repeated_read_files = read_counts.values().filter(|count| **count > 1).count() as u32;
+    metrics.repeated_read_events = read_counts
+        .values()
+        .map(|count| count.saturating_sub(1))
+        .sum();
+
+    metrics.pre_edit_read_coverage = if edited_files.is_empty() {
+        100
+    } else {
+        ((read_before_edit_files.len() as f64 / edited_files.len() as f64) * 100.0).round() as u32
+    };
+
+    metrics.convergence_score = score_convergence(&metrics);
+    metrics.execution_score = score_execution(&metrics);
+
+    metrics
+}
+
+#[derive(Debug, Clone)]
+#[cfg(not(feature = "desktop"))]
+struct ToolCallShape {
+    name: String,
+}
+
+#[cfg(not(feature = "desktop"))]
+fn extract_tool_calls_from_metadata(metadata: Option<&Value>) -> Vec<ToolCallShape> {
+    metadata
+        .and_then(|meta| meta.get("tool_calls"))
+        .and_then(|tool_calls| tool_calls.as_array())
+        .map(|tool_calls| {
+            tool_calls
+                .iter()
+                .filter_map(|tool_call| {
+                    tool_call
+                        .get("function")
+                        .and_then(|function| function.get("name"))
+                        .and_then(|name| name.as_str())
+                        .map(|name| ToolCallShape {
+                            name: name.to_string(),
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(not(feature = "desktop"))]
+fn extract_tool_name(metadata: Option<&Value>) -> Option<String> {
+    metadata
+        .and_then(|meta| meta.get("tool_name"))
+        .and_then(|tool_name| tool_name.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            metadata
+                .and_then(|meta| meta.get("tool_call"))
+                .and_then(|tool_call| tool_call.get("function"))
+                .and_then(|function| function.get("name"))
+                .and_then(|name| name.as_str())
+                .map(str::to_string)
+        })
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_search_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "glob" | "grep" | "list_dir" | "search_workspace_files" | "web_search"
+    )
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_read_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file" | "read_git_base_text_file" | "web_fetch"
+    )
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_edit_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "edit_file" | "write_file")
+}
+
+#[cfg(not(feature = "desktop"))]
+fn is_verification_tool(tool_name: &str, metadata: Option<&Value>) -> bool {
+    if !matches!(tool_name, "bash" | "execute_command") {
+        return false;
+    }
+
+    let Some(command_text) = metadata
+        .and_then(|meta| meta.get("tool_call"))
+        .and_then(|tool_call| tool_call.get("function"))
+        .and_then(|function| function.get("arguments"))
+        .and_then(|arguments| arguments.as_str())
+    else {
+        return false;
+    };
+
+    let command_text = command_text.to_ascii_lowercase();
+    [
+        "cargo check",
+        "cargo test",
+        "cargo clippy",
+        "npm test",
+        "pnpm test",
+        "pnpm lint",
+        "pnpm build",
+        "go test",
+        "pytest",
+        "vitest",
+        "jest",
+        "ruff check",
+    ]
+    .iter()
+    .any(|needle| command_text.contains(needle))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn extract_paths_for_tool(message: &WorkflowMessage, tool_name: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    if matches!(tool_name, "read_file" | "read_git_base_text_file") {
+        if let Some(path) = extract_file_content_path(&message.message) {
+            paths.push(path);
+        }
+    }
+
+    if let Some(arguments) = message
+        .metadata
+        .as_ref()
+        .and_then(|meta| meta.get("tool_call"))
+        .and_then(|tool_call| tool_call.get("function"))
+        .and_then(|function| function.get("arguments"))
+        .and_then(|arguments| arguments.as_str())
+        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+    {
+        collect_paths_from_json(&arguments, &mut paths);
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+#[cfg(not(feature = "desktop"))]
+fn extract_file_content_path(message: &str) -> Option<String> {
+    let marker = "<file_content path=\"";
+    let start = message.find(marker)? + marker.len();
+    let rest = &message[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+#[cfg(not(feature = "desktop"))]
+fn collect_paths_from_json(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map {
+                let lower = key.to_ascii_lowercase();
+                let should_collect = matches!(
+                    lower.as_str(),
+                    "file_path" | "path" | "relative_path" | "target_file"
+                );
+                if should_collect {
+                    if let Some(path) = inner.as_str() {
+                        output.push(path.to_string());
+                    }
+                }
+                collect_paths_from_json(inner, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_paths_from_json(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn score_convergence(metrics: &WorkflowEfficiencyMetrics) -> u32 {
+    let mut score: i32 = 72;
+    score += ((metrics.parallel_search_rounds.min(2)) as i32) * 4;
+    score += ((metrics.parallel_read_rounds.min(2)) as i32) * 3;
+    score -= ((metrics.no_match_searches.min(3)) as i32) * 5;
+    score -= ((metrics.repeated_read_events.min(8)) as i32) * 2;
+
+    if metrics.edit_calls > 0 || metrics.verification_calls > 0 {
+        score += 6;
+    }
+
+    if metrics.total_tool_calls > 0 && metrics.search_calls == 0 && metrics.read_calls > 0 {
+        score += 2;
+    }
+
+    score.clamp(35, 95) as u32
+}
+
+#[cfg(not(feature = "desktop"))]
+fn score_execution(metrics: &WorkflowEfficiencyMetrics) -> u32 {
+    let mut score: i32 = 72;
+
+    if metrics.edit_calls > 0 {
+        score += ((metrics.pre_edit_read_coverage as i32) * 12) / 100;
+        score += ((metrics.batch_edit_rounds.min(2)) as i32) * 3;
+        if metrics.pre_edit_read_coverage < 50 {
+            score -= 8;
+        }
+    }
+
+    if metrics.verification_calls > 0 {
+        score += 10;
+    } else if metrics.edit_calls > 0 {
+        score -= 10;
+    }
+
+    if metrics.edit_calls == 0 && metrics.verification_calls == 0 {
+        score += 2;
+    }
+
+    score.clamp(45, 96) as u32
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+mod tests {
+    use super::*;
+    use crate::workflow::react::types::{
+        PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
+    };
+    use tempfile::tempdir;
+
+    fn create_test_store() -> (tempfile::TempDir, MainStore) {
+        let dir = tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("workflow_phase4_test.db");
+        let store = MainStore::new(db_path).expect("failed to create MainStore");
+        (dir, store)
+    }
+
+    fn test_completion(parent_session_id: &str, sub_agent_id: &str) -> SubAgentCompletion {
+        SubAgentCompletion {
+            sub_agent_id: sub_agent_id.to_string(),
+            parent_session_id: parent_session_id.to_string(),
+            status: "completed".to_string(),
+            result: Some("done".to_string()),
+            summary: Some("done".to_string()),
+            error: None,
+            tool_calls_count: 0,
+            usage_summary: None,
+            completed_at_ms: 1,
+            consumed: false,
+        }
+    }
+
+    #[test]
+    fn guarded_snapshot_rejects_stale_segment() {
+        let (_temp_dir, store) = create_test_store();
+        let mut current = ExecutionContext::new("snapshot-segment-guard".to_string());
+        current.current_segment_id = 2;
+        store.upsert_execution_context(&current).unwrap();
+
+        let mut stale = current.clone();
+        stale.current_segment_id = 1;
+        stale.state = RuntimeState::Completed;
+        assert!(!store
+            .upsert_execution_context_preserving_concurrent_completions(&stale)
+            .unwrap());
+
+        let restored = store
+            .get_execution_context(&current.session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.current_segment_id, 2);
+        assert_eq!(restored.state, RuntimeState::Pending);
+    }
+
+    #[test]
+    fn guarded_snapshot_preserves_concurrent_sub_agent_completion() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "snapshot-completion-merge";
+        let mut executor_snapshot = ExecutionContext::new(session_id.to_string());
+        executor_snapshot
+            .sub_agent_sessions
+            .push("child-1".to_string());
+        store.upsert_execution_context(&executor_snapshot).unwrap();
+        store
+            .persist_sub_agent_completion(Some(1), &test_completion(session_id, "child-1"))
+            .unwrap();
+
+        executor_snapshot.state = RuntimeState::Running;
+        assert!(store
+            .upsert_execution_context_preserving_concurrent_completions(&executor_snapshot)
+            .unwrap());
+
+        let restored = store.get_execution_context(session_id).unwrap().unwrap();
+        assert_eq!(restored.pending_sub_agent_completions.len(), 1);
+        assert_eq!(
+            restored.pending_sub_agent_completions[0].sub_agent_id,
+            "child-1"
+        );
+        assert!(restored.sub_agent_sessions.is_empty());
+    }
+
+    #[test]
+    fn persist_sub_agent_completion_is_idempotent_and_segment_guarded() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "atomic-sub-agent-completion";
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.current_segment_id = 3;
+        context.wait_reason = Some(WaitReason::SubAgent);
+        context.waiting_on_sub_agent_id = Some("child-1".to_string());
+        context.sub_agent_sessions.push("child-1".to_string());
+        store.upsert_execution_context(&context).unwrap();
+        let completion = test_completion(session_id, "child-1");
+
+        assert!(!store
+            .persist_sub_agent_completion(Some(2), &completion)
+            .unwrap());
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &completion)
+            .unwrap());
+        let mut consumed_completion = completion.clone();
+        consumed_completion.consumed = true;
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &consumed_completion)
+            .unwrap());
+        assert!(store
+            .persist_sub_agent_completion(Some(3), &completion)
+            .unwrap());
+
+        let restored = store.get_execution_context(session_id).unwrap().unwrap();
+        assert_eq!(restored.pending_sub_agent_completions.len(), 1);
+        assert!(restored.pending_sub_agent_completions[0].consumed);
+        assert!(restored.sub_agent_sessions.is_empty());
+        assert_eq!(restored.waiting_on_sub_agent_id.as_deref(), Some("child-1"));
+    }
+
+    #[test]
+    fn get_execution_context_clears_stale_wait_reason_for_non_waiting_state() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "snapshot-stale-wait-reason";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::UserInput);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("expected execution context");
+
+        assert_eq!(restored.state, RuntimeState::Running);
+        assert_eq!(restored.wait_reason, None);
+    }
+
+    #[test]
+    fn get_workflow_for_ui_ignores_stale_wait_reason_for_non_waiting_snapshot() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "workflow-ui-stale-wait-reason";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.wait_reason = Some(WaitReason::UserInput);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist execution context");
+
+        let workflow = store
+            .get_workflow_for_ui(session_id)
+            .expect("failed to load workflow");
+
+        assert_eq!(workflow.wait_reason, None);
+    }
+
+    fn seed_agent(store: &MainStore, agent_id: &str) {
+        let agent_id = agent_id.to_string();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO agents (id, name, system_prompt, agent_type, max_contexts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        agent_id,
+                        format!("Agent Test {}", agent_id),
+                        "You are a test agent.",
+                        "autonomous",
+                        20
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed agent");
+    }
+
+    fn seed_automation_run(store: &MainStore) {
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "INSERT INTO workflow_automations
+                     (id, title, agent_id, allowed_paths, schedule_kind, schedule_config, enabled)
+                     VALUES (?1, ?2, ?3, '[]', 'daily', '{}', 1)",
+                    params!["automation-1", "Automation", "agent-main"],
+                )?;
+                conn.execute(
+                    "INSERT INTO workflow_automation_runs
+                     (id, automation_id, workflow_session_id, status, scheduled_for)
+                     VALUES (?1, ?2, ?3, 'running', '2026-06-27 10:00:00')",
+                    params!["run-1", "automation-1", "automation-session"],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed automation run");
+    }
+
+    #[test]
+    fn approval_recovery_authority_comes_from_execution_context_not_transcript() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "approval-recovery-authority";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(
+                session_id,
+                "Inspect approval recovery",
+                "agent-test",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I'll inspect the workflow state.".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [
+                        {
+                            "id": "complete_1",
+                            "type": "function",
+                            "function": {
+                                "name": "complete_workflow",
+                                "arguments": { "summary": "Done" }
+                            }
+                        }
+                    ]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant message");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"summary\":\"Done\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "complete_1",
+                    "tool_name": "complete_workflow",
+                    "execution_status": "completed",
+                    "summary": "Done"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion tool message");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.pending_tools = vec![PendingTool {
+            tool_call_id: "tool_571ae521".to_string(),
+            tool_name: "bash".to_string(),
+            arguments: json!({ "command": "sqlite3 workflow.db" }),
+            details: Some(json!({
+                "command": "sqlite3 workflow.db",
+                "description": "Inspect workflow state"
+            })),
+            display_type: Some("text".to_string()),
+        }];
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist approval snapshot");
+        store
+            .update_workflow_status(session_id, "awaiting_approval")
+            .expect("failed to update workflow status");
+
+        let workflow = store
+            .get_workflow_for_ui(session_id)
+            .expect("failed to load workflow for ui");
+        assert_eq!(workflow.status, "awaiting_approval");
+        assert_eq!(workflow.wait_reason.as_deref(), Some("approval"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot");
+        assert_eq!(snapshot.messages.len(), 2);
+        assert!(
+            !snapshot.messages.iter().any(|message| {
+                message.role == "tool"
+                    && message
+                        .metadata
+                        .as_ref()
+                        .and_then(|meta| meta.get("tool_call_id"))
+                        .and_then(Value::as_str)
+                        == Some("tool_571ae521")
+            }),
+            "transcript should not need a pending tool observation for approval recovery"
+        );
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load execution context")
+            .expect("approval snapshot should exist");
+        assert_eq!(restored.state, RuntimeState::Waiting);
+        assert_eq!(restored.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(restored.pending_tools.len(), 1);
+        assert_eq!(restored.pending_tools[0].tool_call_id, "tool_571ae521");
+        assert_eq!(restored.pending_tools[0].tool_name, "bash");
+        assert_eq!(
+            restored.pending_tools[0].arguments,
+            json!({ "command": "sqlite3 workflow.db" })
+        );
+        assert_eq!(
+            restored.pending_tools[0].details,
+            Some(json!({
+                "command": "sqlite3 workflow.db",
+                "description": "Inspect workflow state"
+            }))
+        );
+        assert_eq!(
+            restored.pending_tools[0].display_type.as_deref(),
+            Some("text")
+        );
+    }
+
+    fn add_window_test_message(
+        store: &MainStore,
+        session_id: &str,
+        message: &str,
+        completed: bool,
+    ) -> WorkflowMessage {
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: if completed { "tool" } else { "user" }.to_string(),
+                message: message.to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: completed.then(|| {
+                    json!({
+                        "tool_name": "complete_workflow",
+                        "execution_status": "completed"
+                    })
+                }),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add window test message")
+    }
+
+    #[test]
+    fn workflow_message_lookup_is_scoped_by_session_and_role() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-history-read");
+        for session_id in ["history-session-a", "history-session-b"] {
+            store
+                .create_workflow(
+                    session_id,
+                    "Initial query",
+                    "agent-history-read",
+                    None,
+                    None,
+                )
+                .expect("failed to create workflow");
+        }
+        let user_message = add_window_test_message(&store, "history-session-a", "user body", false);
+        let tool_message = add_window_test_message(&store, "history-session-a", "tool body", true);
+
+        let fetched = store
+            .get_workflow_message_by_id_and_role(
+                "history-session-a",
+                user_message.id.expect("user message id"),
+                "user",
+            )
+            .expect("lookup user message")
+            .expect("user message should exist");
+        assert_eq!(fetched.message, "user body");
+        assert!(store
+            .get_workflow_message_by_id_and_role(
+                "history-session-b",
+                user_message.id.expect("user message id"),
+                "user",
+            )
+            .expect("cross-session lookup")
+            .is_none());
+        assert!(store
+            .get_workflow_message_by_id_and_role(
+                "history-session-a",
+                tool_message.id.expect("tool message id"),
+                "user",
+            )
+            .expect("wrong-role lookup")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn async_workflow_message_persistence_uses_sqlite_rowid_instead_of_supplied_id() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "async-workflow-message-id";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+        let first_message = add_window_test_message(&store, session_id, "first", false);
+        assert_eq!(first_message.id, Some(1));
+
+        let persisted = MainStore::add_workflow_message_with_runtime(
+            store
+                .db_runtime()
+                .expect("failed to obtain database runtime"),
+            WorkflowMessage {
+                id: Some(873149882892816384),
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "second".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        )
+        .await
+        .expect("failed to persist workflow message asynchronously");
+
+        assert_eq!(persisted.id, Some(2));
+        let messages = store
+            .get_recent_workflow_message_page(session_id, 10)
+            .expect("failed to load persisted workflow messages")
+            .messages;
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn test_workflow_message_window_loads_recent_and_earlier_complete_tasks() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-window");
+        store
+            .create_workflow("window-session", "Window query", "agent-window", None, None)
+            .expect("failed to create workflow");
+
+        for task in 1..=3 {
+            add_window_test_message(
+                &store,
+                "window-session",
+                &format!("task-{task}-input"),
+                false,
+            );
+            add_window_test_message(
+                &store,
+                "window-session",
+                &format!("task-{task}-completed"),
+                true,
+            );
+        }
+        add_window_test_message(&store, "window-session", "active-task", false);
+
+        let recent = store
+            .get_workflow_message_window("window-session", None, 2)
+            .expect("failed to load recent window");
+        assert_eq!(
+            recent
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-3-input", "task-3-completed", "active-task"]
+        );
+        assert_eq!(recent.hidden_completed_task_count, 2);
+
+        let recent_message_page = store
+            .get_recent_workflow_message_page("window-session", 200)
+            .expect("failed to load recent UI message page");
+        assert_eq!(
+            recent_message_page
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["active-task"]
+        );
+        assert_eq!(recent_message_page.hidden_message_count, 6);
+        assert_eq!(recent_message_page.hidden_completed_task_count, 0);
+
+        let earlier = store
+            .get_workflow_message_window("window-session", recent.before_message_id, 2)
+            .expect("failed to load earlier window");
+        assert_eq!(
+            earlier
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-2-input", "task-2-completed"]
+        );
+        assert_eq!(earlier.hidden_completed_task_count, 1);
+
+        let oldest = store
+            .get_workflow_message_window("window-session", earlier.before_message_id, 1)
+            .expect("failed to load oldest window");
+        assert_eq!(
+            oldest
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1-input", "task-1-completed"]
+        );
+        assert_eq!(oldest.hidden_completed_task_count, 0);
+
+        let loaded_ids = recent
+            .messages
+            .iter()
+            .chain(earlier.messages.iter())
+            .chain(oldest.messages.iter())
+            .filter_map(|message| message.id)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(loaded_ids.len(), 7, "paged windows must not overlap");
+
+        store
+            .create_workflow(
+                "completed-window",
+                "Completed query",
+                "agent-window",
+                None,
+                None,
+            )
+            .expect("failed to create completed workflow");
+        for task in 1..=2 {
+            add_window_test_message(
+                &store,
+                "completed-window",
+                &format!("completed-{task}-input"),
+                false,
+            );
+            add_window_test_message(
+                &store,
+                "completed-window",
+                &format!("completed-{task}-done"),
+                true,
+            );
+        }
+        let completed_window = store
+            .get_workflow_message_window("completed-window", None, 2)
+            .expect("failed to load completed-only window");
+        assert_eq!(completed_window.messages.len(), 4);
+        assert_eq!(completed_window.hidden_completed_task_count, 0);
+
+        let completed_message_page = store
+            .get_recent_workflow_message_page("completed-window", 200)
+            .expect("failed to load completed UI message page");
+        assert_eq!(
+            completed_message_page
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["completed-2-input", "completed-2-done"]
+        );
+        assert_eq!(completed_message_page.hidden_message_count, 2);
+        assert_eq!(completed_message_page.hidden_completed_task_count, 0);
+
+        store
+            .create_workflow(
+                "clear-context-task-window",
+                "Clear-context task window",
+                "agent-window",
+                None,
+                None,
+            )
+            .expect("failed to create clear-context task workflow");
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "previous-task-input",
+            false,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "previous-task-completed",
+            true,
+        );
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "clear-context-task-window".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({ "subtype": "manual_clear_context" })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add task-window clear-context marker");
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "current-task-input",
+            false,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "current-task-completed",
+            true,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-task-window",
+            "next-task-input",
+            false,
+        );
+
+        let clear_context_window = store
+            .get_workflow_message_window("clear-context-task-window", None, 1)
+            .expect("failed to load clear-context task window");
+        assert_eq!(
+            clear_context_window
+                .messages
+                .iter()
+                .map(|message| {
+                    if is_completed_workflow_task_boundary(message) {
+                        "complete_workflow"
+                    } else if is_manual_clear_context_message(message) {
+                        "manual_clear_context"
+                    } else {
+                        message.message.as_str()
+                    }
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "complete_workflow",
+                "manual_clear_context",
+                "current-task-input",
+                "complete_workflow",
+                "next-task-input"
+            ],
+            "the previous completion must stay immediately before the new-session divider"
+        );
+    }
+
+    #[test]
+    fn test_workflow_message_page_keeps_task_boundaries_with_older_content() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-clear-context-boundary");
+        store
+            .create_workflow(
+                "clear-context-boundary-session",
+                "Clear context boundary query",
+                "agent-clear-context-boundary",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        add_window_test_message(
+            &store,
+            "clear-context-boundary-session",
+            "completed-task-input",
+            false,
+        );
+        add_window_test_message(
+            &store,
+            "clear-context-boundary-session",
+            "completed-task",
+            true,
+        );
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "clear-context-boundary-session".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({ "subtype": "manual_clear_context" })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add clear-context marker");
+        for index in 1..=300 {
+            add_window_test_message(
+                &store,
+                "clear-context-boundary-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("clear-context-boundary-session", 300)
+            .expect("failed to load recent clear-context page");
+        assert_eq!(recent.messages.len(), 300);
+        assert_eq!(recent.hidden_message_count, 3);
+        assert_eq!(recent.hidden_completed_task_count, 0);
+        assert_eq!(recent.messages[0].message, "active-message-1");
+        assert_eq!(recent.messages[299].message, "active-message-300");
+        assert!(
+            recent.messages.iter().all(|message| {
+                !is_completed_workflow_task_boundary(message)
+                    && !is_manual_clear_context_message(message)
+            }),
+            "task boundaries must remain attached to the older task instead of becoming a page"
+        );
+
+        let earlier = store
+            .get_earlier_workflow_message_page(
+                "clear-context-boundary-session",
+                recent
+                    .before_message_id
+                    .expect("recent page must expose its oldest displayed message"),
+                300,
+            )
+            .expect("failed to load earlier clear-context page");
+        assert_eq!(earlier.messages.len(), 3);
+        assert_eq!(earlier.hidden_message_count, 0);
+        assert_eq!(earlier.messages[0].message, "completed-task-input");
+        assert!(is_completed_workflow_task_boundary(&earlier.messages[1]));
+        assert_eq!(
+            earlier.messages[2].message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
+        assert!(
+            !earlier.has_more_in_current_task,
+            "the marker page must not automatically top up into the older completed task"
+        );
+    }
+
+    #[test]
+    fn test_workflow_message_page_marks_only_unbroken_active_task_as_extendable() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-current-task-page");
+        store
+            .create_workflow(
+                "current-task-page-session",
+                "Current task page query",
+                "agent-current-task-page",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        for index in 1..=302 {
+            add_window_test_message(
+                &store,
+                "current-task-page-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("current-task-page-session", 300)
+            .expect("failed to load current task page");
+        assert_eq!(recent.messages.len(), 300);
+        assert_eq!(recent.messages[0].message, "active-message-3");
+        assert!(
+            recent.has_more_in_current_task,
+            "a 301st ordinary message in the same task must permit a top-up page"
+        );
+    }
+
+    #[test]
+    fn test_workflow_message_page_limits_long_active_task() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-message-page");
+        store
+            .create_workflow(
+                "message-page-session",
+                "Message page query",
+                "agent-message-page",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        for index in 1..=450 {
+            add_window_test_message(
+                &store,
+                "message-page-session",
+                &format!("active-message-{index}"),
+                false,
+            );
+        }
+
+        let recent = store
+            .get_recent_workflow_message_page("message-page-session", 200)
+            .expect("failed to load recent message page");
+        assert_eq!(recent.messages.len(), 200);
+        assert_eq!(recent.hidden_message_count, 250);
+        assert_eq!(recent.hidden_completed_task_count, 0);
+        assert_eq!(recent.messages[0].message, "active-message-251");
+        assert_eq!(recent.messages[199].message, "active-message-450");
+
+        let middle = store
+            .get_earlier_workflow_message_page(
+                "message-page-session",
+                recent
+                    .before_message_id
+                    .expect("recent page must expose a cursor"),
+                200,
+            )
+            .expect("failed to load middle message page");
+        assert_eq!(middle.messages.len(), 200);
+        assert_eq!(middle.hidden_message_count, 50);
+        assert_eq!(middle.messages[0].message, "active-message-51");
+        assert_eq!(middle.messages[199].message, "active-message-250");
+
+        let oldest = store
+            .get_earlier_workflow_message_page(
+                "message-page-session",
+                middle
+                    .before_message_id
+                    .expect("middle page must expose a cursor"),
+                200,
+            )
+            .expect("failed to load oldest message page");
+        assert_eq!(oldest.messages.len(), 50);
+        assert_eq!(oldest.hidden_message_count, 0);
+        assert_eq!(oldest.messages[0].message, "active-message-1");
+        assert_eq!(oldest.messages[49].message, "active-message-50");
+    }
+
+    #[test]
+    fn test_normalize_legacy_message_classification_from_metadata() {
+        let message = WorkflowMessage {
+            id: Some(1),
+            session_id: "legacy-session".to_string(),
+            role: "system".to_string(),
+            message: String::new(),
+            reasoning: None,
+            message_kind: "message".to_string(),
+            message_subtype: None,
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(serde_json::json!({
+                "type": "summary",
+                "subtype": "manual_clear_context"
+            })),
+            attached_context: None,
+            step_type: None,
+            step_index: 0,
+            is_error: false,
+            error_type: None,
+            created_at: None,
+        }
+        .normalize_classification();
+
+        assert_eq!(message.message_kind, "summary");
+        assert_eq!(
+            message.message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
+    }
+
+    #[test]
+    fn test_snapshot_hydrates_legacy_manual_clear_context_text() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+        store
+            .create_workflow("legacy-session", "Legacy query", "agent-main", None, None)
+            .expect("failed to create legacy workflow");
+
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "INSERT INTO workflow_messages
+                     (session_id, role, message, message_kind, segment_id, step_index, is_error)
+                     VALUES (?1, 'system', 'MANUAL_CLEAR_CONTEXT', 'message', 1, 0, 0)",
+                    params!["legacy-session"],
+                )?;
+                Ok(())
+            })
+            .expect("failed to insert legacy manual clear-context message");
+
+        let snapshot = store
+            .get_workflow_snapshot("legacy-session")
+            .expect("failed to hydrate legacy workflow snapshot");
+        let message = snapshot
+            .messages
+            .first()
+            .expect("legacy message should be present");
+
+        assert_eq!(message.message_kind, "summary");
+        assert_eq!(
+            message.message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
+        assert!(message.message.is_empty());
+    }
+
+    #[test]
+    fn test_workflow_events_table_and_index_exist_after_migration() {
+        let (_temp_dir, store) = create_test_store();
+        let (table_exists, index_exists) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let table_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_events'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let index_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_workflow_events_session_id_id'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((table_exists, index_exists))
+            })
+            .expect("failed to inspect workflow_events schema");
+        assert_eq!(table_exists, 1, "workflow_events table should exist");
+        assert_eq!(
+            index_exists, 1,
+            "idx_workflow_events_session_id_id index should exist"
+        );
+    }
+
+    #[test]
+    fn test_memory_candidates_table_and_index_exist_after_migration() {
+        let (_temp_dir, store) = create_test_store();
+        let (table_exists, index_exists) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let table_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'memory_candidates'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let index_exists: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_candidates_unique_content'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((table_exists, index_exists))
+            })
+            .expect("failed to inspect memory_candidates schema");
+        assert_eq!(table_exists, 1, "memory_candidates table should exist");
+        assert_eq!(
+            index_exists, 1,
+            "memory candidate unique index should exist"
+        );
+    }
+
+    #[test]
+    fn test_append_workflow_event_returns_error_when_table_missing() {
+        let (_temp_dir, store) = create_test_store();
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                conn.execute("DROP TABLE workflow_events", [])?;
+                Ok(())
+            })
+            .expect("failed to drop workflow_events table");
+
+        let event = WorkflowEvent::workflow_started(
+            "session-append-fail".to_string(),
+            "agent-test".to_string(),
+        );
+        let result = store.append_workflow_event(&event);
+        assert!(
+            result.is_err(),
+            "append_workflow_event should return error when table is missing"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_last_event_id_aligns_with_event_tail_for_key_states() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-last-event-align";
+
+        let started =
+            WorkflowEvent::workflow_started(session_id.to_string(), "agent-test".to_string());
+        let e1 = store
+            .append_workflow_event(&started)
+            .expect("failed to append workflow_started event");
+        let state_changed = WorkflowEvent::state_changed(
+            session_id.to_string(),
+            "thinking".to_string(),
+            "executing".to_string(),
+        );
+        let e2 = store
+            .append_workflow_event(&state_changed)
+            .expect("failed to append state_changed event");
+        assert!(e2 >= e1, "event ids should be monotonic");
+
+        let expected_last_event_id = store
+            .get_last_event_id(session_id)
+            .expect("failed to query last event id")
+            .expect("last event id should exist after appends");
+
+        let mut waiting_ctx = ExecutionContext::new(session_id.to_string());
+        waiting_ctx.state = RuntimeState::Waiting;
+        waiting_ctx.wait_reason = Some(WaitReason::Approval);
+        waiting_ctx.last_event_id = Some(expected_last_event_id);
+        store
+            .upsert_execution_context(&waiting_ctx)
+            .expect("failed to save waiting snapshot");
+        let loaded_waiting = store
+            .get_execution_context(session_id)
+            .expect("failed to load waiting snapshot")
+            .expect("waiting snapshot should exist");
+        assert_eq!(
+            loaded_waiting.last_event_id,
+            Some(expected_last_event_id),
+            "waiting snapshot last_event_id should align with event tail"
+        );
+
+        let mut completed_ctx = waiting_ctx.clone();
+        completed_ctx.state = RuntimeState::Completed;
+        completed_ctx.wait_reason = None;
+        completed_ctx.last_event_id = Some(expected_last_event_id);
+        store
+            .upsert_execution_context(&completed_ctx)
+            .expect("failed to save completed snapshot");
+        let loaded_completed = store
+            .get_execution_context(session_id)
+            .expect("failed to load completed snapshot")
+            .expect("completed snapshot should exist");
+        assert_eq!(
+            loaded_completed.last_event_id,
+            Some(expected_last_event_id),
+            "completed snapshot last_event_id should align with event tail"
+        );
+
+        let mut cancelled_ctx = completed_ctx.clone();
+        cancelled_ctx.state = RuntimeState::Cancelled;
+        cancelled_ctx.last_event_id = Some(expected_last_event_id);
+        store
+            .upsert_execution_context(&cancelled_ctx)
+            .expect("failed to save cancelled snapshot");
+        let loaded_cancelled = store
+            .get_execution_context(session_id)
+            .expect("failed to load cancelled snapshot")
+            .expect("cancelled snapshot should exist");
+        assert_eq!(
+            loaded_cancelled.last_event_id,
+            Some(expected_last_event_id),
+            "cancelled snapshot last_event_id should align with event tail"
+        );
+    }
+
+    #[test]
+    fn test_list_workflows_excludes_child_workflows() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-parent");
+        seed_agent(&store, "agent-child");
+
+        store
+            .create_workflow("parent-session", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "task_legacy_child_session",
+                "Legacy child query",
+                "agent-child",
+                None,
+                None,
+            )
+            .expect("failed to create legacy child workflow");
+        store
+            .create_workflow(
+                "child-session",
+                "Child query",
+                "agent-child",
+                None,
+                Some("parent-session"),
+            )
+            .expect("failed to create child workflow");
+
+        let workflows = store
+            .list_workflows()
+            .expect("failed to list top-level workflows");
+
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(
+            workflows[0].id.as_deref(),
+            Some("parent-session"),
+            "child workflow should not appear in top-level workflow list"
+        );
+    }
+
+    #[test]
+    fn test_list_child_workflows_with_pending_approvals_excludes_terminal_parents_and_children() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-parent");
+        seed_agent(&store, "agent-child");
+
+        store
+            .create_workflow("parent", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "completed-parent",
+                "Completed parent query",
+                "agent-parent",
+                None,
+                None,
+            )
+            .expect("failed to create completed parent workflow");
+        for (parent_id, child_id, child_status) in [
+            ("parent", "approval-child", "awaiting_approval"),
+            ("parent", "completed-child", "completed"),
+            (
+                "completed-parent",
+                "completed-parent-child",
+                "awaiting_approval",
+            ),
+        ] {
+            store
+                .create_workflow(
+                    child_id,
+                    "Child query",
+                    "agent-child",
+                    None,
+                    Some(parent_id),
+                )
+                .expect("failed to create child workflow");
+            store
+                .update_workflow_status(child_id, child_status)
+                .expect("failed to update child workflow status");
+        }
+        store
+            .update_workflow_status("completed-parent", "completed")
+            .expect("failed to update completed parent workflow status");
+
+        let children = store
+            .list_child_workflows_with_pending_approvals()
+            .expect("failed to list child workflows awaiting approval");
+
+        assert_eq!(children.len(), 1);
+        assert!(children.iter().all(|child| {
+            matches!(
+                child.status.as_str(),
+                "awaiting_approval" | "awaiting_auto_approval"
+            )
+        }));
+        assert!(children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("approval-child")));
+        assert!(!children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("completed-child")));
+        assert!(!children
+            .iter()
+            .any(|child| child.id.as_deref() == Some("completed-parent-child")));
+    }
+
+    #[test]
+    fn test_list_workflows_marks_automation_runs() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+
+        store
+            .create_workflow("normal-session", "Normal query", "agent-main", None, None)
+            .expect("failed to create normal workflow");
+        store
+            .create_workflow(
+                "automation-session",
+                "Automation query",
+                "agent-main",
+                None,
+                None,
+            )
+            .expect("failed to create automation workflow");
+
+        seed_automation_run(&store);
+
+        let workflows = store
+            .list_workflows()
+            .expect("failed to list top-level workflows");
+
+        let normal = workflows
+            .iter()
+            .find(|workflow| workflow.id.as_deref() == Some("normal-session"))
+            .expect("normal workflow should exist");
+        let automation = workflows
+            .iter()
+            .find(|workflow| workflow.id.as_deref() == Some("automation-session"))
+            .expect("automation workflow should exist");
+
+        assert!(!normal.is_automation_run);
+        assert!(automation.is_automation_run);
+    }
+
+    #[test]
+    fn test_get_workflow_snapshot_marks_automation_runs() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+
+        store
+            .create_workflow(
+                "automation-session",
+                "Automation query",
+                "agent-main",
+                None,
+                None,
+            )
+            .expect("failed to create automation workflow");
+
+        seed_automation_run(&store);
+
+        let snapshot = store
+            .get_workflow_snapshot("automation-session")
+            .expect("failed to get workflow snapshot");
+
+        assert!(snapshot.workflow.is_automation_run);
+    }
+
+    #[test]
+    fn test_delete_workflow_removes_sub_agent_descendants() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-parent");
+        seed_agent(&store, "agent-child");
+
+        store
+            .create_workflow("parent-session", "Parent query", "agent-parent", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "subagent-child",
+                "Child query",
+                "agent-child",
+                None,
+                Some("parent-session"),
+            )
+            .expect("failed to create child workflow");
+
+        store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .write_blocking(|conn| {
+                for session_id in ["parent-session", "subagent-child"] {
+                    conn.execute(
+                        "INSERT INTO workflow_messages (session_id, role, message) VALUES (?1, 'user', 'message')",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_context_messages (session_id, segment_id, role, message, source_message_id)
+                         VALUES (?1, 1, 'user', 'context', last_insert_rowid())",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_snapshots (session_id, context_json, version)
+                         VALUES (?1, '{}', '1')",
+                        params![session_id],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                         VALUES (?1, 'test', '1', '{}')",
+                        params![session_id],
+                    )?;
+                }
+                Ok(())
+            })
+            .expect("failed to seed workflow descendants");
+
+        store
+            .delete_workflow("parent-session")
+            .expect("failed to recursively delete workflow tree");
+
+        let (workflow_count, related_counts) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(|conn| {
+                let workflow_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflows WHERE id IN ('parent-session', 'subagent-child')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let related_counts = [
+                    "workflow_messages",
+                    "workflow_context_messages",
+                    "workflow_snapshots",
+                    "workflow_events",
+                ]
+                .into_iter()
+                .map(|table| {
+                    conn.query_row::<i64, _, _>(
+                        &format!("SELECT COUNT(1) FROM {table} WHERE session_id IN ('parent-session', 'subagent-child')"),
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map(|count| (table, count))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+                Ok((workflow_count, related_counts))
+            })
+            .expect("failed to count deleted workflow records");
+        assert_eq!(workflow_count, 0, "workflow records should be deleted");
+
+        for (table, count) in related_counts {
+            assert_eq!(count, 0, "{table} records should be deleted");
+        }
+    }
+
+    #[test]
+    fn test_get_workflow_efficiency_report_splits_main_and_sub_agents() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+        seed_agent(&store, "agent-child");
+
+        store
+            .create_workflow("main-session", "Main task", "agent-main", None, None)
+            .expect("failed to create main workflow");
+        store
+            .create_workflow(
+                "subagent-child",
+                "Explore task",
+                "agent-child",
+                None,
+                Some("main-session"),
+            )
+            .expect("failed to create sub workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                role: "assistant".to_string(),
+                message: "Read and edit".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"file_path\":\"src/main.rs\"}"
+                            }
+                        },
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "{\"file_path\":\"src/lib.rs\"}"
+                            }
+                        }
+                    ]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add main assistant context");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                role: "tool".to_string(),
+                message: "<file_content path=\"src/main.rs\">fn main() {}</file_content>"
+                    .to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "read_file",
+                    "tool_call": {
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"file_path\":\"src/main.rs\"}"
+                        }
+                    }
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add main read tool");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"src/main.rs\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "edit_file",
+                    "tool_call": {
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"src/main.rs\"}"
+                        }
+                    }
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add main edit tool");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "main-session".to_string(),
+                role: "tool".to_string(),
+                message: "ok".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "bash",
+                    "tool_call": {
+                        "function": {
+                            "name": "bash",
+                            "arguments": "{\"command\":\"cargo check\"}"
+                        }
+                    }
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add main verification tool");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "subagent-child".to_string(),
+                role: "assistant".to_string(),
+                message: "Search in parallel".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "grep",
+                                "arguments": "{\"pattern\":\"foo\"}"
+                            }
+                        },
+                        {
+                            "function": {
+                                "name": "glob",
+                                "arguments": "{\"pattern\":\"*.rs\"}"
+                            }
+                        }
+                    ]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add sub assistant context");
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "subagent-child".to_string(),
+                role: "tool".to_string(),
+                message: "[No matches found]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_name": "grep",
+                    "tool_call": {
+                        "function": {
+                            "name": "grep",
+                            "arguments": "{\"pattern\":\"foo\"}"
+                        }
+                    }
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add sub grep tool");
+
+        let report = store
+            .get_workflow_efficiency_report("main-session")
+            .expect("failed to build efficiency report");
+
+        assert_eq!(report.main_agent.session_id, "main-session");
+        assert_eq!(report.sub_agents.len(), 1);
+        assert_eq!(report.sub_agents[0].session_id, "subagent-child");
+        assert_eq!(report.main_agent.metrics.read_calls, 1);
+        assert_eq!(report.main_agent.metrics.edit_calls, 1);
+        assert_eq!(report.main_agent.metrics.verification_calls, 1);
+        assert_eq!(report.main_agent.metrics.pre_edit_read_coverage, 100);
+        assert_eq!(report.sub_agents[0].metrics.parallel_search_rounds, 1);
+        assert_eq!(report.sub_agents[0].metrics.no_match_searches, 1);
+        assert!(report.main_agent.metrics.convergence_score >= 60);
+        assert!(report.main_agent.metrics.execution_score >= 80);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_trailing_user_message_and_rebuilds_snapshot() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-workflow-message";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Fix it".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+
+        let assistant_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I'll edit the file".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_calls": [{
+                        "id": "tool_1",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"a.rs\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant message");
+
+        let tool_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"a.rs\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(serde_json::json!({
+                    "tool_call_id": "tool_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "pending",
+                    "execution_status": "pending_approval"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add tool message");
+
+        store
+            .add_workflow_ai_context_message(&WorkflowAiContextMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                segment_id: 1,
+                role: "assistant".to_string(),
+                message: assistant_message.message.clone(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: assistant_message.metadata.clone(),
+                source_message_id: assistant_message.id,
+                created_at: None,
+            })
+            .expect("failed to add assistant context message");
+        store
+            .add_workflow_ai_context_message(&WorkflowAiContextMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                segment_id: 1,
+                role: "tool".to_string(),
+                message: tool_message.message.clone(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: tool_message.metadata.clone(),
+                source_message_id: tool_message.id,
+                created_at: None,
+            })
+            .expect("failed to add tool context message");
+
+        let started =
+            WorkflowEvent::workflow_started(session_id.to_string(), "agent-test".to_string());
+        store
+            .append_workflow_event(&started)
+            .expect("failed to append workflow_started event");
+        let wait_entered = WorkflowEvent::wait_entered(
+            session_id.to_string(),
+            "approval".to_string(),
+            vec![json!({
+                "tool_call_id": "tool_1",
+                "tool_name": "edit_file",
+                "arguments": { "file_path": "a.rs" },
+                "details": Value::Null,
+                "display_type": "text"
+            })],
+        );
+        store
+            .append_workflow_event(&wait_entered)
+            .expect("failed to append wait_entered event");
+        let approval_requested = WorkflowEvent::approval_requested(
+            session_id.to_string(),
+            "tool_1".to_string(),
+            "edit_file".to_string(),
+            json!({ "file_path": "a.rs" }),
+            None,
+            Some("text".to_string()),
+        );
+        let last_event_id = store
+            .append_workflow_event(&approval_requested)
+            .expect("failed to append approval_requested event");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.pending_tools = vec![PendingTool {
+            tool_call_id: "tool_1".to_string(),
+            tool_name: "edit_file".to_string(),
+            arguments: json!({ "file_path": "a.rs" }),
+            details: None,
+            display_type: Some("text".to_string()),
+        }];
+        context.last_event_id = Some(last_event_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist snapshot");
+
+        let trailing_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Continue from here".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add trailing user message");
+
+        let deleted = store
+            .delete_last_message(session_id)
+            .expect("failed to delete last workflow message");
+        assert!(deleted, "tail message should be deleted");
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load workflow snapshot after deletion");
+        assert_eq!(snapshot.messages.len(), 3);
+        assert_eq!(snapshot.messages[0].id, user_message.id);
+        assert_eq!(snapshot.messages[0].role, "user");
+        assert_eq!(snapshot.messages[1].id, assistant_message.id);
+        assert_eq!(snapshot.messages[1].role, "assistant");
+        assert_eq!(snapshot.messages[2].id, tool_message.id);
+        assert_eq!(snapshot.messages[2].role, "tool");
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != trailing_user_message.id));
+
+        let session_id_for_query = session_id.to_string();
+        let (context_count, event_count, status) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let context_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let event_count: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_events WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((context_count, event_count, status))
+            })
+            .expect("failed to inspect workflow records");
+        assert_eq!(context_count, 0);
+        assert_eq!(event_count, 3);
+        assert_eq!(status, "awaiting_approval");
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(restored.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(restored.pending_tools.len(), 1);
+        assert_eq!(restored.last_event_id, Some(last_event_id));
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_continuation_state_to_prior_completion() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-continuation-after-completion";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Task completed".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: Some("tool_completed".to_string()),
+                metadata: Some(json!({
+                    "tool_call_id": "complete-1",
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
+                    "approval_status": "approved",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion message");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Continue the conversation".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add continuation message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started event");
+        let completed_event_id = store
+            .append_workflow_event(&WorkflowEvent::workflow_completed(
+                session_id.to_string(),
+                Some("Task completed".to_string()),
+            ))
+            .expect("failed to append workflow_completed event");
+        store
+            .append_workflow_event(&WorkflowEvent::user_input_received(
+                session_id.to_string(),
+                "Continue the conversation".to_string(),
+            ))
+            .expect("failed to append user_input_received event");
+        store
+            .append_workflow_event(&WorkflowEvent::state_changed(
+                session_id.to_string(),
+                "completed".to_string(),
+                "thinking".to_string(),
+            ))
+            .expect("failed to append continuation state event");
+
+        let deleted = store
+            .delete_last_message(session_id)
+            .expect("failed to delete continuation message");
+        assert!(deleted);
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load rewound workflow snapshot");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.workflow.status, "completed");
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rewound execution context")
+            .expect("rewound execution context should exist");
+        assert_eq!(restored.state, RuntimeState::Completed);
+        assert_eq!(restored.last_event_id, Some(completed_event_id));
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_answered_ask_user_in_two_steps() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-answered-ask-user";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Help me decide".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_ask_user_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I need one more choice from you before continuing.".to_string(),
+                reasoning: Some("Ask the user to choose an option.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "ask_user_1",
+                        "type": "function",
+                        "function": {
+                            "name": crate::tools::TOOL_ASK_USER,
+                            "arguments": "{\"items\":[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant ask_user placeholder");
+        let ask_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+        let user_answer = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "I choose A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user answer");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        let ask_user_wait_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+        let user_input_received_id = store
+            .append_workflow_event(&WorkflowEvent::user_input_received(
+                session_id.to_string(),
+                "I choose A".to_string(),
+            ))
+            .expect("failed to append user_input_received");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.last_event_id = Some(user_input_received_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind answered ask_user"));
+
+        let first_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after first rewind");
+        assert_eq!(first_pass_snapshot.messages.len(), 3);
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == ask_user_message.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == assistant_ask_user_placeholder.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != user_answer.id));
+
+        let first_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load first rewind snapshot")
+            .expect("snapshot should exist after first rewind");
+        assert_eq!(first_context.state, RuntimeState::Waiting);
+        assert_eq!(first_context.wait_reason, Some(WaitReason::UserInput));
+        assert_eq!(first_context.last_event_id, Some(ask_user_wait_id));
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind ask_user wait"));
+
+        let second_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after second rewind");
+        assert_eq!(second_pass_snapshot.messages.len(), 1);
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != ask_user_message.id));
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_ask_user_placeholder.id));
+
+        let second_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load second rewind snapshot")
+            .expect("snapshot should exist after second rewind");
+        assert_eq!(second_context.state, RuntimeState::Running);
+        assert_eq!(second_context.wait_reason, None);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_unanswered_ask_user_batch_after_stop() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-unanswered-ask-user-stop";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Need a decision".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_ask_user_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I need one more answer from you before proceeding.".to_string(),
+                reasoning: Some("Pause and ask the user to choose a direction.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "ask_user_stop_1",
+                        "type": "function",
+                        "function": {
+                            "name": crate::tools::TOOL_ASK_USER,
+                            "arguments": "{\"items\":[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant ask_user placeholder");
+        let ask_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_stop_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        let wait_event_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Cancelled;
+        context.wait_reason = Some(WaitReason::UserInput);
+        context.last_event_id = Some(wait_event_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist cancelled snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind unanswered ask_user after stop"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after rewind");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != ask_user_message.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_ask_user_placeholder.id));
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("snapshot should exist after rewind");
+        assert_eq!(restored.state, RuntimeState::Running);
+        assert_eq!(restored.wait_reason, None);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_pending_submit_plan_to_planning() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-pending-submit-plan";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(
+                session_id,
+                "Initial query",
+                "agent-test",
+                Some(json!({ "phase": "planning" }).to_string()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Plan this change".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+
+        let pending_plan_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Approved execution plan draft".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "approval_status": "pending",
+                    "execution_status": "pending_approval",
+                    "display_type": "markdown"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add pending submit_plan message");
+        assert!(pending_plan_message.id.is_some());
+
+        let started =
+            WorkflowEvent::workflow_started(session_id.to_string(), "agent-test".to_string());
+        store
+            .append_workflow_event(&started)
+            .expect("failed to append workflow_started event");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "arguments": { "plan": "# Plan" },
+                    "details": Value::Null,
+                    "display_type": "markdown"
+                })],
+            ))
+            .expect("failed to append approval wait event");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "submit_plan_1".to_string(),
+                crate::tools::TOOL_SUBMIT_PLAN.to_string(),
+                json!({ "plan": "# Plan" }),
+                None,
+                Some("markdown".to_string()),
+            ))
+            .expect("failed to append approval_requested event");
+
+        let deleted = store
+            .delete_last_message(session_id)
+            .expect("failed to rewind pending submit_plan");
+        assert!(deleted);
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload workflow after rewind");
+        assert_eq!(snapshot.messages.len(), 1);
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load snapshot after rewind")
+            .expect("snapshot should exist after rewind");
+        assert_eq!(restored.state, RuntimeState::Running);
+        assert_eq!(restored.wait_reason, None);
+
+        let session_id_for_query = session_id.to_string();
+        let (status, agent_config) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let agent_config: String = conn.query_row(
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, agent_config))
+            })
+            .expect("failed to inspect workflow state");
+        assert_eq!(status, "thinking");
+        assert_eq!(
+            serde_json::from_str::<Value>(&agent_config)
+                .expect("agent config should be valid json")["phase"]
+                .as_str(),
+            Some("planning")
+        );
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_pending_approval_tool_to_running() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-pending-approval-tool";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Edit config".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I will edit the config now.".to_string(),
+                reasoning: Some("Preparing the single edit tool call.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "edit_1",
+                        "type": "function",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"app.toml\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant placeholder");
+        let pending_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"app.toml\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "edit_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "pending",
+                    "execution_status": "pending_approval",
+                    "display_type": "text"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add pending approval tool");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "edit_1",
+                    "tool_name": "edit_file",
+                    "arguments": { "file_path": "app.toml" },
+                    "details": Value::Null,
+                    "display_type": "text"
+                })],
+            ))
+            .expect("failed to append approval wait");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "edit_1".to_string(),
+                "edit_file".to_string(),
+                json!({ "file_path": "app.toml" }),
+                None,
+                Some("text".to_string()),
+            ))
+            .expect("failed to append approval requested");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.pending_tools = vec![PendingTool {
+            tool_call_id: "edit_1".to_string(),
+            tool_name: "edit_file".to_string(),
+            arguments: json!({ "file_path": "app.toml" }),
+            details: None,
+            display_type: Some("text".to_string()),
+        }];
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist approval wait snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind pending approval tool"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot after rewind");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != pending_tool.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_placeholder.id));
+
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_completed_tool_to_running() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-completed-tool";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Read the file".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I will read README.md.".to_string(),
+                reasoning: Some("Preparing the read tool call.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "read_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"file_path\":\"README.md\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant placeholder");
+        let completed_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "file contents".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "read_1",
+                    "tool_name": "read_file",
+                    "execution_status": "completed",
+                    "display_type": "text"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completed tool message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::tool_started(
+                session_id.to_string(),
+                "read_1".to_string(),
+                "read_file".to_string(),
+                json!({ "file_path": "README.md" }),
+            ))
+            .expect("failed to append tool_started");
+        store
+            .append_workflow_event(&WorkflowEvent::tool_completed(
+                session_id.to_string(),
+                "read_1".to_string(),
+                "read_file".to_string(),
+                Some(json!("file contents")),
+            ))
+            .expect("failed to append tool_completed");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind completed tool"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot after rewind");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != completed_tool.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_placeholder.id));
+
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_deletes_completed_approved_tool_unit() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-approved-tool";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Edit config".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I will edit the config now.".to_string(),
+                reasoning: Some("Preparing the single edit tool call.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "edit_2",
+                        "type": "function",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"app.toml\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant placeholder");
+        let approval_submitted_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"app.toml\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "edit_2",
+                    "tool_name": "edit_file",
+                    "approval_status": "approved",
+                    "execution_status": "approval_submitted",
+                    "summary": "Executing"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approval_submitted message");
+        let completed_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "updated file".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "edit_2",
+                    "tool_name": "edit_file",
+                    "approval_status": "approved",
+                    "execution_status": "completed",
+                    "display_type": "text"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completed tool message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "edit_2",
+                    "tool_name": "edit_file",
+                    "arguments": { "file_path": "app.toml" },
+                    "details": Value::Null,
+                    "display_type": "text"
+                })],
+            ))
+            .expect("failed to append approval wait");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "edit_2".to_string(),
+                "edit_file".to_string(),
+                json!({ "file_path": "app.toml" }),
+                None,
+                Some("text".to_string()),
+            ))
+            .expect("failed to append approval requested");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_resolved(
+                session_id.to_string(),
+                "edit_2".to_string(),
+                crate::tools::TOOL_EDIT_FILE.to_string(),
+                true,
+                false,
+                Some("approved".to_string()),
+                Some("approval_submitted".to_string()),
+                None,
+            ))
+            .expect("failed to append approval resolved");
+        let tool_started_id = store
+            .append_workflow_event(&WorkflowEvent::tool_started(
+                session_id.to_string(),
+                "edit_2".to_string(),
+                "edit_file".to_string(),
+                json!({ "file_path": "app.toml" }),
+            ))
+            .expect("failed to append tool_started");
+        store
+            .append_workflow_event(&WorkflowEvent::tool_completed(
+                session_id.to_string(),
+                "edit_2".to_string(),
+                "edit_file".to_string(),
+                Some(json!("updated file")),
+            ))
+            .expect("failed to append tool_completed");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        context.last_event_id = Some(tool_started_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind completed approved tool"));
+
+        let first_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot after first rewind");
+        assert_eq!(first_snapshot.messages.len(), 1);
+        assert!(first_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != approval_submitted_tool.id));
+        assert!(first_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != completed_tool.id));
+        assert!(first_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_placeholder.id));
+
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+        assert!(rebuilt.pending_tools.is_empty());
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_deletes_approved_tool_waiting_execution_unit() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-approved-tool-waiting-execution";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Edit config".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let assistant_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "I will edit the config now.".to_string(),
+                reasoning: Some("Preparing the single edit tool call.".to_string()),
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "edit_wait_1",
+                        "type": "function",
+                        "function": {
+                            "name": "edit_file",
+                            "arguments": "{\"file_path\":\"app.toml\"}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant placeholder");
+        let approval_submitted_tool = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "{\"file_path\":\"app.toml\"}".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "edit_wait_1",
+                    "tool_name": "edit_file",
+                    "approval_status": "approved",
+                    "execution_status": "approval_submitted",
+                    "summary": "Executing"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approval_submitted message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "edit_wait_1",
+                    "tool_name": "edit_file",
+                    "arguments": { "file_path": "app.toml" },
+                    "details": Value::Null,
+                    "display_type": "text"
+                })],
+            ))
+            .expect("failed to append approval wait");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "edit_wait_1".to_string(),
+                "edit_file".to_string(),
+                json!({ "file_path": "app.toml" }),
+                None,
+                Some("text".to_string()),
+            ))
+            .expect("failed to append approval requested");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_resolved(
+                session_id.to_string(),
+                "edit_wait_1".to_string(),
+                crate::tools::TOOL_EDIT_FILE.to_string(),
+                true,
+                false,
+                Some("approved".to_string()),
+                Some("approval_submitted".to_string()),
+                None,
+            ))
+            .expect("failed to append approval resolved");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Running;
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist running snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to delete approved tool waiting execution"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot after delete");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != approval_submitted_tool.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_placeholder.id));
+
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("rebuilt snapshot should exist");
+        assert_eq!(rebuilt.state, RuntimeState::Running);
+        assert_eq!(rebuilt.wait_reason, None);
+        assert!(rebuilt.pending_tools.is_empty());
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_rewinds_tail_in_two_steps_after_plan_approval() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-approved-plan-tail";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(
+                session_id,
+                "Initial query",
+                "agent-test",
+                Some(json!({ "phase": "implementation" }).to_string()),
+                None,
+            )
+            .expect("failed to create workflow");
+
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Make the docs changes".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let pending_submit_plan = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Pending plan".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "approval_status": "pending",
+                    "execution_status": "pending_approval",
+                    "display_type": "markdown"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add pending submit_plan");
+        let approved_plan_summary = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: "APPROVED EXECUTION PLAN".to_string(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("approved_plan".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "type": "summary",
+                    "subtype": "approved_plan"
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approved plan summary");
+        let approved_submit_plan = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Approved plan".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "approval_status": "approved",
+                    "execution_status": "completed",
+                    "display_type": "markdown"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add approved submit_plan");
+        let assistant_ask_user_placeholder = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "assistant".to_string(),
+                message: "".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{
+                        "id": "ask_user_1",
+                        "type": "function",
+                        "function": {
+                            "name": crate::tools::TOOL_ASK_USER,
+                            "arguments": "{\"items\":[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]}"
+                        }
+                    }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add assistant ask_user placeholder");
+        let ask_user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "[{\"title\":\"Choose\",\"options\":[\"A\",\"B\"]}]".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask_user_1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "display_type": "choice",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add ask_user message");
+
+        store
+            .append_workflow_event(&WorkflowEvent::workflow_started(
+                session_id.to_string(),
+                "agent-test".to_string(),
+            ))
+            .expect("failed to append workflow_started");
+        store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![json!({
+                    "tool_call_id": "submit_plan_1",
+                    "tool_name": crate::tools::TOOL_SUBMIT_PLAN,
+                    "arguments": { "plan": "# Plan" },
+                    "details": Value::Null,
+                    "display_type": "markdown"
+                })],
+            ))
+            .expect("failed to append approval wait");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_requested(
+                session_id.to_string(),
+                "submit_plan_1".to_string(),
+                crate::tools::TOOL_SUBMIT_PLAN.to_string(),
+                json!({ "plan": "# Plan" }),
+                None,
+                Some("markdown".to_string()),
+            ))
+            .expect("failed to append approval requested");
+        store
+            .append_workflow_event(&WorkflowEvent::approval_resolved(
+                session_id.to_string(),
+                "submit_plan_1".to_string(),
+                crate::tools::TOOL_SUBMIT_PLAN.to_string(),
+                true,
+                false,
+                Some("approved".to_string()),
+                Some("completed".to_string()),
+                None,
+            ))
+            .expect("failed to append approval resolved");
+        let tool_started_id = store
+            .append_workflow_event(&WorkflowEvent::tool_started(
+                session_id.to_string(),
+                "submit_plan_1".to_string(),
+                crate::tools::TOOL_SUBMIT_PLAN.to_string(),
+                json!({ "plan": "# Plan" }),
+            ))
+            .expect("failed to append tool_started");
+        let ask_user_wait_id = store
+            .append_workflow_event(&WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "user_input".to_string(),
+                Vec::new(),
+            ))
+            .expect("failed to append ask_user wait");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::UserInput);
+        context.last_event_id = Some(ask_user_wait_id);
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist user wait snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind ask_user tail"));
+
+        let first_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after first rewind");
+        assert_eq!(first_pass_snapshot.messages.len(), 4);
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != ask_user_message.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != assistant_ask_user_placeholder.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == approved_submit_plan.id));
+        assert!(first_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == approved_plan_summary.id));
+
+        let first_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load first rewind snapshot")
+            .expect("snapshot should exist after first rewind");
+        assert_eq!(first_context.state, RuntimeState::Running);
+        assert_eq!(first_context.wait_reason, None);
+        assert_eq!(first_context.last_event_id, Some(tool_started_id));
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to rewind approved plan"));
+
+        let second_pass_snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to reload after second rewind");
+        assert_eq!(second_pass_snapshot.messages.len(), 2);
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != approved_submit_plan.id));
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != approved_plan_summary.id));
+        assert!(second_pass_snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == pending_submit_plan.id));
+
+        let second_context = store
+            .get_execution_context(session_id)
+            .expect("failed to load second rewind snapshot")
+            .expect("snapshot should exist after second rewind");
+        assert_eq!(second_context.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(second_context.pending_tools.len(), 1);
+
+        let session_id_for_query = session_id.to_string();
+        let (status, agent_config) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let agent_config: String = conn.query_row(
+                    "SELECT agent_config FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, agent_config))
+            })
+            .expect("failed to inspect final workflow state");
+        assert_eq!(status, "awaiting_approval");
+        assert_eq!(
+            serde_json::from_str::<Value>(&agent_config)
+                .expect("agent config should be valid json")["phase"]
+                .as_str(),
+            Some("planning")
+        );
+    }
+
+    #[test]
+    fn tail_rewind_prefers_manual_clear_context_over_historical_answered_ask_user() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "tool".to_string(),
+                message: "ask user".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask-user-1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "user".to_string(),
+                message: "A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "rewind-manual-clear-tail".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "subtype": "manual_clear_context",
+                    "previous_segment_id": 1
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "rewind-manual-clear-tail".to_string(),
+                event_type: "wait_entered".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({
+                    "wait_reason": "user_input",
+                    "awaiting_user_tool_call_id": "ask-user-1"
+                }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "rewind-manual-clear-tail".to_string(),
+                event_type: "user_input_received".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "content": "A" }),
+                created_at: String::new(),
+            },
+        ];
+
+        let plan = determine_tail_rewind_plan(&messages, &events)
+            .expect("manual clear marker should be rewindable");
+        assert_eq!(plan.kind, "manual_clear_context");
+        assert_eq!(plan.delete_message_boundary_id, Some(3));
+        assert_eq!(plan.event_boundary_id, None);
+    }
+
+    #[test]
+    fn tail_rewind_prefers_latest_tool_over_historical_answered_ask_user() {
+        let messages = vec![
+            WorkflowMessage {
+                id: Some(1),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "tool".to_string(),
+                message: "ask user".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "ask-user-1",
+                    "tool_name": crate::tools::TOOL_ASK_USER,
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(2),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "user".to_string(),
+                message: "A".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "ask_user_response": true,
+                    "tool_call_id": "ask-user-1"
+                })),
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(3),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "assistant".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_calls": [{ "id": "read-1", "function": { "name": "read_file" } }]
+                })),
+                attached_context: None,
+                step_type: Some("act".to_string()),
+                step_index: 3,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+            WorkflowMessage {
+                id: Some(4),
+                session_id: "rewind-tool-tail".to_string(),
+                role: "tool".to_string(),
+                message: "contents".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "tool_call_id": "read-1",
+                    "tool_name": "read_file",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 4,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            },
+        ];
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "wait_entered".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({
+                    "wait_reason": "user_input",
+                    "awaiting_user_tool_call_id": "ask-user-1"
+                }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "user_input_received".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "content": "A" }),
+                created_at: String::new(),
+            },
+            WorkflowEventRecord {
+                id: 3,
+                session_id: "rewind-tool-tail".to_string(),
+                event_type: "tool_started".to_string(),
+                event_version: "1".to_string(),
+                event_data: json!({ "tool_call_id": "read-1" }),
+                created_at: String::new(),
+            },
+        ];
+
+        let plan = determine_tail_rewind_plan(&messages, &events)
+            .expect("completed tail tool should be rewindable");
+        assert_eq!(plan.kind, "completed_tool");
+        assert_eq!(plan.delete_message_boundary_id, Some(4));
+        assert_eq!(plan.event_boundary_id, Some(3));
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_restores_completed_manual_clear_context() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-completed-manual-clear";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let completion = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "tool".to_string(),
+                message: "Task completed".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: Some("tool_completed".to_string()),
+                metadata: Some(json!({
+                    "tool_call_id": "complete-1",
+                    "tool_name": crate::tools::TOOL_COMPLETE_WORKFLOW,
+                    "approval_status": "approved",
+                    "execution_status": "completed"
+                })),
+                attached_context: None,
+                step_type: Some("observe".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add completion message");
+        let mut completed_context = ExecutionContext::new(session_id.to_string());
+        completed_context.state = RuntimeState::Completed;
+        completed_context.current_segment_id = 1;
+        completed_context.current_context_tokens = Some(144);
+        completed_context.max_context_tokens = Some(4096);
+        let clear_marker = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "type": "summary",
+                    "subtype": "manual_clear_context",
+                    "previous_segment_id": 1,
+                    "previous_context_tokens": 144,
+                    "previous_max_context_tokens": 4096,
+                    "previous_execution_context": completed_context
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add manual clear marker");
+        let mut pending_context = completed_context;
+        pending_context.state = RuntimeState::Pending;
+        pending_context.current_segment_id = 2;
+        store
+            .upsert_execution_context(&pending_context)
+            .expect("failed to persist manual-clear pending context");
+        store
+            .update_workflow_status(session_id, "pending")
+            .expect("failed to persist manual-clear pending status");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to delete manual clear marker"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load rewound workflow snapshot");
+        assert_eq!(snapshot.workflow.status, "completed");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert_eq!(snapshot.messages[0].id, completion.id);
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != clear_marker.id));
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("failed to load rewound execution context")
+            .expect("rewound execution context should exist");
+        assert_eq!(restored.state, RuntimeState::Completed);
+        assert_eq!(restored.current_segment_id, 1);
+    }
+
+    #[test]
+    fn test_delete_last_workflow_message_deletes_manual_clear_context_marker_only() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "session-delete-last-manual-clear-context";
+        seed_agent(&store, "agent-test");
+
+        store
+            .create_workflow(session_id, "Initial query", "agent-test", None, None)
+            .expect("failed to create workflow");
+
+        let user_message = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "user".to_string(),
+                message: "Original task".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: None,
+                attached_context: None,
+                step_type: Some("think".to_string()),
+                step_index: 1,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add user message");
+        let clear_marker = store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                role: "system".to_string(),
+                message: "".to_string(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({
+                    "type": "summary",
+                    "subtype": "manual_clear_context",
+                    "compressed_until_message_id": user_message.id,
+                    "previous_segment_id": 1,
+                    "previous_context_tokens": 17753,
+                    "previous_max_context_tokens": 202752
+                })),
+                attached_context: None,
+                step_type: None,
+                step_index: 2,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add clear-context marker");
+
+        let _preserved_context = store
+            .add_workflow_ai_context_message(&WorkflowAiContextMessage {
+                id: None,
+                session_id: session_id.to_string(),
+                segment_id: 1,
+                role: "user".to_string(),
+                message: "<user_query>\nOriginal task\n</user_query>".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                metadata: None,
+                source_message_id: user_message.id,
+                created_at: None,
+            })
+            .expect("failed to add preserved ai context message");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.current_segment_id = 2;
+        context.current_step = 7;
+        context.max_steps = 42;
+        context.last_action_summary = Some("waiting for approval".to_string());
+        context.current_context_tokens = Some(2048);
+        context.max_context_tokens = Some(202752);
+        context.waiting_on_sub_agent_id = Some("sub-agent-1".to_string());
+        context.sub_agent_sessions = vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()];
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to persist waiting snapshot");
+
+        assert!(store
+            .delete_last_message(session_id)
+            .expect("failed to delete manual clear-context marker"));
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("failed to load snapshot after deleting clear-context marker");
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(snapshot
+            .messages
+            .iter()
+            .any(|message| message.id == user_message.id));
+        assert!(snapshot
+            .messages
+            .iter()
+            .all(|message| message.id != clear_marker.id));
+
+        let rebuilt = store
+            .get_execution_context(session_id)
+            .expect("failed to load rebuilt snapshot")
+            .expect("manual clear-context deletion should restore a snapshot");
+        assert_eq!(rebuilt.state, RuntimeState::Waiting);
+        assert_eq!(rebuilt.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(rebuilt.current_segment_id, 1);
+        assert_eq!(rebuilt.current_context_tokens, Some(17753));
+        assert_eq!(rebuilt.max_context_tokens, Some(202752));
+        assert_eq!(rebuilt.current_step, 7);
+        assert_eq!(rebuilt.max_steps, 42);
+        assert_eq!(
+            rebuilt.last_action_summary.as_deref(),
+            Some("waiting for approval")
+        );
+        assert_eq!(
+            rebuilt.waiting_on_sub_agent_id.as_deref(),
+            Some("sub-agent-1")
+        );
+        assert_eq!(
+            rebuilt.sub_agent_sessions,
+            vec!["sub-agent-1".to_string(), "sub-agent-2".to_string()]
+        );
+
+        let session_id_for_query = session_id.to_string();
+        let (status, wait_reason, preserved_context_rows) = store
+            .db_runtime()
+            .expect("failed to obtain database runtime")
+            .read_blocking(move |conn| {
+                let status: String = conn.query_row(
+                    "SELECT status FROM workflows WHERE id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let wait_reason: Option<String> = conn.query_row(
+                    "SELECT wait_reason FROM workflow_snapshots WHERE session_id = ?1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                let preserved_context_rows: i64 = conn.query_row(
+                    "SELECT COUNT(1) FROM workflow_context_messages WHERE session_id = ?1 AND segment_id = 1",
+                    params![session_id_for_query],
+                    |row| row.get(0),
+                )?;
+                Ok((status, wait_reason, preserved_context_rows))
+            })
+            .expect("failed to inspect rebuilt workflow state");
+        assert_eq!(status, execution_context_to_workflow_status(&rebuilt));
+        assert_eq!(wait_reason.as_deref(), Some("approval"));
+        assert_eq!(preserved_context_rows, 1);
+    }
+}

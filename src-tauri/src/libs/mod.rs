@@ -1,23 +1,13 @@
-// pub mod dedup;
-// pub mod similarity;
-#[cfg(not(feature = "desktop"))]
-pub mod ai_temp;
-pub mod fs;
-pub mod lang;
-// The TSID generator backs runtime-only identifiers (workflow sessions, shell
-// output files); no desktop path constructs one, so the desktop crate does not
-// compile it.
-#[cfg(not(feature = "desktop"))]
-pub mod tsid;
-pub mod util;
-// Desktop-only: wraps Tauri webview handles, which the desktop-free runtime
-// crate must not link.
-#[cfg(feature = "desktop")]
+//! Desktop `libs` adapter.
+//!
+//! Re-exports the runtime backend's transport-neutral helpers (`fs`, `lang`,
+//! `util`, the TSID generator and the windowless chat stream registry) and adds
+//! the desktop-only `webview_proxy` module, which resolves a webview's proxy from
+//! the runtime configuration. `window_channels.rs` (the Tauri-window chat stream
+//! registry) is retained next to it as an unwired desktop-only source: chat
+//! streaming now runs in the runtime and reaches the frontend over SSE, so
+//! nothing constructs the registry any more.
+
+pub use chatspeed_runtime_backend::libs::*;
+
 pub mod webview_proxy;
-// Windowless chat stream registry. Every chat turn now runs in the standalone
-// runtime, so the desktop no longer compiles its Tauri-window implementation
-// (`window_channels.rs`); the runtime owns no window and lets a control-plane
-// route register the one stream each chat turn needs.
-#[cfg(not(feature = "desktop"))]
-#[path = "window_channels_runtime.rs"]
-pub mod window_channels;

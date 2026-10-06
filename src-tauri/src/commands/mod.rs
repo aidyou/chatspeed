@@ -21,5 +21,8 @@ pub mod terminal;
 pub mod types;
 pub mod updater;
 pub mod window;
+// The workflow Tauri wire is a desktop adapter: the shared cores and wire types
+// are re-exported from the runtime backend, and this file holds only the
+// `#[tauri::command]` wrappers that forward to `crate::runtime_workflow`.
 pub mod workflow;
 pub mod workflow_automation;

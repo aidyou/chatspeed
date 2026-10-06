@@ -10,7 +10,7 @@ use crate::{
         BuiltInSearch, GoogleSearch, SearchFactory, SearchProvider, SearchProviderName,
         SerperSearch, TavilySearch,
     },
-    tools::{error::ToolError, web_config::WebToolConfig, ToolCallResult},
+    tools::{web_config::WebToolConfig, ToolCallResult, ToolError},
 };
 use tauri::{AppHandle, Wry};
 

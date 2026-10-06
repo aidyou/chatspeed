@@ -1,13 +1,30 @@
+//! The desktop Tauri-command error contract.
+//!
+//! This is the desktop's own error union: it is the wire shape a `#[tauri::command]`
+//! returns to the frontend, so it must be able to name the desktop-only error
+//! sources the runtime must never link — the legacy HTTP server
+//! (`crate::http::error::HttpError`), the updater (`crate::updater::UpdateError`)
+//! and the Tauri/Wry host errors. The desktop-free runtime keeps its own
+//! transport-neutral `AppError` in `chatspeed_runtime_backend::error`; the two
+//! enums share the same `#[serde(tag = "module", content = "details")]` shape and
+//! the same variant set for the shared domains, so the frontend parses both
+//! identically.
+//!
+//! The two definitions cannot be unified: `From<tauri::Error>`/`From<wry::Error>`
+//! are inherent conversions on this enum, and an inherent impl may only be written
+//! where the type is defined, while the runtime backend must not depend on Tauri,
+//! Wry or an updater error type.
+
 use rust_i18n::t;
 use serde::Serialize;
 use thiserror::Error;
 
-/// The single, unified error type for the entire application.
+/// The single, unified error type for the desktop Tauri surface.
 ///
-/// This enum wraps all module-specific errors, providing a consistent structure
-/// for error handling across the backend and for serialization to the frontend.
-/// The `#[serde(tag = "module", content = "details")]` attribute ensures that
-/// the JSON output is clean and predictable.
+/// The enum wraps every module-specific error, providing a consistent structure
+/// for error handling across the desktop commands and for serialization to the
+/// frontend. The `#[serde(tag = "module", content = "details")]` attribute keeps
+/// the JSON output clean and predictable.
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "module", content = "details")]
 pub enum AppError {
@@ -23,11 +40,7 @@ pub enum AppError {
     #[error(transparent)]
     Workflow(#[from] crate::workflow::error::WorkflowError),
 
-    /// Errors originating from the HTTP module.
-    ///
-    /// The HTTP server is part of the desktop client, so this variant is absent
-    /// from the desktop-free runtime closure.
-    #[cfg(feature = "desktop")]
+    /// Errors originating from the desktop HTTP server module.
     #[error(transparent)]
     Http(#[from] crate::http::error::HttpError),
     /// Errors originating from the CCProxy module.
@@ -35,7 +48,6 @@ pub enum AppError {
     Ccproxy(#[from] crate::ccproxy::CCProxyError),
 
     /// Errors originating from the updater, which only the desktop client runs.
-    #[cfg(feature = "desktop")]
     #[error(transparent)]
     Updater(#[from] crate::updater::UpdateError),
 
@@ -91,7 +103,6 @@ impl From<AppError> for String {
     }
 }
 
-#[cfg(feature = "desktop")]
 impl From<tauri::Error> for AppError {
     fn from(err: tauri::Error) -> Self {
         AppError::General {
@@ -101,7 +112,6 @@ impl From<tauri::Error> for AppError {
 }
 
 /// Errors reported by the `wry` webview that carries the ChatHub page.
-#[cfg(feature = "desktop")]
 impl From<wry::Error> for AppError {
     fn from(err: wry::Error) -> Self {
         AppError::General {

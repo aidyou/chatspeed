@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "contracts", "cli", "runtime", "runtime-backend", "runtime-client"]
+members = [".", "contracts", "cli", "runtime/bin", "runtime/backend", "runtime/client"]
 resolver = "2"
 
 [profile.release]
@@ -59,7 +59,8 @@ walkdir     = "2"
 
 [dependencies]
 chatspeed-contracts = { path = "contracts" }
-chatspeed-runtime-client = { path = "runtime-client" }
+chatspeed-runtime-backend = { path = "runtime/backend" }
+chatspeed-runtime-client = { path = "runtime/client" }
 anyhow           = "1.0.102"
 aes-gcm          = "0.10"
 arboard          = "3.6"

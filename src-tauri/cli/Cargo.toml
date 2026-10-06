@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 chatspeed-contracts = { path = "../contracts", features = ["contracts-crate"] }
-chatspeed-runtime-client = { path = "../runtime-client" }
+chatspeed-runtime-client = { path = "../runtime/client" }
 clap = { version = "4.5", features = ["derive"] }
 futures-util = "0.3.32"
 hex = "0.4"

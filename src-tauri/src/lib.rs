@@ -1,17 +1,28 @@
-mod ai;
-mod builtin_agents;
+// The canonical runtime modules live in the desktop-free
+// `chatspeed-runtime-backend` crate, which this crate links as an ordinary Cargo
+// dependency (U-6). The re-exports below keep every shared call site's
+// `crate::ai::…`, `crate::db::…`, `crate::workflow::…` view without compiling a
+// second copy of any canonical source. The modules declared with `mod` are the
+// desktop's own adapters: the Tauri surface, the runtime control-plane client,
+// the WebView-backed tools and the desktop error contract.
+use chatspeed_runtime_backend::ai;
+// The built-in agent synchronization is transport-neutral, so the desktop
+// re-exports the runtime backend's canonical file.
+use chatspeed_runtime_backend::owner::builtin_agents;
 /// The Phase 3 capability-management contract: one transport-neutral
 /// application service owns every Agent Skill and MCP mutation, backed by the
 /// runtime-owned journal. It never opens its own database connection and never
 /// owns a runtime, so the standalone runtime is its only owner while the Tauri,
 /// HTTP and CLI adapters delegate to it through the control plane.
-pub mod capability;
-mod ccproxy;
+pub use chatspeed_runtime_backend::capability;
+use chatspeed_runtime_backend::ccproxy;
 pub mod chat_hub;
 mod commands;
-mod constants;
-mod db;
-mod environment;
+use chatspeed_runtime_backend::constants;
+use chatspeed_runtime_backend::db;
+use chatspeed_runtime_backend::environment;
+/// The desktop Tauri-command error contract. It is a desktop adapter because it
+/// names the Tauri/Wry/updater/HTTP error sources the runtime must not link.
 pub mod error;
 #[cfg(target_os = "linux")]
 mod frame_edges;
@@ -30,32 +41,33 @@ mod runtime_workflow;
 // plane's typed HTTP routes; only the desktop adapters can reach it.
 #[cfg(feature = "desktop")]
 mod runtime_agent;
-// `runtime_data` contains the shared, allowlisted runtime-owned data command
-// cores and the desktop HTTP adapters. It is also included by the
-// desktop-free runtime backend, so it must remain transport-neutral.
+// `runtime_data` holds the desktop transport adapters for the runtime-owned data
+// commands. The transport-neutral command cores and their request bodies live in
+// the runtime backend (`chatspeed_runtime_backend::data::runtime_data`).
 mod runtime_data;
-// `runtime_web_bridge` is the desktop-only dispatcher for the runtime's
-// client-pull WebView capability bridge. It is the only place that runs the
-// bridged web capabilities on the runtime's behalf.
 mod http;
+// `libs` re-exports the runtime backend helpers and adds the desktop-only
+// Tauri/Wry-bound `webview_proxy` adapter.
 mod libs;
 mod logger;
-mod mcp;
+use chatspeed_runtime_backend::mcp;
 #[cfg(feature = "desktop")]
 mod runtime_web_bridge;
 #[cfg(feature = "desktop")]
 mod runtime_web_mcp_provider;
 mod scraper;
 mod search;
-mod sensitive;
+use chatspeed_runtime_backend::sensitive;
 mod shortcut;
 mod terminal;
 mod runtime_terminal;
+// `tools` re-exports the runtime backend tool contracts and adds the
+// WebView-backed `web_fetch`/`web_search` implementations.
 mod tools;
 mod tray;
 mod updater;
 mod window;
-mod workflow;
+use chatspeed_runtime_backend::workflow;
 
 #[cfg(test)]
 pub mod test;

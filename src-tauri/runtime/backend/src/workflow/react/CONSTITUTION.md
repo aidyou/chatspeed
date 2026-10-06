@@ -1,0 +1,821 @@
+# Workflow React Constitution
+
+This document is the highest-priority maintenance contract for `src-tauri/runtime/backend/src/workflow/react`.
+
+It exists to keep the workflow runtime aligned with `work/plan.md`, prevent architectural drift, and stop regressions caused by convenience fallbacks becoming new main paths.
+
+If this document conflicts with ad-hoc local behavior, this document wins.
+
+## 1. Scope
+
+This constitution governs:
+
+- `src-tauri/runtime/backend/src/workflow/react/*`
+- `src-tauri/runtime/backend/src/commands/workflow.rs`
+- frontend workflow runtime consumers that depend on workflow state, signals, approvals, or tool observations
+
+This constitution does not replace implementation guides. It constrains them.
+
+## 2. Primary Goal
+
+The workflow module is a reliable execution kernel, not a best-effort chat feature.
+
+Its first responsibility is correctness of:
+
+- session lifecycle
+- waiting state modeling
+- approval state modeling
+- recovery
+- context projection
+- structured UI/runtime synchronization
+
+New capabilities must not weaken those guarantees.
+
+## 3. Non-Negotiable Invariants
+
+### 3.1 Backend authority is absolute
+
+The backend is the only authority for:
+
+- session liveness
+- runtime state
+- wait reason
+- pending approvals
+- queued user messages
+- resumability
+
+The frontend may cache and optimistically render, but it must reconcile to backend state.
+
+### 3.2 Structured state is always preferred over transcript text
+
+Recoverable behavior must come from:
+
+- `ExecutionContext`
+- structured events
+- structured tool metadata
+- structured approval payloads
+
+It must not come from:
+
+- assistant text
+- tool text
+- Markdown blocks
+- embedded JSON inside normal transcript content
+
+Transcript content is presentation, not authority.
+
+### 3.3 There must be one canonical path per concern
+
+The module must not maintain parallel main paths for:
+
+- waiting
+- approval recovery
+- signal parsing
+- context rebuild
+- session resume
+
+Compatibility adapters may exist, but they must collapse immediately into the canonical path.
+
+### 3.4 Compatibility logic is an adapter, not a second system
+
+Legacy support is allowed only at explicit boundaries:
+
+- signal wire aliases
+- old persisted payload migration
+- old frontend payload hydration
+
+Legacy handling must normalize immediately into canonical structured form.
+
+No new feature may be built directly on top of a legacy or fallback representation.
+
+### 3.5 Naming-case conversion belongs at language boundaries
+
+Workflow backend structures, persisted metadata, runtime events, tool results, and internal JSON keys use canonical `snake_case`.
+
+Frontend JavaScript and Vue-local data may use `camelCase`, but conversion between `snake_case` and `camelCase` must happen only at explicit backend/frontend adapter boundaries.
+
+Core workflow logic must not accept both casing styles for the same field as a normal compatibility path. If a field crosses the Rust-to-JavaScript boundary, the boundary adapter is responsible for converting it once into the target-side convention.
+
+Do not add ad-hoc dual reads such as `field_name || fieldName` inside workflow state recovery, approval handling, observation reinforcement, or runtime metadata construction for newly produced data.
+
+## 4. Session Lifecycle Law
+
+### 4.1 `WorkflowManager` is the lifecycle registry
+
+`WorkflowManager` owns:
+
+- session registration
+- executor lookup
+- managed status
+- hot-resume eligibility
+- cleanup eligibility
+
+No other structure may become a competing lifecycle registry.
+
+### 4.2 Completed sessions must support hot resume within the configured grace window
+
+If a completed session is still within its grace period, new user input must prefer executor reuse over executor reconstruction.
+
+Cold recovery is allowed only when:
+
+- the executor is gone
+- the channels are stale
+- recovery is explicitly required
+- the grace period has elapsed
+
+### 4.3 Cleanup must be state-safe
+
+Delayed cleanup must only remove a session if both remain true:
+
+- status is still terminal and eligible for cleanup
+- the recorded completion/update marker still matches
+
+Cleanup timers must never be able to delete an actively resumed session.
+
+## 5. Waiting Law
+
+### 5.1 Waiting is modeled by `state + wait_reason`
+
+Any user-interactive pause must be represented by:
+
+- a waiting-capable `WorkflowState`
+- a canonical `WaitReason`
+
+The UI and command layer must not infer waiting intent from text or tool names when structured wait state is available.
+
+### 5.2 Waiting validation is centralized
+
+Signals that resume a wait state must be validated against `wait_reason`.
+
+Do not add new wait-state acceptance logic in unrelated files.
+
+### 5.3 Stop must remain globally actionable
+
+`stop` must continue to work:
+
+- during active execution
+- during waiting
+- during retry/backoff windows
+- during temporary signal drains
+
+Any code that temporarily intercepts signals must preserve stop semantics.
+
+## 6. Signal Law
+
+### 6.1 Signals have one canonical shape
+
+Every runtime signal must have:
+
+- a canonical snake_case wire name
+- a typed backend representation
+- an explicit accepted-state contract
+
+### 6.2 Gateway transport is not permission to stay untyped
+
+`TauriGateway` may transport raw JSON strings as a wire detail, but command and engine layers must normalize them immediately into typed signal meaning.
+
+Raw JSON strings are transport format only.
+
+### 6.3 New signal types require full-path updates
+
+Adding a signal requires all of:
+
+1. canonical definition in backend types
+2. compatibility mapping if needed
+3. waiting/non-waiting handling rules
+4. frontend emission mapping
+5. logs
+6. recovery expectations
+
+Adding a signal in only one layer is prohibited.
+
+## 7. Approval Law
+
+### 7.1 Approval payloads must remain structured end-to-end
+
+For every pending tool:
+
+- `tool_call_id` is the canonical identifier
+- `tool_name` is explicit
+- `arguments` is a structured `Value`
+- `details` is a structured `Value` or `null`
+- `display_type` is explicit when rendering depends on it
+
+Stringified JSON is not an acceptable primary representation for approvals.
+
+### 7.2 Approval recovery must not parse transcript JSON
+
+Approval restoration must come from:
+
+- `ExecutionContext.pending_tools`
+- structured events
+- structured pending approval maps
+
+It must not depend on reparsing:
+
+- assistant messages
+- tool message body strings
+- approval dialog content text
+
+### 7.3 Approval UI messages must carry canonical metadata
+
+Pending approval tool messages must carry enough metadata for the frontend to render directly:
+
+- `tool_call`
+- `tool_call_id`
+- `tool_name`
+- `details`
+- `display_type`
+
+The frontend may keep compatibility fallback for old data, but new live data must not require string re-parsing.
+
+### 7.4 Mutation tools are not lossy-preview candidates
+
+`edit_file`, `write_file`, and other file-mutation tools must not be passed through generic lossy truncation that destroys preview structure.
+
+If a special preview policy is needed, it must preserve semantic renderability.
+
+### 7.5 Auto-approved tools must be visible tools
+
+For non-shell tools, the auto-approved tool set must be a subset of the workflow's current
+AI-visible tool capabilities.
+
+This invariant applies to:
+
+- persisted workflow Agent configuration
+- live executor approval state
+- tool schemas exposed to the AI
+- frontend auto-approval lists, counts, and controls
+
+The frontend must derive auto-approval options from the workflow's effective
+`available_tools`, not from a newer Agent definition that has not yet synchronized into the
+workflow. The backend must filter invalid or stale auto-approval entries before persistence,
+runtime injection, and display.
+
+Agent tool changes synchronize into an existing workflow only at canonical task boundaries:
+
+- a new workflow is created
+- new user input resumes a completed workflow
+- the user manually clears context
+
+They must not silently change the tool set of an already-running task segment.
+
+### 7.6 Shell approval policy remains separate and cumulative
+
+Shell approval must not be represented as ordinary tool auto-approval. `bash` availability is
+controlled by `available_tools`, while auto-approved shell commands are controlled by structured
+`shell_policy` rules.
+
+At an Agent tool synchronization boundary, non-conflicting workflow-level shell `Allow` rules
+must be retained alongside the current Agent shell policy so that user-defined commands form a
+cumulative set. Rules must be deduplicated by pattern. When the same pattern already exists in
+the current Agent policy, that current rule is authoritative; inherited rules must never weaken
+an Agent `Review` or `Deny` decision.
+
+## 8. Context Law
+
+### 8.1 `messages` is the durable history
+
+`messages` is the source of truth for transcript history.
+
+Database implication:
+
+- `workflow_messages` is authoritative transcript storage
+- audit, replay fallback, and semantic reporting must prefer it over derived caches
+
+### 8.2 `context_messages` is a projection, not an independent state machine
+
+`context_messages` exists to feed the LLM efficiently.
+
+It must be rebuilt from runtime history according to explicit rules.
+
+It must not accumulate hidden semantics through ad-hoc clone/append mutation.
+
+Database implication:
+
+- `workflow_context_messages` is a rebuildable AI-context cache
+- it must not become authority for recovery, audit, reporting, or UI semantics
+- active AI segment boundaries must recover from transcript/snapshot authority, not from cache rows
+- if cache contents conflict with durable history, durable history wins and cache must be rebuilt
+
+Consumer boundary implication:
+
+- AI may read in-memory `context_messages` and persisted `workflow_context_messages` as cache
+- recovery must not depend on `workflow_context_messages`
+- UI must not depend on `workflow_context_messages` for semantic correctness
+- reports and metrics must not depend on `workflow_context_messages`
+
+Hard rule: frequently changing runtime data must not be inserted into the system prompt. Keep the
+system prompt cache-stable; inject dynamic state only as an ordered user or tool observation when
+the current context actually needs it, such as an authoritative todo snapshot after compression.
+
+Hard rule: AI-visible history is a stable ordered projection of durable workflow messages. When the
+projection cache is missing or stale, `ContextManager` may rebuild it deterministically from durable
+transcript and snapshot authority, preserving the same semantic order and boundaries. Semantic
+context needed after compression, recovery, or restart must be persisted at the event boundary.
+LLM request preparation must consume that projection and may perform only deterministic
+provider-wire normalization; it must not query current runtime state, synthesize missing semantic
+history, or reorder semantic messages.
+
+### 8.3 Context rebuild must be rule-driven
+
+At minimum, context rebuild rules must distinguish:
+
+- no-compression full context
+- active-task pressure compression
+- task-boundary rollup compression
+- completed-task-to-new-task segment carryover
+
+Do not hide those semantics behind generic “copy current projection” behavior.
+
+### 8.4 Completed-task carryover must stay explicit
+
+When a new task starts after completed work, the projection must preserve exactly the carryover policy that the module defines.
+
+It must not depend on whatever happened to remain in a previous projection.
+
+Current required carryover contract:
+
+- AI context must preserve the latest compression summary when one exists
+- before the first rollup/checkpoint covers it, AI context must preserve the most recent completed task after that summary
+- after a rollup/checkpoint has durably covered that completed task, a later pressure compression may retain it only through the structured summary instead of preserving its raw dialogue
+- AI context must preserve the current unfinished task
+- older completed tasks may be rolled into summary, but must not silently disappear from both the AI projection and durable transcript history
+
+Unless the compression algorithm is intentionally redesigned, changes that weaken this carryover contract are prohibited.
+
+### 8.5 Compression thresholds are part of the design contract
+
+Compression behavior is not an implementation detail. It is part of the workflow model.
+
+Current required thresholds:
+
+- pressure compression before any rollup/checkpoint covers the latest completed task must preserve that task and only compress older completed work
+- once a durable rollup/checkpoint already covers the latest completed task, later pressure compression may remove its raw dialogue while preserving its structured carryover and durable message IDs
+- initial task-boundary rollup must not trigger until three completed tasks exist and a new active task has resumed
+- after a summary already exists, rollup must preserve the current unfinished task and must not remove completed work from both the structured summary and durable transcript history
+- the system must not collapse AI context to only the current task while removing all structured completed-task carryover
+- rollup is an independent compression kind: it must not be forced to share the blocking handoff format, and its enablement default is a product decision rather than an engine detail. It is currently disabled by default because provider prefix caching makes retaining raw history cheaper than writing an extra archive, and re-enabling it must not weaken the blocking handoff contract
+
+Do not change these thresholds or retention rules unless the workflow compression design itself is explicitly being revised.
+
+### 8.6 Manual clear-context boundaries are durable transcript markers
+
+Manual "clear context" is a structured transcript boundary, not a cache reset.
+
+Its contract is:
+
+- `session_id` remains unchanged
+- durable transcript history remains complete in `messages`
+- the boundary is persisted as a structured summary marker
+- AI context projection starts after the latest manual clear-context boundary
+- compression and task carryover logic must treat the latest manual clear-context boundary as the active lower bound
+
+The boundary must not become a second authority for approvals, waiting, resumability, or lifecycle state.
+
+### 8.7 Manual clear-context is only allowed from stopped states
+
+Manual "clear context" must be rejected unless the workflow is in a stopped state.
+
+Allowed states are:
+
+- pending
+- completed
+- failed
+- cancelled
+
+It must be rejected while the workflow is still live or transitional, including:
+
+- running
+- stopping
+- any interactive wait
+
+Interactive waits include:
+
+- approval
+- user input
+- confirmation
+- sub-agent completion
+
+This exists to prevent splitting a live or interactive protocol across transcript segments in ways that would orphan tool calls, approvals, user-input waits, or stop/recovery state from their structured authority.
+
+### 8.8 Intermediate state is not AI history
+
+Request-local and control-flow intermediate state must remain in memory and must not be
+persisted as transcript messages or AI-context messages. This includes temporary drafts,
+retry instructions, projection helpers, normalization artifacts, and one-shot runtime
+reminders.
+
+When an intermediate state must be durable for crash recovery, it may be persisted only in
+its canonical structured recovery form, such as snapshot state or a structured event. That
+persistence does not make the state part of AI-visible history.
+
+The AI projection may contain canonical user, assistant, and tool interaction records, but it
+must expose the resolved result of stateful processing rather than its storage or control-flow
+intermediates. Once an intermediate state resolves, subsequent AI context must expose only the
+canonical result. Intermediate data already persisted by older versions must be filtered at
+projection boundaries and must not be interpreted as current runtime state.
+
+### 8.9 The blocking handoff goal is runtime-tracked
+
+The goal a blocking handoff carries is runtime-owned. Before the handoff is written, the runtime
+runs one goal-tracking call per compression window over that window's ordered user directives and
+completed-work summaries, and the tracked goal supersedes any goal wording the compressor reply
+supplies.
+
+Its contract is:
+
+- the tracked goal is the goal of record for the boundary, so the compressor must not be required to
+  reconstruct it from the raw directive history
+- the handoff must not carry a model-authored list of user execution requirements. A bounded list
+  that also demands verbatim retention of every prior entry has no legal move once it fills, so
+  that contract was removed deliberately and must not be reintroduced under a new name
+- a compressor reply that still carries legacy requirement fields is discarded rather than validated
+- goal-tracking failure is a fatal compression failure that terminates the workflow, because a
+  handoff without a tracked goal would silently drift. It is not the best-effort compression
+  failure that logs and lets the turn continue
+- tracking never becomes the authority for task scope: `workflow_messages`, the effective task
+  objective, and the recorded goal source IDs remain the durable sources, and the tracker only
+  projects them
+- blocking compression has one canonical path, so this applies to pressure, manual, and terminal
+  manual compression alike; it must not be special-cased per caller
+
+## 9. Recovery Law
+
+### 9.1 Snapshot first, replay fallback
+
+Recovery must continue to prefer:
+
+1. valid snapshot
+2. structured replay fallback
+
+Database implication:
+
+- `workflow_snapshots` is the structured recovery authority
+- snapshot contents must remain structural runtime state, not a second transcript
+- `current_segment_id` belongs to structured recovery authority and must be persisted in snapshot state
+- transcript reconstruction from snapshot text is prohibited
+
+### 9.2 Command-layer recovery cannot become a parallel state engine
+
+`commands/workflow.rs` may route recovery, but it must not become a second, text-driven state machine.
+
+Any temporary fallback based on legacy persisted status strings must be treated as migration debt and kept visibly isolated.
+
+### 9.3 Safe failure is explicit
+
+When recovery cannot be trusted, the workflow must fail safely and observably.
+
+Silent best-effort recovery that may execute with unknown state is prohibited.
+
+### 9.4 Cache corruption is rebuilt, not interpreted
+
+If `workflow_context_messages` is missing, stale, or corrupted, the correct action is rebuild.
+
+Recovery must not reinterpret cache rows as hidden authority.
+
+If `workflow_messages` and `workflow_context_messages` disagree, `workflow_messages` wins.
+
+## 10. UI Contract Law
+
+### 10.1 Frontend workflow decisions must be structure-based
+
+Frontend logic should prefer:
+
+- `state`
+- `wait_reason`
+- `executionContext`
+- structured `metadata`
+
+It should avoid depending on:
+
+- message body heuristics
+- title text heuristics
+- JSON embedded in transcript text
+
+### 10.2 Fallback parsing must shrink over time
+
+If the frontend contains fallback parsing for old payloads, it must be treated as compatibility debt.
+
+New backend work must reduce reliance on fallback parsing, not introduce more of it.
+
+### 10.3 UI filtering must not erase authoritative tool records
+
+If a tool call is part of the authoritative execution record, frontend filtering must not hide it unless the filtered replacement preserves the same semantic information.
+
+### 10.4 Frontend authority is concern-scoped
+
+The frontend must not choose one global local source for all workflow UI behavior.
+
+Each workflow concern has its own authority, and that authority must match the concern's lifecycle:
+
+- session lifecycle, resumability, terminal state, and waiting:
+  authority is backend workflow state (`state + wait_reason`)
+- current active workflow inline approvals:
+  authority is the current workflow's approval-wait state plus the latest structured state for each pending `tool_call_id`
+- approval recovery after reload or cold resume:
+  authority is `ExecutionContext.pendingTools`, normalized into the current inline approval view model
+- cross-session top-bar user-action reminders:
+  authority is a background notification cache built from structured approval and user-input wait events, reconciled by workflow state transitions
+- tool execution lifecycle:
+  authority is the structured tool ledger or latest structured tool metadata for the same `tool_call_id`
+- message rendering:
+  authority is the message projection derived from durable messages and structured metadata
+
+No concern may borrow another concern's authority just because the data is convenient.
+
+Examples:
+
+- the top-bar user-action reminder cache must not decide which approval buttons appear inside the active message list
+- rendered message scans must not decide global reminder counts
+- old transcript messages must not keep an approval alive after backend state has left approval wait
+- a pending approval message must be ignored when a newer structured state for the same `tool_call_id` is approved, running, rejected, failed, interrupted, or completed
+
+### 10.5 Approval view models must be lifecycle-gated
+
+The current active workflow's inline approval view model must be valid only while the workflow is waiting for approval:
+
+- `wait_reason == approval`, or
+- a canonical approval-waiting workflow state is present
+
+If the workflow is running, completed, failed, cancelled, awaiting user input, awaiting a sub-agent, or waiting for confirmation, the current inline approval view model must be empty even if old messages still contain `approval_status = pending`.
+
+Within an approval-waiting workflow, inline approval membership must be derived by reducing structured records by `tool_call_id` with latest-state semantics:
+
+- pending states add or keep the item
+- approved, submitted, running, rejected, completed, failed, or interrupted states remove the item
+- duplicate historical messages for the same `tool_call_id` must collapse to one current item
+- bulk approval targets must come from this current inline approval view model, not from rendered DOM state or global reminders
+
+This rule exists specifically to make old persisted messages safe: old pending records may remain in transcript history, but they must not become current business state after the workflow state or latest tool state has moved on.
+
+### 10.6 Background user-action reminders are a notification cache
+
+The top-bar indicator is a cross-session user-action reminder cache, not the approval protocol itself.
+
+It may contain:
+
+- background approval requests from structured `confirm` events
+- background ask-user reminders from structured user-input waits
+- handoff entries produced when the active workflow is switched away while it is still waiting
+
+It must be reconciled by:
+
+- structured per-tool resolution events (`approval_resolved`, `tool_started`)
+- workflow state transitions that leave approval or user-input waiting
+- terminal workflow state transitions
+- active-session selection, which must remove that session from the background reminder cache and rebuild active inline state from the active workflow authority
+
+The user-action reminder cache may notify about both approvals and ask-user waits, but it must never resurrect old active-session approvals or override the current active workflow's inline approval view model. Ask-user waits and tool approvals must remain distinct entries with distinct `kind` values.
+
+### 10.7 Message lists are projections, not business-state engines
+
+Frontend message lists may merge, collapse, or restyle data for readability.
+
+They must not become the authority for:
+
+- global user-action reminder membership
+- resumability
+- wait-state meaning
+- terminal vs running tool state when a structured source already exists
+- approval counts or bulk approval target sets
+
+If a message projection conflicts with the canonical authority for its concern, the authority wins and the projection must reconcile to it.
+
+### 10.8 "Delete last step" is transcript/runtime deletion, not side-effect undo
+
+The workflow UI action exposed to users as "delete last step" is not a general-purpose undo system.
+
+Its contract is:
+
+- delete the last rewindable workflow interaction unit
+- rebuild workflow runtime state from structured event authority
+- keep transcript/UI consistent with that rebuilt state
+
+It must not claim or imply that it:
+
+- restores edited files to a previous version
+- recreates deleted files
+- reverts shell commands
+- rolls back network or other external side effects
+
+Deletion semantics must stay explicit:
+
+- `ask_user`
+  - if a user answer already exists, first delete the answer and return to waiting-for-input
+  - if no answer exists, delete the entire `ask_user` interaction unit, including the same-batch assistant message/reasoning and tool observation
+- `submit_plan`
+  - if plan approval has already happened, first delete the approval result and return to the pending-plan state
+  - deleting again removes the current planning interaction unit itself
+- other tools
+  - delete the tool interaction unit itself
+  - if the deleted tool was the last tool call in its assistant batch, the same-batch assistant message and reasoning must also be deleted
+  - tool deletion does not imply rollback of real-world side effects
+
+Frontend wording, tooltips, and confirmations must reflect this contract and must not describe the feature as "undo", "revert", or equivalent side-effect rollback language.
+
+### 10.9 Completed task boundaries are backend-authoritative
+
+The successful completion of one top-level task is represented by the canonical
+`task_completed` event.
+
+It may be emitted only after:
+
+- `complete_workflow` passes runtime validation
+- the completion tool is not pending, rejected, or failed
+- any configured final review has approved the completion
+- the successful completion tool observation has been persisted
+
+`task_completed` is distinct from `workflow_completed`:
+
+- `task_completed` marks a durable transcript/UI task boundary
+- `workflow_completed` marks the session lifecycle entering a terminal state
+- `task_completed` must still be emitted when queued user input keeps the hot executor running
+
+Frontend message projections may use `task_completed` to rotate completed-task
+windows. Snapshot and legacy recovery may reconstruct the same boundary from the
+durable successful completion tool observation, but live UI code must not independently
+reimplement completion approval rules.
+
+In particular, frontend projection must not coerce an explicit backend
+non-terminal `execution_status` such as `waiting`, `running`, or
+`approval_submitted` into `completed`.
+
+When final review is pending, the completion-tool observation may carry
+`review_display_state = final_review_pending` together with a child-session
+identifier. Frontend delegated-task rendering must preserve that reviewer
+sub-session visibility even though the originating tool message is not a literal
+`sub_agent_run` row.
+
+When that reviewer reaches a terminal state, the backend must update the same
+pending completion-tool observation with the structured reviewer result and its
+reviewer-scoped `usage_summary` before publishing terminal completion. The
+frontend must hydrate RESULT and COST for that card from this structured data,
+not infer either value from the parent completion summary, its parent-scoped
+usage summary, or transcript text.
+
+### 10.10 Manual clear-context rendering is projection-only
+
+The frontend may render a visible divider for each manual clear-context marker in the transcript.
+
+That divider is presentation only.
+
+It must not:
+
+- decide approval membership
+- suppress authoritative pending tool records
+- reset message identity semantics for live tool updates
+- replace structured runtime state reconciliation
+
+If the divider conflicts with structured approval or tool lifecycle state, the structured authority wins.
+
+### 10.11 Delete-last-step must treat manual clear-context as its own unit
+
+When manual clear-context exists as the last rewindable workflow interaction unit:
+
+- deleting last step must remove only that manual clear-context marker
+- deleting the marker must rebuild runtime snapshot/context state from the remaining structured authority
+- deleting the marker must not implicitly delete surrounding assistant, tool, approval, or task-completion records
+
+This rule applies only after manual clear-context has been durably persisted as a structured marker.
+
+### 10.12 Message-history paging has one backend path and one projection window
+
+The UI uses one backend history-pagination protocol: a cursor-based, fixed-size message page
+(currently 300 messages). A bounded database look-ahead used to classify page boundaries is an
+implementation detail, not a second page or a task-segment pagination protocol.
+
+The frontend may apply a separate rendering window to messages that are already loaded for
+the session. That window is a projection-performance limit, not durable history state and not
+a second backend pagination system.
+
+The contract is:
+
+- `workflow_messages` and the backend snapshot/page response remain the authority for durable
+  message order and the existence of unloaded history
+- the backend-provided page cursor and hidden-message count describe only durable rows that
+  have not been loaded; the frontend rendering-window count describes only already-loaded rows
+  that are temporarily outside the projection
+- the UI may use both facts to decide whether to show the history action, but must not merge
+  their meanings, expose the projection-window count as a backend count, or reintroduce a
+  task-segment pagination endpoint/state into the current UI path; an old command retained for
+  migration or compatibility must remain outside the main frontend flow
+- each rendered session pane must own exactly one message projection instance; the handler for
+  "show earlier messages" must operate on that same instance that supplies the rendered
+  messages, never on a second parent or helper projection
+- local window expansion and backend page loading are separate, ordered operations within that
+  single history path: expand already loaded messages first; when no loaded messages remain
+  hidden but the backend reports older rows, request the earlier page with the current cursor,
+  merge it, update the cursor/count, and then re-evaluate the projection
+- earlier pages must merge idempotently by persisted message identity, preserve chronological
+  order, and prefer the current/live structured record when a page overlaps an in-flight event
+- primary and child session panes must obey the same pagination contract and must reject stale
+  page responses after a session switch or a newer load revision
+- prepending a page must preserve an off-bottom reader's stable persisted-message anchor; page
+  loading must not reset the reader to the bottom or make live messages move an off-bottom
+  reader unexpectedly
+
+The message-list component may emit a history intent and the completion callback used for
+scroll restoration, but it must not call the store directly or duplicate pagination state.
+
+Any change to this path must cover, at minimum:
+
+1. expansion when history is already loaded locally
+2. backend loading when only unloaded history remains
+3. overlap/idempotency and stale-response rejection
+4. scroll-anchor preservation for an off-bottom reader
+
+## 11. Command-Layer Discipline
+
+`commands/workflow.rs` is allowed to do orchestration.
+
+It is not allowed to become:
+
+- a second planner
+- a second context engine
+- a second approval protocol
+- a transcript-interpreting recovery engine
+
+If command-layer logic must inspect transcript history, that logic must be explicitly justified as presentation or migration compatibility, not core correctness.
+
+## 12. Prompt Compatibility Law
+
+Workflow and agent system prompts are compatibility contracts for models with different
+reasoning, planning, tool-use, and state-tracking capabilities. They must not assume that
+every supported model can infer rules left implicit for the sake of brevity.
+
+Prompt simplification may remove genuine duplication or wording that adds no behavioral
+value, but it must preserve the explicit guidance needed for reliable execution across
+model capability levels. This includes, when relevant:
+
+- conditions that trigger or prohibit an action
+- phase, priority, and planning-versus-execution relationships
+- behavioral boundaries and required state-transition or handoff order
+- concrete recovery guidance after an invalid action or tool error
+- brief explanations or examples when the rule would otherwise be ambiguous
+
+A rule being inferable by a strong model does not mean it is sufficiently specified for all
+supported models. Before shortening a system prompt, verify that each critical workflow can
+still be followed directly without reconstructing omitted logic. Cross-model behavioral
+reliability takes precedence over minimizing prompt tokens.
+
+## 13. Observability Law
+
+Any change to lifecycle, waiting, approval, recovery, or context rules must keep logs good enough to answer:
+
+- what session changed
+- what phase handled it
+- what signal or event triggered it
+- what authoritative state changed
+- whether recovery or compatibility logic was used
+
+If a change reduces traceability, it is not acceptable.
+
+## 14. Forbidden Patterns
+
+The following patterns are forbidden unless they are strictly isolated compatibility shims:
+
+- reparsing JSON from transcript text to recover state
+- introducing a second pending approval representation with different semantics
+- inferring wait state from status strings when structured wait state is available
+- copying `context_messages` as a hidden state shortcut
+- hiding tool mutations behind generic truncation
+- adding new signal names on only one side of the wire
+- fixing a structured payload problem by adding more frontend string parsing
+
+## 15. Required Review Questions
+
+Every change touching this module must answer:
+
+1. What is the single authoritative state source for this behavior?
+2. Does this add a parallel path or just normalize into the existing one?
+3. Is recovery still structure-first?
+4. Is the frontend consuming structure or guessing from text?
+5. Does this increase or decrease compatibility debt?
+6. What invariant from this constitution is being protected?
+
+If these answers are not explicit, the change is not ready.
+
+## 16. Minimum Validation Before Merge
+
+Changes touching lifecycle, waiting, approval, recovery, or context must validate the relevant scenarios:
+
+1. active execution
+2. each wait reason
+3. refresh during waiting
+4. restart/recovery during waiting
+5. approval round-trip
+6. completed-session resume
+7. compression or context rebuild if affected
+
+Manual validation is acceptable, but it must be stated.
+
+## 17. Amendment Rule
+
+This constitution may be changed only when:
+
+- the new rule is more explicit than the old one
+- the change is justified by architecture, not convenience
+- the change reduces ambiguity instead of introducing it
+
+If a future patch needs to bypass this constitution to “quickly fix” something, the correct assumption is that the patch is probably wrong.

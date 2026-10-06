@@ -4,9 +4,9 @@
   "version": "2.0.17",
   "identifier": "ai.aidyou.chatspeed",
   "build": {
-    "beforeDevCommand": "cargo build --manifest-path src-tauri/runtime/Cargo.toml --bin chatspeed-runtime && pnpm dev",
+    "beforeDevCommand": "cargo build --manifest-path src-tauri/runtime/bin/Cargo.toml --bin chatspeed-runtime && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && touch src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cargo build --release --manifest-path src-tauri/runtime/Cargo.toml --bin chatspeed-runtime && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && cp src-tauri/target/release/chatspeed-runtime src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi",
+    "beforeBuildCommand": "target=$(rustc -vV | sed -n 's/^host: //p') && mkdir -p src-tauri/target/release && touch src-tauri/target/release/cscli-$target && touch src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi && pnpm build && cargo build --release --manifest-path src-tauri/cli/Cargo.toml --bin cscli && cargo build --release --manifest-path src-tauri/runtime/bin/Cargo.toml --bin chatspeed-runtime && cp src-tauri/target/release/cscli src-tauri/target/release/cscli-$target && cp src-tauri/target/release/chatspeed-runtime src-tauri/target/release/chatspeed-runtime-$target && if command -v chmod >/dev/null 2>&1; then chmod +x src-tauri/target/release/cscli-$target src-tauri/target/release/chatspeed-runtime-$target; fi",
     "frontendDist": "../dist"
   },
   "app": {

@@ -906,6 +906,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chatspeed-contracts",
+ "chatspeed-runtime-backend",
  "chatspeed-runtime-client",
  "chrono",
  "clap",
