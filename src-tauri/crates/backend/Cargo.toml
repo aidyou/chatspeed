@@ -18,6 +18,13 @@ path    = "src/lib.rs"
 doctest = false
 
 [features]
+# The runtime-only `agent-skills` plugin filesystem lifecycle. It is a default
+# feature so the standalone runtime and this crate's focused tests compile it,
+# while the desktop links this crate with `default-features = false` and never
+# compiles the plugin lifecycle it can only reach over the control plane. The
+# shared error/DTO contract (`plugin_types`) is always compiled.
+default = ["plugin-service"]
+plugin-service = []
 # Legacy marker for remaining conditional source guards. Neither the runtime
 # nor the desktop dependency enables it; desktop adapters live in their own
 # crate and the backend closure must never link Tauri, Wry or GTK.

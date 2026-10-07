@@ -256,6 +256,18 @@ mod tests {
     }
 
     #[test]
+    fn legacy_zip_and_github_fields_are_rejected() {
+        for document in [
+            json!({"kind": "zip", "path": "/fixture/demo.zip"}),
+            json!({"kind": "github", "repository": "owner/repo", "reference": "main"}),
+            json!({"kind": "github", "owner": "owner", "repo": "repo", "reference": "main"}),
+            json!({"kind": "local_zip", "path": "/fixture/demo.zip", "unknown": true}),
+        ] {
+            assert!(SkillSource::parse(&document).is_err(), "{document}");
+        }
+    }
+
+    #[test]
     fn a_github_source_is_validated_and_its_url_is_built_from_the_host_constant() {
         let source = SkillSource::parse(&json!({
             "kind": "github",

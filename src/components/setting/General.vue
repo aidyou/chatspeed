@@ -1,4 +1,6 @@
 <template>
+  <el-tabs v-model="generalTab" class="general-tabs">
+    <el-tab-pane :label="$t('settings.general.generalTab')" name="general">
   <div class="card">
     <div class="title">{{ $t('settings.general.generalSettings') }}</div>
     <div class="list">
@@ -893,6 +895,12 @@
     </div>
   </div>
 
+  </el-tab-pane>
+  <el-tab-pane :label="$t('settings.general.agentSkillsTab')" name="agentSkills">
+    <agent-skills />
+  </el-tab-pane>
+  </el-tabs>
+
   <el-dialog v-model="configExportVisible" :title="$t('settings.general.exportConfiguration')" width="560px" @closed="configExportCategories = []">
     <el-checkbox-group v-model="configExportCategories">
       <el-checkbox v-for="category in configCategories" :key="category" :label="category">
@@ -966,6 +974,7 @@ import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
 import { useUpdateStore } from '@/stores/update'
 import { DEFAULT_TERMINAL_SKIN, TERMINAL_SKINS } from '@/constants/terminalThemes'
+import agentSkills from '@/components/setting/AgentSkills.vue'
 
 const { t } = useI18n()
 const modelStore = useModelStore()
@@ -979,6 +988,7 @@ const { settings } = storeToRefs(settingStore)
 const { versionInfo, downloadProgress, downloadError, isUpdateReady, isCheckingForUpdates } =
   storeToRefs(updateStore)
 
+const generalTab = ref('general')
 const currentVersion = ref('')
 const manualUpdateStatus = computed(() => {
   if (downloadError.value) {
@@ -1874,6 +1884,14 @@ const getAllBackups = () => {
 </script>
 
 <style lang="scss">
+.general-tabs {
+  min-height: 100%;
+
+  .el-tab-pane {
+    padding-bottom: var(--cs-space);
+  }
+}
+
 .auto-width-select {
   width: auto;
   min-width: 150px;

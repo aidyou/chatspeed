@@ -48,6 +48,8 @@ pub mod skill;
 #[cfg(not(feature = "desktop"))]
 pub mod skill_inventory;
 #[cfg(not(feature = "desktop"))]
+pub mod target_preflight;
+#[cfg(not(feature = "desktop"))]
 pub mod targets;
 pub mod types;
 

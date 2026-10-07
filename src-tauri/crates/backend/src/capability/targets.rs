@@ -40,7 +40,14 @@ const CURSOR_HOME_RELATIVE: &[&str] = &[".cursor", "skills"];
 const WINDSURF_HOME_RELATIVE: &[&str] = &[".codeium", "windsurf", "skills"];
 const CLINE_HOME_RELATIVE: &[&str] = &[".cline", "skills"];
 const CODEX_HOME_RELATIVE: &[&str] = &[".codex", "skills"];
-const TRAE_HOME_RELATIVE: &[&str] = &[".agents", "skills"];
+
+/// Trae CN (the China edition) personal skills directory.
+///
+/// The CN edition keeps its own profile directory, so its skills live under
+/// `~/.trae-cn/skills`. It is registered as its own target; the international
+/// build has no separate skills directory (it reads the shared Agents
+/// directory), so it is not aliased here.
+const TRAE_CN_HOME_RELATIVE: &[&str] = &[".trae-cn", "skills"];
 
 /// Why a target cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +79,10 @@ pub enum SkillTargetId {
     Windsurf,
     Cline,
     Trae,
+    TraeCn,
+    Dsh,
+    Workbuddy,
+    Qoder,
 }
 
 impl SkillTargetId {
@@ -86,6 +97,10 @@ impl SkillTargetId {
         SkillTargetId::Windsurf,
         SkillTargetId::Cline,
         SkillTargetId::Trae,
+        SkillTargetId::TraeCn,
+        SkillTargetId::Dsh,
+        SkillTargetId::Workbuddy,
+        SkillTargetId::Qoder,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -99,6 +114,10 @@ impl SkillTargetId {
             SkillTargetId::Windsurf => "windsurf",
             SkillTargetId::Cline => "cline",
             SkillTargetId::Trae => "trae",
+            SkillTargetId::TraeCn => "trae-cn",
+            SkillTargetId::Dsh => "dsh",
+            SkillTargetId::Workbuddy => "workbuddy",
+            SkillTargetId::Qoder => "qoder",
         }
     }
 
@@ -209,9 +228,41 @@ const REGISTRY: &[SkillTargetSpec] = &[
     SkillTargetSpec {
         id: SkillTargetId::Trae,
         default_selected: false,
-        home_relative: Some(TRAE_HOME_RELATIVE),
-        verified_against: Some("https://docs.trae.ai/ide/skills"),
+        // The international Trae build has no skills directory of its own, so
+        // a separate `trae` target would only duplicate the shared Agents
+        // directory without a Trae-specific path. It stays registered but
+        // refused instead of aliasing `.agents/skills`.
+        home_relative: None,
+        verified_against: None,
+        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+    },
+    SkillTargetSpec {
+        id: SkillTargetId::TraeCn,
+        default_selected: false,
+        home_relative: Some(TRAE_CN_HOME_RELATIVE),
+        verified_against: Some("https://docs.trae.cn/ide/skills"),
         unsupported_reason: None,
+    },
+    SkillTargetSpec {
+        id: SkillTargetId::Dsh,
+        default_selected: false,
+        home_relative: None,
+        verified_against: None,
+        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+    },
+    SkillTargetSpec {
+        id: SkillTargetId::Workbuddy,
+        default_selected: false,
+        home_relative: None,
+        verified_against: None,
+        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
+    },
+    SkillTargetSpec {
+        id: SkillTargetId::Qoder,
+        default_selected: false,
+        home_relative: None,
+        verified_against: None,
+        unsupported_reason: Some(TargetUnsupportedReason::PathNotVerified),
     },
 ];
 
@@ -423,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn every_registered_target_is_listed_and_verified_targets_are_supported() {
+    fn every_registered_target_is_listed_and_only_verified_targets_are_supported() {
         let (_temp, environment) = environment();
         let resolved = resolve_targets(&environment);
         assert_eq!(resolved.len(), SkillTargetId::ALL.len());
@@ -442,17 +493,21 @@ mod tests {
             "cursor",
             "windsurf",
             "cline",
-            "trae",
+            "trae-cn",
         ] {
             assert!(supported.contains(&id), "expected {id} supported");
         }
 
+        // A registered target without a reliable directory is reported
+        // unsupported instead of being guessed.
         let unsupported: Vec<&str> = resolved
             .iter()
             .filter(|entry| !entry.supported)
             .map(|entry| entry.id.as_str())
             .collect();
-        assert!(unsupported.is_empty());
+        for id in ["trae", "dsh", "workbuddy", "qoder"] {
+            assert!(unsupported.contains(&id), "expected {id} unsupported");
+        }
 
         // A supported external target resolves under HOME; the ChatSpeed
         // target resolves under CHATSPEED_HOME.
@@ -476,7 +531,7 @@ mod tests {
             ("cursor", ".cursor/skills"),
             ("windsurf", ".codeium/windsurf/skills"),
             ("cline", ".cline/skills"),
-            ("trae", ".agents/skills"),
+            ("trae-cn", ".trae-cn/skills"),
         ] {
             let target = resolved
                 .iter()
@@ -497,7 +552,7 @@ mod tests {
                 "cursor".to_string(),
                 "windsurf".to_string(),
                 "cline".to_string(),
-                "trae".to_string(),
+                "trae-cn".to_string(),
             ],
             &environment,
         )
@@ -528,5 +583,118 @@ mod tests {
         assert_eq!(selection.len(), 2);
         assert_eq!(selection[0].0, SkillTargetId::ClaudeCode);
         assert_eq!(selection[1].0, SkillTargetId::Agents);
+    }
+
+    #[test]
+    fn the_registry_carries_every_required_target_and_one_default() {
+        let ids: Vec<&str> = SkillTargetId::ALL.iter().map(|id| id.as_str()).collect();
+        for required in [
+            "chatspeed",
+            "agents",
+            "codex",
+            "claude-code",
+            "cursor",
+            "windsurf",
+            "opencode",
+            "dsh",
+            "workbuddy",
+            "qoder",
+            "trae",
+            "trae-cn",
+        ] {
+            assert!(ids.contains(&required), "registry is missing {required}");
+        }
+
+        let defaults: Vec<&str> = REGISTRY
+            .iter()
+            .filter(|spec| spec.default_selected)
+            .map(|spec| spec.id.as_str())
+            .collect();
+        assert_eq!(defaults, vec![CHATSPEED_TARGET]);
+
+        // Every id parses back to itself, so only the closed ids are accepted.
+        for id in SkillTargetId::ALL {
+            assert_eq!(SkillTargetId::parse(id.as_str()), Some(*id));
+        }
+    }
+
+    #[test]
+    fn unverified_targets_are_unsupported_with_path_not_verified() {
+        let (_temp, environment) = environment();
+        let resolved = resolve_targets(&environment);
+        for id in ["dsh", "workbuddy", "qoder", "trae"] {
+            let target = resolved
+                .iter()
+                .find(|entry| entry.id == id)
+                .expect("target");
+            assert!(!target.supported, "{id} must be unsupported");
+            assert!(target.path.is_none(), "{id} must not expose a path");
+            assert_eq!(
+                target.unsupported_reason.as_deref(),
+                Some("path_not_verified"),
+                "{id} reason"
+            );
+            assert!(target.verified_against.is_none(), "{id} source");
+        }
+    }
+
+    #[test]
+    fn agents_resolves_to_the_canonical_agents_skills_directory() {
+        let (_temp, environment) = environment();
+        let resolved = resolve_targets(&environment);
+        let agents = resolved
+            .iter()
+            .find(|entry| entry.id == "agents")
+            .expect("agents target");
+        assert!(agents.supported);
+        assert!(agents
+            .path
+            .as_deref()
+            .unwrap_or_default()
+            .ends_with(".agents/skills"));
+    }
+
+    #[test]
+    fn trae_cn_uses_its_own_directory_and_trae_no_longer_aliases_agents() {
+        let (_temp, environment) = environment();
+        let resolved = resolve_targets(&environment);
+
+        let trae_cn = resolved
+            .iter()
+            .find(|entry| entry.id == "trae-cn")
+            .expect("trae-cn target");
+        assert!(trae_cn.supported);
+        let trae_cn_path = trae_cn.path.as_deref().unwrap_or_default();
+        assert!(trae_cn_path.ends_with(".trae-cn/skills"));
+        assert!(!trae_cn_path.contains(".agents/skills"));
+
+        let trae = resolved
+            .iter()
+            .find(|entry| entry.id == "trae")
+            .expect("trae target");
+        assert!(!trae.supported);
+        assert!(trae.path.is_none());
+    }
+
+    #[test]
+    fn a_selection_is_resolved_by_id_only_and_refuses_paths_and_unsupported_ids() {
+        let (_temp, environment) = environment();
+
+        // A caller never supplies a directory: even a path-shaped string is an
+        // unknown id and is refused before any path is derived from it.
+        for value in ["/tmp/somewhere", "~/.agents/skills", "../escape"] {
+            let error = resolve_selection(&[value.to_string()], &environment)
+                .expect_err("path-shaped selection must be refused");
+            assert_eq!(
+                error.code(),
+                super::super::error::code::INVALID_REQUEST,
+                "{value} must be an unknown id"
+            );
+        }
+
+        // A registered but unverified id is refused as unsupported.
+        let error = resolve_selection(&["qoder".to_string()], &environment)
+            .expect_err("unsupported id must be refused");
+        assert_eq!(error.code(), super::super::error::code::UNSUPPORTED_TARGET);
     }
 }

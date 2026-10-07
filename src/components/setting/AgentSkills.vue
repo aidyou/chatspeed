@@ -1,5 +1,60 @@
 <template>
   <div class="agent-skills">
+    <div v-loading="pluginStore.loading" class="card plugin-card">
+      <div class="title">
+        <span>{{ t('settings.agentSkills.pluginTitle') }}</span>
+        <el-tag v-if="pluginStore.inventory" size="small" :type="pluginStore.inventory.enabled ? 'success' : 'info'">
+          {{ pluginStore.inventory.enabled ? t('settings.agentSkills.pluginEnabled') : t('settings.agentSkills.pluginDisabled') }}
+        </el-tag>
+      </div>
+      <p class="hint">{{ t('settings.agentSkills.pluginHint') }}</p>
+      <el-alert
+        v-if="pluginStore.lastError"
+        class="alert"
+        type="error"
+        :closable="false"
+        :title="pluginStore.lastError" />
+      <div v-if="pluginStore.inventory" class="plugin-meta">
+        <span>{{ pluginStore.inventory.plugin_id }}@{{ pluginStore.inventory.version || '-' }}</span>
+        <span>{{ pluginStore.inventory.root }}</span>
+        <span>{{ pluginStore.inventory.host?.host }}</span>
+      </div>
+      <div v-if="pluginStore.inventory" class="buttons">
+        <el-button
+          v-if="!pluginStore.inventory?.installed"
+          type="primary"
+          size="small"
+          :loading="pluginStore.applying"
+          @click="installPlugin">
+          {{ t('settings.agentSkills.pluginInstall') }}
+        </el-button>
+        <el-button
+          v-else-if="pluginStore.inventory.enabled"
+          size="small"
+          :loading="pluginStore.applying"
+          @click="disablePlugin">
+          {{ t('settings.agentSkills.pluginDisable') }}
+        </el-button>
+        <el-button
+          v-else
+          type="primary"
+          size="small"
+          :loading="pluginStore.applying"
+          @click="installPlugin">
+          {{ t('settings.agentSkills.pluginEnable') }}
+        </el-button>
+        <el-button
+          v-if="pluginStore.inventory?.installed"
+          type="danger"
+          plain
+          size="small"
+          :loading="pluginStore.applying"
+          @click="uninstallPlugin">
+          {{ t('settings.agentSkills.pluginUninstall') }}
+        </el-button>
+      </div>
+    </div>
+
     <div class="card">
       <div class="title">
         <span>{{ t('settings.agentSkills.title') }}</span>
@@ -35,16 +90,18 @@
           <el-radio-button value="local_directory">
             {{ t('settings.agentSkills.sourceLocal') }}
           </el-radio-button>
-          <el-radio-button value="zip">{{ t('settings.agentSkills.sourceZip') }}</el-radio-button>
+          <el-radio-button value="local_zip">
+            {{ t('settings.agentSkills.sourceZip') }}
+          </el-radio-button>
           <el-radio-button value="github">{{ t('settings.agentSkills.sourceGithub') }}</el-radio-button>
         </el-radio-group>
 
         <div class="fields">
           <el-input
-            v-if="sourceKind === 'local_directory' || sourceKind === 'zip'"
+            v-if="sourceKind === 'local_directory' || sourceKind === 'local_zip'"
             v-model="sourcePath"
             :placeholder="
-              sourceKind === 'zip'
+              sourceKind === 'local_zip'
                 ? t('settings.agentSkills.zipPlaceholder')
                 : t('settings.agentSkills.directoryPlaceholder')
             "
@@ -262,9 +319,11 @@ import { ElMessage } from 'element-plus';
 
 import { mutationOutcomes, verdictAllowsInstall } from '@/libs/capability.js';
 import { useCapabilityStore } from '@/stores/capability';
+import { usePluginStore } from '@/stores/plugin';
 
 const { t } = useI18n();
 const store = useCapabilityStore();
+const pluginStore = usePluginStore();
 
 const sourceKind = ref('local_directory');
 const sourcePath = ref('');
@@ -274,11 +333,12 @@ const githubRef = ref('main');
 const selection = ref([]);
 
 const report = computed(() => store.checkReport);
+const repositoryParts = computed(() => githubRepository.value.trim().split('/').filter(Boolean));
 
 const canCheck = computed(() => {
   if (store.checking) return false;
   if (sourceKind.value === 'github') {
-    return githubRepository.value.trim() !== '' && githubPath.value.trim() !== '';
+    return repositoryParts.value.length === 2 && githubPath.value.trim() !== '';
   }
   return sourcePath.value.trim() !== '';
 });
@@ -294,9 +354,10 @@ const sourceDocument = computed(() => {
   if (sourceKind.value === 'github') {
     return {
       kind: 'github',
-      repository: githubRepository.value.trim(),
-      path: githubPath.value.trim(),
-      reference: githubRef.value.trim() || undefined
+      owner: repositoryParts.value[0],
+      repo: repositoryParts.value[1],
+      path: githubPath.value.trim() || undefined,
+      git_ref: githubRef.value.trim() || undefined
     };
   }
   return { kind: sourceKind.value, path: sourcePath.value.trim() };
@@ -397,8 +458,40 @@ async function uninstall(row) {
   }
 }
 
+async function loadPlugin() {
+  try {
+    await pluginStore.loadInventory();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function installPlugin() {
+  try {
+    await pluginStore.install();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function disablePlugin() {
+  try {
+    await pluginStore.disable();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
+async function uninstallPlugin() {
+  try {
+    await pluginStore.uninstall();
+  } catch (error) {
+    ElMessage.error(error.message);
+  }
+}
+
 onMounted(async () => {
-  await rescan();
+  await Promise.all([rescan(), loadPlugin()]);
   // Selected by default: the ChatSpeed directory only, never an external tool.
   selection.value = [...store.defaultSelection];
 });
@@ -462,8 +555,19 @@ onMounted(async () => {
     margin-top: var(--cs-space-sm);
   }
 
+  .plugin-meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xs);
+    margin-bottom: var(--cs-space-sm);
+    color: var(--cs-text-color-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
   .buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--cs-space-sm);
   }
 

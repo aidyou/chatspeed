@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod message;
 pub mod model_catalog;
 pub mod note;
+pub mod plugin;
 pub mod proxy_group;
 pub mod sandbox;
 pub mod sensitive;

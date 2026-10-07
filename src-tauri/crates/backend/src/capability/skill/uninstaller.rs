@@ -2,6 +2,9 @@
 //!
 //! A directory is only removed when ChatSpeed can prove all of:
 //!
+//! * the target is one ChatSpeed may delete from — its own directory or the
+//!   shared canonical Agents directory — so an external tool's target is
+//!   read-only even when a ChatSpeed ownership row exists (AC-6/INV-2);
 //! * a durable installation row exists for this `(target, name)`;
 //! * the row was created for exactly this path;
 //! * the in-directory ownership marker matches the row;
@@ -16,14 +19,29 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::capability::error::CapabilityError;
 use crate::capability::repository::CapabilityRepository;
 use crate::capability::skill::manifest::{verify_file_manifest, ManifestVerdict};
 use crate::capability::skill::ownership;
 use crate::capability::skill_inventory::RESERVED_SKILL_NAMES;
-use crate::capability::targets::{resolve_target_or_error, TargetEnvironment};
+use crate::capability::target_preflight;
+use crate::capability::targets::{SkillTargetId, TargetEnvironment};
 use crate::capability::types::{EffectOutcome, SkillInstallation, SkillInstallationState};
+
+/// Target ids whose managed Skill directories ChatSpeed may ever delete:
+/// ChatSpeed's own directory and the shared canonical Agents directory.
+///
+/// Every other registered target belongs to an external tool, so a ChatSpeed
+/// ownership record there is not authority to delete: those targets are refused
+/// read-only and their directories are preserved (AC-6/INV-2).
+pub fn is_uninstall_eligible_target(target_id: &str) -> bool {
+    matches!(
+        SkillTargetId::parse(target_id),
+        Some(SkillTargetId::Chatspeed | SkillTargetId::Agents)
+    )
+}
 
 /// What an uninstall did on one target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -123,6 +141,18 @@ impl SkillUninstaller {
         if RESERVED_SKILL_NAMES.contains(&skill_name) {
             return Ok(None);
         }
+        // An external target is never converged: any ownership row or leftover
+        // quarantine there is preserved rather than acted on (AC-6/INV-2).
+        if !is_uninstall_eligible_target(target_id) {
+            return Ok(None);
+        }
+        // A target that only aliases a higher-priority target's physical
+        // directory — for example `chatspeed` when `CHATSPEED_HOME` points at
+        // the shared Agents home — is not its owner, so a legacy ownership row
+        // or quarantine must never be converged through it (AC-7/INV-2).
+        if !target_preflight::is_canonical_owner(target_id, &self.environment) {
+            return Ok(None);
+        }
         let Some(recorded) = repository.get_installation(target_id, skill_name)? else {
             return Ok(None);
         };
@@ -130,11 +160,14 @@ impl SkillUninstaller {
         match recorded.state {
             // A quarantine that never finalized: delete only the directory
             // ChatSpeed moved aside and record the row as removed.
-            SkillInstallationState::Quarantined => Ok(Some(self.finish_quarantine(
-                repository,
-                &recorded,
-                &install_path,
-            ))),
+            SkillInstallationState::Quarantined => {
+                let outcome = self.finish_quarantine(repository, &recorded, &install_path);
+                if outcome.status == UninstallOutcomeStatus::Finalized {
+                    Ok(Some(outcome))
+                } else {
+                    Ok(None)
+                }
+            }
             // An install whose rename did not finish: if the committed content
             // and marker prove the install, record it Installed; otherwise leave
             // it (never delete an unproven or partial directory here).
@@ -200,10 +233,26 @@ impl SkillUninstaller {
             );
         }
 
-        let target_root = match resolve_target_or_error(target_id, &self.environment) {
-            Ok((_, path)) => path,
-            Err(error) => {
-                return self.refuse(target_id, skill_name, None, error.redacted_message());
+        // Deletion is only ever authorized for ChatSpeed's own directories;
+        // an external tool's target is read-only here even when a ChatSpeed
+        // ownership row exists (AC-6/INV-2).
+        if !is_uninstall_eligible_target(target_id) {
+            return self.refuse(
+                target_id,
+                skill_name,
+                None,
+                "this target is external to ChatSpeed and is never uninstalled",
+            );
+        }
+
+        // Before any deletion the eligible root must be a real directory: a
+        // symlinked target or ancestor is refused so an eligible id can never
+        // delete through a link that points at an external software root
+        // (AC-7/INV-6).
+        let target_root = match target_preflight::verify_delete_root(target_id, &self.environment) {
+            Ok(verified) => verified.root,
+            Err(failure) => {
+                return self.refuse(target_id, skill_name, None, failure.detail());
             }
         };
         let install_path = target_root.join(skill_name);
@@ -229,6 +278,15 @@ impl SkillUninstaller {
                 detail: Some("no recorded installation owns this name".to_string()),
             };
         };
+
+        if recorded.install_path != install_path.to_string_lossy() {
+            return self.refuse(
+                target_id,
+                skill_name,
+                Some(&install_path),
+                "the recorded installation belongs to a different path",
+            );
+        }
 
         // A row that already says "removed" or "quarantined" is metadata to
         // reconcile, never a fresh deletion.
@@ -271,7 +329,7 @@ impl SkillUninstaller {
         if !install_path.exists() {
             // The directory is already gone; finalize the row instead of
             // guessing about a deletion that already happened.
-            return self.finalize_row(repository, &recorded, None);
+            return self.finalize_row(repository, &recorded);
         }
 
         match ownership::has_proof(&install_path, &recorded) {
@@ -316,11 +374,18 @@ impl SkillUninstaller {
 
         // Same-filesystem rename inside the target root: atomic, and it never
         // depends on app data living on the same device as the target.
-        let quarantine = target_root.join(format!(
-            ".{}.cs-quarantine-{}",
-            skill_name,
-            uuid::Uuid::now_v7().simple()
-        ));
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        match std::fs::symlink_metadata(&quarantine) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => {
+                return self.refuse(
+                    target_id,
+                    skill_name,
+                    Some(&install_path),
+                    "the quarantine path already exists or cannot be inspected",
+                );
+            }
+        }
         if let Err(error) = std::fs::rename(&install_path, &quarantine) {
             return self.refuse(
                 target_id,
@@ -348,7 +413,7 @@ impl SkillUninstaller {
             }
         }
 
-        let mut outcome = self.finalize_row(repository, &recorded, Some(&quarantine));
+        let mut outcome = self.finish_quarantine(repository, &recorded, &install_path);
         outcome.install_path = Some(install_path.to_string_lossy().to_string());
         outcome.quarantine_path = Some(quarantine.to_string_lossy().to_string());
         if outcome.status == UninstallOutcomeStatus::Finalized {
@@ -358,34 +423,66 @@ impl SkillUninstaller {
     }
 
     /// Completes an uninstall whose content is already quarantined.
+    ///
+    /// The quarantine location is deterministic from the durable installation
+    /// id. We never scan by skill-name prefix: an unproven sibling (including a
+    /// symlink or a second candidate) is user content and must remain intact.
     fn finish_quarantine(
         &self,
         repository: &CapabilityRepository,
         recorded: &SkillInstallation,
         install_path: &Path,
     ) -> UninstallOutcome {
-        let target_root = install_path.parent().unwrap_or(install_path);
-        let prefix = format!(".{}.cs-quarantine-", recorded.skill_name);
-        let quarantine = std::fs::read_dir(target_root).ok().and_then(|entries| {
-            entries.flatten().map(|entry| entry.path()).find(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().starts_with(&prefix))
-                    .unwrap_or(false)
-            })
-        });
-
-        let Some(quarantine) = quarantine else {
-            return UninstallOutcome {
-                target_id: recorded.target_id.clone(),
-                skill_name: recorded.skill_name.clone(),
-                status: UninstallOutcomeStatus::NotFound,
-                install_path: Some(install_path.to_string_lossy().to_string()),
-                quarantine_path: None,
-                detail: Some("no quarantine directory remains to finalize".to_string()),
+        if !is_uninstall_eligible_target(&recorded.target_id) {
+            return self.refuse(
+                &recorded.target_id,
+                &recorded.skill_name,
+                Some(install_path),
+                "this target is not eligible for quarantine deletion",
+            );
+        }
+        let target_root =
+            match target_preflight::verify_delete_root(&recorded.target_id, &self.environment) {
+                Ok(verified) => verified.root,
+                Err(failure) => {
+                    return self.refuse(
+                        &recorded.target_id,
+                        &recorded.skill_name,
+                        Some(install_path),
+                        failure.detail(),
+                    );
+                }
             };
+        let expected_install = target_root.join(&recorded.skill_name);
+        if install_path != expected_install
+            || recorded.install_path != expected_install.to_string_lossy()
+        {
+            return self.refuse(
+                &recorded.target_id,
+                &recorded.skill_name,
+                Some(install_path),
+                "the quarantine ownership row does not match the fixed target path",
+            );
+        }
+        let quarantine = target_root.join(quarantine_name(recorded));
+        let Some(verified) = prove_quarantine(&quarantine, recorded) else {
+            return self.refuse(
+                &recorded.target_id,
+                &recorded.skill_name,
+                Some(install_path),
+                "the durable quarantine path is missing or its ownership/content proof is invalid",
+            );
         };
-        let _ = std::fs::remove_dir_all(&quarantine);
-        let mut outcome = self.finalize_row(repository, recorded, Some(&quarantine));
+
+        if let Err(error) = std::fs::remove_dir_all(&verified) {
+            return self.refuse(
+                &recorded.target_id,
+                &recorded.skill_name,
+                Some(install_path),
+                format!("failed to remove the proven quarantine: {error}"),
+            );
+        }
+        let mut outcome = self.finalize_row(repository, recorded);
         outcome.quarantine_path = Some(quarantine.to_string_lossy().to_string());
         outcome
     }
@@ -394,11 +491,7 @@ impl SkillUninstaller {
         &self,
         repository: &CapabilityRepository,
         recorded: &SkillInstallation,
-        quarantine: Option<&Path>,
     ) -> UninstallOutcome {
-        if let Some(quarantine) = quarantine {
-            let _ = std::fs::remove_dir_all(quarantine);
-        }
         match repository
             .set_installation_state(&recorded.installation_id, SkillInstallationState::Removed)
         {
@@ -420,6 +513,55 @@ impl SkillUninstaller {
             },
         }
     }
+}
+
+/// Derives the only quarantine name that can belong to a durable installation.
+fn quarantine_name(recorded: &SkillInstallation) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(recorded.installation_id.as_bytes());
+    let identity = hex::encode(hasher.finalize());
+    format!(".{}.cs-quarantine-{identity}", recorded.skill_name)
+}
+
+/// Re-proves a quarantine before deletion. It must be the exact deterministic
+/// sibling, a real directory, and contain the same ownership marker and content
+/// manifest as the durable installation row. `None` means preserve it.
+fn prove_quarantine(path: &Path, recorded: &SkillInstallation) -> Option<PathBuf> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    if path.file_name()? != quarantine_name(recorded).as_str() {
+        return None;
+    }
+    let prefix = format!(".{}.cs-quarantine-", recorded.skill_name);
+    let parent = path.parent()?;
+    let entries = std::fs::read_dir(parent).ok()?;
+    for entry in entries {
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with(&prefix) && name != quarantine_name(recorded).as_str()
+        {
+            // An ambiguous set of quarantine candidates cannot be attributed
+            // to this installation. Preserve every candidate and wait for
+            // explicit reconciliation evidence rather than deleting one.
+            return None;
+        }
+    }
+    let digest = crate::capability::skill::manifest::manifest_digest(&recorded.file_manifest)?;
+    if digest != recorded.manifest_digest || digest != recorded.content_digest {
+        return None;
+    }
+    if !ownership::has_proof(path, recorded).ok()? {
+        return None;
+    }
+    if !verify_file_manifest(path, &recorded.file_manifest)
+        .ok()?
+        .is_match()
+    {
+        return None;
+    }
+    Some(path.to_path_buf())
 }
 
 /// A quarantine directory left behind by an interrupted uninstall.
@@ -458,8 +600,20 @@ mod tests {
 
     fn fixture() -> Fixture {
         let temp = TempDir::new().expect("temp dir");
-        let home = temp.path().join("home");
         let chatspeed = temp.path().join("chatspeed-home");
+        fixture_in(temp, chatspeed)
+    }
+
+    /// A fixture whose `CHATSPEED_HOME` points at the shared Agents home, so the
+    /// `chatspeed` and `agents` ids resolve to one physical directory.
+    fn aliased_fixture() -> Fixture {
+        let temp = TempDir::new().expect("temp dir");
+        let chatspeed = temp.path().join("home").join(".agents");
+        fixture_in(temp, chatspeed)
+    }
+
+    fn fixture_in(temp: TempDir, chatspeed: PathBuf) -> Fixture {
+        let home = temp.path().join("home");
         std::fs::create_dir_all(&home).expect("create home");
 
         let content = temp.path().join("content");
@@ -481,6 +635,64 @@ mod tests {
         }
     }
 
+    /// Plants a managed skill directory under the shared Agents home and records
+    /// an ownership row for `target_id`, so the directory is otherwise fully
+    /// deletable and only the target's right to delete can refuse it.
+    fn plant_managed_skill(fixture: &Fixture, target_id: &str, name: &str) -> PathBuf {
+        let directory = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".agents")
+            .join("skills")
+            .join(name);
+        std::fs::create_dir_all(&directory).expect("create skill dir");
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test skill\n---\n\n# {name}\n"),
+        )
+        .expect("write skill");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let manifest_digest = crate::capability::skill::manifest::manifest_digest(&manifest)
+            .expect("manifest digest");
+        let content_digest = crate::capability::operation::content_digest(
+            &manifest
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.sha256.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let installation = SkillInstallation {
+            installation_id: format!("skl-{target_id}-{name}"),
+            skill_name: name.to_string(),
+            target_id: target_id.to_string(),
+            install_path: directory.to_string_lossy().to_string(),
+            source_kind: "local_directory".to_string(),
+            source_ref: "local_directory:test".to_string(),
+            checker_version: "skill-checker.v1".to_string(),
+            verdict: "pass".to_string(),
+            content_digest,
+            file_manifest: manifest,
+            marker_nonce: format!("nonce-{target_id}-{name}"),
+            manifest_digest,
+            state: SkillInstallationState::Installed,
+            operation_id: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        crate::capability::skill::ownership::write_marker(
+            &directory,
+            &crate::capability::skill::ownership::OwnershipMarker::from_installation(&installation),
+        )
+        .expect("write marker");
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+        directory
+    }
+
     fn operation(fixture: &Fixture, idempotency_key: &str) -> String {
         let request = OperationRequest {
             capability: CapabilityKind::Skill,
@@ -498,6 +710,11 @@ mod tests {
 
     /// Installs the fixture skill into the ChatSpeed target and returns its path.
     fn installed(fixture: &Fixture) -> PathBuf {
+        installed_into(fixture, SkillTargetId::Chatspeed)
+    }
+
+    /// Installs the fixture skill into one target and returns its install path.
+    fn installed_into(fixture: &Fixture, target: SkillTargetId) -> PathBuf {
         let report = check_directory(&fixture.content).expect("check");
         let source = SkillSource::LocalDirectory {
             path: fixture.content.to_string_lossy().to_string(),
@@ -506,8 +723,8 @@ mod tests {
             &source,
             &report,
             &fixture.content,
-            &[crate::capability::targets::SkillTargetId::Chatspeed],
-            fixture.frozen.clone(),
+            &[target],
+            fixture.frozen.join(target.as_str()),
         )
         .expect("plan");
         let installer = SkillInstaller::new(fixture.environment.clone());
@@ -631,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn a_verified_target_missing_install_is_not_found_without_deletion() {
+    fn an_external_target_without_an_install_is_still_refused() {
         let fixture = fixture();
         let uninstaller = SkillUninstaller::new(fixture.environment.clone());
         let outcome = uninstaller
@@ -642,7 +859,172 @@ mod tests {
                 "demo",
             )
             .expect("uninstall");
-        assert_eq!(outcome.status, UninstallOutcomeStatus::NotFound);
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+    }
+
+    #[test]
+    fn an_external_install_is_refused_and_retained() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Codex);
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-1"),
+                "codex",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(install_path.join("SKILL.md").is_file());
+        assert!(install_path.join("notes.md").is_file());
+        let row = fixture
+            .repository
+            .get_installation("codex", "demo")
+            .expect("lookup")
+            .expect("row");
+        assert_eq!(row.state, SkillInstallationState::Installed);
+    }
+
+    #[test]
+    fn a_canonical_agents_install_is_removed_with_proof() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Agents);
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-1"),
+                "agents",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Removed);
+        assert!(!install_path.exists());
+        let row = fixture
+            .repository
+            .get_installation("agents", "demo")
+            .expect("lookup")
+            .expect("row");
+        assert_eq!(row.state, SkillInstallationState::Removed);
+    }
+
+    #[test]
+    fn a_canonical_agents_install_is_refused_when_drifted() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Agents);
+        std::fs::write(install_path.join("notes.md"), "edited by hand").expect("edit");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-1"),
+                "agents",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(install_path.join("notes.md").is_file());
+    }
+
+    #[test]
+    fn a_legacy_chatspeed_row_cannot_delete_the_canonical_agents_directory() {
+        let fixture = aliased_fixture();
+        let directory = plant_managed_skill(&fixture, "chatspeed", "demo");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-legacy-alias"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(
+            directory.join("SKILL.md").is_file(),
+            "the canonical Agents content is retained"
+        );
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Installed,
+            "an aliasing row is left exactly as it was"
+        );
+    }
+
+    #[test]
+    fn a_canonical_agents_row_is_removed_in_an_aliased_environment() {
+        let fixture = aliased_fixture();
+        let directory = plant_managed_skill(&fixture, "agents", "demo");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-agents-alias"),
+                "agents",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Removed);
+        assert!(!directory.exists());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("agents", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Removed
+        );
+    }
+
+    #[test]
+    fn reconcile_never_converges_an_external_target() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Codex);
+        let installation_id = fixture
+            .repository
+            .get_installation("codex", "demo")
+            .expect("lookup")
+            .expect("row")
+            .installation_id;
+        fixture
+            .repository
+            .set_installation_state(&installation_id, SkillInstallationState::Installing)
+            .expect("mark installing");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let converged = uninstaller
+            .reconcile_owned_directory(&fixture.repository, "codex", "demo")
+            .expect("reconcile");
+
+        assert!(converged.is_none());
+        assert!(install_path.join("SKILL.md").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("codex", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Installing,
+            "an external row is left exactly as it was"
+        );
     }
 
     #[test]
@@ -674,17 +1056,17 @@ mod tests {
         let fixture = fixture();
         let install_path = installed(&fixture);
         let target_root = install_path.parent().expect("parent").to_path_buf();
-        let quarantine = target_root.join(".demo.cs-quarantine-crashed");
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
         std::fs::rename(&install_path, &quarantine).expect("simulate the interrupted rename");
         fixture
             .repository
             .set_installation_state(
-                &fixture
-                    .repository
-                    .get_installation("chatspeed", "demo")
-                    .expect("lookup")
-                    .expect("row")
-                    .installation_id,
+                &recorded.installation_id,
                 SkillInstallationState::Quarantined,
             )
             .expect("mark quarantined");
@@ -701,5 +1083,330 @@ mod tests {
 
         assert_eq!(outcome.status, UninstallOutcomeStatus::Finalized);
         assert!(!quarantine.exists());
+    }
+
+    #[test]
+    fn unproven_quarantine_candidates_are_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let fake = target_root.join(".demo.cs-quarantine-fake");
+        std::fs::create_dir_all(&fake).expect("fake quarantine");
+        std::fs::write(fake.join("user.txt"), "keep me").expect("fake content");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-unproven-quarantine"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(fake.join("user.txt").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Quarantined
+        );
+    }
+
+    #[test]
+    fn drifted_quarantine_is_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        std::fs::rename(&install_path, &quarantine).expect("quarantine");
+        std::fs::write(quarantine.join("notes.md"), "drifted").expect("drift");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-drifted-quarantine"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.join("notes.md").is_file());
+    }
+
+    #[test]
+    fn quarantine_with_a_wrong_marker_is_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        std::fs::rename(&install_path, &quarantine).expect("quarantine");
+        std::fs::write(
+            quarantine.join(".chatspeed-skill.json"),
+            b"{\"schema_version\":1,\"installation_id\":\"wrong\"}",
+        )
+        .expect("write wrong marker");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-wrong-marker"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.exists());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Quarantined
+        );
+    }
+
+    #[test]
+    fn quarantine_with_a_wrong_recorded_digest_is_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let mut recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        std::fs::rename(&install_path, &quarantine).expect("quarantine");
+        recorded.content_digest = "wrong-content-digest".to_string();
+        fixture
+            .repository
+            .upsert_installation(&recorded)
+            .expect("update digest");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-wrong-digest"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.join("SKILL.md").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Quarantined
+        );
+    }
+
+    #[test]
+    fn a_non_directory_quarantine_is_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        std::fs::remove_dir_all(&install_path).expect("remove install");
+        std::fs::write(&quarantine, "not a directory").expect("write quarantine file");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-non-directory-quarantine"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.is_file());
+    }
+
+    #[test]
+    fn multiple_quarantine_candidates_are_all_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        let extra = target_root.join(".demo.cs-quarantine-extra");
+        std::fs::rename(&install_path, &quarantine).expect("quarantine");
+        std::fs::create_dir_all(&extra).expect("create extra candidate");
+        std::fs::write(extra.join("user.txt"), "keep me").expect("write extra content");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-multiple-quarantines"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.join("SKILL.md").is_file());
+        assert!(extra.join("user.txt").is_file());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlink_quarantine_is_preserved() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let recorded = fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row");
+        let outside = fixture._temp.path().join("quarantine-outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("user.txt"), "keep me").expect("outside content");
+        let quarantine = target_root.join(quarantine_name(&recorded));
+        std::os::unix::fs::symlink(&outside, &quarantine).expect("symlink quarantine");
+        std::fs::remove_dir_all(&install_path).expect("remove install");
+        fixture
+            .repository
+            .set_installation_state(
+                &recorded.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let outcome = SkillUninstaller::new(fixture.environment.clone())
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-symlink-quarantine"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(quarantine.exists());
+        assert!(outside.join("user.txt").is_file());
+    }
+    #[test]
+    fn a_symlinked_eligible_root_is_refused_and_the_content_is_kept() {
+        #[cfg(unix)]
+        {
+            let fixture = fixture();
+            let install_path = installed(&fixture);
+            let skills = fixture
+                .environment
+                .chatspeed_skills_dir()
+                .expect("skills dir");
+
+            // Replace the eligible root with a link that points at an external
+            // directory holding the installed skill.
+            let outside = fixture._temp.path().join("outside");
+            std::fs::create_dir_all(&outside).expect("create outside");
+            std::fs::rename(&skills, outside.join("skills")).expect("move skills aside");
+            std::os::unix::fs::symlink(outside.join("skills"), &skills).expect("symlink root");
+
+            let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+            let outcome = uninstaller
+                .uninstall(
+                    &fixture.repository,
+                    &operation(&fixture, "uninstall-symlink"),
+                    "chatspeed",
+                    "demo",
+                )
+                .expect("uninstall");
+
+            assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+            assert!(
+                outside.join("skills/demo/SKILL.md").is_file(),
+                "the external content is retained"
+            );
+            assert!(
+                install_path.exists(),
+                "the eligible root link still resolves to the retained content"
+            );
+            let row = fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row");
+            assert_eq!(row.state, SkillInstallationState::Installed);
+        }
     }
 }

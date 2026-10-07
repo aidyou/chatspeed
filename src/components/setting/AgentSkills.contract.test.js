@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
+import { createPinia, defineStore, setActivePinia } from 'pinia'
+import { ref } from 'vue'
+import { parseCapabilityError } from '../../libs/capability.js'
 
 const component = readFileSync(new URL('./AgentSkills.vue', import.meta.url), 'utf8')
+const general = readFileSync(new URL('./General.vue', import.meta.url), 'utf8')
 const settings = readFileSync(new URL('../../views/Settings.vue', import.meta.url), 'utf8')
 
 const locales = ['en', 'zh-Hans', 'zh-Hant'].map(name => ({
@@ -18,8 +23,10 @@ test('the Agent Skills page is separate from the prompt Skill page', () => {
   assert.match(component, /import { useCapabilityStore } from '@\/stores\/capability'/)
   // The prompt page keeps its own menu entry, and the new page is additive.
   assert.match(settings, /id: 'skill'/)
-  assert.match(settings, /id: 'agentSkills'/)
-  assert.match(settings, /<agent-skills \/>/)
+  assert.match(general, /v-model="generalTab"/)
+  assert.match(general, /name="agentSkills"/)
+  assert.match(general, /<agent-skills \/>/)
+  assert.doesNotMatch(settings, /id: 'agentSkills'/)
 })
 
 test('check, install and uninstall all go through the capability service', () => {
@@ -35,6 +42,86 @@ test('check, install and uninstall all go through the capability service', () =>
   assert.match(component, /verdictAllowsInstall\(report\.value\)/)
   // A source change drops the previous verdict instead of reusing it.
   assert.match(component, /store\.resetCheck\(\)/)
+})
+
+test('plugin lifecycle stays behind the runtime forwarding surface', () => {
+  const pluginStore = readFileSync(new URL('../../stores/plugin.js', import.meta.url), 'utf8')
+  assert.match(component, /usePluginStore/)
+  for (const command of ['plugin_inventory', 'plugin_load', 'plugin_disable', 'plugin_uninstall']) {
+    assert.match(pluginStore, new RegExp(`'${command}'`))
+  }
+  assert.doesNotMatch(pluginStore, /agent_skills_plugin_|readFile|writeFile|fetch\(/)
+  assert.match(component, /pluginStore\.loadInventory\(\)/)
+})
+
+test('source documents use the strict backend SkillSource DTO', () => {
+  assert.match(component, /value="local_zip"/)
+  assert.match(component, /kind: 'github'/)
+  assert.match(component, /owner: repositoryParts\.value\[0\]/)
+  assert.match(component, /repo: repositoryParts\.value\[1\]/)
+  assert.match(component, /git_ref: githubRef\.value\.trim\(\) \|\| undefined/)
+  assert.doesNotMatch(component, /kind: 'zip'/)
+  assert.doesNotMatch(component, /repository: githubRepository/)
+  assert.doesNotMatch(component, /reference: githubRef/)
+})
+test('plugin store executes only runtime forwarding commands and reconciles responses', async () => {
+  const source = readFileSync(new URL('../../stores/plugin.js', import.meta.url), 'utf8')
+  assert.match(source, /import \{ invoke \} from '@tauri-apps\/api\/core'/)
+  setActivePinia(createPinia())
+  const calls = []
+  let failure = null
+  const useStore = runInNewContext(
+    source.replace(/^import .*\n/gm, '').replace('export const usePluginStore', 'const usePluginStore') + '\nusePluginStore',
+    {
+      defineStore, ref, parseCapabilityError,
+      invoke: async command => {
+        calls.push(command)
+        if (failure) throw failure
+        return { installed: command !== 'plugin_uninstall', enabled: command === 'plugin_load' }
+      }
+    }
+  )
+  const store = useStore()
+  await store.loadInventory()
+  await store.install()
+  assert.equal(store.inventory.enabled, true)
+  await store.disable()
+  assert.equal(store.inventory.enabled, false)
+  await store.uninstall()
+  assert.equal(store.inventory.installed, false)
+  assert.deepEqual(calls, ['plugin_inventory', 'plugin_load', 'plugin_disable', 'plugin_uninstall'])
+  failure = JSON.stringify({ code: 'unavailable', message: 'runtime unavailable' })
+  await assert.rejects(store.install(), error => error.code === 'unavailable')
+  assert.equal(store.lastError, 'runtime unavailable')
+  assert.equal(store.applying, false)
+  await assert.rejects(store.loadInventory(), error => error.code === 'unavailable')
+  assert.equal(store.loading, false)
+  assert.match(component, /v-if="pluginStore.inventory" class="buttons"/)
+})
+
+test('source adapter generates canonical JSON for directory, ZIP and GitHub', () => {
+  const start = component.indexOf('const sourceDocument = computed(')
+  const end = component.indexOf('\n\n// A changed source', start)
+  assert.ok(start > -1 && end > start)
+  const sourceKind = { value: 'local_directory' }
+  const sourcePath = { value: ' /fixture/demo ' }
+  const repositoryParts = { value: ['owner', 'repo'] }
+  const githubPath = { value: ' skills/demo ' }
+  const githubRef = { value: ' main ' }
+  const source = runInNewContext(component.slice(start, end) + '\nsourceDocument', {
+    computed: getter => ({ get value() { return getter() } }),
+    sourceKind, sourcePath, repositoryParts, githubPath, githubRef
+  })
+  const json = () => JSON.parse(JSON.stringify(source.value))
+  assert.deepEqual(json(), { kind: 'local_directory', path: '/fixture/demo' })
+  sourceKind.value = 'local_zip'
+  sourcePath.value = ' /fixture/demo.zip '
+  assert.deepEqual(json(), { kind: 'local_zip', path: '/fixture/demo.zip' })
+  sourceKind.value = 'github'
+  assert.deepEqual(json(), { kind: 'github', owner: 'owner', repo: 'repo', git_ref: 'main', path: 'skills/demo' })
+  githubPath.value = ''
+  githubRef.value = ''
+  assert.deepEqual(json(), { kind: 'github', owner: 'owner', repo: 'repo' })
 })
 
 test('the page surfaces every refusal state instead of hiding it', () => {

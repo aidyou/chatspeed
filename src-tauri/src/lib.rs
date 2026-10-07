@@ -16,6 +16,11 @@ use chatspeed_runtime_backend::ai;
 pub use chatspeed_runtime_backend::capability;
 use chatspeed_runtime_backend::ccproxy;
 use chatspeed_runtime_backend::owner::builtin_agents;
+// The shared, filesystem-free plugin error/DTO contract. The standalone runtime
+// is the only plugin-management owner; the desktop reaches it exclusively over
+// `/control/v1`, so it names only these types and never compiles the runtime's
+// plugin filesystem lifecycle.
+pub use chatspeed_runtime_backend::plugin_types;
 pub mod chat_hub;
 mod commands;
 use chatspeed_runtime_backend::constants;
@@ -106,6 +111,7 @@ use commands::model_catalog::{
     list_models_dev_provider_models, list_models_dev_providers, resolve_model_profile,
 };
 use commands::note::*;
+use commands::plugin::*;
 use commands::proxy_group::*;
 use commands::sandbox::*;
 use commands::sensitive::*;
@@ -272,6 +278,11 @@ pub async fn run() -> crate::error::Result<()> {
             capability_skill_check,
             capability_skill_install,
             capability_skill_uninstall,
+            // plugin management (runtime-owned static bundle; fixed typed facade)
+            plugin_inventory,
+            plugin_load,
+            plugin_disable,
+            plugin_uninstall,
             // agent command
             add_agent,
             update_agent,

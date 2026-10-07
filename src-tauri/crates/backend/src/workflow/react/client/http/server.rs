@@ -824,6 +824,33 @@ fn build_router(state: ControlPlaneState) -> Router {
             post(delete_automation),
         );
 
+    // Runtime-only plugin management. The static `agent-skills` bundle is owned
+    // by the runtime's `PluginService`; the desktop and every other client reach
+    // it only through these fixed typed routes, which never accept a path, a
+    // shell string or a generic command envelope. Mutations are bearer +
+    // idempotency-key required and take only an empty body. The service sits
+    // behind the runtime-only `plugin-service` feature, so the desktop build
+    // never mounts these routes; a workspace-wide build still compiles the
+    // lifecycle, because the backend enables the feature by default.
+    #[cfg(feature = "plugin-service")]
+    let router = router
+        .route(
+            "/control/v1/plugins/agent-skills",
+            get(get_agent_skills_plugin),
+        )
+        .route(
+            "/control/v1/plugins/agent-skills/load",
+            post(load_agent_skills_plugin),
+        )
+        .route(
+            "/control/v1/plugins/agent-skills/disable",
+            post(disable_agent_skills_plugin),
+        )
+        .route(
+            "/control/v1/plugins/agent-skills/uninstall",
+            post(uninstall_agent_skills_plugin),
+        );
+
     // The standalone runtime owns the client-lease lifecycle, so those routes
     // exist only when a runtime extension is present. They are added before the
     // auth layer so they are bearer-protected and body-limited like every other
@@ -1708,6 +1735,136 @@ struct SkillUninstallRequest {
     skill_name: String,
     #[serde(default)]
     targets: Vec<String>,
+}
+
+/// Maps a plugin service failure to a stable HTTP status and envelope code.
+///
+/// The service's own code is preserved on the wire so a client branches on the
+/// exact token the runtime produced. The message is the service's non-secret
+/// diagnostic; a plugin root is the only path a caller ever receives and it
+/// travels in the inventory body, never in an error.
+#[cfg(feature = "plugin-service")]
+fn plugin_error_response(error: &crate::plugin_types::PluginError) -> Response {
+    use crate::plugin_types::plugin_code;
+    let (status, code) = match error.code.as_str() {
+        plugin_code::INVALID_MANIFEST => (StatusCode::BAD_REQUEST, plugin_code::INVALID_MANIFEST),
+        plugin_code::NOT_INSTALLED => (StatusCode::NOT_FOUND, plugin_code::NOT_INSTALLED),
+        plugin_code::UNAVAILABLE => (StatusCode::SERVICE_UNAVAILABLE, plugin_code::UNAVAILABLE),
+        plugin_code::REFUSED => (StatusCode::CONFLICT, plugin_code::REFUSED),
+        plugin_code::CONFLICT => (StatusCode::CONFLICT, plugin_code::CONFLICT),
+        plugin_code::IO => (StatusCode::INTERNAL_SERVER_ERROR, plugin_code::IO),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, plugin_code::INTERNAL),
+    };
+    dto::error_response(status, code, error.message.clone())
+}
+
+/// `GET /control/v1/plugins/agent-skills` — the static bundle inventory.
+///
+/// Read-only and non-durable: it reports the state the runtime can prove and
+/// never creates, reads or removes the managed skills directory.
+#[cfg(feature = "plugin-service")]
+async fn get_agent_skills_plugin(State(state): State<ControlPlaneState>) -> Response {
+    match state.svc.plugin().inventory() {
+        Ok(inventory) => snake_json_response(serde_json::to_value(&inventory)),
+        Err(error) => plugin_error_response(&error),
+    }
+}
+
+/// The exact body a plugin lifecycle mutation accepts.
+///
+/// The plugin routes take no parameters — no path, no shell string, no generic
+/// command envelope — so the body must be an empty JSON object (or empty) and an
+/// unknown field is refused instead of ignored. A client can never smuggle
+/// input the typed facade would not read.
+#[cfg(feature = "plugin-service")]
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct PluginMutationBody {}
+
+/// Validates a plugin mutation body, refusing anything but an empty object.
+#[cfg(feature = "plugin-service")]
+fn parse_plugin_mutation_body(body: &str) -> Result<(), Response> {
+    if body.trim().is_empty() {
+        return Ok(());
+    }
+    serde_json::from_str::<PluginMutationBody>(body)
+        .map(|_| ())
+        .map_err(|error| {
+            dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                format!("Invalid plugin mutation request: {error}"),
+            )
+        })
+}
+
+/// `POST /control/v1/plugins/agent-skills/load` — stages, verifies and
+/// atomically publishes the embedded bundle.
+#[cfg(feature = "plugin-service")]
+async fn load_agent_skills_plugin(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("plugins:load");
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        if let Err(response) = parse_plugin_mutation_body(&body) {
+            return response;
+        }
+        match state.svc.plugin().load() {
+            Ok(inventory) => snake_json_response(serde_json::to_value(&inventory)),
+            Err(error) => plugin_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/plugins/agent-skills/disable` — marks the installed
+/// bundle disabled without touching its assets.
+#[cfg(feature = "plugin-service")]
+async fn disable_agent_skills_plugin(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("plugins:disable");
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        if let Err(response) = parse_plugin_mutation_body(&body) {
+            return response;
+        }
+        match state.svc.plugin().disable() {
+            Ok(inventory) => snake_json_response(serde_json::to_value(&inventory)),
+            Err(error) => plugin_error_response(&error),
+        }
+    })
+    .await
+}
+
+/// `POST /control/v1/plugins/agent-skills/uninstall` — removes only the
+/// plugin-owned bundle; never the managed skills directory or any target.
+#[cfg(feature = "plugin-service")]
+async fn uninstall_agent_skills_plugin(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("plugins:uninstall");
+    }
+    with_idempotency(&state, &headers, &body, |state, body| async move {
+        if let Err(response) = parse_plugin_mutation_body(&body) {
+            return response;
+        }
+        match state.svc.plugin().uninstall() {
+            Ok(inventory) => snake_json_response(serde_json::to_value(&inventory)),
+            Err(error) => plugin_error_response(&error),
+        }
+    })
+    .await
 }
 
 /// `POST /control/v1/mcp-install` — registers one MCP server, always disabled.
@@ -3469,6 +3626,434 @@ mod tests {
             .await
             .expect("request without auth");
         assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    }
+
+    /// The runtime-owned plugin routes are additive, bearer-protected and
+    /// idempotency-required for every mutation. They delegate to the runtime's
+    /// single `PluginService`, so the desktop and any other client observe one
+    /// plugin lifecycle and no client ever resolves a plugin path itself.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_manage_the_runtime_owned_bundle() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        // The harness points `CHATSPEED_HOME` at its own tempdir, so the
+        // runtime's plugin root is inside that tempdir, never the developer's.
+        let plugin_dir = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        )
+        .join("plugins")
+        .join("agent-skills");
+
+        // The read route sits behind the same bearer middleware as the rest.
+        let response = http
+            .get(auth_url(&app, "/control/v1/plugins/agent-skills"))
+            .send()
+            .await
+            .expect("unauthenticated inventory");
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        // A fresh home reports the embedded bundle as not installed without
+        // creating anything on disk.
+        let response = http
+            .get(auth_url(&app, "/control/v1/plugins/agent-skills"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("inventory");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("inventory json");
+        assert_eq!(inventory["plugin_id"], "agent-skills");
+        assert_eq!(inventory["installed"], serde_json::json!(false));
+        assert!(!plugin_dir.exists());
+
+        // Every mutation requires an idempotency key.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("load without key");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.expect("error json");
+        assert_eq!(body["error"]["code"], "missing_idempotency_key");
+
+        // Load stages, verifies and publishes the embedded bundle.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-load-1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("load json");
+        assert_eq!(inventory["installed"], serde_json::json!(true));
+        assert_eq!(inventory["enabled"], serde_json::json!(true));
+        assert_eq!(inventory["version"], "0.1.0");
+        assert!(plugin_dir.join("plugin.json").is_file());
+        assert!(plugin_dir.join("index.html").is_file());
+
+        // Disable keeps the assets and only flips the lifecycle state.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/disable"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-disable-1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("disable");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("disable json");
+        assert_eq!(inventory["installed"], serde_json::json!(true));
+        assert_eq!(inventory["enabled"], serde_json::json!(false));
+        assert!(plugin_dir.join("index.html").is_file());
+
+        // Uninstall removes only the plugin-owned bundle.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/uninstall"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-uninstall-1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("uninstall");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("uninstall json");
+        assert_eq!(inventory["installed"], serde_json::json!(false));
+        assert!(!plugin_dir.exists());
+    }
+
+    /// A plugin mutation takes no parameters: the body must be empty or an empty
+    /// JSON object. An arbitrary JSON body — including a path — is refused and
+    /// nothing is written.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_refuse_a_non_empty_mutation_body() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let plugin_dir = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        )
+        .join("plugins")
+        .join("agent-skills");
+
+        // An unknown field is refused instead of ignored.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-strict-unknown")
+            .json(&serde_json::json!({ "path": "/etc/passwd" }))
+            .send()
+            .await
+            .expect("load with an unknown field");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = response.json().await.expect("error json");
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert!(!plugin_dir.exists(), "a refused load writes nothing");
+
+        // A non-object body is refused too.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-strict-scalar")
+            .header("Content-Type", "application/json")
+            .body("\"just-a-string\"")
+            .send()
+            .await
+            .expect("load with a scalar body");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        assert!(!plugin_dir.exists());
+
+        // The empty object the typed facade documents is still accepted.
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-strict-empty")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load with an empty body");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(plugin_dir.join("index.html").is_file());
+    }
+
+    /// Idempotent replay must not re-execute a mutation: a load under a key, then
+    /// a disable, then a replayed load under the same key leaves the bundle
+    /// disabled on disk even though the replayed response is the cached first
+    /// load.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_replay_a_load_without_reenabling() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let home = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        );
+        let plugin_dir = home.join("plugins").join("agent-skills");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-replay-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("first load");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let first: serde_json::Value = response.json().await.expect("first load json");
+        assert_eq!(first["enabled"], serde_json::json!(true));
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/disable"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-replay-disable")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("disable");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        // The replayed load returns the cached first response...
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-replay-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("replayed load");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        // ...but the mutation never re-ran: the bundle stays disabled on disk.
+        let response = http
+            .get(auth_url(&app, "/control/v1/plugins/agent-skills"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("inventory");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("inventory json");
+        assert_eq!(inventory["installed"], serde_json::json!(true));
+        assert_eq!(
+            inventory["enabled"],
+            serde_json::json!(false),
+            "a replayed load must not re-enable the bundle"
+        );
+        assert!(plugin_dir.join("index.html").is_file());
+    }
+
+    /// A symlinked `plugins/` parent redirects every lifecycle path, so the
+    /// routes must fail closed: the mutations are refused, the read reports
+    /// "not installed", and the managed skills directory is never touched.
+    #[cfg(all(feature = "plugin-service", unix))]
+    #[tokio::test]
+    async fn plugin_routes_refuse_a_parent_symlink_into_skills() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let home = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        );
+        let skills = home.join("skills");
+        std::fs::create_dir_all(&skills).expect("skills");
+        std::fs::write(skills.join("SKILL.md"), b"managed").expect("skill");
+        // `plugins/` is redirected into the managed skills directory.
+        std::os::unix::fs::symlink(&skills, home.join("plugins")).expect("symlink root");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-symlink-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/uninstall"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-symlink-uninstall")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("uninstall");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+
+        // The read reports "not installed" and never follows the link.
+        let response = http
+            .get(auth_url(&app, "/control/v1/plugins/agent-skills"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("inventory");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("inventory json");
+        assert_eq!(inventory["installed"], serde_json::json!(false));
+
+        assert!(
+            skills.join("SKILL.md").is_file(),
+            "the skills directory must be untouched"
+        );
+        assert!(
+            !skills.join("plugin.json").exists(),
+            "no bundle may be published into the link target"
+        );
+    }
+
+    /// A plain directory that only shares the bundle's name has no manifest to
+    /// prove ownership, so it must never be deleted or replaced.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_refuse_a_foreign_bundle_directory() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let home = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        );
+        let plugin_dir = home.join("plugins").join("agent-skills");
+        std::fs::create_dir_all(&plugin_dir).expect("foreign dir");
+        std::fs::write(plugin_dir.join("keep.txt"), b"keep").expect("keep");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/uninstall"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-foreign-uninstall")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("uninstall");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-foreign-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+
+        assert!(
+            plugin_dir.join("keep.txt").is_file(),
+            "foreign content must survive"
+        );
+    }
+
+    /// After a load, a drifted asset makes the installed directory unprovable,
+    /// so uninstall must refuse instead of deleting unknown content.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_refuse_a_drifted_bundle() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let home = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        );
+        let plugin_dir = home.join("plugins").join("agent-skills");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-drift-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert!(plugin_dir.join("index.html").is_file());
+
+        std::fs::write(plugin_dir.join("index.html"), b"tampered").expect("tamper");
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/uninstall"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-drift-uninstall")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("uninstall");
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+        assert!(plugin_dir.exists(), "drifted content must survive");
+    }
+
+    /// Concurrent load and uninstall requests are serialized by the service:
+    /// no request may fail with an internal error, the final state is
+    /// consistent and no staging residue survives.
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_routes_serialize_concurrent_load_and_uninstall() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let home = std::path::PathBuf::from(
+            std::env::var("CHATSPEED_HOME").expect("CHATSPEED_HOME is set by the harness"),
+        );
+        let load_url = auth_url(&app, "/control/v1/plugins/agent-skills/load");
+        let uninstall_url = auth_url(&app, "/control/v1/plugins/agent-skills/uninstall");
+
+        let mut handles = Vec::new();
+        for index in 0..6 {
+            let http = http.clone();
+            let auth = auth.clone();
+            let load_url = load_url.clone();
+            let uninstall_url = uninstall_url.clone();
+            handles.push(tokio::spawn(async move {
+                let (url, key) = if index % 2 == 0 {
+                    (load_url, format!("plugin-concurrent-load-{index}"))
+                } else {
+                    (uninstall_url, format!("plugin-concurrent-uninstall-{index}"))
+                };
+                http.post(&url)
+                    .header("Authorization", &auth)
+                    .header("Idempotency-Key", &key)
+                    .json(&serde_json::json!({}))
+                    .send()
+                    .await
+                    .expect("concurrent request")
+            }));
+        }
+        for handle in handles {
+            let response = handle.await.expect("join");
+            // A serialized load/uninstall resolves to success or a fail-closed
+            // refusal, never an internal error from an interleaved cleanup.
+            assert!(
+                response.status() == reqwest::StatusCode::OK
+                    || response.status() == reqwest::StatusCode::CONFLICT,
+                "unexpected status {}",
+                response.status()
+            );
+        }
+
+        let response = http
+            .get(auth_url(&app, "/control/v1/plugins/agent-skills"))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("inventory");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let inventory: serde_json::Value = response.json().await.expect("inventory json");
+        let plugin_dir = home.join("plugins").join("agent-skills");
+        if inventory["installed"] == serde_json::json!(true) {
+            assert!(plugin_dir.join("index.html").is_file());
+        } else {
+            assert!(!plugin_dir.exists());
+        }
+        let residue = home
+            .join("plugins")
+            .join(".staging")
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+        assert!(!residue, "no staging residue may survive");
     }
 
     /// The manual invocation route is mounted, bearer-protected and delegates to

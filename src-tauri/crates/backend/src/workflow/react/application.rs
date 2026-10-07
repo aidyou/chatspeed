@@ -72,6 +72,11 @@ pub struct WorkflowApplicationService {
     /// here keeps exactly one instance alive for the desktop owner, so the
     /// in-process single-flight locks and the durable journal cannot diverge.
     pub(crate) capability: Arc<crate::capability::CapabilityApplicationService>,
+    /// The runtime-owned `agent-skills` plugin bundle service. The runtime is
+    /// the only plugin-management owner; the desktop reaches it exclusively
+    /// over `/control/v1`, so this accessor exists only in the runtime build.
+    #[cfg(feature = "plugin-service")]
+    pub(crate) plugin: Arc<crate::plugin::PluginService>,
     /// The runtime-owned Models.dev catalog snapshot owner. The catalog data
     /// commands and the background refresh both read this single instance, so
     /// snapshot loading, refresh and profile fallback have one owner.
@@ -124,6 +129,11 @@ impl WorkflowApplicationService {
         // Retained for compatibility with the bridge protocol tests. Production
         // web execution uses the desktop loopback MCP provider.
         let bridge = Arc::new(ClientBridgeRegistry::with_defaults());
+        // The single plugin-management owner. It resolves the plugin root at
+        // startup; the bundle content is compiled in, so no caller can inject
+        // plugin code.
+        #[cfg(feature = "plugin-service")]
+        let plugin = Arc::new(crate::plugin::PluginService::detect());
         Self {
             main_store,
             chat_state,
@@ -133,6 +143,8 @@ impl WorkflowApplicationService {
             workflow_manager,
             app_data_dir,
             capability,
+            #[cfg(feature = "plugin-service")]
+            plugin,
             catalog,
             #[cfg(not(feature = "desktop"))]
             bridge,
@@ -142,6 +154,16 @@ impl WorkflowApplicationService {
     /// The unique capability service, shared with the Tauri command layer.
     pub fn capability(&self) -> &Arc<crate::capability::CapabilityApplicationService> {
         &self.capability
+    }
+
+    /// The runtime-owned `agent-skills` plugin bundle service.
+    ///
+    /// Runtime-only: the desktop never reaches the plugin filesystem directly,
+    /// it calls the `/control/v1/plugins/agent-skills` routes that delegate
+    /// here.
+    #[cfg(feature = "plugin-service")]
+    pub fn plugin(&self) -> &Arc<crate::plugin::PluginService> {
+        &self.plugin
     }
 
     /// The runtime-owned Models.dev catalog snapshot service.

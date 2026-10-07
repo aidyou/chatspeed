@@ -24,7 +24,7 @@ use serde::Serialize;
 use crate::capability::error::{code, CapabilityError};
 use crate::capability::mcp::runtime::ObservedMcpRuntime;
 use crate::capability::skill::staging::StagingArea;
-use crate::capability::skill::uninstaller::SkillUninstaller;
+use crate::capability::skill::uninstaller::{is_uninstall_eligible_target, SkillUninstaller};
 use crate::capability::types::{
     CapabilityKind, CapabilityOperation, EffectOutcome, OperationState, SkillInstallationState,
 };
@@ -145,12 +145,16 @@ impl CapabilityApplicationService {
         let installations = self.repository().list_installations()?;
         let uninstaller = SkillUninstaller::new(self.environment().clone());
 
-        // Only targets that resolve to a real, verified directory are converged;
-        // an unverified path never receives a filesystem probe (INV-5/D-5).
+        // Only targets that resolve to a real, verified directory *and* are
+        // eligible for deletion are converged; an unverified path never receives
+        // a filesystem probe (INV-5/D-5), and an external tool's target keeps
+        // every ownership row and quarantine it has (AC-6/INV-2). A target that
+        // only aliases a higher-priority target's directory is likewise left
+        // alone by `reconcile_owned_directory` (AC-7/INV-2).
         let supported: HashSet<String> = self
             .skill_targets()
             .iter()
-            .filter(|target| target.supported)
+            .filter(|target| target.supported && is_uninstall_eligible_target(&target.id))
             .map(|target| target.id.clone())
             .collect();
 
@@ -172,7 +176,10 @@ impl CapabilityApplicationService {
                     &installation.skill_name,
                 )
                 .unwrap_or(None);
-            if converged.is_some() {
+            if converged.as_ref().is_some_and(|outcome| {
+                outcome.status
+                    == crate::capability::skill::uninstaller::UninstallOutcomeStatus::Finalized
+            }) {
                 let key = format!("{}:{}", installation.target_id, installation.skill_name);
                 if is_quarantined {
                     report.quarantines_finalized.push(key);
@@ -318,6 +325,13 @@ impl CapabilityApplicationService {
         };
         let mut all_proven = true;
         for effect in self.repository().list_effects(&operation.operation_id)? {
+            if matches!(
+                effect.outcome,
+                EffectOutcome::Blocked | EffectOutcome::Failed
+            ) {
+                all_proven = false;
+                continue;
+            }
             let Some(target_id) = effect.effect_key.strip_prefix("skill.uninstall:") else {
                 if matches!(
                     effect.outcome,
@@ -781,6 +795,7 @@ mod tests {
     use crate::capability::targets::{SkillTargetId, TargetEnvironment};
     use crate::capability::types::{CapabilityKind, OperationRequest};
     use crate::db::MainStore;
+    use sha2::Digest;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -819,6 +834,87 @@ mod tests {
         }
     }
 
+    /// A service fixture whose `CHATSPEED_HOME` points at the shared Agents home,
+    /// so the `chatspeed` and `agents` ids resolve to one physical directory.
+    fn aliased_fixture() -> Fixture {
+        let temp = TempDir::new().expect("temp dir");
+        let home = temp.path().join("home");
+        let chatspeed = home.join(".agents");
+        std::fs::create_dir_all(&home).expect("create home");
+
+        let content = temp.path().join("content");
+        std::fs::create_dir_all(&content).expect("create content");
+        std::fs::write(content.join("SKILL.md"), "---\nname: demo\n---\n\n# demo\n")
+            .expect("write skill");
+        std::fs::write(content.join("notes.md"), "prose").expect("write notes");
+
+        let store = Arc::new(MainStore::new(":memory:").expect("in-memory store"));
+        let app_data = temp.path().to_path_buf();
+        let frozen = temp.path().join("frozen");
+        let service = Arc::new(
+            CapabilityApplicationService::new(store, app_data)
+                .with_environment(TargetEnvironment::injected(home, chatspeed)),
+        );
+        Fixture {
+            service,
+            content,
+            frozen,
+            _temp: temp,
+        }
+    }
+
+    /// Plants a chatspeed-managed skill directory under the shared Agents home
+    /// with a matching ownership marker and row, so the directory is otherwise
+    /// fully convergeable and only the target's right to act can refuse it.
+    fn plant_chatspeed_skill(fixture: &Fixture, name: &str) -> PathBuf {
+        let directory = fixture
+            .service
+            .environment()
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".agents")
+            .join("skills")
+            .join(name);
+        std::fs::create_dir_all(&directory).expect("create skill dir");
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test skill\n---\n\n# {name}\n"),
+        )
+        .expect("write skill");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let installation = crate::capability::types::SkillInstallation {
+            installation_id: format!("skl-chatspeed-{name}"),
+            skill_name: name.to_string(),
+            target_id: "chatspeed".to_string(),
+            install_path: directory.to_string_lossy().to_string(),
+            source_kind: "local_directory".to_string(),
+            source_ref: "local_directory:test".to_string(),
+            checker_version: "skill-checker.v1".to_string(),
+            verdict: "pass".to_string(),
+            content_digest: "digest".to_string(),
+            file_manifest: manifest,
+            marker_nonce: format!("nonce-chatspeed-{name}"),
+            manifest_digest: "manifest-digest".to_string(),
+            state: SkillInstallationState::Installed,
+            operation_id: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        crate::capability::skill::ownership::write_marker(
+            &directory,
+            &crate::capability::skill::ownership::OwnershipMarker::from_installation(&installation),
+        )
+        .expect("write marker");
+        fixture
+            .service
+            .repository()
+            .upsert_installation(&installation)
+            .expect("record ownership");
+        directory
+    }
+
     /// Begins a Skill operation and returns its id (used as the effect owner).
     async fn begin(fixture: &Fixture, kind: &str, resource_key: &str, key: &str) -> String {
         fixture
@@ -839,6 +935,11 @@ mod tests {
 
     /// Installs the fixture skill into the ChatSpeed target and returns its path.
     async fn installed(fixture: &Fixture) -> PathBuf {
+        installed_into(fixture, SkillTargetId::Chatspeed).await
+    }
+
+    /// Installs the fixture skill into one target and returns its install path.
+    async fn installed_into(fixture: &Fixture, target: SkillTargetId) -> PathBuf {
         let report = check_directory(&fixture.content).expect("check");
         let source = SkillSource::LocalDirectory {
             path: fixture.content.to_string_lossy().to_string(),
@@ -847,8 +948,8 @@ mod tests {
             &source,
             &report,
             &fixture.content,
-            &[SkillTargetId::Chatspeed],
-            fixture.frozen.clone(),
+            &[target],
+            fixture.frozen.join(target.as_str()),
         )
         .expect("plan");
         let installer = SkillInstaller::new(fixture.service.environment().clone());
@@ -874,9 +975,15 @@ mod tests {
         let fixture = fixture();
         let install_path = installed(&fixture).await;
         let target_root = install_path.parent().expect("parent").to_path_buf();
-        let quarantine = target_root.join(".demo.cs-quarantine-crashed");
+        let installation = row(&fixture);
+        let quarantine = target_root.join(format!(
+            ".demo.cs-quarantine-{}",
+            hex::encode(sha2::Sha256::digest(
+                installation.installation_id.as_bytes()
+            ))
+        ));
         std::fs::rename(&install_path, &quarantine).expect("simulate interrupted rename");
-        let installation_id = row(&fixture).installation_id;
+        let installation_id = installation.installation_id;
         fixture
             .service
             .repository()
@@ -917,6 +1024,38 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn preserves_ambiguous_quarantine_candidates_during_reconcile() {
+        let fixture = fixture();
+        let install_path = installed(&fixture).await;
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let installation = row(&fixture);
+        let quarantine = target_root.join(format!(
+            ".demo.cs-quarantine-{}",
+            hex::encode(sha2::Sha256::digest(
+                installation.installation_id.as_bytes()
+            ))
+        ));
+        let fake = target_root.join(".demo.cs-quarantine-fake");
+        std::fs::rename(&install_path, &quarantine).expect("simulate interrupted rename");
+        std::fs::create_dir_all(&fake).expect("create fake quarantine");
+        std::fs::write(fake.join("user.txt"), "keep me").expect("write fake content");
+        fixture
+            .service
+            .repository()
+            .set_installation_state(
+                &installation.installation_id,
+                SkillInstallationState::Quarantined,
+            )
+            .expect("mark quarantined");
+
+        let report = fixture.service.reconcile().await.expect("reconcile");
+
+        assert!(report.quarantines_finalized.is_empty());
+        assert!(quarantine.join("SKILL.md").is_file());
+        assert!(fake.join("user.txt").is_file());
+        assert_eq!(row(&fixture).state, SkillInstallationState::Quarantined);
+    }
     #[tokio::test]
     async fn recovers_an_interrupted_install_whose_content_still_matches_proof() {
         let fixture = fixture();
@@ -966,6 +1105,92 @@ mod tests {
             row(&fixture).state,
             SkillInstallationState::Installing,
             "an unproven install stays for the next pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn never_converges_an_external_target_even_with_a_quarantine() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Codex).await;
+        let target_root = install_path.parent().expect("parent").to_path_buf();
+        let quarantine = target_root.join(".demo.cs-quarantine-external");
+        std::fs::rename(&install_path, &quarantine).expect("simulate the interrupted rename");
+        let installation_id = fixture
+            .service
+            .repository()
+            .get_installation("codex", "demo")
+            .expect("lookup")
+            .expect("row")
+            .installation_id;
+        fixture
+            .service
+            .repository()
+            .set_installation_state(&installation_id, SkillInstallationState::Quarantined)
+            .expect("mark quarantined");
+
+        let report = fixture.service.reconcile().await.expect("reconcile");
+
+        assert!(
+            report.quarantines_finalized.is_empty(),
+            "an external target is never converged"
+        );
+        assert!(
+            quarantine.exists(),
+            "the moved-aside directory is preserved"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .repository()
+                .get_installation("codex", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Quarantined,
+            "the external row is left untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn never_converges_a_legacy_chatspeed_alias_of_the_agents_directory() {
+        let fixture = aliased_fixture();
+        let directory = plant_chatspeed_skill(&fixture, "demo");
+        let target_root = directory.parent().expect("parent").to_path_buf();
+        let quarantine = target_root.join(".demo.cs-quarantine-legacy");
+        std::fs::rename(&directory, &quarantine).expect("simulate the interrupted rename");
+        let installation_id = fixture
+            .service
+            .repository()
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .expect("row")
+            .installation_id;
+        fixture
+            .service
+            .repository()
+            .set_installation_state(&installation_id, SkillInstallationState::Quarantined)
+            .expect("mark quarantined");
+
+        let report = fixture.service.reconcile().await.expect("reconcile");
+
+        assert!(
+            report.quarantines_finalized.is_empty(),
+            "a target that only aliases the canonical Agents directory is not an owner"
+        );
+        assert!(
+            quarantine.exists(),
+            "the canonical Agents quarantine is preserved"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .repository()
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Quarantined,
+            "the aliasing row is left untouched"
         );
     }
 

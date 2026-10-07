@@ -32,7 +32,7 @@ Plugin ─────────────────> Runtime capability f
 
 当前版本不再把 headless 作为客户端、运行形态、兼容性目标或验收范围。headless 和自我改进模块已经通过 `with-headless` tag 固化，并从当前主线移除。
 
-## 2. 两期开发范围
+## 2. 三期开发范围
 
 ### 2.1 第一期：Runtime 独立运行时
 
@@ -77,11 +77,22 @@ Plugin ─────────────────> Runtime capability f
    - runtime 通过受控的客户端能力/MCP 边界调用该服务，并继续服从权限、审批和审计；
    - 其他客户端暂不要求实现 Web 工具，但协议应允许未来客户端声明和提供自己的 Web 能力。
 
-第一期不包含插件安装、插件进程管理、插件 SDK 或插件 capability contract 的最终设计；第一期只建立能够承载这些能力的 runtime 边界。
+上述 runtime 独立阶段不包含插件安装、插件进程管理、插件 SDK 或插件 capability contract 的最终设计。runtime 独立后开展的首个插件管理交付见 2.2；该阶段不执行或加载插件 UI。
 
-### 2.2 第二期：插件能力
+### 2.2 第一期插件管理：Runtime authority + Tauri presentation
 
-第二期在第一期 runtime 独立运行和客户端协议稳定后，实现插件到 runtime 的单向能力调用：
+第一期插件管理只交付 Agent Skills capability 与静态插件包的 runtime 管理边界：runtime 是唯一插件 inventory/lifecycle/安装策略入口，Tauri 通过 HTTP/JSON control-plane 负责展示和用户交互，不执行插件后端逻辑，也不反向被 runtime 调用。
+
+- 插件管理入口位于桌面 Settings 的 General.vue 独立 tab；不新增第二个本地 installer。
+- runtime 负责插件 manifest 校验、插件目录归属、staging/atomic publish、enable/disable/uninstall 和结构化错误。
+- Tauri 仅提供 typed forwarding command/store，不直接管理 `~/.chatspeed/plugins` 或数据库，不运行插件代码，也不把 runtime 认证 token 交给插件资源。
+- 第一阶段不加载插件 `ui/xxx`，不执行插件脚本，不把插件资源当作 Tauri WebView 页面。
+- Agent Skills 的 checker、target registry、ownership、journal、reconcile 和卸载策略继续由 runtime 的唯一 capability service 负责；外部软件副本不可由插件管理器删除。
+- runtime 不得依赖 Tauri、Wry、GTK、WebView 或任何桌面窗口对象；需要桌面能力时只能由客户端通过明确协议提供。
+
+### 2.3 第二期：插件 capability contract
+
+第二期在第一期 runtime 独立运行和客户端协议稳定后，定义插件到 runtime 的单向能力调用、身份、权限、审批、生命周期和 SDK 边界。插件运行形态仍不默认获得 Tauri 或任意文件/进程/网络权限。
 
 ```text
 Plugin
@@ -94,7 +105,7 @@ Plugin
 第二期交付范围：
 
 1. 明确插件运行形态、宿主边界和插件到 runtime 的接入方式；
-2. 定义一期最小 capability 清单；
+2. 定义最小 capability 清单；
 3. 为每项 capability 定义名称、版本、请求、响应、流式、取消、超时和结构化错误协议；
 4. 设计 capability facade、版本策略、能力发现和能力降级；
 5. 设计插件身份、能力白名单、权限和用户审批模型；
@@ -103,6 +114,19 @@ Plugin
 8. 最后确定 SDK、示例插件和测试矩阵。
 
 第二期不新增一套插件专用工具扩展体系。插件需要使用外部工具时，优先复用现有 MCP 的安装、发现、配置、启停、权限和调用边界。
+
+### 2.4 第三期：插件 UI 宿主与多插件入口
+
+以下内容明确后置到第三期，不作为本期验收：
+
+1. 约定并实现 `~/.chatspeed/plugins/{plugin_id}/ui/xxx` 的 UI manifest、静态资源加载、版本校验、CSP/origin/IPC 隔离和无 UI 插件的隐藏规则；
+2. WorkflowSidebar 在侧边栏命令行图标上方提供插件入口，展开列表仅包含具备已验证 UI 的插件，无 UI 插件不展示；
+3. 类似 ChatHub 的独立 WebView 容器，以及包含多个插件 tab 的生命周期、焦点、关闭和恢复；
+4. 插件 UI 与 runtime facade 的 typed bridge、权限降级、断线恢复和跨平台真实 WebView 验证。
+
+插件市场、远程任意插件代码执行、独立插件进程不是上述第三期 UI 范围的默认授权，仍需另行确认。
+
+第三期 UI 宿主仍须遵守：runtime 不调用 Tauri；Tauri 只是宿主展示/交互层；任何插件 mutation 通过 runtime control-plane，不得在桌面侧复制 backend 逻辑。
 
 ## 3. 一期架构不变量
 
@@ -192,7 +216,7 @@ Tauri 可以通过客户端内置 MCP 或其他明确的客户端服务提供 We
 - 当前已有独立 `contracts` workspace crate、`cscli` workspace crate 和 loopback `/control/v1` HTTP/JSON + SSE 控制面；
 - 当前已有的 `db/plugin.rs` 只视为历史插件元数据持久化基础，不视为已完成的插件运行框架；
 - `src-tauri/assets` 不纳入本次 runtime/插件分期设计的实现基线，除非具体任务明确涉及；
-- 第一期的当前工作重点是 runtime 独立运行，不提前实现第二期插件协议或插件 SDK。
+- 第一期 runtime 独立后，按 2.2 交付 runtime 插件管理入口和桌面 General tab；不提前实现第二期插件协议或 SDK，也不加载第三期插件 UI。
 
 ## 6. 后续执行顺序
 
@@ -206,6 +230,6 @@ Tauri 可以通过客户端内置 MCP 或其他明确的客户端服务提供 We
 6. 将 Tauri 改为 runtime client，并保留 Tauri 专属 Web MCP 能力；
 7. 将 `cscli` 对齐为 runtime helper，验证 workflow、capability 和流式调用；
 8. 建立第一期的进程、协议、生命周期和客户端集成测试矩阵；
-9. 第一期验收完成后，再进入第二期插件 capability 设计与实现。
+9. runtime 独立验收后，按 2.2 交付第一期插件管理（runtime lifecycle + General tab）；随后进入第二期 capability contract，再进入第三期 UI 宿主。
 
 在第一期完成前，不把 runtime 内部模块直接固化为公共插件 API，不新增独立工具扩展体系，也不重新引入 headless 或自我改进运行链路。

@@ -59,7 +59,11 @@ walkdir     = "2"
 
 [dependencies]
 chatspeed-contracts = { path = "crates/contracts" }
-chatspeed-runtime-backend = { path = "crates/backend" }
+# The plugin filesystem lifecycle is runtime-only; the desktop links the shared
+# error/DTO contract (`plugin_types`) without the `plugin-service` default
+# feature, so it never compiles the plugin lifecycle it reaches over the control
+# plane.
+chatspeed-runtime-backend = { path = "crates/backend", default-features = false }
 chatspeed-runtime-client = { path = "crates/client" }
 anyhow           = "1.0.102"
 aes-gcm          = "0.10"

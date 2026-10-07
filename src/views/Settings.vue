@@ -29,12 +29,9 @@
       <skill />
     </el-main>
 
-    <!-- Agent Skills (file-based, managed by the capability service) is a
-         separate area from the database prompt skills above. -->
-    <el-main v-show="settingType === 'agentSkills'" class="main">
-      <agent-skills />
-    </el-main>
-
+    <!-- Agent Skills management is hosted as an independent tab in General so
+         plugin management remains a desktop presentation concern while all
+         mutations stay in the runtime capability service. -->
     <el-main v-show="settingType === 'mcp'" class="main">
       <mcp />
     </el-main>
@@ -76,7 +73,6 @@ import mcp from '@/components/setting/Mcp.vue'
 import model from '@/components/setting/Model.vue'
 import proxy from '@/components/setting/Proxy.vue'
 import skill from '@/components/setting/Skill.vue'
-import agentSkills from '@/components/setting/AgentSkills.vue'
 import privacy from '@/components/setting/Privacy.vue'
 import agentManagement from '@/components/setting/AgentManagement.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
@@ -99,7 +95,6 @@ const menuItems = computed(() => [
   { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
-  { label: t('settings.type.agentSkills'), icon: 'hammer', id: 'agentSkills' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' },
   { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }

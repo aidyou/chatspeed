@@ -23,6 +23,7 @@ use crate::capability::repository::CapabilityRepository;
 use crate::capability::skill::manifest::{manifest_digest, verify_file_manifest};
 use crate::capability::skill::ownership::{self, OwnershipMarker};
 use crate::capability::skill::plan::SkillInstallPlan;
+use crate::capability::target_preflight::{self, code as preflight_code};
 use crate::capability::targets::{resolve_target_or_error, SkillTargetId, TargetEnvironment};
 use crate::capability::types::{EffectOutcome, SkillInstallation, SkillInstallationState};
 
@@ -53,6 +54,11 @@ pub struct TargetOutcome {
     pub install_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation_id: Option<String>,
+    /// The stable preflight failure code (`target_not_supported`,
+    /// `target_path_unavailable` or `target_permission_denied`), present when
+    /// the target was refused for a machine-checkable path or permission reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -151,6 +157,7 @@ impl SkillInstaller {
                 "status": outcome.status,
                 "install_path": outcome.install_path,
                 "installation_id": outcome.installation_id,
+                "error_code": outcome.error_code,
             });
             repository.record_effect_outcome(
                 operation_id,
@@ -176,18 +183,28 @@ impl SkillInstaller {
         repository: &CapabilityRepository,
         operation_id: &str,
     ) -> TargetOutcome {
-        let resolved = match resolve_target_or_error(target_id, &self.environment) {
-            Ok((_, path)) => path,
-            Err(error) => {
+        let verified = match target_preflight::verify_install_root(target_id, &self.environment) {
+            Ok(verified) => verified,
+            Err(failure) => {
+                // A target that has no verified directory, aliases another
+                // target, or fails its physical path/permission check is a
+                // structured per-target refusal, never a lost operation.
+                let status = if failure.code() == preflight_code::TARGET_NOT_SUPPORTED {
+                    TargetOutcomeStatus::Unsupported
+                } else {
+                    TargetOutcomeStatus::Blocked
+                };
                 return TargetOutcome {
                     target_id: target_id.to_string(),
-                    status: TargetOutcomeStatus::Unsupported,
+                    status,
                     install_path: None,
                     installation_id: None,
-                    detail: Some(error.redacted_message()),
+                    error_code: Some(failure.code().to_string()),
+                    detail: Some(failure.detail()),
                 };
             }
         };
+        let resolved = verified.root;
 
         let install_path = resolved.join(&plan.skill_name);
         match self.inspect_existing(&install_path, target_id, &plan.skill_name, repository) {
@@ -199,6 +216,7 @@ impl SkillInstaller {
                     status: TargetOutcomeStatus::Blocked,
                     install_path: Some(install_path.to_string_lossy().to_string()),
                     installation_id: None,
+                    error_code: None,
                     detail: Some(error.redacted_message()),
                 };
             }
@@ -217,6 +235,7 @@ impl SkillInstaller {
                 status: TargetOutcomeStatus::Installed,
                 install_path: Some(install_path.to_string_lossy().to_string()),
                 installation_id: Some(installation_id),
+                error_code: None,
                 detail: None,
             },
             Err(error) => TargetOutcome {
@@ -224,6 +243,7 @@ impl SkillInstaller {
                 status: TargetOutcomeStatus::Failed,
                 install_path: Some(install_path.to_string_lossy().to_string()),
                 installation_id: None,
+                error_code: Some(error.code().to_string()),
                 detail: Some(error.redacted_message()),
             },
         }
@@ -250,25 +270,29 @@ impl SkillInstaller {
             }
         };
 
-        let settle = |status: TargetOutcomeStatus, detail: Option<String>| {
-            Ok(Some(TargetOutcome {
-                target_id: target_id.to_string(),
-                status,
-                install_path: Some(install_path.to_string_lossy().to_string()),
-                installation_id: None,
-                detail,
-            }))
-        };
+        let settle =
+            |status: TargetOutcomeStatus, error_code: Option<&str>, detail: Option<String>| {
+                Ok(Some(TargetOutcome {
+                    target_id: target_id.to_string(),
+                    status,
+                    install_path: Some(install_path.to_string_lossy().to_string()),
+                    installation_id: None,
+                    error_code: error_code.map(str::to_string),
+                    detail,
+                }))
+            };
 
         if metadata.file_type().is_symlink() {
             return settle(
                 TargetOutcomeStatus::Blocked,
+                Some(preflight_code::TARGET_PATH_UNAVAILABLE),
                 Some("the install path is a symbolic link".to_string()),
             );
         }
         if !metadata.is_dir() {
             return settle(
                 TargetOutcomeStatus::Blocked,
+                Some(preflight_code::TARGET_PATH_UNAVAILABLE),
                 Some("the install path exists and is not a directory".to_string()),
             );
         }
@@ -277,6 +301,7 @@ impl SkillInstaller {
         let Some(recorded) = recorded else {
             return settle(
                 TargetOutcomeStatus::SkippedExisting,
+                None,
                 Some("a same-name directory already exists".to_string()),
             );
         };
@@ -286,6 +311,7 @@ impl SkillInstaller {
         {
             return settle(
                 TargetOutcomeStatus::AlreadyInstalled,
+                None,
                 Some("this exact installation is already present".to_string()),
             );
         }
@@ -294,12 +320,17 @@ impl SkillInstaller {
         // overwritten; drift is reported and left for the user or doctor.
         settle(
             TargetOutcomeStatus::SkippedExisting,
+            None,
             Some("an existing managed directory has drifted and is never overwritten".to_string()),
         )
     }
 
     /// Copies the frozen content into a sibling temp directory, records the
     /// ownership row, then renames the temp directory into place.
+    ///
+    /// The target root is created and probed by the physical preflight before
+    /// this runs, so a missing or unwritable root is already a structured
+    /// refusal rather than a half-applied copy.
     fn commit(
         &self,
         plan: &SkillInstallPlan,
@@ -309,10 +340,6 @@ impl SkillInstaller {
         repository: &CapabilityRepository,
         operation_id: &str,
     ) -> Result<String, CapabilityError> {
-        std::fs::create_dir_all(target_root).map_err(|error| {
-            CapabilityError::internal(format!("failed to create the target directory: {error}"))
-        })?;
-
         let nonce = uuid::Uuid::now_v7().simple().to_string();
         let temp = target_root.join(format!(".{}.cs-install-{}", plan.skill_name, nonce));
         let result = self.copy_into(
@@ -647,5 +674,256 @@ mod tests {
             .err()
             .expect("a tampered plan must not be applied");
         assert_eq!(error.code(), crate::capability::error::code::REFUSED);
+    }
+
+    #[test]
+    fn a_symlinked_target_root_blocks_the_install_without_writing() {
+        #[cfg(unix)]
+        {
+            let fixture = fixture();
+            let plan = plan(&fixture, &[SkillTargetId::Chatspeed]);
+            let installer = SkillInstaller::new(fixture.environment.clone());
+
+            let chatspeed_home = fixture
+                .environment
+                .chatspeed_home
+                .clone()
+                .expect("chatspeed home");
+            std::fs::create_dir_all(&chatspeed_home).expect("create chatspeed home");
+            let outside = fixture._temp.path().join("outside");
+            std::fs::create_dir_all(&outside).expect("create outside");
+            std::os::unix::fs::symlink(&outside, chatspeed_home.join("skills")).expect("symlink");
+
+            let summary = installer
+                .apply(
+                    &plan,
+                    &fixture.repository,
+                    &operation(&fixture, "key-symlink-root"),
+                )
+                .expect("apply");
+            assert_eq!(summary.outcomes[0].status, TargetOutcomeStatus::Blocked);
+            assert_eq!(
+                summary.outcomes[0].error_code.as_deref(),
+                Some("target_path_unavailable")
+            );
+            assert!(outside.read_dir().expect("read outside").next().is_none());
+            assert!(fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn a_symlinked_target_parent_blocks_the_install() {
+        #[cfg(unix)]
+        {
+            let fixture = fixture();
+            let plan = plan(&fixture, &[SkillTargetId::Agents]);
+            let installer = SkillInstaller::new(fixture.environment.clone());
+
+            let home = fixture.environment.home_dir.clone().expect("home");
+            let outside = fixture._temp.path().join("outside-agents");
+            std::fs::create_dir_all(&outside).expect("create outside");
+            std::os::unix::fs::symlink(&outside, home.join(".agents")).expect("symlink parent");
+
+            let summary = installer
+                .apply(
+                    &plan,
+                    &fixture.repository,
+                    &operation(&fixture, "key-symlink-parent"),
+                )
+                .expect("apply");
+            assert_eq!(summary.outcomes[0].status, TargetOutcomeStatus::Blocked);
+            assert_eq!(
+                summary.outcomes[0].error_code.as_deref(),
+                Some("target_path_unavailable")
+            );
+            assert!(outside.read_dir().expect("read outside").next().is_none());
+            assert!(fixture
+                .repository
+                .get_installation("agents", "demo")
+                .expect("lookup")
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn a_non_directory_target_root_blocks_the_install() {
+        let fixture = fixture();
+        let plan = plan(&fixture, &[SkillTargetId::Chatspeed]);
+        let installer = SkillInstaller::new(fixture.environment.clone());
+
+        let skills = fixture
+            .environment
+            .chatspeed_skills_dir()
+            .expect("skills dir");
+        std::fs::create_dir_all(skills.parent().expect("parent")).expect("create chatspeed home");
+        std::fs::write(&skills, "not a directory").expect("write file");
+
+        let summary = installer
+            .apply(
+                &plan,
+                &fixture.repository,
+                &operation(&fixture, "key-non-directory"),
+            )
+            .expect("apply");
+        assert_eq!(summary.outcomes[0].status, TargetOutcomeStatus::Blocked);
+        assert_eq!(
+            summary.outcomes[0].error_code.as_deref(),
+            Some("target_path_unavailable")
+        );
+        assert!(fixture
+            .repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .is_none());
+    }
+
+    #[test]
+    fn a_read_only_target_root_reports_permission_denied() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let fixture = fixture();
+            let plan = plan(&fixture, &[SkillTargetId::Chatspeed]);
+            let installer = SkillInstaller::new(fixture.environment.clone());
+
+            let skills = fixture
+                .environment
+                .chatspeed_skills_dir()
+                .expect("skills dir");
+            std::fs::create_dir_all(&skills).expect("create skills");
+            std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o555))
+                .expect("read-only");
+
+            let summary = installer
+                .apply(
+                    &plan,
+                    &fixture.repository,
+                    &operation(&fixture, "key-permission"),
+                )
+                .expect("apply");
+            assert_eq!(summary.outcomes[0].status, TargetOutcomeStatus::Blocked);
+            assert_eq!(
+                summary.outcomes[0].error_code.as_deref(),
+                Some("target_permission_denied")
+            );
+            assert!(fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .is_none());
+
+            let _ = std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    #[test]
+    fn a_missing_target_parent_is_created_and_the_install_succeeds() {
+        let fixture = fixture();
+        // The fixture never creates the ChatSpeed home, so the whole target
+        // chain is created by the preflight before the copy.
+        assert!(!fixture
+            .environment
+            .chatspeed_home
+            .clone()
+            .expect("chatspeed home")
+            .exists());
+
+        let plan = plan(&fixture, &[SkillTargetId::Chatspeed]);
+        let installer = SkillInstaller::new(fixture.environment.clone());
+        let summary = installer
+            .apply(
+                &plan,
+                &fixture.repository,
+                &operation(&fixture, "key-missing-parent"),
+            )
+            .expect("apply");
+        assert_eq!(summary.outcomes[0].status, TargetOutcomeStatus::Installed);
+        let skills = fixture
+            .environment
+            .chatspeed_skills_dir()
+            .expect("skills dir");
+        assert!(skills.join("demo/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn aliased_targets_do_not_create_a_second_ownership() {
+        use crate::capability::types::{CapabilityKind, OperationBegin, OperationRequest};
+
+        let temp = TempDir::new().expect("temp dir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("create home");
+        // CHATSPEED_HOME overlaps the shared Agents home, so chatspeed and
+        // agents resolve to one physical directory that must have one owner.
+        let environment = TargetEnvironment::injected(home.clone(), home.join(".agents"));
+
+        let content = temp.path().join("content");
+        std::fs::create_dir_all(&content).expect("create content");
+        std::fs::write(content.join("SKILL.md"), "---\nname: demo\n---\n\n# demo\n")
+            .expect("write skill");
+
+        let store = Arc::new(MainStore::new(":memory:").expect("in-memory store"));
+        let repository = CapabilityRepository::new(store);
+        let report = check_directory(&content).expect("check");
+        let source = SkillSource::LocalDirectory {
+            path: content.to_string_lossy().to_string(),
+        };
+        let plan = SkillInstallPlan::build(
+            &source,
+            &report,
+            &content,
+            &[SkillTargetId::Chatspeed, SkillTargetId::Agents],
+            temp.path().join("frozen"),
+        )
+        .expect("plan");
+
+        let request = OperationRequest {
+            capability: CapabilityKind::Skill,
+            operation_kind: "skill.install".to_string(),
+            actor_scope: "test".to_string(),
+            idempotency_key: "alias-1".to_string(),
+            request: serde_json::json!({ "skill_name": "demo" }),
+            resource_key: "skill:demo".to_string(),
+        };
+        let operation_id = match repository.begin(&request).expect("begin operation") {
+            OperationBegin::Started(operation) => operation.operation_id,
+            OperationBegin::Replay(operation) => operation.operation_id,
+        };
+
+        let installer = SkillInstaller::new(environment);
+        let summary = installer
+            .apply(&plan, &repository, &operation_id)
+            .expect("apply");
+
+        let chatspeed = summary
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target_id == "chatspeed")
+            .expect("chatspeed outcome");
+        assert_eq!(chatspeed.status, TargetOutcomeStatus::Unsupported);
+        assert_eq!(
+            chatspeed.error_code.as_deref(),
+            Some("target_not_supported")
+        );
+        let agents = summary
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target_id == "agents")
+            .expect("agents outcome");
+        assert_eq!(agents.status, TargetOutcomeStatus::Installed);
+
+        // Exactly one ownership row exists, under the canonical Agents target.
+        let installations = repository.list_installations().expect("installations");
+        assert_eq!(installations.len(), 1);
+        assert_eq!(installations[0].target_id, "agents");
+        assert!(home.join(".agents/skills/demo/SKILL.md").is_file());
+        assert!(repository
+            .get_installation("chatspeed", "demo")
+            .expect("lookup")
+            .is_none());
     }
 }

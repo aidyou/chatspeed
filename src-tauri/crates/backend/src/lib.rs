@@ -67,6 +67,27 @@ pub mod tools;
 
 pub mod capability;
 
+/// The shared, filesystem-free error codes, manifest descriptor and wire DTOs
+/// for the runtime-owned `agent-skills` plugin service.
+///
+/// The desktop's typed forwarding adapters name these types, so this module
+/// stays in the desktop dependency graph without dragging in the plugin
+/// filesystem lifecycle.
+pub mod plugin_types;
+
+/// The runtime-owned `agent-skills` plugin bundle lifecycle service.
+///
+/// The standalone runtime is the only plugin-management owner: it resolves the
+/// plugin root, materializes the static embedded bundle and answers the
+/// `/control/v1/plugins/agent-skills` routes. It executes no plugin code and
+/// links no Tauri type, so the desktop reaches it only over the control plane.
+///
+/// Gated behind `plugin-service` so the desktop links this crate with
+/// `default-features = false` and never compiles the plugin filesystem
+/// lifecycle it can only reach over the control plane.
+#[cfg(feature = "plugin-service")]
+pub mod plugin;
+
 pub mod ccproxy;
 
 pub mod workflow;

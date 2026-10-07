@@ -16,6 +16,8 @@ use serde::Serialize;
 use crate::capability::error::CapabilityError;
 use crate::capability::repository::CapabilityRepository;
 use crate::capability::skill::manifest::{verify_file_manifest, ManifestVerdict};
+use crate::capability::skill::uninstaller::is_uninstall_eligible_target;
+use crate::capability::target_preflight;
 use crate::capability::targets::{
     resolve_targets, ResolvedSkillTarget, SkillTargetId, TargetEnvironment,
 };
@@ -73,7 +75,8 @@ pub struct SkillInventoryEntry {
     pub managed: bool,
     /// Whether the content no longer matches the ownership proof.
     pub drifted: bool,
-    /// Whether the entry is protected from overwrite and removal.
+    /// Whether the entry is protected from overwrite and removal: a bundled
+    /// Skill, a reserved name, or a target ChatSpeed must not delete from.
     pub protected: bool,
     /// Whether an uninstall of this entry is currently permitted.
     pub uninstallable: bool,
@@ -162,8 +165,16 @@ impl SkillInventoryService {
                 claimed.insert(found.installation_id.clone());
             }
 
-            let protected =
-                skill.builtin || RESERVED_SKILL_NAMES.contains(&skill.manifest.name.as_str());
+            // A registered target ChatSpeed may not delete from is read-only here:
+            // it is surfaced as protected and can never be uninstallable, even
+            // while an ownership row still manages it (AC-6/INV-2).
+            let read_only_target = target_id
+                .as_deref()
+                .map(|target| !is_uninstall_eligible_target(target))
+                .unwrap_or(false);
+            let protected = skill.builtin
+                || RESERVED_SKILL_NAMES.contains(&skill.manifest.name.as_str())
+                || read_only_target;
 
             let (source, drifted) =
                 classify(skill.builtin, installation.as_ref(), &skill.directory);
@@ -173,6 +184,10 @@ impl SkillInventoryService {
                 .map(|found| found.state.as_str().to_string());
             let uninstallable = !protected
                 && !drifted
+                && target_id
+                    .as_deref()
+                    .map(is_uninstall_eligible_target)
+                    .unwrap_or(false)
                 && installation
                     .as_ref()
                     .map(|found| found.state == SkillInstallationState::Installed)
@@ -222,7 +237,8 @@ impl SkillInventoryService {
                 present,
                 managed: true,
                 drifted: !present,
-                protected: RESERVED_SKILL_NAMES.contains(&installation.skill_name.as_str()),
+                protected: RESERVED_SKILL_NAMES.contains(&installation.skill_name.as_str())
+                    || !is_uninstall_eligible_target(&installation.target_id),
                 uninstallable: false,
                 installation_state: Some(installation.state.as_str().to_string()),
                 checker_version: Some(installation.checker_version.clone()),
@@ -270,25 +286,17 @@ fn classify(
     }
 }
 
-/// Maps a scanned search root back to a registered target id.
+/// Maps a scanned search root back to the registered target that canonically
+/// owns its physical directory.
+///
+/// Several registry ids can resolve to one physical directory — for example
+/// `chatspeed` when `CHATSPEED_HOME` points at the shared Agents home — so a
+/// lexical match alone would attribute a canonical Agents directory to the
+/// `chatspeed` alias. Resolution uses the same canonical-owner rule as the write
+/// path, otherwise one installation is reported twice: once as discovered under
+/// the alias and once as managed under its real owner (AC-7/INV-2).
 fn target_for_root(targets: &[ResolvedSkillTarget], root: &Path) -> Option<String> {
-    let root = root.to_string_lossy();
-    targets
-        .iter()
-        .find(|target| {
-            target
-                .path
-                .as_deref()
-                .map(|path| paths_equal(path, &root))
-                .unwrap_or(false)
-        })
-        .map(|target| target.id.clone())
-}
-
-fn paths_equal(left: &str, right: &str) -> bool {
-    let left = left.trim_end_matches(std::path::MAIN_SEPARATOR);
-    let right = right.trim_end_matches(std::path::MAIN_SEPARATOR);
-    left == right
+    target_preflight::canonical_owner_for_root(targets, root)
 }
 
 /// The target id a managed installation belongs to, for adapter display.
@@ -313,8 +321,20 @@ mod tests {
 
     fn fixture() -> Fixture {
         let temp = TempDir::new().expect("temp dir");
-        let home = temp.path().join("home");
         let chatspeed_home = temp.path().join("chatspeed");
+        fixture_in(temp, chatspeed_home)
+    }
+
+    /// A fixture whose `CHATSPEED_HOME` points at the shared Agents home, so the
+    /// `chatspeed` and `agents` ids resolve to one physical directory.
+    fn aliased_fixture() -> Fixture {
+        let temp = TempDir::new().expect("temp dir");
+        let chatspeed_home = temp.path().join("home").join(".agents");
+        fixture_in(temp, chatspeed_home)
+    }
+
+    fn fixture_in(temp: TempDir, chatspeed_home: PathBuf) -> Fixture {
+        let home = temp.path().join("home");
         let app_data = temp.path().join("app-data");
         let chatspeed_skills = chatspeed_home.join("skills");
         fs::create_dir_all(&chatspeed_skills).expect("create chatspeed skills dir");
@@ -482,6 +502,141 @@ mod tests {
             .expect("missing entry");
         assert!(!gone_entry.present);
         assert!(gone_entry.drifted);
+    }
+
+    #[test]
+    fn an_external_target_install_is_managed_but_not_uninstallable() {
+        let fixture = fixture();
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        fs::create_dir_all(&codex_root).expect("create codex skills dir");
+        let directory = write_skill(&codex_root, "external-skill", "body");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let mut installation = installation_for("external-skill", &directory, manifest);
+        installation.target_id = "codex".to_string();
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+
+        let scanner =
+            SkillScanner::with_search_paths(vec![fixture.chatspeed_skills.clone(), codex_root]);
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "external-skill")
+            .expect("external entry");
+        assert_eq!(entry.target_id.as_deref(), Some("codex"));
+        assert_eq!(entry.source, SkillInventorySource::Managed);
+        assert!(entry.managed);
+        assert!(!entry.drifted);
+        assert!(entry.protected, "an external target is read-only");
+        assert!(!entry.uninstallable);
+        assert!(
+            inventory
+                .uninstallable()
+                .iter()
+                .all(|candidate| candidate.name != "external-skill"),
+            "an external entry is not offered for uninstall"
+        );
+    }
+
+    #[test]
+    fn a_canonical_agents_install_remains_uninstallable() {
+        let fixture = fixture();
+        let agents_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".agents")
+            .join("skills");
+        fs::create_dir_all(&agents_root).expect("create agents skills dir");
+        let directory = write_skill(&agents_root, "agents-skill", "body");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let mut installation = installation_for("agents-skill", &directory, manifest);
+        installation.target_id = "agents".to_string();
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+
+        let scanner =
+            SkillScanner::with_search_paths(vec![fixture.chatspeed_skills.clone(), agents_root]);
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "agents-skill")
+            .expect("agents entry");
+        assert_eq!(entry.target_id.as_deref(), Some("agents"));
+        assert!(entry.managed);
+        assert!(!entry.protected, "the canonical Agents target is deletable");
+        assert!(entry.uninstallable);
+    }
+
+    #[test]
+    fn an_aliased_home_reports_one_managed_identity_for_the_canonical_owner() {
+        let fixture = aliased_fixture();
+        // The only row is the canonical Agents owner of this physical directory,
+        // even though the alias home makes `chatspeed` resolve to it as well.
+        let directory = write_skill(&fixture.chatspeed_skills, "demo", "body");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let mut installation = installation_for("demo", &directory, manifest);
+        installation.target_id = "agents".to_string();
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &fixture.scanner)
+            .expect("inventory");
+
+        let entries: Vec<_> = inventory
+            .skills
+            .iter()
+            .filter(|entry| entry.name == "demo")
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "one physical installation is reported once, not once per aliasing id"
+        );
+        let entry = entries[0];
+        assert_eq!(
+            entry.target_id.as_deref(),
+            Some("agents"),
+            "the canonical owner is reported, not the chatspeed alias"
+        );
+        assert_eq!(entry.source, SkillInventorySource::Managed);
+        assert!(entry.managed);
+        assert!(!entry.drifted);
+        assert!(
+            entry.uninstallable,
+            "the canonical owner remains uninstallable"
+        );
     }
 
     #[test]
