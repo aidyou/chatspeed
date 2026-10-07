@@ -1,0 +1,60 @@
+[package]
+name = "chatspeed-runtime"
+version = "2.0.17"
+edition = "2021"
+publish = false
+description = "Headless ChatSpeed control-plane runtime (no Tauri/Wry/GTK)."
+
+# This package is the first independent runtime target. It deliberately does
+# not depend on the desktop crate, `tauri`, `wry`, `gtk` or any Tauri plugin:
+# the production dependency graph must stay desktop-free.
+[lib]
+name = "chatspeed_runtime"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chatspeed-runtime"
+path = "src/main.rs"
+
+[dependencies]
+chatspeed-contracts = { path = "../contracts", features = ["contracts-crate"] }
+# The standalone runtime shares the client's Tauri-free path resolver so the
+# runtime directory, database and application-data directory can never drift
+# from what a client computed.
+chatspeed-runtime-client = { path = "../client" }
+# The canonical backend (database, chat/tool state, workflow hub, application
+# service) is assembled from the shared, desktop-free modules instead of being
+# re-implemented here; this is what makes the runtime serve the same routes as
+# the desktop's in-process control plane.
+chatspeed-runtime-backend = { path = "../backend" }
+chrono = { version = "0.4.44", features = ["serde"] }
+hex = "0.4"
+log = "0.4.29"
+rand = "0.10.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.52.2", features = ["full"] }
+
+# Unix uses `kill(pid, 0)` to decide whether an existing lock owner is still
+# alive; a lock that cannot be proven stale is never taken over.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# The Web MCP provider regression test hosts a real loopback streamable-HTTP MCP
+# server so the runtime's provider handshake and tool discovery are exercised
+# over the wire. Both crates are already in the workspace graph with the same
+# features (the backend depends on them), so this adds no new third-party
+# library and reuses the existing compiled units.
+axum = "0.8.9"
+rmcp = { version = "3.4.0", features = [
+    "client",
+    "reqwest",
+    "transport-child-process",
+    "tower",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+] }
+reqwest = { version = "0.13.3", features = ["json"] }
+tempfile = "3.27.0"

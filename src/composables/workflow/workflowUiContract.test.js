@@ -196,9 +196,9 @@ test('authorized root drag sorting stays on the existing structured allowed-path
       readFile('src/views/Workflow.vue', 'utf8'),
       readFile('src/composables/workflow/useWorkflowPaths.ts', 'utf8'),
       readFile('src/stores/workflow.js', 'utf8'),
-      readFile('src-tauri/runtime/backend/src/commands/workflow.rs', 'utf8'),
-      readFile('src-tauri/runtime/backend/src/workflow/react/security.rs', 'utf8'),
-      readFile('src-tauri/runtime/backend/src/workflow/react/engine.rs', 'utf8')
+      readFile('src-tauri/crates/backend/src/commands/workflow.rs', 'utf8'),
+      readFile('src-tauri/crates/backend/src/workflow/react/security.rs', 'utf8'),
+      readFile('src-tauri/crates/backend/src/workflow/react/engine.rs', 'utf8')
     ])
 
   assert.match(fileTree, /import \{ Sortable \} from 'sortablejs-vue3'/)
@@ -250,9 +250,9 @@ test('child session panes preserve a confirm received while snapshot hydration i
     readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
     readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8'),
     readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
-    readFile('src-tauri/runtime/backend/src/workflow/react/engine.rs', 'utf8'),
-    readFile('src-tauri/runtime/backend/src/commands/workflow.rs', 'utf8'),
-    readFile('src-tauri/runtime/backend/src/db/workflow.rs', 'utf8')
+    readFile('src-tauri/crates/backend/src/workflow/react/engine.rs', 'utf8'),
+    readFile('src-tauri/crates/backend/src/commands/workflow.rs', 'utf8'),
+    readFile('src-tauri/crates/backend/src/db/workflow.rs', 'utf8')
   ])
 
   assert.match(messageList, /<cs name="fullscreen-off"\s*\/>/)
@@ -409,7 +409,7 @@ test('ask-user responses stay hidden from the transcript and render on their sou
       readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
       readFile('src/composables/workflow/useWorkflowMessages.ts', 'utf8'),
       readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-      readFile('src-tauri/runtime/backend/src/workflow/react/engine.rs', 'utf8'),
+      readFile('src-tauri/crates/backend/src/workflow/react/engine.rs', 'utf8'),
       readFile('src/stores/workflow.js', 'utf8'),
       readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
       readFile('src/composables/workflow/useWorkflowSessionMessages.ts', 'utf8')
@@ -951,7 +951,7 @@ test('workflow startup uses the primary message skeleton without covering the wi
 test('tool duration badges use structured backend metadata and preserve the requested exclusions', async () => {
   const [messageList, workflowEngine] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-    readFile('src-tauri/runtime/backend/src/workflow/react/engine.rs', 'utf8')
+    readFile('src-tauri/crates/backend/src/workflow/react/engine.rs', 'utf8')
   ])
 
   assert.match(messageList, /message\?\.metadata\?\.duration_ms/)

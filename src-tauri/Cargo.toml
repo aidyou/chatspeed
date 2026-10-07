@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "contracts", "cli", "runtime/bin", "runtime/backend", "runtime/client"]
+members = [".", "crates/contracts", "crates/cli", "crates/daemon", "crates/backend", "crates/client"]
 resolver = "2"
 
 [profile.release]
@@ -49,7 +49,7 @@ name = "cs"
 path = "src/bin/cs.rs"
 required-features = ["legacy-cli-binary"]
 
-# `cscli` is maintained as the independent workspace package at `cli`.
+# `cscli` is maintained as the independent workspace package at `crates/cli`.
 # Keeping its normal build in that package prevents Tauri/runtime dependencies
 # from becoming part of the CLI dependency graph.
 
@@ -58,9 +58,9 @@ tauri-build = { version = "2.7.0", features = [] }
 walkdir     = "2"
 
 [dependencies]
-chatspeed-contracts = { path = "contracts" }
-chatspeed-runtime-backend = { path = "runtime/backend" }
-chatspeed-runtime-client = { path = "runtime/client" }
+chatspeed-contracts = { path = "crates/contracts" }
+chatspeed-runtime-backend = { path = "crates/backend" }
+chatspeed-runtime-client = { path = "crates/client" }
 anyhow           = "1.0.102"
 aes-gcm          = "0.10"
 arboard          = "3.6"

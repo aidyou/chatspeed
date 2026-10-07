@@ -327,7 +327,7 @@ Transport 选择需要同时考虑模型、命中的 profile、实际端点和�
 - `src-tauri/src/ai/chat/list_models.rs`：补全供应商模型列表中的能力和限制；
 - `src-tauri/src/commands/model_catalog.rs`：向前端提供 profile 查询命令；
 - `src/components/setting/Model.vue`、`src/stores/model.js`：模型新建、导入和配置预填；
-- `src-tauri/runtime/backend/src/ccproxy/helper/thinking/`：各厂商 thinking 参数的类型安全归一化；
-- `src-tauri/runtime/backend/src/ccproxy/handler/` 与 backend adapter：在统一请求和直连请求中使用解析出的 Transport。
+- `src-tauri/crates/backend/src/ccproxy/helper/thinking/`：各厂商 thinking 参数的类型安全归一化；
+- `src-tauri/crates/backend/src/ccproxy/handler/` 与 backend adapter：在统一请求和直连请求中使用解析出的 Transport。
 
 当目录匹配不到或解析结果不确定时，安全行为是保留未知能力，并跳过不确定的厂商专属传输适配，而不是猜测并发送可能不兼容的字段。

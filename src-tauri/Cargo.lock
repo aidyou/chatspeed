@@ -1015,6 +1015,7 @@ dependencies = [
 name = "chatspeed-runtime"
 version = "2.0.17"
 dependencies = [
+ "axum",
  "chatspeed-contracts",
  "chatspeed-runtime-backend",
  "chatspeed-runtime-client",
@@ -1024,6 +1025,7 @@ dependencies = [
  "log",
  "rand 0.10.3",
  "reqwest",
+ "rmcp",
  "serde",
  "serde_json",
  "tempfile",

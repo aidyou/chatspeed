@@ -91,8 +91,8 @@ test('ordinary settings and title/vision execution reject decision models', asyn
   const workflow = await readFile(new URL('../../views/Workflow.vue', import.meta.url), 'utf8')
   assert.match(workflow, /function normalizeVisionModel\(model\) \{[\s\S]*?modelStore\.getAvailableProviders\.some/)
 
-  const decision = await readFile(new URL('../../../src-tauri/runtime/backend/src/workflow/react/decision.rs', import.meta.url), 'utf8')
+  const decision = await readFile(new URL('../../../src-tauri/crates/backend/src/workflow/react/decision.rs', import.meta.url), 'utf8')
   assert.match(decision, /provider\.api_protocol != "decision"/)
-  const chat = await readFile(new URL('../../../src-tauri/runtime/backend/src/ai/interaction/chat_completion.rs', import.meta.url), 'utf8')
+  const chat = await readFile(new URL('../../../src-tauri/crates/backend/src/ai/interaction/chat_completion.rs', import.meta.url), 'utf8')
   assert.match(chat, /validate_chat_provider\(chat_state_arc\.main_store\.as_ref\(\), provider_id\)\?/)
 })

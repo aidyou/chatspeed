@@ -327,7 +327,7 @@ The main usage paths are as follows:
 - `src-tauri/src/ai/chat/list_models.rs`: completes capabilities and limits in provider model lists;
 - `src-tauri/src/commands/model_catalog.rs`: provides profile query commands to the frontend;
 - `src/components/setting/Model.vue`, `src/stores/model.js`: model creation, import, and configuration prefill;
-- `src-tauri/runtime/backend/src/ccproxy/helper/thinking/`: type-safe normalization of per-vendor thinking parameters;
-- `src-tauri/runtime/backend/src/ccproxy/handler/` and the backend adapters: use the resolved transport in unified and direct requests.
+- `src-tauri/crates/backend/src/ccproxy/helper/thinking/`: type-safe normalization of per-vendor thinking parameters;
+- `src-tauri/crates/backend/src/ccproxy/handler/` and the backend adapters: use the resolved transport in unified and direct requests.
 
 When the catalog does not match or the resolution is uncertain, the safe behavior is to keep capabilities unknown and skip uncertain vendor-specific transport adaptation, rather than guessing and sending potentially incompatible fields.

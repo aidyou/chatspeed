@@ -56,7 +56,7 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 
 ## Critical Module Rules
 
-- Workflow runtime and frontend: when changing `src-tauri/runtime/backend/src/workflow/react`, `src/views/Workflow.vue`, `src/components/workflow`, `src/composables/workflow`, or workflow modules in `src/stores`, read and follow `src-tauri/runtime/backend/src/workflow/react/CONSTITUTION.md`.
-- CCProxy: when changing `src-tauri/runtime/backend/src/ccproxy`, read and follow `src-tauri/runtime/backend/src/ccproxy/CONSTITUTION.md`.
+- Workflow runtime and frontend: when changing `src-tauri/crates/backend/src/workflow/react`, `src/views/Workflow.vue`, `src/components/workflow`, `src/composables/workflow`, or workflow modules in `src/stores`, read and follow `src-tauri/crates/backend/src/workflow/react/CONSTITUTION.md`.
+- CCProxy: when changing `src-tauri/crates/backend/src/ccproxy`, read and follow `src-tauri/crates/backend/src/ccproxy/CONSTITUTION.md`.
 - CCProxy routing is order-sensitive.
 - Proxy responses must use header filtering. Do not forward transport headers like `Content-Length`, `Transfer-Encoding`, `Connection`, or `Content-Encoding` directly.

@@ -1,0 +1,33 @@
+[package]
+name = "chatspeed-cli"
+version = "2.0.17"
+edition = "2021"
+publish = false
+autobins = false
+
+[features]
+default = ["standalone-cli"]
+standalone-cli = []
+
+[[bin]]
+name = "cscli"
+path = "src/main.rs"
+
+[dependencies]
+chatspeed-contracts = { path = "../contracts", features = ["contracts-crate"] }
+chatspeed-runtime-client = { path = "../client" }
+clap = { version = "4.5", features = ["derive"] }
+futures-util = "0.3.32"
+hex = "0.4"
+log = "0.4.29"
+chrono = { version = "0.4.44", features = ["serde"] }
+rust-i18n = "4.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.11.0"
+reqwest = { version = "0.13.3", features = ["json", "stream", "multipart", "cookies"] }
+tokio = { version = "1.52.2", features = ["full"] }
+uuid = { version = "1.23.1", features = ["v4", "v7"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
