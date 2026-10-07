@@ -1178,6 +1178,26 @@ watch(
 
 const autoApprovedPopoverVisible = ref(false)
 const mcpConfigPopoverVisible = ref(false)
+// Runtime-owned MCP discovery can settle after the window's initial catalog read.
+// Refresh only while the panel is visible, including changes made by other clients.
+watch(mcpConfigPopoverVisible, (visible, _, onCleanup) => {
+  if (!visible) return
+  let refreshing = false
+  const refresh = async () => {
+    if (refreshing) return
+    refreshing = true
+    try {
+      await agentStore.fetchAvailableTools()
+    } catch (error) {
+      console.error('Failed to refresh MCP tool catalog:', error)
+    } finally {
+      refreshing = false
+    }
+  }
+  refresh()
+  const timer = setInterval(refresh, 2000)
+  onCleanup(() => clearInterval(timer))
+})
 const approvalToolsTab = ref('available')
 const isImportingShellPolicies = ref(false)
 const isClearingShellPolicies = ref(false)

@@ -2036,6 +2036,89 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn available_tools_catalog_keeps_native_and_mcp_categories_separate() {
+        use crate::ai::interaction::chat_completion::ChatState;
+        use crate::libs::{tsid::TsidGenerator, window_channels::WindowChannels};
+        use crate::workflow::react::{
+            client::hub::{NoWindowTransport, WorkflowRuntimeHub},
+            manager::WorkflowManager,
+            orchestrator::DefaultSubAgentFactory,
+        };
+        let dir = tempdir().expect("temporary store directory");
+        let store = Arc::new(MainStore::new(dir.path().join("tools.db")).expect("store"));
+        let chat = ChatState::runtime_new(Arc::new(WindowChannels::new()), store.clone());
+        let manager = chat.tool_manager.clone();
+        let tsid = Arc::new(TsidGenerator::new(1).expect("TSID generator"));
+        let gateway = Arc::new(WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "tool-catalog-test".to_string(),
+        ));
+        let workflows = Arc::new(WorkflowManager::new());
+        let factory = Arc::new(DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state: chat.clone(),
+            gateway: gateway.clone(),
+            workflow_manager: workflows.clone(),
+            app_data_dir: dir.path().to_path_buf(),
+            tsid_generator: tsid.clone(),
+        });
+        let service = WorkflowApplicationService::new(
+            store,
+            chat,
+            tsid,
+            gateway,
+            factory,
+            workflows,
+            dir.path().to_path_buf(),
+        );
+        let initial = get_available_tools_core(&service)
+            .await
+            .expect("initial catalog");
+        assert!(!initial
+            .as_array()
+            .expect("catalog array")
+            .iter()
+            .any(|tool| tool["category"] == "MCP"));
+
+        for name in ["web_fetch", "web_search"] {
+            manager
+                .register_test_mcp_tool("chatspeed_web", name, json!({"type": "object"}))
+                .await
+                .expect("register MCP tool");
+        }
+        let catalog = get_available_tools_core(&service)
+            .await
+            .expect("updated catalog");
+        let entries = catalog.as_array().expect("catalog array");
+        for name in ["web_fetch", "web_search"] {
+            let matches = entries
+                .iter()
+                .filter(|tool| tool["name"] == name)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0]["category"], "MCP");
+            assert_eq!(matches[0]["id"], format!("chatspeed_web__MCP__{name}"));
+        }
+        assert!(manager
+            .get_all_native_tool_metadata()
+            .await
+            .iter()
+            .all(|tool| tool["category"] != "MCP"));
+        manager
+            .disable_mcp_tool("chatspeed_web", "web_fetch", true)
+            .await
+            .expect("disable MCP tool");
+        let catalog = get_available_tools_core(&service)
+            .await
+            .expect("disabled catalog");
+        assert!(!catalog
+            .as_array()
+            .expect("catalog array")
+            .iter()
+            .any(|tool| tool["name"] == "web_fetch"));
+    }
+
     #[test]
     fn assigns_tsid_to_new_scheme_items_without_client_supplied_ids() {
         use crate::tools::{

@@ -30,6 +30,8 @@ export const isWorkflowMcpTool = (toolName, category = null) => {
   if (String(category || '').toUpperCase() === 'MCP') return true
   const normalized = normalizeToolName(toolName)
   return (
+    normalized === 'web_fetch' ||
+    normalized === 'web_search' ||
     normalized === WORKFLOW_MCP_LOADER_TOOL_NAME ||
     normalized === WORKFLOW_MCP_EXECUTOR_TOOL_NAME ||
     normalized === WORKFLOW_MCP_LEGACY_LOADER_TOOL_NAME ||

@@ -11,7 +11,7 @@ test('workflow terminal stays isolated from the workflow runtime and is workflow
   const [manager, commands, runtime] = await Promise.all([
     read('src-tauri/src/terminal.rs'),
     read('src-tauri/src/commands/terminal.rs'),
-    read('src-tauri/src/workflow/react/manager.rs')
+    read('src-tauri/runtime/backend/src/workflow/react/manager.rs')
   ])
 
   assert.match(manager, /struct TerminalManager/)
@@ -86,7 +86,7 @@ test('terminal preferences bound output, preserve terminal input, and use detect
     read('src/composables/workflow/useTerminal.ts'),
     read('src/components/setting/General.vue'),
     read('src-tauri/src/commands/env.rs'),
-    read('src-tauri/src/environment.rs'),
+    read('src-tauri/runtime/backend/src/environment.rs'),
     read('src/views/Workflow.vue'),
     read('src/stores/setting.js')
   ])

@@ -76,7 +76,7 @@ const approvalResolvedHandler = sourceSection(
 assert.match(approvalResolvedHandler, /payload\.tool_name === 'submit_plan'/)
 assert.match(approvalResolvedHandler, /resolvePendingTool\(sessionId, payload\.tool_call_id\)/)
 
-const constitution = readProjectFile('src-tauri/src/workflow/react/CONSTITUTION.md')
+const constitution = readProjectFile('src-tauri/runtime/backend/src/workflow/react/CONSTITUTION.md')
 assert.match(
   constitution,
   /pending completion-tool observation with the structured reviewer result and its\s+reviewer-scoped `usage_summary`/
@@ -427,7 +427,7 @@ assert.match(
   /normal new workflow sends no inherited configuration[\s\S]*checked `availableTools` set/
 )
 
-const workflowCommands = readProjectFile('src-tauri/src/commands/workflow.rs')
+const workflowCommands = readProjectFile('src-tauri/runtime/backend/src/commands/workflow.rs')
 assert.match(
   workflowCommands,
   /user left checked[\s\S]*Agent's tool list/
@@ -438,7 +438,7 @@ assert.match(
 )
 
 const workflowConstitution = readProjectFile(
-  'src-tauri/src/workflow/react/CONSTITUTION.md'
+  'src-tauri/runtime/backend/src/workflow/react/CONSTITUTION.md'
 )
 assert.match(workflowConstitution, /Auto-approved tools must be visible tools/)
 assert.match(workflowConstitution, /auto-approved tool set must be a subset/)
@@ -506,8 +506,8 @@ assert.doesNotMatch(
   'compact mode must ignore expanded-mode search and directory filters'
 )
 
-const reactEngine = readProjectFile('src-tauri/src/workflow/react/engine.rs')
-const reactLlm = readProjectFile('src-tauri/src/workflow/react/llm.rs')
+const reactEngine = readProjectFile('src-tauri/runtime/backend/src/workflow/react/engine.rs')
+const reactLlm = readProjectFile('src-tauri/runtime/backend/src/workflow/react/llm.rs')
 assert.doesNotMatch(reactEngine, /DEFAULT_MAX_STEPS|STEP BUDGET|max-step budget|self\.max_steps/)
 assert.doesNotMatch(
   reactEngine,
@@ -788,7 +788,7 @@ assert.match(workflowView, /!isWorkflowBeingDeleted\(entry\?\.sessionId\)/)
 const classification = readProjectFile('src/composables/workflow/toolClassification.js')
 assert.doesNotMatch(classification, /startsWith\s*\(/)
 
-const rustConstants = readProjectFile('src-tauri/src/tools/constants.rs')
+const rustConstants = readProjectFile('src-tauri/runtime/backend/src/tools/constants.rs')
 const rustToolName = constantName => {
   const match = rustConstants.match(
     new RegExp(`pub const ${constantName}: &str = "([^"]+)";`)

@@ -280,17 +280,25 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
+  let toolCatalogRevision = 0;
   const fetchAvailableTools = async () => {
+    const revision = ++toolCatalogRevision;
     loading.value = true;
     error.value = null;
     try {
       const result = await invokeWrapper('get_available_tools');
-      // Each result item now includes {id, name, category}
-      availableTools.value = result || [];
+      // A startup read must not overwrite discovery from a newer refresh.
+      if (revision === toolCatalogRevision) {
+        availableTools.value = result || [];
+      }
     } catch (err) {
-      _handleError(err, 'Failed to fetch available tools');
+      if (revision === toolCatalogRevision) {
+        _handleError(err, 'Failed to fetch available tools');
+      }
     } finally {
-      loading.value = false;
+      if (revision === toolCatalogRevision) {
+        loading.value = false;
+      }
     }
   };
 

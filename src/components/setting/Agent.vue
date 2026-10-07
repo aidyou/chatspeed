@@ -528,6 +528,7 @@ import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { useSettingStore } from '@/stores/setting'
 import { useWorkflowStore } from '@/stores/workflow'
+import { isWorkflowMcpTool } from '@/composables/workflow/toolClassification'
 import { EXECUTION_STYLE_PRESETS, EXECUTION_STYLE_PRESET_VALUES } from '@/constants/executionStyle'
 import { AGENT_ROLE, AGENT_ROLE_OPTIONS, SUB_AGENT_ROLE_OPTIONS } from '@/constants/agent'
 
@@ -925,7 +926,7 @@ const sortedAvailableTools = computed(() => {
       t =>
         !CORE_MANAGEMENT_TOOLS.includes(t.id) &&
         !HIDDEN_AGENT_TOOL_IDS.includes(t.id) &&
-        t.category !== 'MCP' &&
+        !isWorkflowMcpTool(t.id, t.category) &&
         (agentForm.value.role === AGENT_ROLE.CHILD || !CHILD_ONLY_TOOL_IDS.includes(t.id))
     )
     .sort((a, b) => {
