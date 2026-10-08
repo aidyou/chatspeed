@@ -420,7 +420,6 @@
     },
     "general": {
       "advancedSettings": "進階設定",
-      "agentSkillsTab": "插件管理",
       "apiKeyProtection": {
         "fileFilterName": "ChatSpeed 金鑰檔案",
         "generateFile": "產生新金鑰檔案",
@@ -649,14 +648,6 @@
         "uses_network": "使用網路",
         "writes_sensitive_paths": "寫入敏感路徑"
       },
-      "pluginDisable": "停用插件",
-      "pluginDisabled": "已停用",
-      "pluginEnable": "啟用插件",
-      "pluginEnabled": "已啟用",
-      "pluginHint": "靜態插件包由 runtime 管理。本期不載入或執行插件介面程式碼；卸載只移除插件包，不刪除已安裝的 Skills。",
-      "pluginInstall": "安裝插件包",
-      "pluginTitle": "Agent Skills 插件",
-      "pluginUninstall": "卸載插件包",
       "protected": "受保護",
       "reconcile": "收斂能力漂移",
       "reconcileDone": "收斂完成",
@@ -681,6 +672,32 @@
       "uninstall": "卸載",
       "uninstallDone": "Skill 已卸載",
       "zipPlaceholder": "skill.zip"
+    },
+    "plugin": {
+      "builtinCount": "{count} 個內建插件",
+      "capabilities": "能力",
+      "disable": "停用",
+      "empty": "暫無可用插件。",
+      "enable": "啟用",
+      "hint": "插件清單與生命週期由 runtime 管理。本頁面渲染 runtime 回傳的快照，並透過固定的型別化命令轉送每次變更。已校驗的靜態介面由 runtime 受控資源提供，不向插件暴露 IPC 介面。",
+      "install": "安裝",
+      "kind": {
+        "builtin": "內建"
+      },
+      "operationFailed": "runtime 無法確認此插件操作，請重新整理後再試。",
+      "refresh": "重新整理",
+      "state": {
+        "disabled": "已停用",
+        "enabled": "已啟用",
+        "not_installed": "未安裝"
+      },
+      "title": "插件",
+      "uiEntry": "介面入口",
+      "uiUnverified": "介面未通過校驗",
+      "uiVerified": "介面已校驗",
+      "uninstall": "卸載",
+      "verifiedUiCount": "{count} 個已校驗介面包",
+      "version": "版本"
     },
     "mcp": {
       "added": "已新增",
@@ -1295,6 +1312,7 @@
       "general": "通用",
       "mcp": "MCP",
       "model": "AI供應商",
+      "plugin": "插件",
       "privacy": "隱私",
       "proxy": "代理",
       "scraperTest": "爬蟲測試",
@@ -1639,6 +1657,15 @@
     "planningModeTooltip": "規劃模式：執行前 AI 研究與策略",
     "planningModeDisabled": "已關閉規劃模式",
     "planningModeEnabled": "已開啟規劃模式",
+    "plugin": {
+      "close": "關閉",
+      "empty": "暫無可用插件介面。",
+      "hide": "隱藏",
+      "newTab": "在新分頁開啟",
+      "openFailed": "開啟插件介面失敗。",
+      "reload": "重新載入",
+      "title": "插件"
+    },
     "quickActionsConfiguration": "配置",
     "quickActionsRuntime": "執行方式",
     "rejected": "已拒絕",

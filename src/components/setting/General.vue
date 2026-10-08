@@ -896,9 +896,6 @@
   </div>
 
   </el-tab-pane>
-  <el-tab-pane :label="$t('settings.general.agentSkillsTab')" name="agentSkills">
-    <agent-skills />
-  </el-tab-pane>
   </el-tabs>
 
   <el-dialog v-model="configExportVisible" :title="$t('settings.general.exportConfiguration')" width="560px" @closed="configExportCategories = []">
@@ -974,7 +971,6 @@ import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useModelStore } from '@/stores/model'
 import { useUpdateStore } from '@/stores/update'
 import { DEFAULT_TERMINAL_SKIN, TERMINAL_SKINS } from '@/constants/terminalThemes'
-import agentSkills from '@/components/setting/AgentSkills.vue'
 
 const { t } = useI18n()
 const modelStore = useModelStore()

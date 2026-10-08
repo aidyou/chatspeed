@@ -101,14 +101,16 @@ pub async fn update_chat_hub_order(
     broadcast_chat_hubs_changed(&app).map_err(|error| error.to_string())
 }
 
-/// Reveals the ChatHub page, docked to the right edge of the Workflow window.
+/// Reveals one ChatHub tab at the dock rectangle the frontend measured.
 ///
-/// The work runs on the platform main thread because it creates a real webview. The
-/// same page is reused for every entry, so the site keeps its cookies and session
-/// while navigating between entries. `corner_radius` is the radius of the rounded window
-/// border the page gives back at the corners it covers, and `top_inset` is the space the
-/// frontend chrome occupies, which only a carrier that stacks the page over the workflow UI
-/// needs.
+/// The work runs on the platform main thread because it creates a real webview. Each `tab_id`
+/// keeps its own webview (and its browsing session) while another tab is shown, and `bounds` is
+/// the dock rectangle the frontend measured in its own layout, in logical pixels. The carrier
+/// never changes the window layout, so this rectangle is the authoritative geometry.
+///
+/// `width` and `top_inset` are kept for an older caller that sends no `bounds`: they describe the
+/// same right dock, and the carrier turns them into the rectangle. `corner_radius` is the radius
+/// of the rounded dock border the page gives back at its corners.
 #[tauri::command]
 pub async fn show_chat_hub_page(
     app: AppHandle,
@@ -116,36 +118,48 @@ pub async fn show_chat_hub_page(
     width: f64,
     top_inset: f64,
     corner_radius: f64,
+    tab_id: Option<String>,
+    bounds: Option<crate::native_dock::DockBounds>,
 ) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, move |state, app| {
-        state.show(app, &url, width, top_inset, corner_radius)
+        state.show(app, &url, width, top_inset, corner_radius, tab_id, bounds)
     })
     .await
 }
 
-/// Hides the ChatHub page while keeping its session alive.
+/// Hides every ChatHub tab while keeping their sessions alive.
 #[tauri::command]
 pub async fn hide_chat_hub_page(app: AppHandle) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, |state, app| state.hide(app)).await
 }
 
-/// Applies a new width to the docked page.
+/// Applies a new width to the active docked tab.
 #[tauri::command]
 pub async fn set_chat_hub_page_width(app: AppHandle, width: f64) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, move |state, app| state.set_width(app, width)).await
 }
 
-/// Releases the ChatHub page and the browsing session it holds.
+/// Reloads one ChatHub tab's current page, keeping its webview and its session.
+///
+/// A reload keeps the page the tab is already showing, so a session, a draft or a scroll position
+/// survives it; the tab is not recreated.
 #[tauri::command]
-pub async fn destroy_chat_hub_page(app: AppHandle) -> AppResult<()> {
-    chat_hub::run_on_page_thread(&app, |state, app| state.destroy(app)).await
+pub async fn reload_chat_hub_page(app: AppHandle, tab_id: String) -> AppResult<()> {
+    chat_hub::run_on_page_thread(&app, move |state, app| state.reload(app, &tab_id)).await
+}
+
+/// Closes one ChatHub tab, or every tab when no tab id is given.
+///
+/// Closing is the only operation that destroys a tab's webview and its browsing session.
+#[tauri::command]
+pub async fn destroy_chat_hub_page(app: AppHandle, tab_id: Option<String>) -> AppResult<()> {
+    chat_hub::run_on_page_thread(&app, move |state, app| state.destroy(app, tab_id)).await
 }
 
 /// Tells the frontend how it has to make room for the docked page.
 ///
-/// `split` means the platform already lays both webviews out side by side, `reserve`
-/// means the page is stacked over the workflow UI and the frontend keeps that space
-/// free itself.
+/// Every platform reserves the right dock itself, so the mode is always `reserve`: the frontend
+/// measures the dock rectangle in its own layout and hands it to the carrier.
 #[tauri::command]
 pub fn get_chat_hub_view_mode() -> String {
     chat_hub::view_mode().to_string()

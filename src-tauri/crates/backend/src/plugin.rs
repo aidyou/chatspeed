@@ -24,8 +24,8 @@
 //!
 //! - The bundle is a *static* set of files compiled into the binary
 //!   (`include_str!`) and materialized on disk byte-for-byte. Nothing in it is
-//!   ever executed: no entry point is loaded into a webview and no plugin
-//!   process is spawned (`plugin_code_executed: false`).
+//!   ever executed by this service: only a verified current UI is served to the
+//!   isolated desktop WebView, and no plugin process is spawned.
 //! - The bundle lives under `${CHATSPEED_HOME:-~/.chatspeed}/plugins/agent-skills`
 //!   and the service refuses to touch any path outside that bundle. Uninstall
 //!   never removes `${CHATSPEED_HOME:-~/.chatspeed}/skills` and never removes any
@@ -35,10 +35,11 @@
 //!   refused (never followed), including a symlinked `${CHATSPEED_HOME}` or one
 //!   of its parents, and a `${CHATSPEED_HOME}` that resolves into a registered
 //!   Agent Skill target directory is refused. A plain directory is only ever
-//!   removed or replaced after it proves it is *exactly* the embedded bundle
-//!   (manifest, assets and host state as real regular files, with no extra
-//!   entry); residue is removed under the same proof. Foreign or drifted content
-//!   is left in place.
+//!   removed or replaced after it proves it is *exactly* an owned bundle — the
+//!   current embedded bundle or the recognized phase-1 legacy bundle (manifest,
+//!   assets and host state as real regular files, with no extra entry); residue
+//!   is removed under the same proof. Foreign or drifted content is left in
+//!   place.
 //! - All lifecycle calls are serialized so a concurrent load and uninstall
 //!   cannot interleave their staging and cleanup.
 //! - The only surface is the fixed set of typed service methods the control
@@ -76,6 +77,40 @@ struct EmbeddedAsset {
 const EMBEDDED_ASSETS: &[EmbeddedAsset] = &[EmbeddedAsset {
     path: "index.html",
     bytes: EMBEDDED_ENTRY.as_bytes(),
+}];
+
+/// The phase-1 manifest schema. This exact shape is recognized only so an
+/// already-published legacy bundle can be inventoried, upgraded, disabled or
+/// uninstalled without weakening the ownership proof. It is never re-published
+/// and never served.
+const LEGACY_PLUGIN_SCHEMA: &str = "chatspeed.agent-skills.plugin/v1";
+
+/// The exact phase-1 entry bytes, compared byte-for-byte (not against a version
+/// control blob) so a drifted legacy bundle is refused instead of upgraded.
+const LEGACY_ENTRY: &str = concat!(
+    "<!doctype html>\n",
+    "<html lang=\"en\">\n",
+    "  <head>\n",
+    "    <meta charset=\"utf-8\" />\n",
+    "    <title>Agent Skills</title>\n",
+    "  </head>\n",
+    "  <body>\n",
+    "    <h1>Agent Skills</h1>\n",
+    "    <p>\n",
+    "      This is the static presentation bundle shipped with ChatSpeed. The plugin\n",
+    "      host stages, verifies and atomically publishes these files, but it never\n",
+    "      executes plugin code, never loads the entry into a Tauri webview, and\n",
+    "      exposes no Tauri IPC, no database, no token and no arbitrary filesystem\n",
+    "      API to the bundle.\n",
+    "    </p>\n",
+    "  </body>\n",
+    "</html>\n",
+);
+
+/// The complete phase-1 bundle content, retained for recognition only.
+const LEGACY_ASSETS: &[EmbeddedAsset] = &[EmbeddedAsset {
+    path: "index.html",
+    bytes: LEGACY_ENTRY.as_bytes(),
 }];
 
 /// The absolute paths the service resolves against one `${CHATSPEED_HOME}`.
@@ -274,6 +309,14 @@ fn default_enabled() -> bool {
     true
 }
 
+/// A verified static UI asset returned by the runtime resource boundary.
+#[derive(Debug, Clone)]
+pub struct PluginUiAsset {
+    pub bytes: Vec<u8>,
+    pub content_type: &'static str,
+    pub content_digest: String,
+}
+
 /// The runtime-owned plugin service. It owns only the resolved paths; the set
 /// of assets is the compile-time embedded bundle, so a caller cannot inject
 /// content. Every call is serialized through one mutex so a concurrent load and
@@ -337,16 +380,17 @@ impl PluginService {
         let manifest = embedded_manifest()?;
 
         let mut inventory = PluginInventory {
-            plugin_id: manifest.id.clone(),
-            schema: manifest.schema.clone(),
-            installed: false,
-            enabled: false,
-            version: None,
-            entry: None,
-            assets: Vec::new(),
-            permissions: Vec::new(),
-            root: paths.plugin_dir.to_string_lossy().to_string(),
-            bundle_digest: None,
+            schema_version: PLUGIN_INVENTORY_SCHEMA_VERSION,
+            plugins: vec![PluginRecord {
+                id: manifest.id.clone(),
+                kind: BUILTIN_PLUGIN_KIND,
+                version: None,
+                state: PluginState::NotInstalled,
+                capabilities: manifest.permissions.clone(),
+                ui: None,
+                root: paths.plugin_dir.to_string_lossy().to_string(),
+                bundle_digest: None,
+            }],
             uninstall_scope: UNINSTALL_SCOPE,
             managed_skills_dir: paths.skills_dir.to_string_lossy().to_string(),
             host: host_isolation(),
@@ -357,20 +401,105 @@ impl PluginService {
         // the link target, and only a complete evidence bundle is installed.
         if paths.is_readable() {
             if let Some((disk, state)) = inspect_installed(paths) {
-                inventory.installed = true;
-                inventory.enabled = state.enabled;
-                inventory.version = Some(disk.version.clone());
-                inventory.entry = Some(disk.entry.clone());
-                inventory.assets = disk.assets.clone();
-                inventory.permissions = disk.permissions.clone();
-                inventory.bundle_digest =
-                    installed_bundle_digest(&paths.plugin_dir, &disk.assets);
+                let Some(record) = inventory.plugins.first_mut() else {
+                    return Err(PluginError::internal(
+                        "the built-in plugin inventory record is missing",
+                    ));
+                };
+                let digest = installed_bundle_digest(&paths.plugin_dir, &disk.assets);
+                let verified = digest.as_deref() == Some(embedded_bundle_digest().as_str())
+                    && disk.ui.is_some();
+                record.version = Some(disk.version.clone());
+                record.state = if state.enabled {
+                    PluginState::Enabled
+                } else {
+                    PluginState::Disabled
+                };
+                record.ui = disk.ui.as_ref().map(|ui| PluginUi {
+                    entry: ui.entry.clone(),
+                    assets: ui.assets.clone(),
+                    verified,
+                    content_digest: digest.clone().unwrap_or_default(),
+                    route_version: PLUGIN_UI_ROUTE_VERSION,
+                });
+                record.bundle_digest = digest;
             }
         }
         Ok(inventory)
     }
 
-    /// Stages, verifies and atomically publishes the embedded bundle.
+    /// Reads one verified, enabled UI asset. The caller supplies only the
+    /// route-safe plugin id and relative asset path; physical access remains
+    /// runtime-owned and every proof is repeated under the lifecycle lock. The
+    /// route is current-only: a recognized phase-1 legacy bundle is refused.
+    pub fn read_ui_asset(
+        &self,
+        plugin_id: &str,
+        asset_path: &str,
+    ) -> Result<PluginUiAsset, PluginError> {
+        let _guard = self.lock()?;
+        let paths = self.resolved_paths()?;
+        if plugin_id != PLUGIN_ID || !is_safe_relative_path(asset_path) {
+            return Err(PluginError::refused("the plugin UI asset is not allowed"));
+        }
+        paths.ensure_confined()?;
+        paths.ensure_clear_of_skill_targets(&TargetEnvironment::detect())?;
+        paths.ensure_real_path(&paths.plugin_dir, true)?;
+        let (spec, state) = match prove_owned_bundle(&paths.plugin_dir) {
+            Ok(value) => value,
+            Err(_) if std::fs::symlink_metadata(&paths.plugin_dir).is_ok() => {
+                return Err(PluginError::refused(
+                    "the plugin UI bundle integrity proof failed",
+                ));
+            }
+            Err(_) => {
+                return Err(PluginError::not_installed(
+                    "the plugin UI bundle is not installed",
+                ));
+            }
+        };
+        // The UI resource route is current-only: a recognized phase-1 legacy
+        // bundle is never served, whatever asset is requested.
+        if spec.kind != BundleKind::Current {
+            return Err(PluginError::refused(
+                "the plugin UI bundle is not the current bundle",
+            ));
+        }
+        if !state.enabled {
+            return Err(PluginError::refused("the plugin UI plugin is disabled"));
+        }
+        // The current proof already established exact equality with the embedded
+        // manifest and assets, so this only confirms the asset is declared.
+        spec.manifest
+            .ui
+            .as_ref()
+            .filter(|ui| ui.assets.iter().any(|asset| asset == asset_path))
+            .ok_or_else(|| PluginError::refused("the plugin UI asset is not declared"))?;
+        let path = paths.plugin_dir.join(asset_path);
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|_| PluginError::refused("the plugin UI asset is unavailable"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(PluginError::refused("the plugin UI asset is not a regular file"));
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|_| PluginError::refused("the plugin UI asset is unavailable"))?;
+        let content_digest = sha256_hex(&bytes);
+        let expected = EMBEDDED_ASSETS
+            .iter()
+            .find(|asset| asset.path == asset_path)
+            .map(|asset| sha256_hex(asset.bytes));
+        if expected.as_deref() != Some(content_digest.as_str()) {
+            return Err(PluginError::refused("the plugin UI asset integrity proof failed"));
+        }
+        Ok(PluginUiAsset {
+            bytes,
+            content_type: content_type_for(asset_path),
+            content_digest,
+        })
+    }
+    /// Stages, verifies and atomically publishes the current bundle. An existing
+    /// owned bundle — the current one or a recognized phase-1 legacy install — is
+    /// replaced atomically; a failure keeps the previous version.
     pub fn load(&self) -> Result<PluginInventory, PluginError> {
         let _guard = self.lock()?;
         let paths = self.resolved_paths()?;
@@ -380,11 +509,11 @@ impl PluginService {
         paths.ensure_real_path(&paths.plugins_root, true)?;
         paths.ensure_real_path(&paths.staging_root, true)?;
         // Never publish through a terminal bundle symlink, and never replace a
-        // directory that does not prove it is the embedded bundle.
+        // directory that does not prove it is an owned bundle.
         paths.ensure_real_path(&paths.plugin_dir, true)?;
         assert_owned_bundle(paths)?;
 
-        let manifest = embedded_manifest()?;
+        let spec = BundleSpec::current()?;
 
         std::fs::create_dir_all(&paths.plugins_root).map_err(|error| {
             PluginError::io(format!("failed to create the plugins root: {error}"))
@@ -406,7 +535,7 @@ impl PluginService {
         })?;
         restrict_permissions(&staged)?;
 
-        if let Err(error) = stage_into(&staged, &manifest) {
+        if let Err(error) = stage_into(&staged, &spec) {
             let _ = std::fs::remove_dir_all(&staged);
             return Err(error);
         }
@@ -473,17 +602,79 @@ fn embedded_manifest() -> Result<PluginManifest, PluginError> {
     PluginManifest::parse(EMBEDDED_MANIFEST)
 }
 
-/// Writes the embedded manifest, assets and lifecycle state into a fresh
-/// staging directory, then verifies every byte that was written.
-fn stage_into(staged: &Path, manifest: &PluginManifest) -> Result<(), PluginError> {
-    let canonical = serde_json::to_string_pretty(manifest).map_err(|error| {
+/// The recognized on-disk bundle shapes.
+///
+/// Only [`BundleKind::Current`] is ever published or served; [`BundleKind::Legacy`]
+/// (the phase-1 v1 bundle) is recognized solely so an upgrade, disable or
+/// uninstall can proceed without weakening the ownership proof. Recognition is
+/// by exact manifest structure and exact asset bytes, not by a heuristic such as
+/// a missing `ui` field or a version comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BundleKind {
+    Current,
+    Legacy,
+}
+
+/// One recognized bundle shape: its kind, its structural manifest and the exact
+/// asset bytes an on-disk bundle of this shape must reproduce.
+struct BundleSpec {
+    kind: BundleKind,
+    manifest: PluginManifest,
+    assets: &'static [EmbeddedAsset],
+}
+
+impl BundleSpec {
+    /// The current published bundle. Its manifest is the compile-time embedded
+    /// one, so the bundle identity has a single source of truth.
+    fn current() -> Result<Self, PluginError> {
+        Ok(Self {
+            kind: BundleKind::Current,
+            manifest: embedded_manifest()?,
+            assets: EMBEDDED_ASSETS,
+        })
+    }
+
+    /// The phase-1 bundle. It is built structurally (not from the raw file bytes)
+    /// because the on-disk manifest is written with `serde_json::to_string_pretty`.
+    fn legacy() -> Self {
+        Self {
+            kind: BundleKind::Legacy,
+            manifest: PluginManifest {
+                schema: LEGACY_PLUGIN_SCHEMA.to_string(),
+                id: PLUGIN_ID.to_string(),
+                version: "0.1.0".to_string(),
+                entry: "index.html".to_string(),
+                assets: vec!["index.html".to_string()],
+                permissions: vec!["skills:read".to_string()],
+                ui: None,
+            },
+            assets: LEGACY_ASSETS,
+        }
+    }
+
+    /// The exact set of names a bundle of this shape may contain.
+    fn names(&self) -> BTreeSet<OsString> {
+        let mut names = BTreeSet::new();
+        names.insert(OsString::from(MANIFEST_FILE_NAME));
+        names.insert(OsString::from(STATE_FILE_NAME));
+        for asset in self.assets {
+            names.insert(OsString::from(asset.path));
+        }
+        names
+    }
+}
+
+/// Writes a bundle of the given shape into a fresh staging directory, then
+/// verifies every byte that was written.
+fn stage_into(staged: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
+    let canonical = serde_json::to_string_pretty(&spec.manifest).map_err(|error| {
         PluginError::internal(format!("failed to serialize the plugin manifest: {error}"))
     })?;
     write_new_file(&staged.join(MANIFEST_FILE_NAME), canonical.as_bytes()).map_err(|error| {
         PluginError::io(format!("failed to write the staged manifest: {error}"))
     })?;
 
-    for asset in EMBEDDED_ASSETS {
+    for asset in spec.assets {
         write_asset(staged, asset.path, asset.bytes)?;
     }
 
@@ -491,11 +682,11 @@ fn stage_into(staged: &Path, manifest: &PluginManifest) -> Result<(), PluginErro
         &staged.join(STATE_FILE_NAME),
         &HostState {
             enabled: true,
-            version: manifest.version.clone(),
+            version: spec.manifest.version.clone(),
         },
     )?;
 
-    verify_bundle(staged, manifest)
+    verify_bundle(staged, spec)
 }
 
 /// Writes `bytes` to a brand-new file with `create_new`.
@@ -508,18 +699,6 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.flush()
-}
-
-/// The exact set of names the embedded bundle may contain: the manifest, the
-/// declared embedded assets and the service host state, and nothing else.
-fn embedded_bundle_names() -> BTreeSet<OsString> {
-    let mut names = BTreeSet::new();
-    names.insert(OsString::from(MANIFEST_FILE_NAME));
-    names.insert(OsString::from(STATE_FILE_NAME));
-    for asset in EMBEDDED_ASSETS {
-        names.insert(OsString::from(asset.path));
-    }
-    names
 }
 
 /// Refuses a path that is not an existing real regular file.
@@ -545,14 +724,14 @@ fn require_real_regular_file(path: &Path, what: &str) -> Result<(), PluginError>
     }
 }
 
-/// Verifies a bundle tree is *exactly* the embedded bundle.
+/// Verifies a bundle tree is *exactly* the given shape.
 ///
 /// The directory must be a real directory (not a symlink), contain the exact set
 /// of names (no stray file), and hold the manifest, every declared asset and the
-/// host state as real regular files whose bytes match the embedded bundle. A
-/// missing or unexpected entry is a refusal, not an IO error, so a foreign or
-/// drifted directory is never mistaken for the owned bundle.
-fn verify_bundle(root: &Path, manifest: &PluginManifest) -> Result<(), PluginError> {
+/// host state as real regular files whose bytes match the shape. A missing or
+/// unexpected entry is a refusal, not an IO error, so a foreign or drifted
+/// directory is never mistaken for an owned bundle.
+fn verify_bundle(root: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
     match std::fs::symlink_metadata(root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(PluginError::refused(
@@ -578,9 +757,9 @@ fn verify_bundle(root: &Path, manifest: &PluginManifest) -> Result<(), PluginErr
         }
     }
 
-    // The directory must contain exactly the embedded names: an extra entry is
+    // The directory must contain exactly the shape's names: an extra entry is
     // unknown content the service refuses to replace or delete.
-    let expected = embedded_bundle_names();
+    let expected = spec.names();
     let mut seen: BTreeSet<OsString> = BTreeSet::new();
     let entries = std::fs::read_dir(root)
         .map_err(|error| PluginError::io(format!("failed to read the plugin bundle: {error}")))?;
@@ -604,13 +783,13 @@ fn verify_bundle(root: &Path, manifest: &PluginManifest) -> Result<(), PluginErr
     }
 
     require_real_regular_file(&root.join(MANIFEST_FILE_NAME), "manifest")?;
-    let on_disk = read_manifest(root)?;
-    if on_disk != *manifest {
+    let on_disk = read_manifest_structure(root)?;
+    if on_disk != spec.manifest {
         return Err(PluginError::refused(
-            "the on-disk manifest does not match the embedded manifest",
+            "the on-disk manifest does not match the expected manifest",
         ));
     }
-    for asset in EMBEDDED_ASSETS {
+    for asset in spec.assets {
         let path = root.join(asset.path);
         require_real_regular_file(&path, "asset")?;
         let bytes = std::fs::read(&path).map_err(|error| {
@@ -627,32 +806,58 @@ fn verify_bundle(root: &Path, manifest: &PluginManifest) -> Result<(), PluginErr
     Ok(())
 }
 
-/// Reads and validates the manifest of a bundle directory.
-fn read_manifest(dir: &Path) -> Result<PluginManifest, PluginError> {
+/// Reads a bundle manifest structurally, without applying the current-schema
+/// validation, so a recognized legacy manifest can be compared by structure
+/// exactly as it was written to disk (`serde_json::to_string_pretty`).
+fn read_manifest_structure(dir: &Path) -> Result<PluginManifest, PluginError> {
     let path = dir.join(MANIFEST_FILE_NAME);
     let text = std::fs::read_to_string(&path)
         .map_err(|error| PluginError::io(format!("failed to read the plugin manifest: {error}")))?;
-    PluginManifest::parse(&text)
+    serde_json::from_str(&text).map_err(|error| {
+        PluginError::refused(format!("the plugin manifest is unparsable: {error}"))
+    })
 }
 
-/// Proves `root` is exactly the embedded bundle and returns its host state.
-fn prove_embedded_bundle(root: &Path) -> Result<HostState, PluginError> {
-    let embedded = embedded_manifest()?;
-    verify_bundle(root, &embedded)?;
+/// Proves `root` is exactly a bundle of the given shape and returns its host
+/// state.
+fn prove_bundle(root: &Path, spec: &BundleSpec) -> Result<HostState, PluginError> {
+    verify_bundle(root, spec)?;
     let state = read_state_file(&root.join(STATE_FILE_NAME))
         .ok_or_else(|| PluginError::refused("the plugin bundle has no valid host state file"))?;
-    if state.version != embedded.version {
+    if state.version != spec.manifest.version {
         return Err(PluginError::refused(
-            "the plugin bundle host state does not match the embedded bundle",
+            "the plugin bundle host state does not match the expected bundle",
         ));
     }
     Ok(state)
 }
 
-/// Proves that the plugin directory, when it exists, is the embedded bundle
-/// before it is replaced or removed. A missing directory owns nothing and is
-/// fine; a symlink, a plain file, a foreign manifest, an extra entry or a
-/// drifted asset is refused so the service never deletes unknown content.
+/// Proves `root` is one of the recognized bundles and returns its shape and host
+/// state.
+///
+/// The current bundle is preferred; the recognized phase-1 bundle is accepted
+/// only so an upgrade, disable or uninstall can proceed. Any other content is
+/// refused with the current bundle's proof error, so a foreign or drifted
+/// directory is never mistaken for an owned bundle.
+fn prove_owned_bundle(root: &Path) -> Result<(BundleSpec, HostState), PluginError> {
+    let current = BundleSpec::current()?;
+    match prove_bundle(root, &current) {
+        Ok(state) => Ok((current, state)),
+        Err(current_error) => {
+            let legacy = BundleSpec::legacy();
+            match prove_bundle(root, &legacy) {
+                Ok(state) => Ok((legacy, state)),
+                Err(_) => Err(current_error),
+            }
+        }
+    }
+}
+
+/// Proves that the plugin directory, when it exists, is an owned bundle (the
+/// current bundle or the recognized phase-1 bundle) before it is replaced or
+/// removed. A missing directory owns nothing and is fine; a symlink, a plain
+/// file, a foreign manifest, an extra entry or a drifted asset is refused so the
+/// service never deletes unknown content.
 fn assert_owned_bundle(paths: &PluginPaths) -> Result<(), PluginError> {
     let dir = &paths.plugin_dir;
     match std::fs::symlink_metadata(dir) {
@@ -675,20 +880,21 @@ fn assert_owned_bundle(paths: &PluginPaths) -> Result<(), PluginError> {
             )))
         }
     }
-    prove_embedded_bundle(dir).map(|_| ())
+    prove_owned_bundle(dir).map(|_| ())
 }
 
 /// Inspects an installed bundle, returning its manifest and lifecycle state.
 ///
 /// Only a *complete evidence* bundle is installed: the manifest, every asset and
 /// the host state must all be present as real regular files with the exact
-/// embedded content and no extra entry. A missing manifest, a symlinked file, an
+/// recognized content and no extra entry. Either the current bundle or the
+/// recognized phase-1 bundle qualifies, so an already-published legacy install
+/// is still reported as installed. A missing manifest, a symlinked file, an
 /// unexpected entry or an absent state file is not installed — the host state is
 /// never fabricated.
 fn inspect_installed(paths: &PluginPaths) -> Option<(PluginManifest, HostState)> {
-    let state = prove_embedded_bundle(&paths.plugin_dir).ok()?;
-    let manifest = embedded_manifest().ok()?;
-    Some((manifest, state))
+    let (spec, state) = prove_owned_bundle(&paths.plugin_dir).ok()?;
+    Some((spec.manifest, state))
 }
 
 fn read_state_file(path: &Path) -> Option<HostState> {
@@ -872,8 +1078,8 @@ fn cleanup_residue(paths: &PluginPaths) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// Removes prefix-matched entries of `root` only after [`prove_embedded_bundle`]
-/// confirms each is the embedded bundle.
+/// Removes prefix-matched entries of `root` only after [`prove_owned_bundle`]
+/// confirms each is an owned bundle (current or the recognized phase-1 bundle).
 fn remove_proven_residue(
     paths: &PluginPaths,
     root: &Path,
@@ -889,7 +1095,7 @@ fn remove_proven_residue(
             continue;
         }
         let path = entry.path();
-        if prove_embedded_bundle(&path).is_ok() {
+        if prove_owned_bundle(&path).is_ok() {
             remove_owned(paths, &path)?;
         }
     }
@@ -916,7 +1122,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-#[cfg(test)]
+fn content_type_for(path: &str) -> &'static str {
+    match path.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
 /// A digest of the embedded bundle: every path and its content hash.
 fn embedded_bundle_digest() -> String {
     let mut canonical = String::new();
@@ -967,6 +1185,18 @@ mod tests {
         serde_json::from_str(EMBEDDED_MANIFEST).expect("embedded manifest json")
     }
 
+    fn plugin_record(inventory: &PluginInventory) -> &PluginRecord {
+        inventory.plugins.first().expect("built-in plugin record")
+    }
+
+    fn inventory_installed(inventory: &PluginInventory) -> bool {
+        !matches!(plugin_record(inventory).state, PluginState::NotInstalled)
+    }
+
+    fn inventory_enabled(inventory: &PluginInventory) -> bool {
+        matches!(plugin_record(inventory).state, PluginState::Enabled)
+    }
+
     fn service_at(root: &Path) -> PluginService {
         PluginService::with_paths(PluginPaths::under(root.to_path_buf()))
     }
@@ -977,6 +1207,24 @@ mod tests {
             .read_dir()
             .map(|mut entries| entries.next().is_none())
             .unwrap_or(true)
+    }
+
+    /// Publishes a phase-1 legacy bundle into the live plugin directory exactly
+    /// the way the phase-1 service wrote it (pretty manifest, exact entry bytes,
+    /// pretty host state), so the recognition proof runs against the real disk
+    /// form rather than an in-memory value.
+    fn publish_legacy(paths: &PluginPaths, enabled: bool) {
+        let spec = BundleSpec::legacy();
+        std::fs::create_dir_all(&paths.plugin_dir).expect("legacy plugin directory");
+        stage_into(&paths.plugin_dir, &spec).expect("stage the legacy bundle");
+        write_state_file(
+            &paths.state_file,
+            &HostState {
+                enabled,
+                version: spec.manifest.version.clone(),
+            },
+        )
+        .expect("write the legacy host state");
     }
 
     #[test]
@@ -1060,17 +1308,121 @@ mod tests {
     }
 
     #[test]
+    fn manifest_ui_descriptor_is_strict_and_verified_after_load() {
+        let mut json = embedded_json();
+        json["ui"] = serde_json::json!({
+            "entry": "../escape.html",
+            "assets": ["../escape.html"]
+        });
+        assert_eq!(
+            PluginManifest::parse(&json.to_string())
+                .expect_err("unsafe UI path must be refused")
+                .code,
+            plugin_code::INVALID_MANIFEST
+        );
+
+        let temp = TempDir::new().expect("temp dir");
+        let inventory = service_at(temp.path()).load().expect("load");
+        let record = plugin_record(&inventory);
+        assert!(matches!(record.state, PluginState::Enabled));
+        let ui = record.ui.as_ref().expect("verified UI descriptor");
+        assert!(ui.verified);
+        assert_eq!(ui.entry, "index.html");
+        assert_eq!(ui.assets, vec!["index.html".to_string()]);
+        assert_eq!(ui.route_version, PLUGIN_UI_ROUTE_VERSION);
+        assert_eq!(ui.content_digest, embedded_bundle_digest());
+    }
+    #[test]
+    fn ui_asset_reads_only_verified_enabled_declared_content() {
+        let temp = TempDir::new().expect("temp dir");
+        let service = service_at(temp.path());
+        assert_eq!(
+            service
+                .read_ui_asset(PLUGIN_ID, "index.html")
+                .expect_err("uninstalled UI must be refused")
+                .code,
+            plugin_code::NOT_INSTALLED
+        );
+
+        service.load().expect("load");
+        let asset = service
+            .read_ui_asset(PLUGIN_ID, "index.html")
+            .expect("read verified UI asset");
+        assert_eq!(asset.content_type, "text/html; charset=utf-8");
+        assert_eq!(asset.bytes, EMBEDDED_ENTRY.as_bytes());
+        assert_eq!(asset.content_digest, sha256_hex(EMBEDDED_ENTRY.as_bytes()));
+
+        for (plugin_id, path) in [
+            ("unknown", "index.html"),
+            (PLUGIN_ID, "missing.html"),
+            (PLUGIN_ID, "../plugin.json"),
+            (PLUGIN_ID, "/etc/passwd"),
+            (PLUGIN_ID, "..\\plugin.json"),
+        ] {
+            assert_eq!(
+                service
+                    .read_ui_asset(plugin_id, path)
+                    .expect_err("untrusted asset request must be refused")
+                    .code,
+                plugin_code::REFUSED
+            );
+        }
+
+        service.disable().expect("disable");
+        assert_eq!(
+            service
+                .read_ui_asset(PLUGIN_ID, "index.html")
+                .expect_err("disabled UI must be refused")
+                .code,
+            plugin_code::REFUSED
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ui_asset_refuses_symlink_and_drifted_content() {
+        let temp = TempDir::new().expect("temp dir");
+        let service = service_at(temp.path());
+        service.load().expect("load");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        let outside = temp.path().join("outside.html");
+        std::fs::write(&outside, EMBEDDED_ENTRY).expect("outside asset");
+        let asset = paths.plugin_dir.join("index.html");
+        std::fs::remove_file(&asset).expect("remove asset");
+        std::os::unix::fs::symlink(&outside, &asset).expect("symlink asset");
+        assert_eq!(
+            service
+                .read_ui_asset(PLUGIN_ID, "index.html")
+                .expect_err("symlink asset must be refused")
+                .code,
+            plugin_code::REFUSED
+        );
+        assert!(outside.is_file());
+
+        std::fs::remove_file(&asset).expect("remove symlink");
+        std::fs::write(&asset, b"drifted").expect("drift asset");
+        assert_eq!(
+            service
+                .read_ui_asset(PLUGIN_ID, "index.html")
+                .expect_err("drifted asset must be refused")
+                .code,
+            plugin_code::REFUSED
+        );
+    }
+
+
+    #[test]
     fn load_stages_verifies_and_publishes_the_bundle() {
         let temp = TempDir::new().expect("temp dir");
         let service = service_at(temp.path());
 
         let inventory = service.load().expect("load");
-        assert!(inventory.installed);
-        assert!(inventory.enabled);
-        assert_eq!(inventory.version.as_deref(), Some("0.1.0"));
+        assert!(inventory_installed(&inventory));
+        assert!(inventory_enabled(&inventory));
+        assert_eq!(plugin_record(&inventory).version.as_deref(), Some("0.1.0"));
         let expected_digest = embedded_bundle_digest();
         assert_eq!(
-            inventory.bundle_digest.as_deref(),
+            plugin_record(&inventory).bundle_digest.as_deref(),
             Some(expected_digest.as_str())
         );
 
@@ -1096,8 +1448,8 @@ mod tests {
 
         let paths = PluginPaths::under(temp.path().to_path_buf());
         let inventory = service.load().expect("second load");
-        assert!(inventory.installed);
-        assert!(inventory.enabled);
+        assert!(inventory_installed(&inventory));
+        assert!(inventory_enabled(&inventory));
         assert!(paths.plugin_dir.join(MANIFEST_FILE_NAME).is_file());
         assert!(paths.plugin_dir.join("index.html").is_file());
         assert!(staged_is_empty(&paths), "no staging residue may survive");
@@ -1174,7 +1526,7 @@ mod tests {
         let service = service_at(home);
         service.load().expect("load");
         let inventory = service.uninstall().expect("uninstall");
-        assert!(!inventory.installed);
+        assert!(!inventory_installed(&inventory));
 
         let paths = PluginPaths::under(home.to_path_buf());
         assert!(!paths.plugin_dir.exists());
@@ -1251,8 +1603,8 @@ mod tests {
         service.load().expect("load");
 
         let inventory = service.disable().expect("disable");
-        assert!(inventory.installed);
-        assert!(!inventory.enabled);
+        assert!(inventory_installed(&inventory));
+        assert!(!inventory_enabled(&inventory));
 
         let paths = PluginPaths::under(home.to_path_buf());
         assert!(paths.plugin_dir.join("index.html").is_file());
@@ -1268,9 +1620,9 @@ mod tests {
     fn inventory_on_an_empty_home_reports_not_installed() {
         let temp = TempDir::new().expect("temp dir");
         let inventory = service_at(temp.path()).inventory().expect("inventory");
-        assert!(!inventory.installed);
-        assert!(!inventory.enabled);
-        assert!(inventory.version.is_none());
+        assert!(!inventory_installed(&inventory));
+        assert!(!inventory_enabled(&inventory));
+        assert!(plugin_record(&inventory).version.is_none());
         assert_eq!(inventory.uninstall_scope, UNINSTALL_SCOPE);
     }
 
@@ -1293,11 +1645,12 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let value = serde_json::to_value(service_at(temp.path()).inventory().expect("inventory"))
             .expect("serialize");
-        assert_eq!(value["plugin_id"], PLUGIN_ID);
-        assert_eq!(value["schema"], PLUGIN_SCHEMA);
-        assert_eq!(value["installed"], serde_json::json!(false));
+        assert_eq!(value["schema_version"], PLUGIN_INVENTORY_SCHEMA_VERSION);
+        assert_eq!(value["plugins"][0]["id"], PLUGIN_ID);
+        assert_eq!(value["plugins"][0]["kind"], BUILTIN_PLUGIN_KIND);
+        assert_eq!(value["plugins"][0]["state"], "not_installed");
         assert_eq!(value["uninstall_scope"], UNINSTALL_SCOPE);
-        assert!(value["root"]
+        assert!(value["plugins"][0]["root"]
             .as_str()
             .is_some_and(|root| root.ends_with(PLUGIN_ID)));
         // A token or credential must never appear in the inventory wire shape.
@@ -1405,7 +1758,7 @@ mod tests {
             plugin_code::REFUSED
         );
         assert!(
-            !service.inventory().expect("inventory").installed,
+            !inventory_installed(&service.inventory().expect("inventory")),
             "a redirected read reports not installed"
         );
         assert!(
@@ -1484,7 +1837,7 @@ mod tests {
         let service = PluginService::with_paths(paths.clone());
         let inventory = service.inventory().expect("inventory");
         assert!(
-            !inventory.installed,
+            !inventory_installed(&inventory),
             "a symlinked bundle is never read as installed"
         );
     }
@@ -1513,7 +1866,7 @@ mod tests {
         // Whichever operation ran last, the service is in one consistent state
         // and leaves no staging residue behind.
         let inventory = service.inventory().expect("inventory");
-        if inventory.installed {
+        if inventory_installed(&inventory) {
             assert!(paths.plugin_dir.join("index.html").is_file());
         } else {
             assert!(!paths.plugin_dir.exists());
@@ -1533,8 +1886,8 @@ mod tests {
         // Without the state file the evidence is incomplete, so the read reports
         // "not installed" instead of fabricating an enabled host state.
         let inventory = service.inventory().expect("inventory");
-        assert!(!inventory.installed);
-        assert!(!inventory.enabled);
+        assert!(!inventory_installed(&inventory));
+        assert!(!inventory_enabled(&inventory));
 
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -1557,7 +1910,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &paths.state_file).expect("symlink state");
 
         assert!(
-            !service.inventory().expect("inventory").installed,
+            !inventory_installed(&service.inventory().expect("inventory")),
             "a symlinked state file is not provable"
         );
         assert_eq!(
@@ -1588,7 +1941,7 @@ mod tests {
         std::fs::remove_file(&asset).expect("remove asset");
         std::os::unix::fs::symlink(&real, &asset).expect("symlink asset");
 
-        assert!(!service.inventory().expect("inventory").installed);
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -1612,7 +1965,7 @@ mod tests {
         std::fs::remove_file(&manifest).expect("remove manifest");
         std::os::unix::fs::symlink(&real, &manifest).expect("symlink manifest");
 
-        assert!(!service.inventory().expect("inventory").installed);
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -1641,7 +1994,7 @@ mod tests {
             service.uninstall().expect_err("uninstall").code,
             plugin_code::REFUSED
         );
-        assert!(!service.inventory().expect("inventory").installed);
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
         assert!(
             !real.join("plugins").exists(),
             "nothing may be written through the home link"
@@ -1666,7 +2019,7 @@ mod tests {
             service.uninstall().expect_err("uninstall").code,
             plugin_code::REFUSED
         );
-        assert!(!service.inventory().expect("inventory").installed);
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
         assert!(
             !real.join("skills").exists(),
             "nothing may be written through the parent link"
@@ -1715,7 +2068,7 @@ mod tests {
         std::fs::write(foreign_backup.join("keep.txt"), b"keep").expect("keep");
 
         let inventory = service.uninstall().expect("uninstall");
-        assert!(!inventory.installed);
+        assert!(!inventory_installed(&inventory));
         assert!(
             foreign_staging.join("keep.txt").is_file(),
             "foreign staging must survive"
@@ -1738,9 +2091,318 @@ mod tests {
         // passes the same ownership proof and is cleared.
         let residue = paths.staging_root.join(format!("{PLUGIN_ID}-orphan"));
         std::fs::create_dir_all(&residue).expect("residue");
-        stage_into(&residue, &embedded_manifest().expect("manifest")).expect("stage residue");
+        stage_into(&residue, &BundleSpec::current().expect("spec")).expect("stage residue");
 
         service.uninstall().expect("uninstall");
         assert!(!residue.exists(), "proven residue is cleared");
+    }
+
+    #[test]
+    fn the_current_and_legacy_bundles_are_strictly_distinct() {
+        let current = BundleSpec::current().expect("current spec");
+        let legacy = BundleSpec::legacy();
+
+        // Recognition is by exact structure, so the two shapes cannot overlap.
+        assert_ne!(current.manifest, legacy.manifest);
+        assert_ne!(current.manifest.schema, legacy.manifest.schema);
+        assert!(current.manifest.ui.is_some());
+        assert!(legacy.manifest.ui.is_none());
+        assert_ne!(LEGACY_ENTRY.as_bytes(), EMBEDDED_ENTRY.as_bytes());
+        assert_ne!(
+            sha256_hex(LEGACY_ENTRY.as_bytes()),
+            sha256_hex(EMBEDDED_ENTRY.as_bytes())
+        );
+
+        // Each shape's proof rejects the other's on-disk bundle, so a legacy
+        // install can never be mistaken for the current one.
+        let temp = TempDir::new().expect("temp dir");
+        let current_dir = temp.path().join("current");
+        std::fs::create_dir_all(&current_dir).expect("dir");
+        stage_into(&current_dir, &current).expect("stage current");
+        assert!(
+            prove_bundle(&current_dir, &legacy).is_err(),
+            "the legacy proof must reject a current bundle"
+        );
+        let legacy_dir = temp.path().join("legacy");
+        std::fs::create_dir_all(&legacy_dir).expect("dir");
+        stage_into(&legacy_dir, &legacy).expect("stage legacy");
+        assert!(
+            prove_bundle(&legacy_dir, &current).is_err(),
+            "the current proof must reject a legacy bundle"
+        );
+    }
+
+    #[test]
+    fn a_legacy_bundle_survives_a_restart_and_reports_enabled_without_ui() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+
+        // A fresh service (as after a restart) recognizes the phase-1 bundle.
+        let inventory = service_at(temp.path()).inventory().expect("inventory");
+        assert!(inventory_installed(&inventory));
+        assert!(inventory_enabled(&inventory));
+        let record = plugin_record(&inventory);
+        assert_eq!(record.version.as_deref(), Some("0.1.0"));
+        assert!(
+            record.ui.is_none(),
+            "a legacy bundle exposes no UI descriptor"
+        );
+
+        // The reported digest is the accurate digest of the legacy content.
+        let legacy_digest =
+            installed_bundle_digest(&paths.plugin_dir, &["index.html".to_string()])
+                .expect("legacy digest");
+        assert_eq!(record.bundle_digest.as_deref(), Some(legacy_digest.as_str()));
+        assert_ne!(
+            legacy_digest,
+            embedded_bundle_digest(),
+            "legacy and current content have distinct digests"
+        );
+    }
+
+    #[test]
+    fn read_ui_asset_refuses_a_legacy_bundle() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        assert!(inventory_installed(&service.inventory().expect("inventory")));
+        // The UI route is current-only, so a recognized legacy install is never
+        // served even though it declares `index.html`.
+        assert_eq!(
+            service
+                .read_ui_asset(PLUGIN_ID, "index.html")
+                .expect_err("a legacy UI must be refused")
+                .code,
+            plugin_code::REFUSED
+        );
+    }
+
+    #[test]
+    fn load_upgrades_a_legacy_bundle_to_the_current_bundle() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        let inventory = service.load().expect("upgrade the legacy bundle");
+        let record = plugin_record(&inventory);
+        assert!(matches!(record.state, PluginState::Enabled));
+        let ui = record.ui.as_ref().expect("current bundle exposes UI");
+        assert!(ui.verified);
+        assert_eq!(
+            record.bundle_digest.as_deref(),
+            Some(embedded_bundle_digest().as_str())
+        );
+        assert_eq!(
+            std::fs::read(paths.plugin_dir.join("index.html")).expect("entry"),
+            EMBEDDED_ENTRY.as_bytes()
+        );
+        let manifest = read_manifest_structure(&paths.plugin_dir).expect("manifest");
+        assert_eq!(manifest.schema, PLUGIN_SCHEMA);
+        assert!(manifest.ui.is_some());
+        assert!(staged_is_empty(&paths), "no staging residue may survive");
+        // The upgraded bundle is now served by the UI route.
+        service
+            .read_ui_asset(PLUGIN_ID, "index.html")
+            .expect("the upgraded UI is served");
+    }
+
+    #[test]
+    fn disable_preserves_a_legacy_bundle_and_allows_uninstall() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        let inventory = service.disable().expect("disable the legacy bundle");
+        assert!(inventory_installed(&inventory));
+        assert!(!inventory_enabled(&inventory));
+        assert!(plugin_record(&inventory).ui.is_none());
+
+        // disable only writes the state file; the legacy assets and manifest are
+        // left exactly as they were.
+        assert_eq!(
+            std::fs::read(paths.plugin_dir.join("index.html")).expect("entry"),
+            LEGACY_ENTRY.as_bytes()
+        );
+        assert_eq!(
+            read_manifest_structure(&paths.plugin_dir).expect("manifest"),
+            BundleSpec::legacy().manifest
+        );
+
+        let inventory = service.uninstall().expect("uninstall the legacy bundle");
+        assert!(!inventory_installed(&inventory));
+        assert!(!paths.plugin_dir.exists());
+    }
+
+    #[test]
+    fn uninstall_removes_a_proven_legacy_bundle() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        let inventory = service.uninstall().expect("uninstall");
+        assert!(!inventory_installed(&inventory));
+        assert!(!paths.plugin_dir.exists());
+        assert!(paths.plugins_root.is_dir(), "the plugins root is not removed");
+    }
+
+    #[test]
+    fn uninstall_removes_legacy_bundle_residue() {
+        let temp = TempDir::new().expect("temp dir");
+        let service = service_at(temp.path());
+        service.load().expect("load");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+
+        // A leftover staging directory holding exactly the phase-1 bundle passes
+        // the ownership proof and is cleared.
+        let residue = paths.staging_root.join(format!("{PLUGIN_ID}-legacy-orphan"));
+        std::fs::create_dir_all(&residue).expect("residue");
+        stage_into(&residue, &BundleSpec::legacy()).expect("stage legacy residue");
+
+        service.uninstall().expect("uninstall");
+        assert!(!residue.exists(), "proven legacy residue is cleared");
+    }
+
+    #[test]
+    fn a_legacy_bundle_with_a_modified_asset_is_preserved() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        std::fs::write(paths.plugin_dir.join("index.html"), b"drifted").expect("drift entry");
+
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
+        assert_eq!(
+            service.disable().expect_err("disable").code,
+            plugin_code::REFUSED
+        );
+        assert_eq!(
+            service.uninstall().expect_err("uninstall").code,
+            plugin_code::REFUSED
+        );
+        assert_eq!(
+            std::fs::read(paths.plugin_dir.join("index.html")).expect("entry"),
+            b"drifted",
+            "drifted legacy content must survive"
+        );
+    }
+
+    #[test]
+    fn a_legacy_bundle_with_a_modified_manifest_is_preserved() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        // A legacy schema with an extra field is no longer the recognized shape.
+        std::fs::write(
+            paths.plugin_dir.join(MANIFEST_FILE_NAME),
+            br#"{"schema":"chatspeed.agent-skills.plugin/v1","id":"agent-skills","version":"0.1.0","entry":"index.html","assets":["index.html"],"permissions":["skills:read"],"extra":true}"#,
+        )
+        .expect("drift manifest");
+
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
+        assert_eq!(
+            service.uninstall().expect_err("uninstall").code,
+            plugin_code::REFUSED
+        );
+        assert!(paths.plugin_dir.join(MANIFEST_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn a_legacy_bundle_with_a_modified_state_version_is_preserved() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        std::fs::write(
+            paths.state_file.clone(),
+            br#"{"enabled":true,"version":"9.9.9"}"#,
+        )
+        .expect("drift state");
+
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
+        assert_eq!(
+            service.uninstall().expect_err("uninstall").code,
+            plugin_code::REFUSED
+        );
+        assert!(paths.plugin_dir.join("index.html").is_file());
+    }
+
+    #[test]
+    fn a_legacy_bundle_with_an_extra_entry_is_preserved() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        std::fs::write(paths.plugin_dir.join("stray.txt"), b"stray").expect("write stray");
+
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
+        assert_eq!(
+            service.uninstall().expect_err("uninstall").code,
+            plugin_code::REFUSED
+        );
+        assert!(
+            paths.plugin_dir.join("stray.txt").is_file(),
+            "unknown content must be preserved"
+        );
+        assert!(paths.plugin_dir.join("index.html").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_legacy_asset_is_refused() {
+        let temp = TempDir::new().expect("temp dir");
+        let paths = PluginPaths::under(temp.path().to_path_buf());
+        publish_legacy(&paths, true);
+        let service = service_at(temp.path());
+
+        let real = temp.path().join("real-legacy-index.html");
+        std::fs::write(&real, LEGACY_ENTRY).expect("real legacy asset");
+        let asset = paths.plugin_dir.join("index.html");
+        std::fs::remove_file(&asset).expect("remove asset");
+        std::os::unix::fs::symlink(&real, &asset).expect("symlink asset");
+
+        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
+        assert_eq!(
+            service.uninstall().expect_err("uninstall").code,
+            plugin_code::REFUSED
+        );
+        assert!(is_symlink(&asset), "the link must be preserved");
+        assert!(real.is_file(), "the link target must survive");
+    }
+
+    #[test]
+    fn replace_dir_restores_a_legacy_bundle_on_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let live = temp.path().join("live");
+        std::fs::create_dir_all(&live).expect("live");
+        stage_into(&live, &BundleSpec::legacy()).expect("stage legacy live");
+        let before = std::fs::read(live.join("index.html")).expect("entry");
+        let missing_staged = temp.path().join("missing-staged");
+        let backup = temp.path().join("backup");
+
+        let error = replace_dir(&live, &missing_staged, &backup).expect_err("must fail");
+        assert_eq!(error.code, plugin_code::IO);
+        assert_eq!(
+            std::fs::read(live.join("index.html")).expect("entry"),
+            before,
+            "the legacy bundle must survive a failed publish"
+        );
+        assert!(live.join(MANIFEST_FILE_NAME).is_file());
+        assert!(!backup.exists(), "the backup must be restored");
     }
 }

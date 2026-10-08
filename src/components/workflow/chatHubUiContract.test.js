@@ -8,7 +8,9 @@ const workflowView = read('../../views/Workflow.vue')
 const sidebar = read('./WorkflowSidebar.vue')
 const entry = read('./ChatHubEntry.vue')
 const splitter = read('./ChatHubSplitter.vue')
-const chatHubViewController = read('../../libs/chatHubView.js')
+const dockedComponent = read('./DockedViews.vue')
+const chatHubView = read('../../libs/chatHubView.js')
+const dockedViews = read('../../libs/dockedViews.js')
 const chatHubStore = read('../../stores/chatHub.js')
 const page = read('../../../src-tauri/src/chat_hub/page.rs')
 const layoutStyles = read('../../styles/workflow/layout.scss')
@@ -23,8 +25,13 @@ const section = (text, start, end) => {
   return text.slice(from, to)
 }
 
+/** The shared dock implementation of the workflow view. */
 const chatHubBlock = () =>
-  section(workflowView, '// ChatHub (web chat entries)', 'const openWorkflowSidebarTab = tab => {')
+  section(
+    workflowView,
+    '// Docked views (ChatHub sites and plugin UI in one right dock)',
+    '// Component refs'
+  )
 
 /** Body of one top level handler in the workflow view. */
 const handlerBody = name => {
@@ -40,11 +47,11 @@ const occurrences = (text, needle) => text.split(needle).length - 1
 test('workflow sidebar keeps the chat entry directly above the terminal entry', () => {
   assert.match(
     workflowView,
-    /<div class="workflow-side-rail__bottom">\s*<ChatHubEntry[\s\S]*?class="workflow-side-rail__item workflow-side-rail__terminal"/
+    /<div class="workflow-side-rail__bottom">[\s\S]*?<ChatHubEntry[\s\S]*?class="workflow-side-rail__item workflow-side-rail__terminal"/
   )
   assert.match(
     sidebar,
-    /<div class="compact-bottom-entries">\s*<ChatHubEntry[\s\S]*?class="workflow-terminal-entry compact-terminal-entry"/
+    /<div class="compact-bottom-entries">[\s\S]*?<ChatHubEntry[\s\S]*?class="workflow-terminal-entry compact-terminal-entry"/
   )
   assert.match(sidebar, /:hubs="chatHubs"[\s\S]*?:active-hub-id="activeChatHubId"[\s\S]*?@select="\$emit\('select-chat-hub', \$event\)"/)
   assert.match(workflowView, /@select-chat-hub="onSelectChatHubEntry"/)
@@ -61,53 +68,160 @@ test('chat entry renders logos with the shared avatar fallback and current entry
   assert.match(entry, /v-if="activeHub"[\s\S]*?class="chat-hub-entry__current"/)
 })
 
-test('the page is docked under the app chrome, never measured from this side', () => {
-  // The page is a second webview inside this very window, so the view layer never
-  // measures a rectangle, follows the window or hides the workflow chat pane.
+test('the dock measures the shared surface and hands the rectangle to the carrier', () => {
+  // The dock is a plain Vue column; the native view is painted over the measured surface,
+  // so this layer measures one rectangle instead of owning a webview api of its own.
   assert.match(workflowView, /<div class="workflow-chat-pane">/)
   assert.doesNotMatch(workflowView, /ChatHubPane/)
-  assert.doesNotMatch(workflowView, /getBoundingClientRect/)
-  assert.doesNotMatch(workflowView, /new ResizeObserver/)
+  assert.match(chatHubBlock(), /const dockGeometry = \(\) => \{[\s\S]*?getBoundingClientRect\(\)/)
+  assert.match(chatHubBlock(), /\? \{ x: rect\.x, y: rect\.y, width: rect\.width, height: rect\.height \}/)
+  assert.match(workflowView, /dockResizeObserver = new ResizeObserver\(onDockLayoutResize\)/)
+  // The rectangle is only trusted once it is laid out; an unlaid surface reports no bounds,
+  // which is what keeps a hidden view hidden.
+  assert.match(chatHubBlock(), /rect && rect\.width > 0 && rect\.height > 0\s*\?\s*\{/)
   assert.doesNotMatch(workflowView, /bounds-change/)
   assert.doesNotMatch(workflowView, /chat-hub-visible/)
   assert.doesNotMatch(workflowView, /show_chat_hub_webview|update_chat_hub_webview_bounds/)
 })
 
-test('showing a chat entry only drives the ordered view commands', () => {
-  // Every view command goes through one ordered boundary, so a late IPC reply can
-  // never override a newer user action (see src/libs/chatHubView.test.js).
+test('the dock is measured only after the DOM update, and a hidden view is never resurrected', () => {
   assert.match(
-    workflowView,
-    /import \{ createChatHubViewController, restoreChatHubEntry \} from '@\/libs\/chatHubView'/
+    chatHubBlock(),
+    /const syncDock = async \(\) => \{\s*if \(dockTornDown\) \{\s*return\s*\}\s*await nextTick\(\)\s*if \(dockTornDown\) \{\s*return\s*\}\s*return dockCoordinator\.sync\(dockSnapshot\(\)\)\s*\}/
   )
   assert.match(
-    workflowView,
-    /const chatHubView = createChatHubViewController\(\{[\s\S]*?invokeWrapper\('show_chat_hub_page', \{\s*url,\s*width,\s*topInset: chatHubTopInset\(\),\s*cornerRadius: chatHubCornerRadius\(\)\s*\}\)[\s\S]*?hide: \(\) => invokeWrapper\('hide_chat_hub_page'\)[\s\S]*?destroy: \(\) => invokeWrapper\('destroy_chat_hub_page'\)[\s\S]*?setWidth: width => invokeWrapper\('set_chat_hub_page_width', \{ width \}\)/
+    chatHubBlock(),
+    /const onDockLayoutResize = \(\) => \{\s*nextTick\(\(\) => \{\s*if \(!dockNativeActive\.value\) \{\s*return\s*\}\s*void syncDock\(\)\s*\}\)\s*\}/
   )
-  assert.match(workflowView, /getWidth: \(\) => chatHubStore\.pageWidth/)
-  // The visible flag follows the applied native state instead of a local guess.
-  assert.match(workflowView, /onVisibleChange: visible => \{\s*chatHubVisible\.value = visible\s*\}/)
-  assert.match(workflowView, /const hideChatHub = \(\) => \{\s*chatHubView\.hide\(\)\s*\}/)
-  // Failures only report a message and keep the original workflow UI usable.
-  assert.match(workflowView, /onError: \(error, action\) => \{[\s\S]*?workflow\.chatHub\.\$\{key\}/)
+  // The coordinator refuses to show without a usable rectangle, so a layout change of a
+  // hidden dock cannot bring a view back.
+  assert.match(dockedViews, /const showable = \(tab, geometry\) =>/)
+  assert.match(dockedViews, /if \(!showable\(active, snapshot\.geometry\)\) \{/)
+})
 
-  const block = chatHubBlock()
-  // The commands are issued from the ordered boundary only: no second
-  // fire-and-forget call site may bypass it.
-  assert.equal(occurrences(block, "invokeWrapper('show_chat_hub_page'"), 1)
-  assert.equal(occurrences(block, "invokeWrapper('hide_chat_hub_page'"), 1)
-  assert.equal(occurrences(block, "invokeWrapper('destroy_chat_hub_page'"), 1)
-  assert.equal(occurrences(block, "invokeWrapper('set_chat_hub_page_width'"), 1)
+test('the right dock hosts both provider kinds in one multi-tab surface', () => {
+  assert.match(
+    workflowView,
+    /<DockedViews\s+ref="dockRef"[\s\S]*?:visible="dockVisible"[\s\S]*?:width="chatHubStore\.pageWidth"[\s\S]*?:tabs="dockTabViews"[\s\S]*?:active-tab-id="dockActiveTabId"[\s\S]*?>/
+  )
+  // One tab needs no strip, but the refresh action stays reachable either way.
+  assert.match(dockedComponent, /<div v-if="tabs\.length > 1" class="docked-views__tabs" role="tablist">/)
+  assert.match(dockedComponent, /class="docked-views__tab-label"[\s\S]*?@click="\$emit\('select', tab\.id\)"/)
+  // Only a refresh action: no add button and no global close.
+  assert.match(dockedComponent, /class="docked-views__action"[\s\S]*?:aria-label="\$t\('common\.refresh'\)"[\s\S]*?@click="\$emit\('reload'\)"/)
+  assert.doesNotMatch(dockedComponent, /workflow\.plugin\.newTab|workflow\.plugin\.hide/)
+  assert.doesNotMatch(dockedComponent, /<cs name="add"/)
+  assert.doesNotMatch(workflowView, /onNewPluginTab|plugin-panel/)
+})
+
+test('the tab close control is a sibling button, never nested in the tab button', () => {
+  // The close button opens after the tab button has already closed, so both remain
+  // independently reachable by pointer and by keyboard.
+  assert.match(
+    dockedComponent,
+    /class="docked-views__tab-label"[\s\S]*?<\/button>[\s\S]*?<button[\s\S]*?class="docked-views__tab-close"[\s\S]*?:aria-label="\$t\('workflow\.plugin\.close'\)"[\s\S]*?@click="\$emit\('close', tab\.id\)"/
+  )
+  assert.match(dockedComponent, /role="tab"[\s\S]*?:aria-selected="tab\.id === activeTabId"/)
+  // The strip scrolls instead of pushing the toolbar out of the dock.
+  assert.match(dockedComponent, /&__tabs \{[\s\S]*?overflow-x: auto;/)
+})
+
+test('showing a chat entry only drives the one shared coordinator', () => {
+  // Every native command of both providers goes through one serial, latest-intent
+  // coordinator (see src/libs/dockedViews.js), so a late reply of one provider can never
+  // paint over a newer action of the other.
+  assert.match(workflowView, /import \{ createChatHubProvider \} from '@\/libs\/chatHubView'/)
+  assert.match(workflowView, /import \{ createDockedViewsCoordinator \} from '@\/libs\/dockedViews'/)
+  assert.match(chatHubBlock(), /const dockCoordinator = createDockedViewsCoordinator\(\{[\s\S]*?chatHub: chatHubProvider,[\s\S]*?plugin: pluginProvider,/)
+  assert.match(chatHubBlock(), /const chatHubProvider = createChatHubProvider\(\{ invoke: invokeWrapper \}\)/)
+
+  // The command payloads live in the provider module, which forwards the tab id and the
+  // measured bounds while keeping the existing carrier fields.
+  assert.match(
+    chatHubView,
+    /show: \(tabId, payload = \{\}\) =>\s*call\('show_chat_hub_page', \{\s*url: payload\.url,\s*width: payload\.width,\s*topInset: payload\.topInset,\s*cornerRadius: payload\.cornerRadius,\s*tabId,\s*bounds: payload\.bounds\s*\}\)/
+  )
+  assert.match(chatHubView, /hide: \(\) => call\('hide_chat_hub_page'\)/)
+  assert.match(chatHubView, /destroy: tabId => call\('destroy_chat_hub_page', \{ tabId \}\)/)
+  assert.match(chatHubView, /destroyAll: \(\) => call\('destroy_chat_hub_page'\)/)
+  assert.match(chatHubView, /reload: tabId => call\('reload_chat_hub_page', \{ tabId \}\)/)
+
+  // No second fire-and-forget call site may bypass the coordinator.
+  assert.equal(occurrences(workflowView, "invokeWrapper('show_chat_hub_page'"), 0)
+  assert.equal(occurrences(workflowView, "invokeWrapper('hide_chat_hub_page'"), 0)
+  assert.equal(occurrences(workflowView, "invokeWrapper('destroy_chat_hub_page'"), 0)
+  assert.equal(occurrences(workflowView, "invokeWrapper('reload_chat_hub_page'"), 0)
+
+  // Failures only report a message and keep the original workflow UI usable.
+  assert.match(chatHubBlock(), /const dockErrorKey = action => \{[\s\S]*?return 'workflow\.chatHub\.showFailed'/)
+  assert.match(
+    chatHubBlock(),
+    /onError: \(error, action\) => \{[\s\S]*?const key = dockErrorKey\(action\)[\s\S]*?showMessage\(t\(key\), 'error'\)/
+  )
+})
+
+test('one coordinator serializes both providers and awaits the inactive hide', () => {
+  assert.match(dockedViews, /const providers = \{ chatHub, plugin \}/)
+  assert.match(dockedViews, /const enqueue = task => \{\s*const next = queue\.then\(task, task\)/)
+  // The provider that must not stay visible is hidden and awaited before the active one is
+  // shown.
+  assert.match(
+    dockedViews,
+    /if \(visible && visible\.kind !== active\.kind\) \{\s*const hidden = await attempt\(`\$\{visible\.kind\}\.hide`, \(\) => hideProvider\(visible\.kind\)\)[\s\S]*?providers\[active\.kind\]\.show\(active\.tabId, payloadFor\(active, snapshot\.geometry\)\)/
+  )
+  // A newer intent supersedes a queued one.
+  assert.match(dockedViews, /if \(mine !== revision\) \{\s*return\s*\}/)
+})
+
+test('closing a tab releases exactly that tab and the active close falls back to a neighbour', () => {
+  assert.match(
+    dockedViews,
+    /const closeTab = tab =>\s*tab\.kind === 'chatHub'\s*\?\s*providers\.chatHub\.destroy\(tab\.tabId\)\s*:\s*providers\.plugin\.close\(tab\.tabId\)/
+  )
+  assert.match(
+    chatHubBlock(),
+    /const closeDockTab = tabId => \{[\s\S]*?const neighbor = dockTabs\.value\[index\] \|\| dockTabs\.value\[index - 1\] \|\| null[\s\S]*?dockActiveTabId\.value = neighbor\.id/
+  )
+  // Hiding preserves every tab and its session.
+  assert.match(chatHubBlock(), /const toggleDock = \(\) => \{\s*if \(dockVisible\.value\) \{\s*dockVisible\.value = false\s*return syncDock\(\)/)
+})
+
+test('each chat entry owns one tab and a repeated click reuses it', () => {
+  assert.match(chatHubBlock(), /const chatHubTabId = hubId => `chathub:\$\{hubId\}`/)
+  assert.match(
+    chatHubBlock(),
+    /const openDockTab = tab => \{\s*if \(!dockTabs\.value\.some\(item => item\.id === tab\.id\)\) \{\s*dockTabs\.value\.push\(tab\)\s*\}\s*return activateDockTab\(tab\.id\)\s*\}/
+  )
+  assert.match(
+    chatHubBlock(),
+    /const onSelectChatHubEntry = hub => \{[\s\S]*?return openDockTab\(\{ id: chatHubTabId\(hub\.id\), kind: 'chatHub', hubId: hub\.id \}\)/
+  )
+})
+
+test('the dock names the trusted skills tab from i18n and every other tab from its source', () => {
+  assert.match(chatHubBlock(), /return hubOf\(tab\.hubId\)\?\.name \|\| ''/)
+  assert.match(chatHubBlock(), /tab\.kind === 'trusted' \? t\('settings\.agentSkills\.title'\) : tab\.pluginId/)
+})
+
+test('the trusted skills tab renders host Vue and never loads remote content', () => {
+  assert.match(dockedComponent, /<AgentSkills v-if="trustedActive" :key="trustedKey" \/>/)
+  assert.match(dockedComponent, /import AgentSkills from '@\/components\/setting\/AgentSkills\.vue'/)
+  assert.doesNotMatch(dockedComponent, /iframe|src=|https?:|file:/)
+  // A trusted reload remounts the component instead of issuing a native command.
+  assert.match(
+    chatHubBlock(),
+    /if \(tab\.kind === 'trusted'\) \{\s*trustedReloadKey\.value \+= 1\s*return Promise\.resolve\(\)\s*\}/
+  )
 })
 
 test('the splitter owns the width and clamps it with the limits the backend enforces', () => {
   assert.match(
     workflowView,
-    /<ChatHubSplitter\s+v-if="chatHubVisible"[\s\S]*?:right="chatHubReservedWidth"[\s\S]*?:width="chatHubStore\.pageWidth"[\s\S]*?:min-width="chatHubStore\.pageMinWidth"[\s\S]*?:min-host-width="chatHubStore\.pageMinHostWidth"[\s\S]*?@resize="onChatHubPageResize"/
+    /<ChatHubSplitter\s+v-if="dockVisible"[\s\S]*?:right="chatHubReservedWidth"[\s\S]*?:width="chatHubStore\.pageWidth"[\s\S]*?:min-width="chatHubStore\.pageMinWidth"[\s\S]*?:min-host-width="chatHubStore\.pageMinHostWidth"[\s\S]*?@resize="onChatHubPageResize"/
   )
   assert.match(
-    workflowView,
-    /const onChatHubPageResize = width => \{\s*chatHubStore\.setPageWidth\(width\)\s*chatHubView\.resize\(\)\s*\}/
+    chatHubBlock(),
+    /const onChatHubPageResize = width => \{\s*chatHubStore\.setPageWidth\(width\)\s*return syncDock\(\)\s*\}/
   )
   // The drag mirrors the backend clamp, so this side never asks for a width the page
   // cannot have.
@@ -119,42 +233,36 @@ test('the splitter owns the width and clamps it with the limits the backend enfo
   assert.match(splitter, /requestAnimationFrame/)
 })
 
-test('a width change never re-shows a hidden page', () => {
+test('the reserved space always matches the dock and no bespoke layout style is used', () => {
   assert.match(
-    chatHubViewController,
-    /const resize = \(\) =>\s*enqueue\(async \(\) => \{\s*if \(!appliedVisible \|\| !appliedUrl\) \{\s*return\s*\}/
-  )
-})
-
-test('stacked carriers keep the page inside the reserved space, splitting carriers do not', () => {
-  assert.match(
-    workflowView,
-    /const chatHubReservedWidth = computed\(\(\) =>\s*chatHubStore\.viewMode === 'reserve' && chatHubVisible\.value \? chatHubStore\.pageWidth : 0\s*\)/
+    chatHubBlock(),
+    /const chatHubReservedWidth = computed\(\(\) =>\s*dockVisible\.value && dockActiveTab\.value \? chatHubStore\.pageWidth : 0\s*\)/
   )
   // The reserved width is published on the document root, because the overlays and popovers
   // Element Plus teleports to the document body have to find it outside this component.
   assert.match(
-    workflowView,
+    chatHubBlock(),
     /watchEffect\(\(\) => \{\s*const reserved = chatHubReservedWidth\.value[\s\S]*?root\.style\.setProperty\('--cs-chathub-reserved-width'[\s\S]*?root\.style\.removeProperty\('--cs-chathub-reserved-width'\)/
   )
   assert.doesNotMatch(workflowView, /chatHubLayoutStyle/)
+  // Every platform reserves the same way: the carrier no longer decides between a split
+  // and a stacked layout on this side.
+  assert.doesNotMatch(chatHubBlock(), /chatHubStore\.viewMode/)
   assert.match(workflowView, /<div class="workflow-layout">/)
-  // The page starts below the app titlebar, so the reserved space narrows the workflow
+  // The dock starts below the app titlebar, so the reserved space narrows the workflow
   // content only and the titlebar keeps the full window width.
   assert.match(
     layoutStyles,
     /\.workflow-main \{[\s\S]*?margin-right: var\(--cs-chathub-reserved-width, 0px\)/
   )
-  // A stacked page must not cover the app chrome, so the view reports how much room the
-  // titlebar with the window controls needs.
-  assert.match(workflowView, /getPropertyValue\('--cs-titlebar-height'\)/)
-  assert.match(workflowView, /topInset: chatHubTopInset\(\)/)
+  assert.match(chatHubBlock(), /getPropertyValue\('--cs-titlebar-height'\)/)
+  assert.match(chatHubBlock(), /topInset: chatHubTopInset\(\)/)
   // The same carrier also paints over the rounded window border at its bottom-right
   // corner, so the view reports the radius the window container actually draws. A
   // platform whose window keeps square corners reports nothing and the page stays
   // rectangular there.
-  assert.match(workflowView, /getComputedStyle\(container\)\.borderBottomRightRadius/)
-  assert.match(workflowView, /cornerRadius: chatHubCornerRadius\(\)/)
+  assert.match(chatHubBlock(), /getComputedStyle\(container\)\.borderBottomRightRadius/)
+  assert.match(chatHubBlock(), /cornerRadius: chatHubCornerRadius\(\)/)
 })
 
 test('overlays and toasts stay inside the workflow UI while the page is docked', () => {
@@ -180,7 +288,7 @@ test('overlays and toasts stay inside the workflow UI while the page is docked',
   )
 })
 
-test('the entry of the shown site toggles the page and the entry list releases it', () => {
+test('the entry of the shown site toggles the dock and the entry list releases its tab', () => {
   // The docked page has no window chrome of its own, so its entry icon toggles it: a page
   // that is on screen is hidden and a hidden one comes back. The icon carries no cross
   // because the entry list below already offers the close action.
@@ -191,12 +299,7 @@ test('the entry of the shown site toggles the page and the entry list releases i
   assert.match(workflowView, /@toggle="onChatHubEntryToggled"/)
   assert.match(sidebar, /@toggle="\$emit\('toggle-chat-hub'\)"/)
   assert.match(workflowView, /@toggle-chat-hub="onChatHubEntryToggled"/)
-  // Toggling hides a page that is on screen and brings a hidden one back, so the same
-  // entry stays useful in both states.
-  assert.match(
-    workflowView,
-    /const onChatHubEntryToggled = \(\) => \{\s*if \(chatHubVisible\.value\) \{\s*hideChatHub\(\)\s*return\s*\}\s*restoreChatHubEntry\(chatHubView, activeChatHub\.value\)\s*\}/
-  )
+  assert.match(chatHubBlock(), /const onChatHubEntryToggled = \(\) => toggleDock\(\)/)
   // The cross must not come back as a second close action on the icon; the icon keeps a
   // hover highlight so it still reads as clickable.
   assert.doesNotMatch(entry, /current-close/)
@@ -205,7 +308,8 @@ test('the entry of the shown site toggles the page and the entry list releases i
     /\.chat-hub-entry__current-surface \{[\s\S]*?&:hover \{\s*background-color: var\(--cs-hover-bg-color\);\s*\}/
   )
 
-  // Releasing the page stays in the entry list, which is the only close action.
+  // Releasing the visible chat tab stays in the entry list, which is the only close action
+  // for a single tab.
   assert.match(entry, /const CLOSE_COMMAND = 'close'/)
   assert.match(entry, /:command="CLOSE_COMMAND"/)
   assert.match(entry, /if \(command === CLOSE_COMMAND\) \{\s*emit\('close'\)\s*return\s*\}/)
@@ -213,13 +317,11 @@ test('the entry of the shown site toggles the page and the entry list releases i
   assert.match(workflowView, /@close="onCloseChatHub"/)
   assert.match(sidebar, /@close="\$emit\('close-chat-hub'\)"/)
   assert.match(workflowView, /@close-chat-hub="onCloseChatHub"/)
-  // Closing selects no entry and releases the page through the ordered boundary, which
-  // hides first and destroys afterwards.
+  // Closing the shown chat tab releases exactly that tab through the shared coordinator.
   assert.match(
-    workflowView,
-    /const onCloseChatHub = \(\) => \{\s*chatHubStore\.setActiveHub\(0\)\s*chatHubView\.close\(\)\s*\}/
+    chatHubBlock(),
+    /const onCloseChatHub = \(\) => \{[\s\S]*?item\.kind === 'chatHub' && item\.hubId === activeChatHubId\.value[\s\S]*?return tab \? closeDockTab\(tab\.id\) : Promise\.resolve\(\)/
   )
-  assert.match(chatHubViewController, /const close = \(\) => \{\s*hideNow\(\)[\s\S]*?await destroy\(\)/)
 })
 
 test('the titlebar buttons next to the docked page point their tooltips left', () => {
@@ -256,7 +358,6 @@ test('the chat entry icon only opens the entry list', () => {
   // Selecting an entry from the menu still shows that entry.
   assert.match(entry, /@command="onSelectCommand"/)
   assert.match(workflowView, /@select-chat-hub="onSelectChatHubEntry"/)
-  assert.match(workflowView, /const onSelectChatHubEntry = hub => \{\s*showChatHub\(hub\)\s*\}/)
 
   // The entry of the site that is docked stays the page control, which is what keeps the page
   // reachable now that the icon no longer brings it back.
@@ -277,8 +378,8 @@ test('the docked page is created by the carrier without Tauri IPC', () => {
   assert.doesNotMatch(workflowView, /show_chat_hub_webview/)
 })
 
-test('switching workflow views keeps the docked page in place', () => {
-  // The page is docked next to the workflow UI, so tasks, automations, sidebar tabs, the
+test('switching workflow views keeps the docked views in place', () => {
+  // The dock is docked next to the workflow UI, so tasks, automations, sidebar tabs, the
   // terminal and the path button only change the workflow view: the entry owns hiding.
   assert.doesNotMatch(workflowView, /watch\(workflowSidebarNavigationTab, hideChatHub\)/)
   assert.doesNotMatch(workflowView, /watch\(workflowSidebarActiveTab, hideChatHub\)/)
@@ -292,27 +393,30 @@ test('switching workflow views keeps the docked page in place', () => {
     /terminal\.visible,\s*visible => \{\s*if \(visible\) \{\s*hideChatHub\(\)/
   )
 
-  // The one view change that still hides the page is a deleted entry, which clears the
-  // current selection elsewhere.
+  // The one view change that still drops a tab is a deleted entry, which clears its tab.
   assert.match(
     workflowView,
-    /watch\(\s*\(\) => chatHubStore\.activeHubId,\s*hubId => \{\s*if \(!hubId\) \{\s*hideChatHub\(\)/
+    /watch\(\s*\(\) => chatHubStore\.list\.map\(hub => hub\.id\)\.join\(','\),\s*\(\) => \{[\s\S]*?!hubOf\(tab\.hubId\)[\s\S]*?void closeDockTab\(tab\.id\)/
   )
 
   const block = chatHubBlock()
-  // Hiding or showing a chat entry must never send a workflow runtime signal.
+  // Hiding or showing a docked view must never send a workflow runtime signal.
   assert.doesNotMatch(block, /emitWorkflowSignal|sendSignal|SIGNAL_TYPES/)
   assert.doesNotMatch(block, /stopWorkflow|clearContext|resumeWorkflow|selectWorkflow\(/)
 })
 
-test('tasks, automations, sidebar tabs and the path button no longer hide the page', () => {
+test('tasks, automations, sidebar tabs and the path button no longer hide the dock', () => {
   for (const name of [
     'openWorkflowSidebarTab',
     'onTitlebarPrimaryPathClick',
     'onSelectWorkflowFromHistory',
     'onSelectAutomation'
   ]) {
-    assert.doesNotMatch(handlerBody(name), /hideChatHub/, `${name} must not hide the docked page`)
+    assert.doesNotMatch(
+      handlerBody(name),
+      /closeDockTab|toggleDock|dockCoordinator/,
+      `${name} must not touch the docked views`
+    )
   }
 
   // The rail and the compact sidebar entries only open the terminal, so they are no longer
@@ -324,7 +428,7 @@ test('tasks, automations, sidebar tabs and the path button no longer hide the pa
   assert.doesNotMatch(sidebar, /hide-chat-hub/)
 })
 
-test('the workflow-side chat view state is not persisted into workflow settings', () => {
+test('the workflow-side dock view state is not persisted into workflow settings', () => {
   assert.match(workflowView, /import \{ useChatHubStore \} from '@\/stores\/chatHub'/)
   assert.doesNotMatch(workflowView, /settings\.chatHub/)
   assert.match(chatHubStore, /defineStore\('chat_hub'/)

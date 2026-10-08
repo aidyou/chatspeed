@@ -14,9 +14,15 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 /// The manifest schema this service understands.
-pub const PLUGIN_SCHEMA: &str = "chatspeed.agent-skills.plugin/v1";
+pub const PLUGIN_SCHEMA: &str = "chatspeed.agent-skills.plugin/v2";
+/// The version of the inventory collection returned by the runtime.
+pub const PLUGIN_INVENTORY_SCHEMA_VERSION: u32 = 1;
+/// Version of the runtime-controlled static UI resource route.
+pub const PLUGIN_UI_ROUTE_VERSION: u32 = 1;
 /// The plugin id. It also names the on-disk bundle directory.
 pub const PLUGIN_ID: &str = "agent-skills";
+/// The only plugin kind exposed by this release.
+pub const BUILTIN_PLUGIN_KIND: &str = "builtin";
 /// The canonical manifest file name inside a bundle.
 pub const MANIFEST_FILE_NAME: &str = "plugin.json";
 /// The service-owned lifecycle state file. It is not part of the bundle assets.
@@ -104,7 +110,7 @@ impl std::fmt::Display for PluginError {
 impl std::error::Error for PluginError {}
 
 /// The strict plugin manifest: `schema`, `id`, `version`, `entry`, `assets`,
-/// `permissions` and nothing else. An unknown field is refused so the contract
+/// `permissions` and optional `ui`. An unknown field is refused so the contract
 /// cannot silently grow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +121,50 @@ pub struct PluginManifest {
     pub entry: String,
     pub assets: Vec<String>,
     pub permissions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<PluginUiManifest>,
+}
+
+/// Static UI metadata declared by a built-in plugin manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginUiManifest {
+    pub entry: String,
+    pub assets: Vec<String>,
+}
+
+impl PluginUiManifest {
+    pub fn validate(&self, manifest: &PluginManifest) -> Result<(), PluginError> {
+        if !is_safe_relative_path(&self.entry) {
+            return Err(PluginError::invalid_manifest(
+                "the plugin UI entry is not a confined relative path",
+            ));
+        }
+        if self.assets.is_empty() {
+            return Err(PluginError::invalid_manifest(
+                "the plugin UI declares no assets",
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for asset in &self.assets {
+            if !is_safe_relative_path(asset) || !seen.insert(asset.as_str()) {
+                return Err(PluginError::invalid_manifest(
+                    "the plugin UI contains an invalid or duplicate asset path",
+                ));
+            }
+        }
+        if !seen.contains(self.entry.as_str()) || !manifest.assets.contains(&self.entry) {
+            return Err(PluginError::invalid_manifest(
+                "the plugin UI entry is not a declared bundle asset",
+            ));
+        }
+        if self.assets.iter().any(|asset| !manifest.assets.contains(asset)) {
+            return Err(PluginError::invalid_manifest(
+                "the plugin UI asset is not a declared bundle asset",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PluginManifest {
@@ -179,6 +229,10 @@ impl PluginManifest {
             )));
         }
 
+        if let Some(ui) = &self.ui {
+            ui.validate(self)?;
+        }
+
         if self.permissions.is_empty() {
             return Err(PluginError::invalid_manifest(
                 "the manifest requests no permissions".to_string(),
@@ -203,7 +257,7 @@ impl PluginManifest {
 
 /// Whether a manifest path stays inside the bundle: relative, `/`-separated and
 /// free of `.`/`..`/drive/`~`/control components.
-fn is_safe_relative_path(value: &str) -> bool {
+pub(crate) fn is_safe_relative_path(value: &str) -> bool {
     if value.is_empty() || value.len() > MAX_ASSET_PATH {
         return false;
     }
@@ -254,22 +308,40 @@ pub fn host_isolation() -> HostIsolation {
 /// The plugin inventory returned by every lifecycle call.
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInventory {
-    pub plugin_id: String,
-    pub schema: String,
-    pub installed: bool,
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub entry: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub assets: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub permissions: Vec<String>,
-    pub root: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bundle_digest: Option<String>,
+    pub schema_version: u32,
+    pub plugins: Vec<PluginRecord>,
     pub uninstall_scope: &'static str,
     pub managed_skills_dir: String,
     pub host: HostIsolation,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRecord {
+    pub id: String,
+    pub kind: &'static str,
+    pub version: Option<String>,
+    pub state: PluginState,
+    pub capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<PluginUi>,
+    pub root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginState {
+    NotInstalled,
+    Enabled,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginUi {
+    pub entry: String,
+    pub assets: Vec<String>,
+    pub verified: bool,
+    pub content_digest: String,
+    pub route_version: u32,
 }

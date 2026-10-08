@@ -420,7 +420,6 @@
     },
     "general": {
       "advancedSettings": "Advanced Settings",
-      "agentSkillsTab": "Plugin management",
       "apiKeyProtection": {
         "fileFilterName": "ChatSpeed key file",
         "generateFile": "Generate New Key File",
@@ -649,14 +648,6 @@
         "uses_network": "uses network",
         "writes_sensitive_paths": "writes sensitive paths"
       },
-      "pluginDisable": "Disable plugin",
-      "pluginDisabled": "disabled",
-      "pluginEnable": "Enable plugin",
-      "pluginEnabled": "enabled",
-      "pluginHint": "The runtime owns this static plugin bundle. This phase does not load or execute plugin UI code; uninstall removes only the bundle, never installed Skills.",
-      "pluginInstall": "Install plugin bundle",
-      "pluginTitle": "Agent Skills plugin",
-      "pluginUninstall": "Uninstall plugin bundle",
       "protected": "protected",
       "reconcile": "Converge capability drift",
       "reconcileDone": "Reconcile complete",
@@ -681,6 +672,32 @@
       "uninstall": "Uninstall",
       "uninstallDone": "Skill uninstalled",
       "zipPlaceholder": "skill.zip"
+    },
+    "plugin": {
+      "builtinCount": "{count} built-in plugin(s)",
+      "capabilities": "Capabilities",
+      "disable": "Disable",
+      "empty": "No plugins are available.",
+      "enable": "Enable",
+      "hint": "The runtime owns the plugin inventory and lifecycle. This page renders the snapshot the runtime returns and forwards each mutation through the fixed typed commands. A verified static UI is served from runtime-controlled resources and receives no IPC surface.",
+      "install": "Install",
+      "kind": {
+        "builtin": "Built-in"
+      },
+      "operationFailed": "The runtime could not confirm this plugin operation. Refresh and try again.",
+      "refresh": "Refresh",
+      "state": {
+        "disabled": "Disabled",
+        "enabled": "Enabled",
+        "not_installed": "Not installed"
+      },
+      "title": "Plugins",
+      "uiEntry": "UI entry",
+      "uiUnverified": "UI not verified",
+      "uiVerified": "UI verified",
+      "uninstall": "Uninstall",
+      "verifiedUiCount": "{count} verified UI bundle(s)",
+      "version": "Version"
     },
     "mcp": {
       "added": "Added",
@@ -1296,6 +1313,7 @@
       "general": "General",
       "mcp": "MCP",
       "model": "AI Provider",
+      "plugin": "Plugin",
       "privacy": "Privacy",
       "proxy": "Proxy",
       "scraperTest": "Scraper Test",
@@ -1640,6 +1658,15 @@
     "planningModeTooltip": "Planning Mode: AI research and strategy before execution",
     "planningModeDisabled": "Planning mode disabled",
     "planningModeEnabled": "Planning mode enabled",
+    "plugin": {
+      "close": "Close",
+      "empty": "No plugin UI is available.",
+      "hide": "Hide",
+      "newTab": "Open in new tab",
+      "openFailed": "Failed to open the plugin UI.",
+      "reload": "Reload",
+      "title": "Plugin"
+    },
     "quickActionsConfiguration": "Configuration",
     "quickActionsRuntime": "Run mode",
     "rejected": "Rejected",

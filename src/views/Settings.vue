@@ -29,9 +29,13 @@
       <skill />
     </el-main>
 
-    <!-- Agent Skills management is hosted as an independent tab in General so
-         plugin management remains a desktop presentation concern while all
-         mutations stay in the runtime capability service. -->
+    <!-- Plugin lifecycle management is an independent top-level tab. The runtime
+         owns the inventory and the mutations; this view only renders the
+         snapshot it returns. -->
+    <el-main v-show="settingType === 'plugin'" class="main">
+      <plugin />
+    </el-main>
+
     <el-main v-show="settingType === 'mcp'" class="main">
       <mcp />
     </el-main>
@@ -73,15 +77,18 @@ import mcp from '@/components/setting/Mcp.vue'
 import model from '@/components/setting/Model.vue'
 import proxy from '@/components/setting/Proxy.vue'
 import skill from '@/components/setting/Skill.vue'
+import plugin from '@/components/setting/Plugin.vue'
 import privacy from '@/components/setting/Privacy.vue'
 import agentManagement from '@/components/setting/AgentManagement.vue'
 import ScraperTest from '@/components/setting/ScraperTest.vue'
 import titlebar from '@/components/window/Titlebar.vue'
 
 import { useMcpStore } from '@/stores/mcp'
+import { usePluginStore } from '@/stores/plugin'
 
 const { t } = useI18n()
 const mcpStore = useMcpStore()
+const pluginStore = usePluginStore()
 
 // const settingType = ref('model')
 // const settingLabel = ref(t(`settings.type.model`))
@@ -95,6 +102,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
+  { label: t('settings.type.plugin'), icon: 'function', id: 'plugin' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' },
   { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }
@@ -138,6 +146,13 @@ const switchSetting = id => {
     // snapshot it took while loading, and a restart is the only way out.
     mcpStore.fetchMcpServers().catch(error => {
       console.error('Failed to refresh MCP servers:', error)
+    })
+  }
+  if (id === 'plugin') {
+    // The plugin rows also show live runtime state, so opening the tab re-reads
+    // the inventory instead of keeping the snapshot taken while loading.
+    pluginStore.loadInventory().catch(error => {
+      console.error('Failed to refresh plugin inventory:', error)
     })
   }
 }

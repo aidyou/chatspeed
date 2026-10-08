@@ -1,31 +1,39 @@
-//! Linux carrier of the ChatHub page.
+//! Linux carrier of the ChatHub tabs.
 //!
-//! GTK does the layout here, which is why this platform has no geometry to track at
-//! all: the window box is turned horizontal, the page webview is packed into a fixed
-//! width column at its end, and the workflow webview keeps the remaining space. GTK
-//! then moves and resizes the page together with the window itself, so the page can
-//! never trail the window, and there is no separate top level window for the desktop
-//! compositor to decorate with a shadow.
+//! Every ChatHub entry has its own tab, each tab keeps its own `wry` webview (with its own
+//! browsing session) while another tab is shown, and every webview is placed at the rectangle
+//! the frontend measured for the right dock. The rectangle is the only geometry the carrier
+//! knows: it never widens, narrows or splits the window, so the workflow UI keeps exactly the
+//! layout the frontend gave it.
 //!
-//! The container is deliberately a [`gtk::Box`] and not a `gtk::Fixed`: a fixed
-//! container positions a webview by absolute coordinates, which would stack the page
-//! *over* the workflow UI instead of giving it its own space.
+//! The native views are bounded overlay children of the shared dock surface
+//! ([`crate::native_dock`]): a holder aligned to the start of the overlay with the rectangle as
+//! its margins and size request. A full-area container would swallow every pointer event of the
+//! window instead, which is what kept the workflow UI from receiving clicks while a native view
+//! was open, so the carrier only ever creates bounded holders.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
-use gtk::prelude::*;
-use tauri::{AppHandle, PhysicalSize, WebviewWindow, Wry};
+use tauri::{AppHandle, PhysicalSize, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use super::{
-    clamp_width, host_window, narrow_host_window, page_builder, page_data_directory, page_proxy,
-    widen_host_window,
-};
+use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
 use crate::frame_edges::{give_frame_band_to_window, Band};
+use crate::native_dock::{self, DockBounds, DockHolder, DockOwner};
 
-/// State of the single docked ChatHub page.
+/// Tab key a caller names when it does not send a tab id.
+///
+/// The frontend names every tab, so this only keeps an older caller working: such a call keeps
+/// addressing the same single page it always did.
+const DEFAULT_TAB_ID: &str = "default";
+
+/// Distance from a window edge at which a dock rectangle still counts as covering it, in logical
+/// pixels. A measurement is rounded, so an exact hit is not guaranteed.
+const WINDOW_EDGE_REACH: f64 = 1.0;
+
+/// State of the docked ChatHub tabs.
 #[derive(Debug, Default)]
 pub struct ChatHubPageState {
     inner: Mutex<Inner>,
@@ -33,303 +41,272 @@ pub struct ChatHubPageState {
 
 #[derive(Debug, Default)]
 struct Inner {
-    page: Option<Page>,
-    /// Url the page is currently showing.
-    url: Option<String>,
-    /// Width currently applied to the page column.
-    width: Option<f64>,
-    /// Width the docked page took from the host window, in logical pixels.
-    ///
-    /// The workflow webview keeps its width next to the page only because the window grows
-    /// by the width of the page, so the added width is remembered here and handed back when
-    /// the page goes away. Zero means the page holds no width of the window.
-    grown: f64,
+    /// One entry per open tab, keyed by the tab id the frontend generated.
+    tabs: std::collections::HashMap<String, Tab>,
+    /// The tab currently shown, if any.
+    active: Option<String>,
 }
 
-/// The native handles of the docked page.
-struct Page {
+/// One open tab: its own webview, the holder that bounds it and the state it last showed.
+struct Tab {
     webview: WebView,
-    /// Column the page lives in. It is a sibling of the workflow webview, so changing
-    /// its size request is what gives the page its width.
-    column: gtk::Box,
+    holder: DockHolder,
+    /// Url the tab is currently showing.
+    url: String,
+    /// Rectangle the tab is currently placed at, in logical pixels.
+    bounds: DockBounds,
 }
 
-impl std::fmt::Debug for Page {
+impl std::fmt::Debug for Tab {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("Page").finish_non_exhaustive()
+        formatter.debug_struct("Tab").finish_non_exhaustive()
     }
 }
 
-// SAFETY: both fields are GTK handles that may only be touched on the main thread.
-// The state keeps them solely so the page can be navigated, resized and destroyed
-// later, and every access happens on that thread: `run_on_page_thread` posts each
-// operation there, and the window event that releases the page already runs there.
-unsafe impl Send for Page {}
+// SAFETY: the webview and the GTK holder may only be touched on the main thread. The state keeps
+// them solely so a tab can be navigated, resized and destroyed later, and every access happens on
+// that thread: `run_on_page_thread` posts each operation there.
+unsafe impl Send for Tab {}
 
 impl ChatHubPageState {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Reveals the page, docked to the right edge of the workflow window.
+    /// Reveals the tab `tab_id` (or the default tab) at the measured rectangle.
     ///
-    /// The same webview is reused for every ChatHub entry, so the site keeps its
-    /// cookies and session while navigating between entries. `_top_inset` is only used
-    /// by carriers that stack the page over the workflow UI: here the page is a sibling
-    /// of the workflow webview, which already contains the app titlebar itself.
-    /// `corner_radius` is the radius the window draws, which the page gives back at both
-    /// right corners: the page owns the window's right edge from top to bottom, so the
-    /// top-right corner belongs to it as well.
-    ///
-    /// The page takes its width from the workflow webview, so the window is widened by that
-    /// width first (see [`super::room_for_page`]) and the workflow UI keeps the width it had.
-    /// A window that already fills the screen cannot grow and the page then takes its space
-    /// from the workflow UI, as it always did.
+    /// Every tab keeps its own webview, so switching between tabs keeps each site's session; the
+    /// other tabs are hidden, never destroyed. `bounds` is the dock rectangle the frontend
+    /// measured in logical pixels. A caller that sends only the legacy `width`/`top_inset` pair is
+    /// laid out at the right edge of the window instead, so an older frontend keeps working.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
         url: &str,
         width: f64,
-        _top_inset: f64,
+        top_inset: f64,
         corner_radius: f64,
+        tab_id: Option<String>,
+        bounds: Option<DockBounds>,
     ) -> Result<()> {
         let url = parse_chat_hub_url(url)?.to_string();
         let host = host_window(app)?;
-        let window_width = host_inner_width(&host)?;
+        let (window_width, window_height) = native_dock::window_size(&host)?;
+        let key = tab_id.unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
+        if key.is_empty() {
+            return Err(AppError::General {
+                message: "the ChatHub tab id is empty".to_string(),
+            });
+        }
 
-        // The page makes room for itself once: re-selecting an entry, or bringing a hidden
-        // page back, must not widen the window a second time. The window is resized outside
-        // the state lock, because a resize is reported back to this window.
-        let added = if self.grown_width() <= 0.0 {
-            widen_host_window(&host, width)
-        } else {
-            0.0
-        };
+        let bounds = bounds
+            .unwrap_or_else(|| legacy_bounds(width, top_inset, window_width, window_height))
+            .sanitize(window_width, window_height)?;
 
-        // The width limits are checked against the window the page will have, so the page
-        // never has to be laid out inside the window it is leaving behind.
-        let width = clamp_width(window_width + added, width);
+        let mut inner = self.lock()?;
+        if !inner.tabs.contains_key(&key) {
+            let holder = native_dock::with_surface(app, |surface| {
+                surface.holder(app, DockOwner::ChatHub, bounds)
+            })?;
 
-        let mut inner = self.inner.lock()?;
-        inner.grown += added;
+            // The page is reused per tab, so building it is the only moment a proxy can be
+            // applied: the settings are read here. The browsing profile is the same directory on
+            // every tab, so the session survives a tab close and a restart.
+            let mut web_context = WebContext::new(Some(page_data_directory(app)));
 
-        if inner.page.is_none() {
-            inner.page = Some(Page::create(app, &host, &url, width, corner_radius)?);
-            inner.url = Some(url.clone());
-            #[cfg(debug_assertions)]
-            log::info!(
-                "[ChatHub] docked the page at {:.0} logical pixels in the '{}' window",
-                width,
-                super::CHAT_HUB_HOST_WINDOW_LABEL
+            // A page that gives a window corner back also has to be see-through. The shared corner
+            // script rounds one window corner, which a page below a shared titlebar needs, so this
+            // carrier leaves it out (`0.0`) and rounds the four corners itself: one implementation
+            // covers them all, so they cannot drift apart.
+            let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
+            let mut builder = page_builder(&mut web_context, &url, page_proxy(app), 0.0, app);
+            if radius > 0.0 {
+                builder = builder
+                    .with_transparent(true)
+                    .with_initialization_script(page_corners_script(radius));
+            }
+
+            let webview = builder.build_gtk(holder.container())?;
+
+            // The dock rectangle can reach a window edge, so that edge keeps its resize band with
+            // the window instead of the page: this webview is built by wry, so the resize handler
+            // tauri installs on a Tauri webview never reaches it.
+            give_frame_band_to_window(
+                &webview.webview(),
+                band_for(bounds, window_width, window_height),
+            );
+
+            inner.tabs.insert(
+                key.clone(),
+                Tab {
+                    webview,
+                    holder,
+                    url: url.clone(),
+                    bounds,
+                },
             );
         }
 
-        let page = inner.page.as_ref().ok_or_else(|| AppError::General {
-            message: "the ChatHub page column is missing".to_string(),
-        })?;
-
-        if inner.url.as_deref() != Some(url.as_str()) {
-            page.webview.load_url(&url)?;
-        }
-
-        // The column is hidden while no entry is open; showing it again keeps the
-        // current page and its session.
-        page.set_width(width);
-        page.column.show_all();
-
-        inner.url = Some(url);
-        inner.width = Some(width);
-
-        Ok(())
-    }
-
-    /// Hides the page without destroying it, so its session survives.
-    ///
-    /// A hidden child is skipped by the window box, so the workflow UI gets the full
-    /// window width back.
-    ///
-    /// The width the page took from the window is handed back with it, so the workflow UI
-    /// keeps the width it has while the page is away.
-    pub fn hide(&self, app: &AppHandle<Wry>) -> Result<()> {
-        let grown = self.take_grown()?;
-
-        {
-            let inner = self.inner.lock()?;
-            if let Some(page) = inner.page.as_ref() {
-                page.column.hide();
+        // A single tab is visible at a time; the others are hidden without touching their
+        // sessions. The loop also covers the tab that was just created.
+        for (id, other) in inner.tabs.iter() {
+            if id != &key {
+                other.holder.set_visible(false);
             }
         }
 
-        self.hand_width_back(app, grown);
+        let tabs = &mut inner.tabs;
+        let tab = tabs.get_mut(&key).ok_or_else(|| AppError::General {
+            message: "the ChatHub tab is missing".to_string(),
+        })?;
+
+        if tab.url != url {
+            tab.webview.load_url(&url)?;
+            tab.url = url;
+        }
+        if tab.bounds != bounds {
+            tab.holder.set_bounds(bounds);
+            tab.bounds = bounds;
+        }
+        tab.holder.set_visible(true);
+        inner.active = Some(key);
+
         Ok(())
     }
 
-    /// Applies a new width to the docked page.
+    /// Hides every tab without destroying it, so each site keeps its session.
+    pub fn hide(&self, _app: &AppHandle<Wry>) -> Result<()> {
+        let mut inner = self.lock()?;
+        for tab in inner.tabs.values() {
+            tab.holder.set_visible(false);
+        }
+        inner.active = None;
+
+        Ok(())
+    }
+
+    /// Applies a new width to the active tab.
     ///
-    /// A drag only changes how much of the window the page takes: the window itself is not
-    /// resized while the splitter moves, so the width it holds is left as the opening set it.
+    /// A drag only changes how much of the dock the tab takes; the window itself is never
+    /// resized. The rectangle keeps its top and height and stays anchored to the right edge of the
+    /// window, which is the dock this command predates.
     pub fn set_width(&self, app: &AppHandle<Wry>, width: f64) -> Result<()> {
         let host = host_window(app)?;
-        let width = clamp_width(host_inner_width(&host)?, width);
+        let (window_width, window_height) = native_dock::window_size(&host)?;
 
-        let mut inner = self.inner.lock()?;
-        if let Some(page) = inner.page.as_ref() {
-            page.set_width(width);
+        let mut inner = self.lock()?;
+        let Some(active) = inner.active.clone() else {
+            return Ok(());
+        };
+        let Some(tab) = inner.tabs.get_mut(&active) else {
+            return Ok(());
+        };
+
+        let width = clamp_width(window_width, width);
+        let bounds = DockBounds {
+            x: (window_width - width).max(0.0),
+            y: tab.bounds.y,
+            width,
+            height: tab.bounds.height,
         }
-        inner.width = Some(width);
+        .sanitize(window_width, window_height)?;
+
+        tab.holder.set_bounds(bounds);
+        tab.bounds = bounds;
 
         Ok(())
     }
 
-    /// Nothing to do on this platform: GTK resizes the page column with the window
-    /// itself, so only a width the user asked for has to be applied explicitly.
+    /// Reloads `tab_id`, keeping the tab's webview, its session and its current page.
+    pub fn reload(&self, _app: &AppHandle<Wry>, tab_id: &str) -> Result<()> {
+        let inner = self.lock()?;
+        let tab = inner.tabs.get(tab_id).ok_or_else(|| AppError::General {
+            message: format!("the ChatHub tab '{tab_id}' is not open"),
+        })?;
+
+        tab.webview.reload()?;
+
+        Ok(())
+    }
+
+    /// Closes one tab, or every tab when no tab id is given.
     ///
-    /// The reported size is therefore not needed either: the column follows the window
-    /// without a rectangle of its own being recomputed here.
+    /// Only an explicit close reaches this, so switching between tabs or hiding the dock keeps
+    /// the site sessions alive.
+    pub fn destroy(&self, app: &AppHandle<Wry>, tab_id: Option<String>) -> Result<()> {
+        match tab_id {
+            Some(key) => {
+                let removed = {
+                    let mut inner = self.lock()?;
+                    let removed = inner.tabs.remove(&key);
+                    if inner.active.as_deref() == Some(key.as_str()) {
+                        inner.active = None;
+                    }
+                    removed
+                };
+
+                if let Some(tab) = removed {
+                    native_dock::with_surface(app, |surface| {
+                        surface.remove(app, &tab.holder);
+                        Ok(())
+                    })?;
+                }
+            }
+            None => self.close_all(app)?,
+        }
+
+        Ok(())
+    }
+
+    /// Closes every tab and removes every holder it owns.
+    pub fn close_all(&self, app: &AppHandle<Wry>) -> Result<()> {
+        {
+            let mut inner = self.lock()?;
+            inner.tabs.clear();
+            inner.active = None;
+        }
+
+        native_dock::with_surface(app, |surface| {
+            surface.remove_owner(app, DockOwner::ChatHub);
+            Ok(())
+        })
+    }
+
+    /// Nothing to do on this platform: the dock rectangle comes from the frontend's own layout and
+    /// is applied when a tab is shown, so a window resize does not move a native view from here.
     pub fn sync_bounds(&self, _app: &AppHandle<Wry>, _reported: PhysicalSize<u32>) -> Result<()> {
         Ok(())
     }
 
-    /// Destroys the page and clears every tracked view field.
+    /// Drops every tab handle when the window it was docked to goes away.
     ///
-    /// Only the explicit close action and application exit reach this, so switching
-    /// entries or hiding the page keeps the site session alive.
-    pub fn destroy(&self, app: &AppHandle<Wry>) -> Result<()> {
-        let grown = self.take_grown()?;
-
-        {
-            let mut inner = self.inner.lock()?;
-
-            if let Some(page) = inner.page.take() {
-                // Hiding first gives the workflow UI its full width back before the widgets
-                // go away; dropping the webview is what destroys the embedded page.
-                page.column.hide();
-                drop(page.webview);
-
-                // The column is the last reference of its own widget, so detaching it from
-                // the window box and dropping the handle releases it as well.
-                if let Some(parent) = page.column.parent() {
-                    if let Ok(container) = parent.downcast::<gtk::Container>() {
-                        container.remove(&page.column);
-                    }
-                }
-            }
-
-            inner.url = None;
-            inner.width = None;
-        }
-
-        self.hand_width_back(app, grown);
-        Ok(())
+    /// The window is going away with the tabs, so the webviews are destroyed with it and only the
+    /// handles are released here; the shared dock surface is reset by the window-destroy cleanup.
+    pub fn release(&self, _app: &AppHandle<Wry>) {
+        self.forget();
     }
 
     /// Clears tracked state without touching handles that are already gone.
     pub fn forget(&self) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.page = None;
-            inner.url = None;
-            inner.width = None;
-            inner.grown = 0.0;
+            inner.tabs.clear();
+            inner.active = None;
         }
     }
 
-    /// Releases the page together with the window it was docked to.
+    /// Width the dock took from the host window, in logical pixels.
     ///
-    /// The window is going away with the page, so the width the page holds is dropped
-    /// instead of being handed back to a window that is closing anyway.
-    pub fn release(&self, app: &AppHandle<Wry>) {
-        if let Err(error) = self.take_grown() {
-            log::warn!("Failed to read the ChatHub page width: {}", error);
-        }
-
-        if let Err(error) = self.destroy(app) {
-            log::warn!("Failed to release the ChatHub page: {}", error);
-        }
-        self.forget();
-    }
-
-    /// Width the docked page took from the host window, in logical pixels.
-    ///
-    /// A window size is remembered across runs, so the width the page holds is reported
-    /// here to be kept out of that record: reopening the app must not restore a window that
-    /// is wider than the workflow UI ever was.
+    /// The dock no longer takes width from the window: the frontend reserves it in its own layout,
+    /// so no independent window resize is reported here.
     pub fn grown_width(&self) -> f64 {
-        self.inner.lock().map(|inner| inner.grown).unwrap_or(0.0)
+        0.0
     }
 
-    /// Takes the width the page holds out of the state, so it is handed back exactly once.
-    fn take_grown(&self) -> Result<f64> {
-        let mut inner = self.inner.lock()?;
-        Ok(std::mem::take(&mut inner.grown))
-    }
-
-    /// Gives the width the page took back to the window it was taken from.
-    fn hand_width_back(&self, app: &AppHandle<Wry>, grown: f64) {
-        if grown <= 0.0 {
-            return;
-        }
-
-        match host_window(app) {
-            Ok(host) => narrow_host_window(&host, grown),
-            Err(error) => log::warn!("Failed to reach the ChatHub host window: {}", error),
-        }
-    }
-}
-
-impl Page {
-    /// Creates the page column inside the workflow window and builds the page in it.
-    ///
-    /// `corner_radius` is the radius the window draws at its right edge, which the page covers
-    /// at both of its right corners.
-    fn create(
-        app: &AppHandle<Wry>,
-        host: &WebviewWindow<Wry>,
-        url: &str,
-        width: f64,
-        corner_radius: f64,
-    ) -> Result<Self> {
-        let window_box = host.default_vbox()?;
-
-        // The workflow webview and the page are siblings in the window box, so the box
-        // has to lay them out horizontally: the workflow webview then keeps the
-        // remaining space and the page owns its column on the right edge.
-        window_box.set_orientation(gtk::Orientation::Horizontal);
-
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        window_box.pack_start(&column, false, false, 0);
-        column.set_size_request(width.round() as i32, -1);
-
-        // The page is reused for every entry, so building it is the only moment a proxy
-        // can be applied: the settings are read here.
-        let mut web_context = WebContext::new(Some(page_data_directory(app)));
-
-        // A page that gives a window corner back also has to be see-through.
-        // The page stands beside the workflow UI instead of sharing its titlebar, so it is a window
-        // of its own next to the workflow window and all four of its corners belong to it. The
-        // shared corner script is left out (`0.0`) for that reason: one implementation rounds all
-        // four corners here, so they cannot drift apart.
-        let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-        let mut builder = page_builder(&mut web_context, url, page_proxy(app), 0.0, app);
-        if radius > 0.0 {
-            builder = builder
-                .with_transparent(true)
-                .with_initialization_script(page_corners_script(radius));
-        }
-
-        let webview = builder.build_gtk(&column)?;
-
-        // The page owns the right edge of the window while it is docked, so it gives the frame
-        // band of that edge back to the window as well (see `crate::frame_edges`). This webview
-        // is built by wry, so the resize handler tauri installs on a Tauri webview never
-        // reaches it.
-        give_frame_band_to_window(&webview.webview(), Band::RIGHT_COLUMN);
-
-        Ok(Self { webview, column })
-    }
-
-    /// Applies a width to the page column.
-    fn set_width(&self, width: f64) {
-        self.column.set_size_request(width.round() as i32, -1);
+    /// Locks the state, reporting a poisoned lock as a plain error instead of a panic.
+    fn lock(&self) -> Result<MutexGuard<'_, Inner>> {
+        self.inner.lock().map_err(|_| AppError::General {
+            message: "the ChatHub page state is poisoned".to_string(),
+        })
     }
 }
 
@@ -338,6 +315,47 @@ impl Page {
 /// It is the bound the shared corner script applies, kept the same here so a radius that reaches
 /// the window is treated the same way on every carrier.
 const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
+
+/// Rectangle a legacy caller's `width`/`top_inset` pair describes.
+///
+/// The pair names the docked page of an older frontend, which owned the right edge of the window
+/// below the app chrome; it is turned into the same rectangle the frontend now measures itself.
+fn legacy_bounds(width: f64, top_inset: f64, window_width: f64, window_height: f64) -> DockBounds {
+    let width = clamp_width(window_width, width);
+    let top = top_inset.clamp(0.0, window_height);
+
+    DockBounds {
+        x: (window_width - width).max(0.0),
+        y: top,
+        width,
+        height: (window_height - top).max(1.0),
+    }
+}
+
+/// Frame band the dock gives back for the window edges its rectangle reaches.
+///
+/// A dock that reaches a window edge covers the band the window level resize handler accepts, so
+/// that edge has to stay with the window; an edge inside the window borders the workflow UI and
+/// keeps its input. The common dock spans the right edge of the window from top to bottom, which
+/// is exactly the band a right column gives back, so the named bands are reused for the shapes
+/// that occur.
+fn band_for(bounds: DockBounds, window_width: f64, window_height: f64) -> Band {
+    let reaches_left = bounds.x <= WINDOW_EDGE_REACH;
+    let reaches_top = bounds.y <= WINDOW_EDGE_REACH;
+    let reaches_right = bounds.x + bounds.width >= window_width - WINDOW_EDGE_REACH;
+    let reaches_bottom = bounds.y + bounds.height >= window_height - WINDOW_EDGE_REACH;
+
+    match (reaches_left, reaches_top, reaches_right, reaches_bottom) {
+        (false, true, true, true) => Band::RIGHT_COLUMN,
+        (true, true, true, true) => Band::EVERY_SIDE,
+        (left, top, right, bottom) => Band {
+            left,
+            top,
+            right,
+            bottom,
+        },
+    }
+}
 
 /// JavaScript descriptor of one corner of the page, as [`page_corners_script`] reads it.
 ///
@@ -355,13 +373,12 @@ fn corner_descriptor(property: &str, attribute: &str, x: &str, y: &str, radius: 
 
 /// Script that leaves the four corners of the page unpainted.
 ///
-/// The page is a rectangle that owns the right edge of the window, so it paints over the corners
-/// the window rounds. The workflow UI keeps its own titlebar *beside* the page here instead of
-/// above it, which leaves the page standing next to the workflow window as a window of its own:
-/// all four of its corners are visible, and each of them has to come back from the page itself.
-/// The shared corner script ([`super::page`]) rounds one window corner, which is what a page below
-/// a shared titlebar needs, so this carrier leaves it out and rounds the four corners here: one
-/// implementation covers them all, so the corners cannot drift apart.
+/// The page is a rectangle placed over the workflow UI, so it paints over whatever corner the
+/// window rounds where its rectangle reaches one. Every one of its four corners therefore has to
+/// come back from the page itself. The shared corner script ([`super::page`]) rounds one window
+/// corner, which is what a page below a shared titlebar needs, so this carrier leaves it out and
+/// rounds the four corners here: one implementation covers them all, so the corners cannot drift
+/// apart.
 ///
 /// The rules are the ones that hold in the shared script:
 ///
@@ -556,36 +573,36 @@ fn page_corners_script(radius: f64) -> String {
     )
 }
 
-/// Logical width of the host window client area.
-fn host_inner_width(host: &WebviewWindow<Wry>) -> Result<f64> {
-    let scale_factor = host.scale_factor()?;
-    Ok(host.inner_size()?.to_logical::<f64>(scale_factor).width)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Guard for the docking layout: the page has to be a fixed width sibling column
-    /// of the workflow webview, which only works while the window box is horizontal.
-    #[test]
-    fn the_page_is_a_fixed_width_column_next_to_the_workflow_ui() {
-        let source = include_str!("gtk_panel.rs");
-
-        assert!(source.contains("window_box.set_orientation(gtk::Orientation::Horizontal)"));
-        assert!(source.contains("window_box.pack_start(&column, false, false, 0)"));
-        assert!(source.contains("column.set_size_request(width.round() as i32, -1)"));
-
-        // A fixed container would stack the page over the workflow UI instead of
-        // giving it its own space.
-        let fixed_container_use = format!("{}{}", "Fixed::", "new");
-        assert!(!source.contains(&fixed_container_use));
+    /// Source of one implementation block, so an assertion can never match its own text
+    /// instead of the code it guards.
+    fn implementation<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split(start)
+            .nth(1)
+            .expect("the implementation block is missing")
+            .split(end)
+            .next()
+            .expect("the implementation block is not terminated")
     }
 
-    /// Guard for the session lifetime: hiding the page must keep its webview.
+    /// The production half of this file, so an assertion can never match its own text.
+    fn production_source() -> &'static str {
+        include_str!("gtk_panel.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("gtk_panel.rs carries a test module")
+    }
+
+    /// Guard for the multi-tab model: every tab keeps its own webview, and switching between tabs
+    /// hides the others instead of destroying them.
     #[test]
-    fn hiding_the_page_keeps_the_webview_alive() {
+    fn every_tab_keeps_its_own_webview_while_another_is_shown() {
         let source = include_str!("gtk_panel.rs");
+        let show = implementation(source, "pub fn show", "pub fn hide");
         let hide = source
             .split("pub fn hide")
             .nth(1)
@@ -594,45 +611,116 @@ mod tests {
             .next()
             .expect("the hide path is not terminated");
 
-        assert!(hide.contains("page.column.hide()"));
-        assert!(!hide.contains("destroy"));
+        // One tab is created per id and kept in the map.
+        assert!(show.contains("if !inner.tabs.contains_key(&key)"));
+        assert!(show.contains("inner.tabs.insert("));
+        // Every other tab is only hidden.
+        assert!(show.contains("other.holder.set_visible(false)"));
+        // Hiding the dock keeps every webview.
+        assert!(hide.contains("tab.holder.set_visible(false)"));
+        assert!(!hide.contains("tabs.clear"));
     }
 
-    /// Guard for the window width: the page takes its width from the workflow webview, so
-    /// the window has to be widened when the page opens and to hand exactly that width back
-    /// when the page goes away.
+    /// Guard for the geometry contract: the rectangle comes from the frontend and no carrier
+    /// changes the window layout.
     #[test]
-    fn the_page_makes_room_in_the_window_once_and_hands_it_back() {
-        let source = include_str!("gtk_panel.rs");
+    fn the_dock_rectangle_comes_from_the_frontend() {
+        let source = production_source();
 
-        assert!(source.contains("if self.grown_width() <= 0.0 {"));
-        assert!(source.contains("widen_host_window(&host, width)"));
-        assert!(source.contains("narrow_host_window(&host, grown)"));
-        // The width limits are checked against the window the page will have.
-        assert!(source.contains("clamp_width(window_width + added, width)"));
+        assert!(source.contains("native_dock::window_size(&host)"));
+        assert!(source.contains(".sanitize(window_width, window_height)?"));
+        // An older caller that sends only a width still gets a rectangle.
+        assert!(source.contains("legacy_bounds(width, top_inset, window_width, window_height)"));
+        // Nothing widens, narrows or splits the window any more.
+        let widening = format!("{}{}", "widen_", "host_window");
+        let narrowing = format!("{}{}", "narrow_", "host_window");
+        assert!(!source.contains(&widening));
+        assert!(!source.contains(&narrowing));
+        assert!(!source.contains("set_orientation"));
+        assert!(!source.contains("notebook"));
     }
 
-    /// Guard for the isolation boundary: the page is built by wry, so it gets no
-    /// Tauri IPC and cannot reach a ChatSpeed command.
+    /// Guard for the input path: a tab is a bounded holder of the shared dock surface, never a
+    /// full-area container that would swallow the workflow UI's pointer events.
+    #[test]
+    fn a_tab_is_a_bounded_holder_of_the_dock_surface() {
+        let source = production_source();
+
+        assert!(source.contains("surface.holder(app, DockOwner::ChatHub, bounds)"));
+        assert!(source.contains("builder.build_gtk(holder.container())"));
+        let fixed_container_use = format!("{}{}", "Fixed::", "new");
+        assert!(!source.contains(&fixed_container_use));
+        assert!(!source.contains("add_overlay"));
+    }
+
+    /// Guard for the isolation boundary: the page is built by wry, so it gets no Tauri IPC and
+    /// cannot reach a ChatSpeed command.
     #[test]
     fn the_page_is_built_by_wry_without_tauri_ipc() {
         let source = include_str!("gtk_panel.rs");
 
-        assert!(source.contains("build_gtk(&column)"));
+        assert!(source.contains("build_gtk(holder.container())"));
         assert!(!source.contains(concat!("Webview", "Builder")));
     }
 
-    /// Guard for the frame band: the page owns the right edge of the window while it is
-    /// docked, so a drag on that edge has to reach the window instead of the page.
+    /// Guard for the frame band: a dock that reaches a window edge gives that edge back to the
+    /// window, so a drag on the frame still resizes the window.
     #[test]
-    fn the_page_gives_the_window_frame_band_back() {
+    fn a_dock_that_reaches_a_window_edge_gives_it_back() {
         let source = include_str!("gtk_panel.rs");
 
-        assert!(source.contains("give_frame_band_to_window(webview.webview(), Band::RIGHT_COLUMN)"));
+        assert!(source.contains("give_frame_band_to_window("));
+        assert!(source.contains("band_for(bounds, window_width, window_height)"));
+
+        let band = band_for(
+            DockBounds {
+                x: 400.0,
+                y: 40.0,
+                width: 600.0,
+                height: 700.0,
+            },
+            1000.0,
+            740.0,
+        );
+        assert!(!band.left);
+        assert!(!band.top);
+        assert!(band.right);
+        assert!(band.bottom);
+
+        // The common dock spans the right edge from top to bottom, which is the right column band.
+        let dock = band_for(
+            DockBounds {
+                x: 400.0,
+                y: 0.0,
+                width: 600.0,
+                height: 740.0,
+            },
+            1000.0,
+            740.0,
+        );
+        assert!(!dock.left);
+        assert!(dock.top);
+        assert!(dock.right);
+        assert!(dock.bottom);
     }
 
-    /// Guard for the corners the page gives back: it stands next to the workflow window as a window
-    /// of its own, so all four of its corners are rounded here, by this carrier alone.
+    /// Guard for the legacy rectangle: a caller that only sends a width still lands on the right
+    /// edge of the window, below the app chrome.
+    #[test]
+    fn a_width_only_call_lands_on_the_right_edge_of_the_window() {
+        assert_eq!(
+            legacy_bounds(600.0, 40.0, 1600.0, 900.0),
+            DockBounds {
+                x: 1000.0,
+                y: 40.0,
+                width: 600.0,
+                height: 860.0,
+            }
+        );
+    }
+
+    /// Guard for the corners the page gives back: the rectangle paints over the window corners it
+    /// reaches, so all four of its corners are rounded here, by this carrier alone.
     #[test]
     fn the_page_gives_back_all_four_of_its_corners() {
         let script = page_corners_script(15.0);
@@ -658,7 +746,7 @@ mod tests {
         // The shared corner script rounds one window corner, which is not what the page needs here,
         // so this carrier leaves it out and rounds the four corners itself.
         let source = include_str!("gtk_panel.rs");
-        assert!(source.contains("page_builder(&mut web_context, url, page_proxy(app), 0.0, app)"));
+        assert!(source.contains("page_builder(&mut web_context, &url, page_proxy(app), 0.0, app)"));
         assert!(source.contains(".with_initialization_script(page_corners_script(radius))"));
     }
 }

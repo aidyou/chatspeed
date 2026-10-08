@@ -1,8 +1,12 @@
 {
-  "schema": "chatspeed.agent-skills.plugin/v1",
+  "schema": "chatspeed.agent-skills.plugin/v2",
   "id": "agent-skills",
   "version": "0.1.0",
   "entry": "index.html",
   "assets": ["index.html"],
-  "permissions": ["skills:read"]
+  "permissions": ["skills:read"],
+  "ui": {
+    "entry": "index.html",
+    "assets": ["index.html"]
+  }
 }

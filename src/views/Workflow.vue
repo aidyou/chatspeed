@@ -1,7 +1,7 @@
 <template>
   <div class="workflow-layout">
     <ChatHubSplitter
-      v-if="chatHubVisible"
+      v-if="dockVisible"
       :right="chatHubReservedWidth"
       :width="chatHubStore.pageWidth"
       :min-width="chatHubStore.pageMinWidth"
@@ -184,9 +184,16 @@
             </button>
           </el-tooltip>
           <div class="workflow-side-rail__bottom">
+            <PluginEntry
+              v-if="pluginUiPlugins.length"
+              :plugins="pluginUiPlugins"
+              :active-plugin-id="activePluginId"
+              @select="onSelectPluginEntry"
+              @toggle="onTogglePluginEntry"
+              @close="onClosePluginEntry" />
             <ChatHubEntry
               :hubs="chatHubStore.list"
-              :active-hub-id="chatHubStore.activeHubId"
+              :active-hub-id="activeChatHubId"
               @select="onSelectChatHubEntry"
               @toggle="onChatHubEntryToggled"
               @close="onCloseChatHub" />
@@ -222,7 +229,12 @@
           :selected-automation-id="workflowAutomationStore.selectedAutomationId"
           :navigation-tab="workflowSidebarNavigationTab"
           :chat-hubs="chatHubStore.list"
-          :active-chat-hub-id="chatHubStore.activeHubId"
+          :active-chat-hub-id="activeChatHubId"
+          :plugins="pluginUiPlugins"
+          :active-plugin-id="activePluginId"
+          @select-plugin="onSelectPluginEntry"
+          @toggle-plugin="onTogglePluginEntry"
+          @close-plugin="onClosePluginEntry"
           v-model:active-tab="workflowSidebarActiveTab"
           v-model:navigation-tab="workflowSidebarNavigationTab"
           @select-workflow="onSelectWorkflowFromHistory"
@@ -365,6 +377,20 @@
       </el-container>
     </div>
 
+    <!-- One right dock shared by the chat-site pages and the plugin panels. It is a plain
+         Vue column: each tab's native webview is painted by the carrier over the measured
+         surface, and only the trusted agent-skills tab renders in this webview. -->
+    <DockedViews
+      ref="dockRef"
+      :visible="dockVisible"
+      :width="chatHubStore.pageWidth"
+      :tabs="dockTabViews"
+      :active-tab-id="dockActiveTabId"
+      :trusted-key="trustedReloadKey"
+      @select="onSelectDockTab"
+      @close="onCloseDockTab"
+      @reload="onReloadDockTab" />
+
     <!-- Edit workflow dialog -->
     <el-dialog
       v-model="editWorkflowDialogVisible"
@@ -439,8 +465,13 @@ import TerminalPanel from '@/components/workflow/TerminalPanel.vue'
 import WorkflowCodeEditor from '@/components/workflow/WorkflowCodeEditor.vue'
 import WorkflowAutomationEditor from '@/components/workflow/automation/WorkflowAutomationEditor.vue'
 import ChatHubEntry from '@/components/workflow/ChatHubEntry.vue'
+import PluginEntry from '@/components/workflow/PluginEntry.vue'
+import DockedViews from '@/components/workflow/DockedViews.vue'
+import { usePluginStore } from '@/stores/plugin'
+import { createPluginProvider, verifiedPluginUis } from '@/libs/pluginView'
 import ChatHubSplitter from '@/components/workflow/ChatHubSplitter.vue'
-import { createChatHubViewController, restoreChatHubEntry } from '@/libs/chatHubView'
+import { createChatHubProvider } from '@/libs/chatHubView'
+import { createDockedViewsCoordinator } from '@/libs/dockedViews'
 
 // Composables
 import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'
@@ -470,6 +501,388 @@ const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const modelStore = useModelStore()
 const chatHubStore = useChatHubStore()
+const pluginStore = usePluginStore()
+
+// ============================================================
+// Docked views (ChatHub sites and plugin UI in one right dock)
+//
+// The dock is one surface shared by chat-site pages and plugin panels: every tab owns its
+// own native webview, while the dock column, the tab strip and the toolbar stay plain Vue.
+// The layer is pure view state - it only decides which tab is docked, how wide the dock is
+// and which rectangle the native view covers. It never stops, clears, rebuilds or otherwise
+// touches the workflow session, task, message or approval state.
+//
+// Every native command of both providers goes through one serial, latest-intent coordinator
+// (src/libs/dockedViews.js), so a slow hide of one provider can never resolve after the
+// show of the other and leave two native views stacked on the same rectangle.
+// ============================================================
+
+/** Built-in plugin whose management page is a trusted host component, never a webview. */
+const TRUSTED_PLUGIN_ID = 'agent-skills'
+/** Most plugin panels the dock opens; the plugin host enforces the same limit. */
+const MAX_PLUGIN_TABS = 8
+
+/** Plugin UIs the dock may open; a runtime the store could not confirm yields none. */
+const pluginUiPlugins = computed(() =>
+  verifiedPluginUis(pluginStore.inventory, !!pluginStore.lastError)
+)
+
+/** Tabs docked right now: `{ id, kind: 'chatHub' | 'plugin' | 'trusted', hubId?, pluginId?, entry? }`. */
+const dockTabs = ref([])
+/** Visible tab id, empty when the dock has no active tab. */
+const dockActiveTabId = ref('')
+/** Whether the dock column is on screen. Hiding it keeps every tab and its session alive. */
+const dockVisible = ref(false)
+/** Remount token for the trusted tab; a reload bumps it instead of issuing a native command. */
+const trustedReloadKey = ref(0)
+const dockRef = ref(null)
+
+let unlistenPlugins = null
+let pluginRefreshTimer = null
+let dockResizeObserver = null
+// Set on unmount so a layout update that was already waiting for the DOM cannot apply a
+// snapshot after every native view was released.
+let dockTornDown = false
+
+const chatHubProvider = createChatHubProvider({ invoke: invokeWrapper })
+const pluginProvider = createPluginProvider({ invoke: invokeWrapper })
+
+/**
+ * Maps a failed dock action to the message shown to the user. A plugin panel and a chat
+ * page report different wording, and a failure with no dedicated message is only logged.
+ */
+const dockErrorKey = action => {
+  switch (action) {
+    case 'chatHub.show':
+    case 'chatHub.reload':
+      return 'workflow.chatHub.showFailed'
+    case 'chatHub.hide':
+      return 'workflow.chatHub.hideFailed'
+    case 'chatHub.destroy':
+      return 'workflow.chatHub.closeFailed'
+    case 'plugin.show':
+      return 'workflow.plugin.openFailed'
+    default:
+      return ''
+  }
+}
+
+const dockCoordinator = createDockedViewsCoordinator({
+  chatHub: chatHubProvider,
+  plugin: pluginProvider,
+  onError: (error, action) => {
+    console.error(`Failed to ${action} the docked view:`, error)
+    const key = dockErrorKey(action)
+    if (key) {
+      showMessage(t(key), 'error')
+    }
+  }
+})
+
+const hubOf = hubId => chatHubStore.list.find(hub => hub.id === hubId) || null
+const chatHubTabId = hubId => `chathub:${hubId}`
+const pluginTabId = pluginId => `plugin:${pluginId}`
+
+const dockTabTitle = tab => {
+  if (tab.kind === 'chatHub') {
+    return hubOf(tab.hubId)?.name || ''
+  }
+  // The trusted skills tab shows the same title as its settings page; any other plugin
+  // only has its plugin id to be named by.
+  return tab.kind === 'trusted' ? t('settings.agentSkills.title') : tab.pluginId
+}
+
+const dockTabViews = computed(() =>
+  dockTabs.value.map(tab => ({ id: tab.id, kind: tab.kind, title: dockTabTitle(tab) }))
+)
+const dockActiveTab = computed(
+  () => dockTabs.value.find(tab => tab.id === dockActiveTabId.value) || null
+)
+const activeChatHubId = computed(() =>
+  dockActiveTab.value?.kind === 'chatHub' ? dockActiveTab.value.hubId : 0
+)
+const activePluginId = computed(() =>
+  dockActiveTab.value && dockActiveTab.value.kind !== 'chatHub'
+    ? dockActiveTab.value.pluginId
+    : ''
+)
+/** Whether a native webview is currently the docked content (a trusted tab is plain Vue). */
+const dockNativeActive = computed(
+  () => dockVisible.value && !!dockActiveTab.value && dockActiveTab.value.kind !== 'trusted'
+)
+
+/**
+ * Space the workflow UI reserves on its right for the docked views.
+ *
+ * The dock is one column over the workflow content and the published width also keeps the
+ * overlays Element Plus teleports to the document body clear of a native view, so the width
+ * is reserved on every platform that docks a view.
+ */
+const chatHubReservedWidth = computed(() =>
+  dockVisible.value && dockActiveTab.value ? chatHubStore.pageWidth : 0
+)
+
+watchEffect(() => {
+  const reserved = chatHubReservedWidth.value
+  const root = document.documentElement
+
+  if (reserved > 0) {
+    root.style.setProperty('--cs-chathub-reserved-width', `${reserved}px`)
+    return
+  }
+
+  root.style.removeProperty('--cs-chathub-reserved-width')
+})
+
+/**
+ * Height of the app titlebar, which a docked view has to stay below so it can never cover
+ * the window controls.
+ */
+const chatHubTopInset = () => {
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--cs-titlebar-height')
+  const height = Number.parseFloat(value)
+  return Number.isFinite(height) && height > 0 ? height : 0
+}
+
+/**
+ * Radius of the rounded border this window actually draws, handed back by a docked view so
+ * it does not paint over that border at its bottom-right corner. A platform whose window
+ * keeps square corners reports nothing.
+ */
+const chatHubCornerRadius = () => {
+  const container = document.querySelector('.app-container')
+  if (!container) {
+    return 0
+  }
+  const radius = Number.parseFloat(getComputedStyle(container).borderBottomRightRadius)
+  return Number.isFinite(radius) && radius > 0 ? radius : 0
+}
+
+/**
+ * The measured rectangle the active native view must cover, plus the carrier hints.
+ *
+ * The rectangle is read from the shared surface element, so it already reflects the current
+ * tab strip height, dock width and window size. A surface that is not laid out (the dock is
+ * hidden) reports no rectangle, which is what keeps a hidden view from being shown.
+ */
+const dockGeometry = () => {
+  const surface = dockRef.value?.getSurfaceElement?.()
+  const rect = surface ? surface.getBoundingClientRect() : null
+  const bounds =
+    rect && rect.width > 0 && rect.height > 0
+      ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      : null
+  return {
+    width: chatHubStore.pageWidth,
+    topInset: chatHubTopInset(),
+    cornerRadius: chatHubCornerRadius(),
+    bounds
+  }
+}
+
+const dockSnapshot = () => ({
+  tabs: dockTabs.value.map(tab => ({
+    kind: tab.kind,
+    tabId: tab.id,
+    url: tab.kind === 'chatHub' ? hubOf(tab.hubId)?.url || '' : '',
+    pluginId: tab.kind === 'chatHub' ? '' : tab.pluginId,
+    entry: tab.kind === 'plugin' ? tab.entry : ''
+  })),
+  activeTabId: dockVisible.value ? dockActiveTabId.value : '',
+  geometry: dockGeometry()
+})
+
+/** Measures the shared surface after the DOM update, then applies the newest dock snapshot. */
+const syncDock = async () => {
+  if (dockTornDown) {
+    return
+  }
+  await nextTick()
+  if (dockTornDown) {
+    return
+  }
+  return dockCoordinator.sync(dockSnapshot())
+}
+
+const activateDockTab = tabId => {
+  dockActiveTabId.value = tabId
+  dockVisible.value = true
+  return syncDock()
+}
+
+/** Docks a tab, reusing the tab that entry already owns so a repeated click dedupes. */
+const openDockTab = tab => {
+  if (!dockTabs.value.some(item => item.id === tab.id)) {
+    dockTabs.value.push(tab)
+  }
+  return activateDockTab(tab.id)
+}
+
+/**
+ * Closes one tab and releases exactly its native view.
+ *
+ * When the closed tab was the visible one, the next tab takes its place, falling back to
+ * the previous tab, and only an empty dock hides the column.
+ */
+const closeDockTab = tabId => {
+  const index = dockTabs.value.findIndex(tab => tab.id === tabId)
+  if (index === -1) {
+    return Promise.resolve()
+  }
+  const wasActive = dockActiveTabId.value === tabId
+  dockTabs.value.splice(index, 1)
+  if (wasActive) {
+    const neighbor = dockTabs.value[index] || dockTabs.value[index - 1] || null
+    if (neighbor) {
+      dockActiveTabId.value = neighbor.id
+      dockVisible.value = true
+    } else {
+      dockActiveTabId.value = ''
+      dockVisible.value = false
+    }
+  }
+  return syncDock()
+}
+
+/** Hides the dock (keeping every tab) or brings the active tab back. */
+const toggleDock = () => {
+  if (dockVisible.value) {
+    dockVisible.value = false
+    return syncDock()
+  }
+  if (!dockActiveTabId.value && dockTabs.value.length) {
+    dockActiveTabId.value = dockTabs.value[dockTabs.value.length - 1].id
+  }
+  if (!dockActiveTab.value) {
+    return Promise.resolve()
+  }
+  dockVisible.value = true
+  return syncDock()
+}
+
+const onSelectDockTab = tabId => activateDockTab(tabId)
+const onCloseDockTab = tabId => closeDockTab(tabId)
+
+/**
+ * Reloads the visible tab. A ChatHub page reloads in place, a plugin panel renews its
+ * capability through the same queue, and the trusted skills tab simply remounts.
+ */
+const onReloadDockTab = () => {
+  const tab = dockActiveTab.value
+  if (!tab) {
+    return Promise.resolve()
+  }
+  if (tab.kind === 'trusted') {
+    trustedReloadKey.value += 1
+    return Promise.resolve()
+  }
+  return dockCoordinator.reload(tab.id)
+}
+
+const onSelectChatHubEntry = hub => {
+  if (!hub) {
+    return Promise.resolve()
+  }
+  return openDockTab({ id: chatHubTabId(hub.id), kind: 'chatHub', hubId: hub.id })
+}
+
+const onCloseChatHub = () => {
+  const tab = dockTabs.value.find(
+    item => item.kind === 'chatHub' && item.hubId === activeChatHubId.value
+  )
+  return tab ? closeDockTab(tab.id) : Promise.resolve()
+}
+
+const onChatHubEntryToggled = () => toggleDock()
+
+/** The docked kind for a verified plugin: the built-in skills bundle is trusted Vue content. */
+const pluginTabKind = plugin => (plugin.id === TRUSTED_PLUGIN_ID ? 'trusted' : 'plugin')
+
+const onSelectPluginEntry = plugin => {
+  if (!plugin) {
+    return Promise.resolve()
+  }
+  const existing = dockTabs.value.find(
+    tab => tab.kind !== 'chatHub' && tab.pluginId === plugin.id
+  )
+  if (!existing && dockTabs.value.filter(tab => tab.kind !== 'chatHub').length >= MAX_PLUGIN_TABS) {
+    return Promise.resolve()
+  }
+  return openDockTab({
+    id: pluginTabId(plugin.id),
+    kind: pluginTabKind(plugin),
+    pluginId: plugin.id,
+    entry: plugin.ui?.entry || ''
+  })
+}
+
+const onClosePluginEntry = () => {
+  const tab = dockTabs.value.find(
+    item => item.kind !== 'chatHub' && item.pluginId === activePluginId.value
+  )
+  return tab ? closeDockTab(tab.id) : Promise.resolve()
+}
+
+const onTogglePluginEntry = () => toggleDock()
+
+/**
+ * Applies a width the splitter reported. The same geometry is re-measured after the DOM
+ * update, so the native view and the reserved space never drift apart. The backend clamps
+ * the width again.
+ */
+const onChatHubPageResize = width => {
+  chatHubStore.setPageWidth(width)
+  return syncDock()
+}
+
+/**
+ * Re-measures the shared surface after a layout change. A hidden dock or a trusted tab has
+ * no native view, so the update never resurrects one.
+ */
+const onDockLayoutResize = () => {
+  nextTick(() => {
+    if (!dockNativeActive.value) {
+      return
+    }
+    void syncDock()
+  })
+}
+
+const refreshPlugins = async () => {
+  try {
+    await pluginStore.loadInventory()
+  } catch {
+    // The store keeps the unavailable state, which hides every plugin tab below.
+  }
+}
+
+// The plugin inventory is the authority for which panels may stay docked: a disabled,
+// replaced or unverifiable plugin (including the trusted skills tab) is closed right away,
+// so the dock fails closed instead of showing a page the runtime no longer confirms.
+watch(pluginUiPlugins, plugins => {
+  const allowed = new Map(plugins.map(plugin => [plugin.id, plugin.ui?.entry || '']))
+  for (const tab of [...dockTabs.value]) {
+    if (tab.kind === 'chatHub') {
+      continue
+    }
+    if (allowed.get(tab.pluginId) !== tab.entry) {
+      void closeDockTab(tab.id)
+    }
+  }
+})
+
+// A chat entry deleted elsewhere clears the tab that was showing it, which releases exactly
+// that page instead of leaving an orphaned tab behind.
+watch(
+  () => chatHubStore.list.map(hub => hub.id).join(','),
+  () => {
+    for (const tab of [...dockTabs.value]) {
+      if (tab.kind === 'chatHub' && !hubOf(tab.hubId)) {
+        void closeDockTab(tab.id)
+      }
+    }
+  }
+)
 
 // Component refs
 const messageListRef = ref(null)
@@ -2316,188 +2729,6 @@ const displayAllowedPathTitle = computed(() => {
   return displayAllowedPath.value || ''
 })
 
-// ============================================================
-// ChatHub (web chat entries)
-//
-// The ChatHub page is docked inside this window (see src-tauri/src/chat_hub), so the
-// layer is pure view state: it only decides whether the page is docked, how wide it is
-// and which entry it shows. It never stops, clears, rebuilds or otherwise touches the
-// workflow session, task, message or approval state.
-// ============================================================
-const chatHubVisible = ref(false)
-
-const activeChatHub = computed(
-  () => chatHubStore.list.find(hub => hub.id === chatHubStore.activeHubId) || null
-)
-
-/**
- * Space the workflow UI keeps free for the docked page.
- *
- * Carriers that place the page themselves already narrow the workflow UI, so only the
- * carriers that stack the page over it have to reserve the space on this side.
- */
-const chatHubReservedWidth = computed(() =>
-  chatHubStore.viewMode === 'reserve' && chatHubVisible.value ? chatHubStore.pageWidth : 0
-)
-
-/**
- * Space the docked page reserves, published on the document root.
- *
- * The page starts below the app titlebar, so the titlebar keeps the full window width and
- * only the workflow content has to stay clear of the page. The width is published on the
- * document root rather than on this layout, because the overlays and popovers Element Plus
- * teleports to the document body have to find it outside this component as well. A carrier
- * that lays the page out itself reserves nothing, and the content then keeps its full width.
- */
-watchEffect(() => {
-  const reserved = chatHubReservedWidth.value
-  const root = document.documentElement
-
-  if (reserved > 0) {
-    root.style.setProperty('--cs-chathub-reserved-width', `${reserved}px`)
-    return
-  }
-
-  root.style.removeProperty('--cs-chathub-reserved-width')
-})
-
-/**
- * Height of the app titlebar, which a stacked page has to stay below so it can never
- * cover the window controls. Carriers that lay both webviews out themselves ignore it.
- */
-const chatHubTopInset = () => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue('--cs-titlebar-height')
-  const height = Number.parseFloat(value)
-  return Number.isFinite(height) && height > 0 ? height : 0
-}
-
-/**
- * Radius of the rounded border this window actually draws.
- *
- * The stacked page is a rectangle, so it paints over that border at its bottom-right
- * corner and has to hand the corner back. The window container is what draws the border,
- * so its computed radius is read instead of a design token: a platform whose window keeps
- * square corners reports nothing, and the page stays rectangular there.
- */
-const chatHubCornerRadius = () => {
-  const container = document.querySelector('.app-container')
-  if (!container) {
-    return 0
-  }
-  const radius = Number.parseFloat(getComputedStyle(container).borderBottomRightRadius)
-  return Number.isFinite(radius) && radius > 0 ? radius : 0
-}
-
-/**
- * Single ordered boundary for every ChatHub view command.
- *
- * Show/hide/width/destroy cross the IPC boundary asynchronously, so a late reply must
- * never override a newer user action: the controller serializes the commands and only
- * applies the newest intent. Failures only report a message and keep the workflow UI
- * usable, they never touch the workflow session.
- */
-const chatHubView = createChatHubViewController({
-  show: (url, width) =>
-    invokeWrapper('show_chat_hub_page', {
-      url,
-      width,
-      topInset: chatHubTopInset(),
-      cornerRadius: chatHubCornerRadius()
-    }),
-  hide: () => invokeWrapper('hide_chat_hub_page'),
-  destroy: () => invokeWrapper('destroy_chat_hub_page'),
-  setWidth: width => invokeWrapper('set_chat_hub_page_width', { width }),
-  getWidth: () => chatHubStore.pageWidth,
-  onVisibleChange: visible => {
-    chatHubVisible.value = visible
-  },
-  onError: (error, action) => {
-    console.error(`Failed to ${action} the ChatHub page:`, error)
-    const key =
-      action === 'show'
-        ? 'showFailed'
-        : action === 'destroy'
-          ? 'closeFailed'
-          : action === 'hide'
-            ? 'hideFailed'
-            : ''
-    if (key) {
-      showMessage(t(`workflow.chatHub.${key}`), 'error')
-    }
-  }
-})
-
-/**
- * Hides the ChatHub layer and restores the original workflow UI.
- *
- * Hiding never destroys the page, so the site session and the open page are still there
- * when the entry is shown again.
- */
-const hideChatHub = () => {
-  chatHubView.hide()
-}
-
-/**
- * Docks the given entry next to the workflow UI.
- */
-const showChatHub = hub => {
-  if (!hub) {
-    return
-  }
-  chatHubStore.setActiveHub(hub.id)
-  return chatHubView.select(hub.url)
-}
-
-const onSelectChatHubEntry = hub => {
-  showChatHub(hub)
-}
-
-/**
- * Applies a width the splitter reported. The backend clamps it again, so the reserved
- * space and the page itself can never drift apart.
- */
-const onChatHubPageResize = width => {
-  chatHubStore.setPageWidth(width)
-  chatHubView.resize()
-}
-
-/**
- * Actively closes the docked page from the entry of the shown site. Only this explicit
- * action releases the page; the site session survives because the page uses a stable
- * profile directory.
- */
-const onCloseChatHub = () => {
-  chatHubStore.setActiveHub(0)
-  chatHubView.close()
-}
-
-/**
- * Chat entry icon action. The docked page has no window chrome of its own, so its entry
- * toggles it: a page that is on screen is hidden (and the workflow UI takes the space
- * back) while a hidden one is brought back, which keeps that entry useful in both states.
- */
-const onChatHubEntryToggled = () => {
-  if (chatHubVisible.value) {
-    hideChatHub()
-    return
-  }
-  restoreChatHubEntry(chatHubView, activeChatHub.value)
-}
-
-// The ChatHub page is docked next to the workflow UI, so switching tasks, automations,
-// sidebar tabs, opening the terminal or the authorized paths tab leaves it in place: the
-// only actions that touch it are its own entry (toggle and close). The open entry may be
-// deleted from the settings window, which only clears the current selection, so the
-// orphaned page is the one view change that still has to hide it.
-watch(
-  () => chatHubStore.activeHubId,
-  hubId => {
-    if (!hubId) {
-      hideChatHub()
-    }
-  }
-)
-
 const openWorkflowSidebarTab = tab => {
   // Clicking an existing navigation entry always returns to the workflow view,
   // even when the entry is already active.
@@ -2944,6 +3175,17 @@ watch(
 )
 
 onMounted(async () => {
+  await refreshPlugins()
+  unlistenPlugins = await listen('cs://plugins-changed', refreshPlugins)
+  pluginRefreshTimer = setInterval(refreshPlugins, 5000)
+  // The dock surface is measured once it exists, and every later layout change updates the
+  // native view through the same coordinator.
+  await nextTick()
+  const dockSurface = dockRef.value?.getSurfaceElement?.()
+  if (dockSurface && typeof ResizeObserver !== 'undefined') {
+    dockResizeObserver = new ResizeObserver(onDockLayoutResize)
+    dockResizeObserver.observe(dockSurface)
+  }
   unlistenFocusInput.value = await listen('cs://workflow-focus-input', event => {
     if (event.payload && event.payload.windowLabel === settingStore.windowLabel) {
       inputAreaRef.value?.focus()
@@ -2997,6 +3239,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('resize', updateMaxWidth)
+  window.addEventListener('resize', onDockLayoutResize)
   startTodayCostRefresh()
   isInitializing.value = false
 
@@ -3005,6 +3248,14 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  dockTornDown = true
+  unlistenPlugins?.()
+  clearInterval(pluginRefreshTimer)
+  dockResizeObserver?.disconnect()
+  window.removeEventListener('resize', onDockLayoutResize)
+  // Releases every docked native view; the intent is cleared first so no queued command
+  // can resurrect one during teardown.
+  void dockCoordinator.dispose()
   if (unlistenWorkflowEvents.value) {
     unlistenWorkflowEvents.value()
   }

@@ -22,6 +22,8 @@ use chatspeed_runtime_backend::owner::builtin_agents;
 // plugin filesystem lifecycle.
 pub use chatspeed_runtime_backend::plugin_types;
 pub mod chat_hub;
+pub mod native_dock;
+pub mod plugin_ui;
 mod commands;
 use chatspeed_runtime_backend::constants;
 use chatspeed_runtime_backend::db;
@@ -283,6 +285,10 @@ pub async fn run() -> crate::error::Result<()> {
             plugin_load,
             plugin_disable,
             plugin_uninstall,
+            plugin_ui_open,
+            plugin_ui_hide,
+            plugin_ui_close,
+            plugin_ui_clear,
             // agent command
             add_agent,
             update_agent,
@@ -332,6 +338,7 @@ pub async fn run() -> crate::error::Result<()> {
             show_chat_hub_page,
             hide_chat_hub_page,
             set_chat_hub_page_width,
+            reload_chat_hub_page,
             destroy_chat_hub_page,
             get_chat_hub_view_mode,
             get_chat_hub_page_limits,
@@ -706,6 +713,26 @@ pub async fn run() -> crate::error::Result<()> {
                     {
                         chat_hub_state.release(app_handle);
                     }
+                    if app_handle.try_state::<crate::plugin_ui::PluginUiRuntime>().is_some() {
+                        let cleanup_app = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Some(runtime) =
+                                cleanup_app.try_state::<crate::plugin_ui::PluginUiRuntime>()
+                            {
+                                let _ = runtime.inner().revoke_all().await;
+                            }
+                        });
+                    }
+                    if let Some(plugin_ui_host) =
+                        app_handle.try_state::<crate::plugin_ui::PluginUiHost>()
+                    {
+                        let _ = plugin_ui_host.clear();
+                    }
+                    if let Some(dock) = app_handle.try_state::<native_dock::DockSurface>() {
+                        // The shared overlay and its native views are torn down with the window, so
+                        // only the tracked state is reset here.
+                        dock.clear(app_handle);
+                    }
                 }
             }
             _ => {
@@ -777,8 +804,12 @@ pub async fn run() -> crate::error::Result<()> {
             // The runtime owns all interactive PTYs. Desktop terminal commands
             // are typed RuntimeSupervisor adapters and keep no local process state.
             // ChatHubPageState
-            // Owns the single ChatHub page docked inside the Workflow window.
+            // Owns the docked ChatHub tabs inside the Workflow window.
             app.manage(chat_hub::ChatHubPageState::new());
+            // Shared bounded overlay every native dock view (ChatHub tab and plugin panel) uses.
+            app.manage(native_dock::DockSurface::new());
+            app.manage(crate::plugin_ui::PluginUiHost::new());
+            app.manage(crate::plugin_ui::PluginUiRuntime::default());
 
             // RuntimeSupervisor: the desktop's client relationship with the
             // standalone `chatspeed-runtime` control plane (attach-or-start,
@@ -829,6 +860,19 @@ pub async fn run() -> crate::error::Result<()> {
                         "[RuntimeSupervisor] connected to runtime at {:?}",
                         runtime_dir
                     );
+
+                    if let Some(plugin_ui_runtime) =
+                        app_handle.try_state::<crate::plugin_ui::PluginUiRuntime>()
+                    {
+                        match crate::plugin_ui::PluginUiGateway::start(supervisor.clone()).await {
+                            Ok(gateway) => {
+                                if let Err(error) = plugin_ui_runtime.set_gateway(gateway) {
+                                    log::warn!("[PluginUiGateway] unavailable: {}", error);
+                                }
+                            }
+                            Err(error) => log::warn!("[PluginUiGateway] unavailable: {}", error),
+                        }
+                    }
 
                     // Start the dedicated desktop Web MCP provider and register
                     // it with the runtime. The runtime reaches `web_fetch` and

@@ -157,6 +157,13 @@
       </div>
 
       <div class="compact-bottom-entries">
+        <PluginEntry
+          v-if="plugins.length"
+          :plugins="plugins"
+          :active-plugin-id="activePluginId"
+          @select="$emit('select-plugin', $event)"
+          @toggle="$emit('toggle-plugin')"
+          @close="$emit('close-plugin')" />
         <ChatHubEntry
           class="compact-chat-hub-entry"
           :hubs="chatHubs"
@@ -352,6 +359,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileTree from './FileTree.vue'
 import ChatHubEntry from './ChatHubEntry.vue'
+import PluginEntry from './PluginEntry.vue'
 
 const { t } = useI18n()
 
@@ -412,6 +420,8 @@ const props = defineProps({
     type: String,
     default: 'history'
   },
+  plugins: { type: Array, default: () => [] },
+  activePluginId: { type: String, default: '' },
   chatHubs: {
     type: Array,
     default: () => []
@@ -439,6 +449,9 @@ const emit = defineEmits([
   'open-editor-file',
   'open-terminal',
   'select-chat-hub',
+  'select-plugin',
+  'toggle-plugin',
+  'close-plugin',
   'toggle-chat-hub',
   'close-chat-hub',
   'update:navigationTab'

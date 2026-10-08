@@ -1,60 +1,5 @@
 <template>
   <div class="agent-skills">
-    <div v-loading="pluginStore.loading" class="card plugin-card">
-      <div class="title">
-        <span>{{ t('settings.agentSkills.pluginTitle') }}</span>
-        <el-tag v-if="pluginStore.inventory" size="small" :type="pluginStore.inventory.enabled ? 'success' : 'info'">
-          {{ pluginStore.inventory.enabled ? t('settings.agentSkills.pluginEnabled') : t('settings.agentSkills.pluginDisabled') }}
-        </el-tag>
-      </div>
-      <p class="hint">{{ t('settings.agentSkills.pluginHint') }}</p>
-      <el-alert
-        v-if="pluginStore.lastError"
-        class="alert"
-        type="error"
-        :closable="false"
-        :title="pluginStore.lastError" />
-      <div v-if="pluginStore.inventory" class="plugin-meta">
-        <span>{{ pluginStore.inventory.plugin_id }}@{{ pluginStore.inventory.version || '-' }}</span>
-        <span>{{ pluginStore.inventory.root }}</span>
-        <span>{{ pluginStore.inventory.host?.host }}</span>
-      </div>
-      <div v-if="pluginStore.inventory" class="buttons">
-        <el-button
-          v-if="!pluginStore.inventory?.installed"
-          type="primary"
-          size="small"
-          :loading="pluginStore.applying"
-          @click="installPlugin">
-          {{ t('settings.agentSkills.pluginInstall') }}
-        </el-button>
-        <el-button
-          v-else-if="pluginStore.inventory.enabled"
-          size="small"
-          :loading="pluginStore.applying"
-          @click="disablePlugin">
-          {{ t('settings.agentSkills.pluginDisable') }}
-        </el-button>
-        <el-button
-          v-else
-          type="primary"
-          size="small"
-          :loading="pluginStore.applying"
-          @click="installPlugin">
-          {{ t('settings.agentSkills.pluginEnable') }}
-        </el-button>
-        <el-button
-          v-if="pluginStore.inventory?.installed"
-          type="danger"
-          plain
-          size="small"
-          :loading="pluginStore.applying"
-          @click="uninstallPlugin">
-          {{ t('settings.agentSkills.pluginUninstall') }}
-        </el-button>
-      </div>
-    </div>
-
     <div class="card">
       <div class="title">
         <span>{{ t('settings.agentSkills.title') }}</span>
@@ -319,11 +264,9 @@ import { ElMessage } from 'element-plus';
 
 import { mutationOutcomes, verdictAllowsInstall } from '@/libs/capability.js';
 import { useCapabilityStore } from '@/stores/capability';
-import { usePluginStore } from '@/stores/plugin';
 
 const { t } = useI18n();
 const store = useCapabilityStore();
-const pluginStore = usePluginStore();
 
 const sourceKind = ref('local_directory');
 const sourcePath = ref('');
@@ -458,40 +401,8 @@ async function uninstall(row) {
   }
 }
 
-async function loadPlugin() {
-  try {
-    await pluginStore.loadInventory();
-  } catch (error) {
-    ElMessage.error(error.message);
-  }
-}
-
-async function installPlugin() {
-  try {
-    await pluginStore.install();
-  } catch (error) {
-    ElMessage.error(error.message);
-  }
-}
-
-async function disablePlugin() {
-  try {
-    await pluginStore.disable();
-  } catch (error) {
-    ElMessage.error(error.message);
-  }
-}
-
-async function uninstallPlugin() {
-  try {
-    await pluginStore.uninstall();
-  } catch (error) {
-    ElMessage.error(error.message);
-  }
-}
-
 onMounted(async () => {
-  await Promise.all([rescan(), loadPlugin()]);
+  await rescan();
   // Selected by default: the ChatSpeed directory only, never an external tool.
   selection.value = [...store.defaultSelection];
 });
@@ -553,16 +464,6 @@ onMounted(async () => {
     flex-direction: column;
     gap: var(--cs-space-sm);
     margin-top: var(--cs-space-sm);
-  }
-
-  .plugin-meta {
-    display: flex;
-    flex-direction: column;
-    gap: var(--cs-space-xs);
-    margin-bottom: var(--cs-space-sm);
-    color: var(--cs-text-color-secondary);
-    font-size: 12px;
-    overflow-wrap: anywhere;
   }
 
   .buttons {

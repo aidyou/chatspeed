@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { parseCapabilityError } from '../../libs/capability.js'
 
 const component = readFileSync(new URL('./AgentSkills.vue', import.meta.url), 'utf8')
+const plugin = readFileSync(new URL('./Plugin.vue', import.meta.url), 'utf8')
 const general = readFileSync(new URL('./General.vue', import.meta.url), 'utf8')
 const settings = readFileSync(new URL('../../views/Settings.vue', import.meta.url), 'utf8')
 
@@ -17,6 +18,19 @@ const locales = ['en', 'zh-Hans', 'zh-Hant'].map(name => ({
   )
 }))
 
+const pluginStoreSource = readFileSync(new URL('../../stores/plugin.js', import.meta.url), 'utf8')
+
+/**
+ * Loads the store module in an isolated context against a mock `invoke`, so the
+ * forwarding contract can be exercised without Tauri or a live runtime.
+ */
+function loadPluginStore(invoke) {
+  return runInNewContext(
+    pluginStoreSource.replace(/^import .*\n/gm, '').replace('export const usePluginStore', 'const usePluginStore') + '\nusePluginStore',
+    { defineStore, ref, computed, parseCapabilityError, invoke }
+  )
+}
+
 test('the Agent Skills page is separate from the prompt Skill page', () => {
   // File-based Agent Skills never share the database prompt skill store.
   assert.doesNotMatch(component, /useSkillStore|stores\/skill/)
@@ -24,8 +38,9 @@ test('the Agent Skills page is separate from the prompt Skill page', () => {
   // The prompt page keeps its own menu entry, and the new page is additive.
   assert.match(settings, /id: 'skill'/)
   assert.match(general, /v-model="generalTab"/)
-  assert.match(general, /name="agentSkills"/)
-  assert.match(general, /<agent-skills \/>/)
+  assert.doesNotMatch(general, /name="agentSkills"|<agent-skills \/>/)
+  assert.match(settings, /id: 'plugin'/)
+  assert.match(settings, /<plugin \/>/)
   assert.doesNotMatch(settings, /id: 'agentSkills'/)
 })
 
@@ -46,12 +61,13 @@ test('check, install and uninstall all go through the capability service', () =>
 
 test('plugin lifecycle stays behind the runtime forwarding surface', () => {
   const pluginStore = readFileSync(new URL('../../stores/plugin.js', import.meta.url), 'utf8')
-  assert.match(component, /usePluginStore/)
+  assert.doesNotMatch(component, /usePluginStore|pluginStore/)
+  assert.match(plugin, /usePluginStore/)
   for (const command of ['plugin_inventory', 'plugin_load', 'plugin_disable', 'plugin_uninstall']) {
     assert.match(pluginStore, new RegExp(`'${command}'`))
   }
   assert.doesNotMatch(pluginStore, /agent_skills_plugin_|readFile|writeFile|fetch\(/)
-  assert.match(component, /pluginStore\.loadInventory\(\)/)
+  assert.match(plugin, /pluginStore\.loadInventory\(\)/)
 })
 
 test('source documents use the strict backend SkillSource DTO', () => {
@@ -65,38 +81,129 @@ test('source documents use the strict backend SkillSource DTO', () => {
   assert.doesNotMatch(component, /reference: githubRef/)
 })
 test('plugin store executes only runtime forwarding commands and reconciles responses', async () => {
-  const source = readFileSync(new URL('../../stores/plugin.js', import.meta.url), 'utf8')
-  assert.match(source, /import \{ invoke \} from '@tauri-apps\/api\/core'/)
+  assert.match(pluginStoreSource, /import \{ invoke \} from '@tauri-apps\/api\/core'/)
   setActivePinia(createPinia())
   const calls = []
   let failure = null
-  const useStore = runInNewContext(
-    source.replace(/^import .*\n/gm, '').replace('export const usePluginStore', 'const usePluginStore') + '\nusePluginStore',
-    {
-      defineStore, ref, parseCapabilityError,
-      invoke: async command => {
-        calls.push(command)
-        if (failure) throw failure
-        return { installed: command !== 'plugin_uninstall', enabled: command === 'plugin_load' }
-      }
-    }
-  )
+  const useStore = loadPluginStore(async command => {
+    calls.push(command)
+    if (failure) throw failure
+    const state = command === 'plugin_uninstall'
+      ? 'not_installed'
+      : command === 'plugin_disable'
+        ? 'disabled'
+        : 'enabled'
+    return { schema_version: 1, plugins: [{ id: 'agent-skills', kind: 'builtin', state }] }
+  })
   const store = useStore()
   await store.loadInventory()
   await store.install()
-  assert.equal(store.inventory.enabled, true)
+  assert.equal(store.plugins[0].state, 'enabled')
   await store.disable()
-  assert.equal(store.inventory.enabled, false)
+  assert.equal(store.plugins[0].state, 'disabled')
   await store.uninstall()
-  assert.equal(store.inventory.installed, false)
+  assert.equal(store.plugins[0].state, 'not_installed')
   assert.deepEqual(calls, ['plugin_inventory', 'plugin_load', 'plugin_disable', 'plugin_uninstall'])
   failure = JSON.stringify({ code: 'unavailable', message: 'runtime unavailable' })
   await assert.rejects(store.install(), error => error.code === 'unavailable')
   assert.equal(store.lastError, 'runtime unavailable')
   assert.equal(store.applying, false)
+  // A failed mutation keeps the last authoritative snapshot instead of guessing.
+  assert.equal(store.plugins[0].state, 'not_installed')
   await assert.rejects(store.loadInventory(), error => error.code === 'unavailable')
   assert.equal(store.loading, false)
-  assert.match(component, /v-if="pluginStore.inventory" class="buttons"/)
+  // A read the runtime could not answer is not a valid snapshot: fail closed.
+  assert.equal(store.inventory, null)
+  assert.doesNotMatch(component, /v-if="pluginStore.inventory" class="buttons"/)
+  assert.match(plugin, /v-for="plugin in pluginStore.builtinPlugins"/)
+})
+
+test('verified UI plugins require enabled and verified, and hide on any failure', async () => {
+  setActivePinia(createPinia())
+  let failure = null
+  const store = loadPluginStore(async () => {
+    if (failure) throw failure
+    return {
+      schema_version: 1,
+      plugins: [
+        { id: 'ready', kind: 'builtin', state: 'enabled', ui: { entry: 'a', verified: true } },
+        { id: 'off', kind: 'builtin', state: 'disabled', ui: { entry: 'b', verified: true } },
+        { id: 'unverified', kind: 'builtin', state: 'enabled', ui: { entry: 'c', verified: false } },
+        { id: 'external', kind: 'external', state: 'enabled', ui: { entry: 'd', verified: true } }
+      ]
+    }
+  })()
+  await store.loadInventory()
+  assert.deepEqual(store.verifiedUiPlugins.map(plugin => plugin.id), ['ready'])
+
+  // A failed mutation keeps the snapshot but hides the UI behind lastError.
+  failure = JSON.stringify({ code: 'unavailable', message: 'runtime unavailable' })
+  await assert.rejects(store.disable(), error => error.code === 'unavailable')
+  assert.equal(store.plugins.length, 4, 'the last snapshot is retained')
+  assert.equal(store.verifiedUiPlugins.length, 0, 'a failed mutation hides the surface')
+
+  // A later successful read clears the error and restores the verified list.
+  failure = null
+  await store.loadInventory()
+  assert.equal(store.lastError, null)
+  assert.deepEqual(store.verifiedUiPlugins.map(plugin => plugin.id), ['ready'])
+})
+
+test('a slow refresh cannot overwrite a newer mutation snapshot', async () => {
+  setActivePinia(createPinia())
+  const pending = []
+  const store = loadPluginStore(command => new Promise((resolve, reject) => {
+    pending.push({ command, resolve, reject })
+  }))()
+
+  const refresh = store.loadInventory()
+  const mutation = store.install()
+  assert.deepEqual(pending.map(entry => entry.command), ['plugin_inventory', 'plugin_load'])
+
+  pending[1].resolve({
+    schema_version: 1,
+    plugins: [{ id: 'agent-skills', kind: 'builtin', state: 'enabled', ui: { verified: true } }]
+  })
+  await mutation
+  assert.equal(store.plugins[0].state, 'enabled')
+
+  // The earlier refresh resolves last with a stale disabled snapshot.
+  pending[0].resolve({
+    schema_version: 1,
+    plugins: [{ id: 'agent-skills', kind: 'builtin', state: 'disabled', ui: { verified: true } }]
+  })
+  const settled = await refresh
+  assert.equal(store.plugins[0].state, 'enabled', 'the stale refresh must not overwrite the mutation')
+  assert.equal(settled, store.inventory)
+})
+
+test('polls cannot overtake an active mutation or overlap another inventory read', async () => {
+  setActivePinia(createPinia())
+  const pending = []
+  const store = loadPluginStore(command => new Promise(resolve => pending.push({ command, resolve })))()
+  const mutation = store.disable()
+  await store.loadInventory()
+  assert.deepEqual(pending.map(item => item.command), ['plugin_disable'])
+  pending[0].resolve({ schema_version: 1, plugins: [{ id: 'agent-skills', kind: 'builtin', state: 'disabled' }] })
+  await mutation
+  assert.equal(store.plugins[0].state, 'disabled')
+  const read = store.loadInventory()
+  await store.loadInventory()
+  assert.deepEqual(pending.map(item => item.command), ['plugin_disable', 'plugin_inventory'])
+  pending[1].resolve({ schema_version: 1, plugins: [] })
+  await read
+  assert.equal(store.loading, false)
+  assert.match(plugin, /:title="t\('settings.plugin.operationFailed'\)"/)
+  assert.doesNotMatch(plugin, /:title="pluginStore.lastError"/)
+})
+
+test('the store exposes only the collection views the UI consumes', async () => {
+  setActivePinia(createPinia())
+  const store = loadPluginStore(async () => ({ schema_version: 1, plugins: [] }))()
+  // The single-plugin compatibility getters have no consumer and were removed.
+  assert.equal(store.plugin, undefined)
+  assert.equal(store.installed, undefined)
+  assert.equal(store.enabled, undefined)
 })
 
 test('source adapter generates canonical JSON for directory, ZIP and GitHub', () => {
@@ -205,5 +312,39 @@ test('every permission the checker can report has a label', () => {
       [...reported].sort(),
       `${locale.name} is missing permission labels`
     )
+  }
+})
+
+test('plugin management contains only plugin lifecycle and status, not skill management', () => {
+  assert.doesNotMatch(plugin, /AgentSkills|agent-skills|useCapabilityStore|stores\/capability/)
+  assert.doesNotMatch(plugin, /useSkillStore|stores\/skill/)
+  assert.match(plugin, /usePluginStore/)
+  for (const action of ['install', 'enable', 'disable', 'uninstall']) {
+    assert.match(plugin, new RegExp(`@click="${action}"`))
+  }
+})
+
+test('every locale defines the same settings.plugin and workflow.plugin surfaces', () => {
+  const requiredWorkflowKeys = ['title', 'empty', 'close', 'hide', 'openFailed', 'reload', 'newTab']
+  const settingsReference = Object.keys(locales[0].messages.settings.plugin)
+  const workflowReference = Object.keys(locales[0].messages.workflow.plugin)
+
+  assert.deepEqual(settingsReference, [...settingsReference].sort(), 'settings.plugin keys are not sorted')
+  assert.deepEqual(workflowReference, [...workflowReference].sort(), 'workflow.plugin keys are not sorted')
+  assert.deepEqual(workflowReference, [...requiredWorkflowKeys].sort())
+
+  for (const locale of locales) {
+    const settingsPlugin = locale.messages.settings.plugin
+    const workflowPlugin = locale.messages.workflow.plugin
+    assert.deepEqual(Object.keys(settingsPlugin), settingsReference, `${locale.name} settings.plugin surface differs`)
+    assert.deepEqual(Object.keys(workflowPlugin), workflowReference, `${locale.name} workflow.plugin surface differs`)
+    assert.deepEqual(Object.keys(settingsPlugin), [...Object.keys(settingsPlugin)].sort(), `${locale.name} settings.plugin keys are not sorted`)
+    assert.deepEqual(Object.keys(workflowPlugin), [...Object.keys(workflowPlugin)].sort(), `${locale.name} workflow.plugin keys are not sorted`)
+    for (const [path, messages] of [['settings.plugin', settingsPlugin], ['workflow.plugin', workflowPlugin]]) {
+      for (const [key, value] of flatten(messages)) {
+        assert.equal(typeof value, 'string', `${locale.name}.${path}.${key} must be a string`)
+        assert.notEqual(value.trim(), '', `${locale.name}.${path}.${key} must not be empty`)
+      }
+    }
   }
 })

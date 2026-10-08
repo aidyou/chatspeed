@@ -22,6 +22,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+#[cfg(feature = "plugin-service")]
+use axum::body::Body;
+#[cfg(feature = "plugin-service")]
+use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG};
 use axum::{Json, Router};
 use chatspeed_contracts::workflow::{
     WorkflowCreateRequest, WorkflowEventsQuery, WorkflowStartRequest,
@@ -841,6 +845,10 @@ fn build_router(state: ControlPlaneState) -> Router {
         .route(
             "/control/v1/plugins/agent-skills/load",
             post(load_agent_skills_plugin),
+        )
+        .route(
+            "/control/v1/plugins/{plugin_id}/ui/{*asset_path}",
+            get(get_plugin_ui_asset),
         )
         .route(
             "/control/v1/plugins/agent-skills/disable",
@@ -1767,6 +1775,29 @@ async fn get_agent_skills_plugin(State(state): State<ControlPlaneState>) -> Resp
     match state.svc.plugin().inventory() {
         Ok(inventory) => snake_json_response(serde_json::to_value(&inventory)),
         Err(error) => plugin_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/plugins/{plugin_id}/ui/{asset_path}` — a verified static UI asset.
+#[cfg(feature = "plugin-service")]
+async fn get_plugin_ui_asset(
+    State(state): State<ControlPlaneState>,
+    Path((plugin_id, asset_path)): Path<(String, String)>,
+) -> Response {
+    match state.svc.plugin().read_ui_asset(&plugin_id, &asset_path) {
+        Ok(asset) => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, asset.content_type)
+            .header(CACHE_CONTROL, "no-store")
+            .header(CONTENT_SECURITY_POLICY, "default-src 'self'; object-src 'none'; base-uri 'none'")
+            .header(ETAG, format!("\"{}\"", asset.content_digest))
+            .body(Body::from(asset.bytes))
+            .unwrap_or_else(|_| dto::error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "failed to build plugin UI response".to_string())),
+        Err(_) => dto::error_response(
+            StatusCode::NOT_FOUND,
+            "plugin_ui_refused",
+            "the plugin UI resource is unavailable".to_string(),
+        ),
     }
 }
 
@@ -3664,8 +3695,10 @@ mod tests {
             .expect("inventory");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("inventory json");
-        assert_eq!(inventory["plugin_id"], "agent-skills");
-        assert_eq!(inventory["installed"], serde_json::json!(false));
+        assert_eq!(inventory["schema_version"], 1);
+        assert_eq!(inventory["plugins"][0]["id"], "agent-skills");
+        assert_eq!(inventory["plugins"][0]["kind"], "builtin");
+        assert_eq!(inventory["plugins"][0]["state"], "not_installed");
         assert!(!plugin_dir.exists());
 
         // Every mutation requires an idempotency key.
@@ -3690,9 +3723,10 @@ mod tests {
             .expect("load");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("load json");
-        assert_eq!(inventory["installed"], serde_json::json!(true));
-        assert_eq!(inventory["enabled"], serde_json::json!(true));
-        assert_eq!(inventory["version"], "0.1.0");
+        assert_eq!(inventory["plugins"][0]["state"], "enabled");
+        assert_eq!(inventory["plugins"][0]["version"], "0.1.0");
+        assert_eq!(inventory["plugins"][0]["ui"]["verified"], true);
+        assert_eq!(inventory["plugins"][0]["ui"]["entry"], "index.html");
         assert!(plugin_dir.join("plugin.json").is_file());
         assert!(plugin_dir.join("index.html").is_file());
 
@@ -3707,8 +3741,7 @@ mod tests {
             .expect("disable");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("disable json");
-        assert_eq!(inventory["installed"], serde_json::json!(true));
-        assert_eq!(inventory["enabled"], serde_json::json!(false));
+        assert_eq!(inventory["plugins"][0]["state"], "disabled");
         assert!(plugin_dir.join("index.html").is_file());
 
         // Uninstall removes only the plugin-owned bundle.
@@ -3722,8 +3755,88 @@ mod tests {
             .expect("uninstall");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("uninstall json");
-        assert_eq!(inventory["installed"], serde_json::json!(false));
+        assert_eq!(inventory["plugins"][0]["state"], "not_installed");
         assert!(!plugin_dir.exists());
+    }
+
+    #[cfg(feature = "plugin-service")]
+    #[tokio::test]
+    async fn plugin_ui_route_serves_only_verified_enabled_assets() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+        let route = "/control/v1/plugins/agent-skills/ui/index.html";
+
+        let response = http
+            .get(auth_url(&app, route))
+            .send()
+            .await
+            .expect("unauthenticated asset request");
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/load"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-ui-load")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("load");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        let response = http
+            .get(auth_url(&app, route))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("asset request");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/html; charset=utf-8");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().contains_key("content-security-policy"));
+        let body = response.text().await.expect("asset body");
+        assert!(body.contains("Agent Skills"));
+
+        for path in [
+            "/control/v1/plugins/unknown/ui/index.html",
+            "/control/v1/plugins/agent-skills/ui/missing.html",
+            "/control/v1/plugins/agent-skills/ui/../plugin.json",
+            "/control/v1/plugins/agent-skills/ui/%2e%2e%2fplugin.json",
+            "/control/v1/plugins/agent-skills/ui/%252e%252e%252fplugin.json",
+            "/control/v1/plugins/agent-skills/ui/C:%5cWindows%5csystem.ini",
+            "/control/v1/plugins/agent-skills/ui/%2fetc%2fpasswd",
+        ] {
+            let response = http
+                .get(auth_url(&app, path))
+                .header("Authorization", &auth)
+                .send()
+                .await
+                .expect("invalid asset request");
+            assert!(
+                response.status() == reqwest::StatusCode::CONFLICT
+                    || response.status() == reqwest::StatusCode::NOT_FOUND
+            );
+        }
+
+        let response = http
+            .post(auth_url(&app, "/control/v1/plugins/agent-skills/disable"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "plugin-ui-disable")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .expect("disable");
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let response = http
+            .get(auth_url(&app, route))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .expect("disabled asset request");
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+        let refusal = response.text().await.expect("refusal body");
+        assert!(!refusal.contains("/plugins/"));
+        assert!(refusal.contains("plugin_ui_refused"));
     }
 
     /// A plugin mutation takes no parameters: the body must be empty or an empty
@@ -3806,7 +3919,7 @@ mod tests {
             .expect("first load");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let first: serde_json::Value = response.json().await.expect("first load json");
-        assert_eq!(first["enabled"], serde_json::json!(true));
+        assert_eq!(first["plugins"][0]["state"], "enabled");
 
         let response = http
             .post(auth_url(&app, "/control/v1/plugins/agent-skills/disable"))
@@ -3838,10 +3951,10 @@ mod tests {
             .expect("inventory");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("inventory json");
-        assert_eq!(inventory["installed"], serde_json::json!(true));
+        assert_eq!(inventory["plugins"][0]["state"], "disabled");
         assert_eq!(
-            inventory["enabled"],
-            serde_json::json!(false),
+            inventory["plugins"][0]["state"],
+            "disabled",
             "a replayed load must not re-enable the bundle"
         );
         assert!(plugin_dir.join("index.html").is_file());
@@ -3894,7 +4007,7 @@ mod tests {
             .expect("inventory");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("inventory json");
-        assert_eq!(inventory["installed"], serde_json::json!(false));
+        assert_eq!(inventory["plugins"][0]["state"], "not_installed");
 
         assert!(
             skills.join("SKILL.md").is_file(),
@@ -4042,7 +4155,7 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let inventory: serde_json::Value = response.json().await.expect("inventory json");
         let plugin_dir = home.join("plugins").join("agent-skills");
-        if inventory["installed"] == serde_json::json!(true) {
+        if inventory["plugins"][0]["state"] != "not_installed" {
             assert!(plugin_dir.join("index.html").is_file());
         } else {
             assert!(!plugin_dir.exists());

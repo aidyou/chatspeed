@@ -275,6 +275,18 @@ pub const CLIENT_REGISTER_PATH: &str = "/control/v1/clients/register";
 /// `POST` route that lists the models a provider exposes.
 pub const MODELS_LIST_PATH: &str = "/control/v1/models/list";
 
+/// The only plugin whose static UI the runtime's resource route exposes.
+///
+/// The control plane refuses every other id, so the client pins the same value
+/// instead of accepting an arbitrary caller id.
+pub const PLUGIN_UI_PLUGIN_ID: &str = "agent-skills";
+
+/// Upper bound on one plugin UI asset read from the runtime, in bytes.
+///
+/// The runtime serves a small, compile-time embedded bundle; the client refuses
+/// a body larger than this instead of buffering an unbounded response.
+pub const PLUGIN_UI_ASSET_MAX_BYTES: usize = 2 * 1024 * 1024;
+
 /// `POST` route prefix for the allowlisted runtime data commands.
 ///
 /// The command set is the runtime's explicit allowlist; this client only ever
@@ -640,6 +652,18 @@ impl fmt::Debug for RuntimeClient {
     }
 }
 
+/// A verified static plugin UI asset pulled from the runtime's control plane.
+///
+/// Only the asset bytes and the runtime-declared `Content-Type` are surfaced;
+/// the runtime's transport headers never reach the caller.
+#[derive(Debug, Clone)]
+pub struct PluginUiAssetResponse {
+    /// The raw asset bytes.
+    pub bytes: Vec<u8>,
+    /// The runtime-declared media type.
+    pub content_type: String,
+}
+
 impl RuntimeClient {
     /// Builds a client for a discovery document, validating it first.
     pub fn new(discovery: &ControlPlaneDiscovery) -> Result<Self, ClientError> {
@@ -711,6 +735,74 @@ impl RuntimeClient {
             .await
             .map_err(transport_error)?;
         decode(response).await
+    }
+
+    /// `GET`s one verified static plugin UI asset as raw bytes.
+    ///
+    /// The route is fixed (`/control/v1/plugins/{plugin}/ui/{path}`) and the
+    /// plugin id is pinned, so a caller can only ever name an asset of the
+    /// built-in bundle. `asset_path` must be a safe relative path: an absolute
+    /// path, a `..` traversal, a percent-encoded or backslash separator, a query
+    /// or fragment, or a control character is refused before any request leaves
+    /// the process. The bearer token, `no_proxy` and the no-redirect policy come
+    /// from [`RuntimeClient::build`]. The response is read in bounded chunks, so
+    /// a body over [`PLUGIN_UI_ASSET_MAX_BYTES`] is rejected instead of
+    /// buffered, and a non-200 reply maps to a redacted [`ClientError`].
+    pub async fn get_plugin_ui_asset(
+        &self,
+        plugin_id: &str,
+        asset_path: &str,
+    ) -> Result<PluginUiAssetResponse, ClientError> {
+        if plugin_id != PLUGIN_UI_PLUGIN_ID {
+            return Err(ClientError::InvalidRequest(
+                "plugin UI assets are only served for the built-in agent-skills bundle".to_string(),
+            ));
+        }
+        if !is_safe_ui_asset_path(asset_path) {
+            return Err(ClientError::InvalidRequest(
+                "plugin UI asset path is not a safe relative path".to_string(),
+            ));
+        }
+        let path = format!(
+            "/control/v1/plugins/{}/ui/{}",
+            PLUGIN_UI_PLUGIN_ID, asset_path
+        );
+        let mut response = self
+            .build(Method::GET, &path)?
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(error_from_status(status, &body));
+        }
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        if let Some(length) = response.content_length() {
+            if length > PLUGIN_UI_ASSET_MAX_BYTES as u64 {
+                return Err(ClientError::Transport(format!(
+                    "plugin UI asset exceeds the {PLUGIN_UI_ASSET_MAX_BYTES} byte limit"
+                )));
+            }
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+            if bytes.len() + chunk.len() > PLUGIN_UI_ASSET_MAX_BYTES {
+                return Err(ClientError::Transport(format!(
+                    "plugin UI asset exceeds the {PLUGIN_UI_ASSET_MAX_BYTES} byte limit"
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(PluginUiAssetResponse {
+            bytes,
+            content_type,
+        })
     }
 
     /// Performs a `POST` with a JSON body and decodes the JSON response.
@@ -1671,6 +1763,37 @@ pub fn chat_events_path(chat_id: &str) -> String {
     format!("/control/v1/chats/{}/events", encode_path_segment(chat_id))
 }
 
+/// Returns whether `path` is a safe, relative plugin UI asset path.
+///
+/// The runtime route carries this value as a wildcard segment, so the client
+/// rejects anything that could escape the bundle root or smuggle a second
+/// request: an empty path, an absolute path, a `..` traversal, a backslash or
+/// percent-encoded separator, a query or fragment, a control character, or any
+/// byte outside a conservative allowlist. Only `/`, `.`, `-`, `_` and ASCII
+/// alphanumerics survive, which the embedded bundle uses exclusively.
+///
+/// Exposed so the desktop plugin UI gateway applies the same rule without a
+/// second, drifting copy.
+pub fn is_safe_ui_asset_path(path: &str) -> bool {
+    if path.is_empty() || path.len() > 1024 {
+        return false;
+    }
+    if path.starts_with('/') {
+        return false;
+    }
+    if path.contains('\\') || path.contains('%') || path.contains('?') || path.contains('#') {
+        return false;
+    }
+    if path.contains("..") {
+        return false;
+    }
+    if path.chars().any(|ch| ch.is_control()) {
+        return false;
+    }
+    path.chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+}
+
 /// Percent-encodes one path segment so a client id cannot escape its route slot.
 fn encode_path_segment(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
@@ -2554,6 +2677,170 @@ mod tests {
             stream.timeout().is_none(),
             "a stream must not carry a total timeout"
         );
+    }
+
+    // -- plugin UI assets ---------------------------------------------------
+
+    #[tokio::test]
+    async fn plugin_ui_asset_requires_the_builtin_plugin_and_a_safe_relative_path() {
+        let server = FakeServer::start(|_| http_response("200 OK", "unused")).await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+
+        let unsafe_paths = [
+            "",
+            "/etc/passwd",
+            "../plugin.json",
+            "assets/../../plugin.json",
+            "a\\b",
+            "a%b",
+            "index.html?x=1",
+            "index.html#frag",
+            "index.html\u{7}",
+            "a:b",
+            "index html",
+        ];
+        for path in unsafe_paths {
+            let error = client
+                .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, path)
+                .await
+                .expect_err("an unsafe asset path must be refused");
+            assert!(
+                matches!(error, ClientError::InvalidRequest(_)),
+                "path {path:?} produced {error:?}"
+            );
+        }
+
+        let error = client
+            .get_plugin_ui_asset("other-plugin", "index.html")
+            .await
+            .expect_err("a foreign plugin id must be refused");
+        assert!(matches!(error, ClientError::InvalidRequest(_)));
+
+        assert!(
+            server.requests().is_empty(),
+            "no request may leave the process for a refused asset"
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_ui_asset_fetches_raw_bytes_and_content_type() {
+        let body: &[u8] = b"<html></html>";
+        let server = FakeServer::start(move |_| {
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend_from_slice(body);
+            response
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+
+        let asset = client
+            .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, "index.html")
+            .await
+            .expect("asset");
+        assert_eq!(asset.bytes, body);
+        assert_eq!(asset.content_type, "text/html; charset=utf-8");
+
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(
+            requests[0].path,
+            "/control/v1/plugins/agent-skills/ui/index.html"
+        );
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer test-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_ui_asset_rejects_a_non_200_response() {
+        let server = FakeServer::start(|_| {
+            http_response(
+                "404 Not Found",
+                r#"{"error":{"code":"not_found","message":"the plugin UI asset is not declared"}}"#,
+            )
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+
+        let error = client
+            .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, "missing.html")
+            .await
+            .expect_err("a non-200 reply must be refused");
+        match error {
+            ClientError::Server { status, .. } => assert_eq!(status, 404),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_ui_asset_does_not_follow_redirects() {
+        let server = FakeServer::start(|_| {
+            b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec()
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+
+        let error = client
+            .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, "index.html")
+            .await
+            .expect_err("a redirect must not be followed");
+        match error {
+            ClientError::Server { status, .. } => assert_eq!(status, 302),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(
+            server.requests().len(),
+            1,
+            "a redirect must never be followed to a second request"
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_ui_asset_enforces_the_size_limit() {
+        // A declared length over the limit is refused before the body is read.
+        let declared = PLUGIN_UI_ASSET_MAX_BYTES + 1;
+        let server = FakeServer::start(move |_| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+            )
+            .into_bytes()
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+        let error = client
+            .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, "index.html")
+            .await
+            .expect_err("an over-limit declared length must be refused");
+        assert!(matches!(error, ClientError::Transport(_)), "{error:?}");
+
+        // A body with no declared length is bounded by the incremental reader.
+        let server = FakeServer::start(|_| {
+            let mut response =
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
+                    .to_vec();
+            response.extend(std::iter::repeat(b'a').take(PLUGIN_UI_ASSET_MAX_BYTES + 1));
+            response
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::new(&document).expect("client");
+        let error = client
+            .get_plugin_ui_asset(PLUGIN_UI_PLUGIN_ID, "index.html")
+            .await
+            .expect_err("an over-limit chunked body must be refused");
+        assert!(matches!(error, ClientError::Transport(_)), "{error:?}");
     }
 
     // -- transport ----------------------------------------------------------
