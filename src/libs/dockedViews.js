@@ -112,6 +112,7 @@ export function createDockedViewsCoordinator({ chatHub, plugin, onError } = {}) 
     return JSON.stringify({
       active: snapshot.activeTabId || '',
       width: geometry.width ?? null,
+      cornerRadius: geometry.cornerRadius ?? 0,
       bounds: geometry.bounds || null,
       tabs: snapshot.tabs.map(tab => [
         tab.kind,
@@ -132,7 +133,12 @@ export function createDockedViewsCoordinator({ chatHub, plugin, onError } = {}) 
           cornerRadius: geometry.cornerRadius,
           bounds: geometry.bounds
         }
-      : { pluginId: tab.pluginId, entry: tab.entry, bounds: geometry.bounds }
+      : {
+          pluginId: tab.pluginId,
+          entry: tab.entry,
+          bounds: geometry.bounds,
+          cornerRadius: geometry.cornerRadius
+        }
 
   /**
    * Signature of just the visible tab and the geometry. A snapshot that only changed a
@@ -146,6 +152,7 @@ export function createDockedViewsCoordinator({ chatHub, plugin, onError } = {}) 
       tab.pluginId || '',
       tab.entry || '',
       geometry.width ?? null,
+      geometry.cornerRadius ?? 0,
       geometry.bounds || null
     ])
 

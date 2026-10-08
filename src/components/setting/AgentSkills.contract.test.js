@@ -4,6 +4,7 @@ import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { ref, computed } from 'vue'
+import { compileStyleAsync, compileTemplate, parse as parseSfc } from 'vue/compiler-sfc'
 import { parseCapabilityError } from '../../libs/capability.js'
 
 const component = readFileSync(new URL('./AgentSkills.vue', import.meta.url), 'utf8')
@@ -347,4 +348,105 @@ test('every locale defines the same settings.plugin and workflow.plugin surfaces
       }
     }
   }
+})
+
+test('the page adapts to the dock container width, never the window viewport', () => {
+  // A named inline-size container is the width the dock actually hands the page, so the
+  // layout reacts to the panel and not to whatever size the whole application window has.
+  assert.match(component, /container-name:\s*agent-skills/)
+  assert.match(component, /container-type:\s*inline-size/)
+  assert.match(component, /@container agent-skills \(max-width: 860px\)/)
+  assert.match(component, /@container agent-skills \(max-width: 480px\)/)
+  // Viewport media queries would answer the wrong question and are deliberately absent.
+  assert.doesNotMatch(component, /@media\b/)
+})
+
+test('each wide table collapses into a full-data card list inside a narrow container', () => {
+  // Findings, outcomes and installed skills are the three tables that cannot fit 600px.
+  assert.equal((component.match(/<el-table[^>]*skill-table/g) || []).length, 3)
+  assert.equal((component.match(/<ul[^>]*class="[^"]*skill-cards/g) || []).length, 3)
+
+  // The cards mirror every findings column instead of dropping any of them.
+  for (const field of ['severity', 'rule', 'path', 'detail']) {
+    assert.match(component, new RegExp(`prop="${field}"`), `missing findings column ${field}`)
+    assert.match(component, new RegExp(`row\\.${field}\\b`), `missing card value ${field}`)
+  }
+
+  // Outcomes keep their target, status tag and detail, including the install path fallback.
+  assert.match(component, /prop="target_id"/)
+  assert.match(component, /statusTagType\(row\.status\)/)
+  assert.match(component, /row\.detail \|\| row\.install_path \|\| '-'/)
+
+  // Installed skills keep name, source, target, every state tag and the uninstall action.
+  for (const field of ['name', 'source']) {
+    assert.match(component, new RegExp(`prop="${field}"`), `missing installed column ${field}`)
+    assert.match(component, new RegExp(`row\\.${field}\\b`), `missing card value ${field}`)
+  }
+  for (const state of ['protected', 'managed', 'drifted', 'present']) {
+    assert.match(component, new RegExp(`row\\.${state}\\b`), `missing state tag ${state}`)
+  }
+  // The card uninstall is the same gated and loading-aware control, never an unconditional one.
+  assert.equal((component.match(/:disabled="!row\.uninstallable"/g) || []).length, 2)
+  assert.equal(
+    (component.match(/:loading="store\.applying"/g) || []).length >= 2,
+    true,
+    'the uninstall controls keep their loading state'
+  )
+  assert.match(component, /v-loading="store\.loading"/)
+})
+
+test('the desktop tables and their column widths are preserved', () => {
+  // The card lists are hidden until the container is measured narrow.
+  assert.match(component, /\.skill-cards\s*\{[^}]*display:\s*none/)
+  const compact = component.slice(
+    component.indexOf('@container agent-skills (max-width: 860px)'),
+    component.indexOf('@container agent-skills (max-width: 480px)')
+  )
+  assert.match(compact, /\.skill-table\s*\{\s*display:\s*none/)
+  // The fixed widths that define the wide desktop tables are unchanged.
+  for (const width of [110, 220, 140, 160, 180, 120]) {
+    assert.match(component, new RegExp(`width="${width}"`), `missing table width ${width}`)
+  }
+})
+
+test('long values and narrow form controls wrap instead of overflowing the page', () => {
+  // Paths and other unbreakable values are allowed to break inside their card.
+  assert.match(component, /\.skill-cards__value\s*\{[^}]*overflow-wrap:\s*anywhere/)
+  assert.match(component, /list-style:\s*none/)
+  const narrow = component.slice(component.indexOf('@container agent-skills (max-width: 480px)'))
+  // The narrow breakpoint stacks the checkbox targets and the action buttons.
+  assert.match(narrow, /\.el-checkbox-group/)
+  assert.match(narrow, /\.el-checkbox\b/)
+  assert.match(narrow, /\.buttons[^}]*\.el-button/)
+})
+
+test('the component compiles as a Vue SFC and its scoped SCSS emits the container queries', async () => {
+  const { descriptor, errors } = parseSfc(component)
+  assert.deepEqual(errors, [], 'the SFC template must parse cleanly')
+  assert.ok(descriptor.template, 'the page must have a template')
+  assert.ok(descriptor.styles.some(entry => entry.lang === 'scss'), 'the page must have scoped SCSS')
+
+  const template = compileTemplate({
+    source: descriptor.template.content,
+    filename: 'AgentSkills.vue',
+    id: 'data-v-agent-skills',
+    scoped: true
+  })
+  assert.deepEqual(template.errors, [], 'the template must compile')
+
+  const style = descriptor.styles.find(entry => entry.lang === 'scss')
+  const compiled = await compileStyleAsync({
+    source: style.content,
+    filename: 'AgentSkills.vue',
+    id: 'data-v-agent-skills',
+    scoped: true,
+    preprocessLang: 'scss'
+  })
+  assert.deepEqual(compiled.errors, [], 'the SCSS must compile')
+  // Both breakpoints survive compilation with the container name and the scope attribute intact.
+  assert.match(
+    compiled.code,
+    /@container agent-skills \(max-width: 860px\)\s*\{\s*\.agent-skills \.skill-table\[data-v-agent-skills\]/
+  )
+  assert.match(compiled.code, /@container agent-skills \(max-width: 480px\)/)
 })

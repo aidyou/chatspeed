@@ -53,7 +53,7 @@ test('the plugin provider maps every dock command to the host command', async ()
   })
   const bounds = { x: 1240, y: 40, width: 600, height: 700 }
 
-  await provider.show('plugin:demo', { pluginId: 'demo', entry: 'demo/index.html', bounds })
+  await provider.show('plugin:demo', { pluginId: 'demo', entry: 'demo/index.html', bounds, cornerRadius: 8 })
   await provider.hide()
   await provider.close('plugin:demo')
   await provider.clear()
@@ -61,12 +61,19 @@ test('the plugin provider maps every dock command to the host command', async ()
   assert.deepEqual(calls, [
     {
       command: 'plugin_ui_open',
-      args: { tabId: 'plugin:demo', pluginId: 'demo', entry: 'demo/index.html', bounds }
+      args: { tabId: 'plugin:demo', pluginId: 'demo', entry: 'demo/index.html', bounds, cornerRadius: 8 }
     },
     { command: 'plugin_ui_hide', args: undefined },
     { command: 'plugin_ui_close', args: { tabId: 'plugin:demo' } },
     { command: 'plugin_ui_clear', args: undefined }
   ])
+})
+
+test('a plugin caller without a radius retains square-corner compatibility', async () => {
+  let args
+  const provider = createPluginProvider({ invoke: async (_command, payload) => { args = payload } })
+  await provider.show('plugin:legacy', { pluginId: 'demo', entry: 'index.html' })
+  assert.equal(args.cornerRadius, 0)
 })
 
 test('a provider without an invoke adapter resolves instead of throwing', async () => {

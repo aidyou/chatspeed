@@ -388,6 +388,31 @@ test('a reload of a tab that is no longer in the dock is a no-op', async () => {
   assert.equal(harness.log.length, count)
 })
 
+test('radius-only changes reach both carriers even when the rectangle stays unchanged', async () => {
+  for (const kind of ['chatHub', 'plugin']) {
+    const calls = []
+    const provider = {
+      show: async (_tabId, payload) => calls.push(payload),
+      hide: async () => {},
+      close: async () => {},
+      destroy: async () => {}
+    }
+    const coordinator = createDockedViewsCoordinator({ chatHub: provider, plugin: provider })
+    const tab = kind === 'chatHub' ? chatTab('a') : pluginTab('p')
+    const tabs = [tab]
+    const first = geometry()
+    await coordinator.sync(snapshot({ tabs, activeTabId: tab.tabId, geometry: first }))
+    const square = { ...first, cornerRadius: 0 }
+    await coordinator.sync(snapshot({ tabs, activeTabId: tab.tabId, geometry: square }))
+    await coordinator.sync(snapshot({ tabs, activeTabId: tab.tabId, geometry: square }))
+    await coordinator.settled()
+    assert.equal(calls.length, 2, `${kind} must apply a radius change and dedupe the repeat`)
+    assert.equal(calls[0].cornerRadius, 8)
+    assert.equal(calls[1].cornerRadius, 0)
+    assert.deepEqual(calls[1].bounds, first.bounds)
+  }
+})
+
 test('settled resolves on an idle coordinator without running any operation', async () => {
   const harness = createHarness()
 

@@ -12,26 +12,23 @@
 //! window instead, which is what kept the workflow UI from receiving clicks while a native view
 //! was open, so the carrier only ever creates bounded holders.
 
+use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard};
 
 use tauri::{AppHandle, PhysicalSize, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix, WebViewExtUnix};
 
+use super::page::dock_page_builder;
 use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
-use crate::frame_edges::{give_frame_band_to_window, Band};
-use crate::native_dock::{self, DockBounds, DockHolder, DockOwner};
+use crate::native_dock::{self, DockBounds, DockHolder, DockOwner, ViewShape};
 
 /// Tab key a caller names when it does not send a tab id.
 ///
 /// The frontend names every tab, so this only keeps an older caller working: such a call keeps
 /// addressing the same single page it always did.
 const DEFAULT_TAB_ID: &str = "default";
-
-/// Distance from a window edge at which a dock rectangle still counts as covering it, in logical
-/// pixels. A measurement is rounded, so an exact hit is not guaranteed.
-const WINDOW_EDGE_REACH: f64 = 1.0;
 
 /// State of the docked ChatHub tabs.
 #[derive(Debug, Default)]
@@ -51,6 +48,8 @@ struct Inner {
 struct Tab {
     webview: WebView,
     holder: DockHolder,
+    /// Main-thread state that reshapes the webview for the band and radius it is shown at.
+    shape: Rc<ViewShape>,
     /// Url the tab is currently showing.
     url: String,
     /// Rectangle the tab is currently placed at, in logical pixels.
@@ -102,6 +101,13 @@ impl ChatHubPageState {
         let bounds = bounds
             .unwrap_or_else(|| legacy_bounds(width, top_inset, window_width, window_height))
             .sanitize(window_width, window_height)?;
+        let radius = native_dock::clamp_corner_radius(corner_radius);
+        // The band follows the rectangle the frontend measured, and both dock owners compute it
+        // through the same rule.
+        let band = native_dock::band_for(bounds, window_width, window_height);
+        // The backend decides how the corner is given back: a shape applied to the native view, or
+        // the shared script on a see-through page. The page is built once, so it is fixed per tab.
+        let native_rounding = native_dock::supports_native_rounding();
 
         let mut inner = self.lock()?;
         if !inner.tabs.contains_key(&key) {
@@ -114,33 +120,29 @@ impl ChatHubPageState {
             // every tab, so the session survives a tab close and a restart.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
 
-            // A page that gives a window corner back also has to be see-through. The shared corner
-            // script rounds one window corner, which a page below a shared titlebar needs, so this
-            // carrier leaves it out (`0.0`) and rounds the four corners itself: one implementation
-            // covers them all, so they cannot drift apart.
-            let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-            let mut builder = page_builder(&mut web_context, &url, page_proxy(app), 0.0, app);
-            if radius > 0.0 {
-                builder = builder
-                    .with_transparent(true)
-                    .with_initialization_script(page_corners_script(radius));
-            }
-
+            // A backend that shapes the native view clips the corner there and keeps the page
+            // opaque; every other backend has no window shape, so it gets a see-through page and
+            // the shared bottom-right script. That page follows a radius change at runtime, which
+            // is why it is see-through even at a zero radius.
+            let builder = if native_rounding {
+                page_builder(&mut web_context, &url, page_proxy(app), 0.0, app)
+            } else {
+                dock_page_builder(&mut web_context, &url, page_proxy(app), radius, app)
+            };
             let webview = builder.build_gtk(holder.container())?;
 
-            // The dock rectangle can reach a window edge, so that edge keeps its resize band with
-            // the window instead of the page: this webview is built by wry, so the resize handler
-            // tauri installs on a Tauri webview never reaches it.
-            give_frame_band_to_window(
-                &webview.webview(),
-                band_for(bounds, window_width, window_height),
-            );
+            // The native view is reshaped from this state on every allocation, so a later show
+            // that only moves the rectangle or changes the radius updates the state instead of
+            // connecting a second callback or rebuilding the webview.
+            let shape = ViewShape::install(&webview.webview());
+            shape.set(radius, band);
 
             inner.tabs.insert(
                 key.clone(),
                 Tab {
                     webview,
                     holder,
+                    shape,
                     url: url.clone(),
                     bounds,
                 },
@@ -160,7 +162,8 @@ impl ChatHubPageState {
             message: "the ChatHub tab is missing".to_string(),
         })?;
 
-        if tab.url != url {
+        let navigated = tab.url != url;
+        if navigated {
             tab.webview.load_url(&url)?;
             tab.url = url;
         }
@@ -168,6 +171,21 @@ impl ChatHubPageState {
             tab.holder.set_bounds(bounds);
             tab.bounds = bounds;
         }
+
+        // The rectangle and the radius both feed the same reshape state, so a reused tab follows
+        // whatever the frontend resent instead of the geometry it was first built with.
+        let previous_radius = tab.shape.radius();
+        tab.shape.set(radius, band);
+
+        // On a backend without a native shape the page gives the corner back itself, so the radius
+        // reaches it through the script's runtime setter. After a navigation the page re-applied the
+        // radius it was built with, so the current radius is pushed again. Neither path reloads the
+        // page or drops the session.
+        if !native_rounding && (navigated || previous_radius != radius) {
+            tab.webview
+                .evaluate_script(&native_dock::bottom_right_corner_update_script(radius))?;
+        }
+
         tab.holder.set_visible(true);
         inner.active = Some(key);
 
@@ -212,6 +230,10 @@ impl ChatHubPageState {
         .sanitize(window_width, window_height)?;
 
         tab.holder.set_bounds(bounds);
+        tab.shape.set(
+            tab.shape.radius(),
+            native_dock::band_for(bounds, window_width, window_height),
+        );
         tab.bounds = bounds;
 
         Ok(())
@@ -310,12 +332,6 @@ impl ChatHubPageState {
     }
 }
 
-/// Largest corner radius the page accepts, so a bad measurement cannot eat into the page.
-///
-/// It is the bound the shared corner script applies, kept the same here so a radius that reaches
-/// the window is treated the same way on every carrier.
-const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
-
 /// Rectangle a legacy caller's `width`/`top_inset` pair describes.
 ///
 /// The pair names the docked page of an older frontend, which owned the right edge of the window
@@ -330,247 +346,6 @@ fn legacy_bounds(width: f64, top_inset: f64, window_width: f64, window_height: f
         width,
         height: (window_height - top).max(1.0),
     }
-}
-
-/// Frame band the dock gives back for the window edges its rectangle reaches.
-///
-/// A dock that reaches a window edge covers the band the window level resize handler accepts, so
-/// that edge has to stay with the window; an edge inside the window borders the workflow UI and
-/// keeps its input. The common dock spans the right edge of the window from top to bottom, which
-/// is exactly the band a right column gives back, so the named bands are reused for the shapes
-/// that occur.
-fn band_for(bounds: DockBounds, window_width: f64, window_height: f64) -> Band {
-    let reaches_left = bounds.x <= WINDOW_EDGE_REACH;
-    let reaches_top = bounds.y <= WINDOW_EDGE_REACH;
-    let reaches_right = bounds.x + bounds.width >= window_width - WINDOW_EDGE_REACH;
-    let reaches_bottom = bounds.y + bounds.height >= window_height - WINDOW_EDGE_REACH;
-
-    match (reaches_left, reaches_top, reaches_right, reaches_bottom) {
-        (false, true, true, true) => Band::RIGHT_COLUMN,
-        (true, true, true, true) => Band::EVERY_SIDE,
-        (left, top, right, bottom) => Band {
-            left,
-            top,
-            right,
-            bottom,
-        },
-    }
-}
-
-/// JavaScript descriptor of one corner of the page, as [`page_corners_script`] reads it.
-///
-/// `property` is the border radius the script applies to the elements that paint the corner,
-/// `attribute` marks a host whose pseudo element paints it, and `x` and `y` select the viewport
-/// point the corner sits at.
-fn corner_descriptor(property: &str, attribute: &str, x: &str, y: &str, radius: f64) -> String {
-    let declarations = format!("{property}:{radius}px !important");
-
-    format!(
-        "{{property: '{property}', attribute: '{attribute}', x: '{x}', y: '{y}', \
-         rule: '[{attribute}]::before,[{attribute}]::after{{{declarations}}}'}}"
-    )
-}
-
-/// Script that leaves the four corners of the page unpainted.
-///
-/// The page is a rectangle placed over the workflow UI, so it paints over whatever corner the
-/// window rounds where its rectangle reaches one. Every one of its four corners therefore has to
-/// come back from the page itself. The shared corner script ([`super::page`]) rounds one window
-/// corner, which is what a page below a shared titlebar needs, so this carrier leaves it out and
-/// rounds the four corners here: one implementation covers them all, so the corners cannot drift
-/// apart.
-///
-/// The rules are the ones that hold in the shared script:
-///
-/// - A corner is given back by every element that paints it. A decorative layer carries
-///   `pointer-events: none`, so it never shows up in a hit test and the document is inspected by
-///   geometry instead: an element is rounded when it covers the corner point of the viewport and
-///   paints something there. A box shadow is painting there as well, and it follows the radius of
-///   its host, so a host that only throws a shadow over the corner is rounded too.
-/// - A pseudo element paints a box of its own, which the radius of its host does not cut, so a
-///   host that paints a corner through one is marked and the corner reaches it through a rule.
-/// - The corners are applied again for a short while after the page load, because a site can
-///   build the layer that paints them later than the load event.
-///
-/// All four corners are inspected in one pass over the document, so they cost a single walk of
-/// the tree rather than four.
-fn page_corners_script(radius: f64) -> String {
-    let page_corners = [
-        ("border-top-left-radius", "data-cs-top-left", "left", "top"),
-        (
-            "border-top-right-radius",
-            "data-cs-top-right",
-            "right",
-            "top",
-        ),
-        (
-            "border-bottom-left-radius",
-            "data-cs-bottom-left",
-            "left",
-            "bottom",
-        ),
-        (
-            "border-bottom-right-radius",
-            "data-cs-bottom-right",
-            "right",
-            "bottom",
-        ),
-    ];
-    let mut descriptors = Vec::new();
-
-    for (property, attribute, x, y) in page_corners {
-        descriptors.push(corner_descriptor(property, attribute, x, y, radius));
-    }
-
-    let corners_js = descriptors.join(",\n    ");
-
-    format!(
-        r#"(function () {{
-  var radius = '{radius}px';
-  var corners = [{corners_js}];
-  var transparent = 'rgba(0, 0, 0, 0)';
-  var pending = 0;
-  var ruled = false;
-  function opaque(background) {{
-    return !!background && background !== 'transparent' && background !== transparent;
-  }}
-  function paints(style) {{
-    return style.backgroundImage !== 'none' || style.boxShadow !== 'none'
-      || opaque(style.backgroundColor);
-  }}
-  function replaced(element) {{
-    var tag = element.tagName;
-    return tag === 'IMG' || tag === 'CANVAS' || tag === 'VIDEO' || tag === 'IFRAME'
-      || tag === 'SVG' || tag === 'OBJECT' || tag === 'EMBED';
-  }}
-  function paintsCorner(element, style) {{
-    return paints(style) || replaced(element);
-  }}
-  function paintsPseudo(element) {{
-    for (var part = 0; part < 2; part += 1) {{
-      var pseudo = window.getComputedStyle(element, part ? '::after' : '::before');
-      if (pseudo.content && pseudo.content !== 'none' && paints(pseudo)) {{
-        return true;
-      }}
-    }}
-    return false;
-  }}
-  function insertRule(rule) {{
-    try {{
-      if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {{
-        var sheet = new CSSStyleSheet();
-        sheet.insertRule(rule, 0);
-        document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
-        return;
-      }}
-    }} catch (error) {{}}
-    var sheets = document.styleSheets;
-    for (var sheet = 0; sheet < sheets.length; sheet += 1) {{
-      try {{
-        sheets[sheet].insertRule(rule, sheets[sheet].cssRules.length);
-        return;
-      }} catch (error) {{}}
-    }}
-    try {{
-      var element = document.createElement('style');
-      element.textContent = rule;
-      (document.head || document.documentElement).appendChild(element);
-    }} catch (error) {{}}
-  }}
-  function addCornerRules() {{
-    if (ruled) {{
-      return;
-    }}
-    ruled = true;
-    for (var index = 0; index < corners.length; index += 1) {{
-      insertRule(corners[index].rule);
-    }}
-  }}
-  function coversCorner(rect, point) {{
-    return rect.left <= point.x && rect.top <= point.y
-      && rect.right >= point.x && rect.bottom >= point.y;
-  }}
-  function roundCorners() {{
-    var points = [];
-    var targets = [];
-    var index;
-    for (index = 0; index < corners.length; index += 1) {{
-      points.push({{
-        x: corners[index].x === 'right' ? window.innerWidth - 2 : 2,
-        y: corners[index].y === 'bottom' ? window.innerHeight - 2 : 2
-      }});
-      targets.push([]);
-    }}
-    var elements = document.querySelectorAll('*');
-    for (var elementIndex = 0; elementIndex < elements.length; elementIndex += 1) {{
-      var element = elements[elementIndex];
-      var rect = element.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) {{
-        continue;
-      }}
-      var covered = false;
-      for (index = 0; index < corners.length; index += 1) {{
-        if (coversCorner(rect, points[index])) {{
-          covered = true;
-          break;
-        }}
-      }}
-      if (!covered) {{
-        continue;
-      }}
-      var style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden'
-        || Number(style.opacity) === 0) {{
-        continue;
-      }}
-      var painted = paintsCorner(element, style);
-      var pseudoPainted = false;
-      for (index = 0; index < corners.length; index += 1) {{
-        if (!coversCorner(rect, points[index])) {{
-          continue;
-        }}
-        if (painted) {{
-          targets[index].push(element);
-        }}
-        if (!pseudoPainted) {{
-          pseudoPainted = paintsPseudo(element);
-        }}
-        if (pseudoPainted) {{
-          element.setAttribute(corners[index].attribute, '');
-          addCornerRules();
-        }}
-      }}
-    }}
-    for (index = 0; index < corners.length; index += 1) {{
-      for (var target = 0; target < targets[index].length; target += 1) {{
-        targets[index][target].style.setProperty(corners[index].property, radius, 'important');
-      }}
-      document.documentElement.style.setProperty(corners[index].property, radius, 'important');
-    }}
-  }}
-  roundCorners();
-  document.addEventListener('DOMContentLoaded', roundCorners);
-  window.addEventListener('load', roundCorners);
-  window.addEventListener('resize', function () {{
-    if (pending) {{
-      return;
-    }}
-    pending = window.setTimeout(function () {{
-      pending = 0;
-      roundCorners();
-    }}, 200);
-  }});
-  var attempts = 0;
-  var retry = window.setInterval(function () {{
-    attempts += 1;
-    if (attempts > 15) {{
-      window.clearInterval(retry);
-      return;
-    }}
-    roundCorners();
-  }}, 400);
-}})();"#
-    )
 }
 
 #[cfg(test)]
@@ -664,31 +439,17 @@ mod tests {
     }
 
     /// Guard for the frame band: a dock that reaches a window edge gives that edge back to the
-    /// window, so a drag on the frame still resizes the window.
+    /// window, so a drag on the frame still resizes the window. The band comes from the rule the two
+    /// dock owners share, not from a copy local to this carrier.
     #[test]
     fn a_dock_that_reaches_a_window_edge_gives_it_back() {
         let source = include_str!("gtk_panel.rs");
 
-        assert!(source.contains("give_frame_band_to_window("));
-        assert!(source.contains("band_for(bounds, window_width, window_height)"));
-
-        let band = band_for(
-            DockBounds {
-                x: 400.0,
-                y: 40.0,
-                width: 600.0,
-                height: 700.0,
-            },
-            1000.0,
-            740.0,
-        );
-        assert!(!band.left);
-        assert!(!band.top);
-        assert!(band.right);
-        assert!(band.bottom);
+        assert!(source.contains("native_dock::band_for(bounds, window_width, window_height)"));
+        assert!(source.contains("shape.set(radius, band)"));
 
         // The common dock spans the right edge from top to bottom, which is the right column band.
-        let dock = band_for(
+        let dock = native_dock::band_for(
             DockBounds {
                 x: 400.0,
                 y: 0.0,
@@ -719,34 +480,42 @@ mod tests {
         );
     }
 
-    /// Guard for the corners the page gives back: the rectangle paints over the window corners it
-    /// reaches, so all four of its corners are rounded here, by this carrier alone.
+    /// A reused tab follows the radius and the rectangle the frontend resent instead of the geometry
+    /// it was first built with, and neither change rebuilds the webview or its session.
     #[test]
-    fn the_page_gives_back_all_four_of_its_corners() {
-        let script = page_corners_script(15.0);
+    fn a_reused_tab_follows_the_resent_radius_and_rectangle() {
+        let show = implementation(include_str!("gtk_panel.rs"), "pub fn show", "pub fn hide");
 
-        for property in [
-            "border-top-left-radius",
-            "border-top-right-radius",
-            "border-bottom-left-radius",
-            "border-bottom-right-radius",
-        ] {
-            assert!(script.contains(&format!("property: '{property}'")));
-            assert!(script.contains(&format!("{property}:15px !important")));
-        }
+        // The webview and its page are built only when the tab does not exist yet.
+        let build = format!("{}{}", "build_", "gtk");
+        assert_eq!(show.matches(&build).count(), 1);
+        // Every show re-applies the current radius and the current band to the shared state.
+        assert!(show.contains("tab.shape.set(radius, band)"));
+        // A radius the page gives back itself is pushed through the runtime setter, which the
+        // navigation path also uses so a fresh document does not keep the radius it was built with.
+        assert!(show.contains("let navigated = tab.url != url;"));
+        assert!(show.contains("native_dock::bottom_right_corner_update_script(radius)"));
+    }
 
-        // A corner painted through a box shadow or through replaced content is found as well.
-        assert!(script.contains("style.boxShadow !== 'none'"));
-        assert!(script.contains("tag === 'IMG'"));
+    /// Guard for the corner the page gives back: the carrier either clips the native view on the
+    /// backend that supports shaping, or builds a see-through page that gives the corner back with
+    /// the shared script and follows a radius change at runtime.
+    #[test]
+    fn the_page_rounds_its_bottom_right_corner_natively_or_by_script() {
+        let source = production_source();
 
-        // The script reaches the page as JavaScript, so no formatting brace may survive in it.
-        assert!(!script.contains("{{"));
-        assert!(!script.contains("}}"));
-
-        // The shared corner script rounds one window corner, which is not what the page needs here,
-        // so this carrier leaves it out and rounds the four corners itself.
-        let source = include_str!("gtk_panel.rs");
+        assert!(source.contains("native_dock::clamp_corner_radius(corner_radius)"));
+        assert!(source.contains("let native_rounding = native_dock::supports_native_rounding();"));
+        // The page is built once, either opaque behind a native shape or see-through with the
+        // shared script.
         assert!(source.contains("page_builder(&mut web_context, &url, page_proxy(app), 0.0, app)"));
-        assert!(source.contains(".with_initialization_script(page_corners_script(radius))"));
+        assert!(source
+            .contains("dock_page_builder(&mut web_context, &url, page_proxy(app), radius, app)"));
+        // The native view is reshaped through the shared state, which carries the band as well.
+        assert!(source.contains("ViewShape::install(&webview.webview())"));
+        // The obsolete four-corner script is gone: only the shared bottom-right corner is rounded.
+        let four_corner = format!("{}{}", "page_corners_", "script");
+        assert!(!source.contains(&four_corner));
+        assert!(!source.contains("border-top-left-radius"));
     }
 }

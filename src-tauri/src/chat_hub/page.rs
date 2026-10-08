@@ -71,6 +71,40 @@ pub fn page_builder<'a>(
     corner_radius: f64,
     app: &AppHandle<Wry>,
 ) -> WebViewBuilder<'a> {
+    build_page(web_context, url, proxy, corner_radius, false, app)
+}
+
+/// Builds a page that always paints over the window corner, for the Linux dock.
+///
+/// A backend that cannot shape the native view (Wayland) lets the page give the corner back itself,
+/// and the radius can change while the page is alive because the frontend resends it with every
+/// dock snapshot. The transparency of a webview cannot be toggled without rebuilding it, and a
+/// rebuild would drop the browsing session, so such a page is created see-through and carries the
+/// shared corner script even at a zero radius. The script's runtime setter then follows every later
+/// radius, including zero, without a reload.
+#[cfg(target_os = "linux")]
+pub fn dock_page_builder<'a>(
+    web_context: &'a mut WebContext,
+    url: &str,
+    proxy: Option<ProxyConfig>,
+    corner_radius: f64,
+    app: &AppHandle<Wry>,
+) -> WebViewBuilder<'a> {
+    build_page(web_context, url, proxy, corner_radius, true, app)
+}
+
+/// Builds the page webview with the rules that hold on every platform.
+///
+/// `always_see_through` forces the see-through page and the shared corner script even at a zero
+/// radius, which the Linux dock needs so a radius that grows later can still be given back.
+fn build_page<'a>(
+    web_context: &'a mut WebContext,
+    url: &str,
+    proxy: Option<ProxyConfig>,
+    corner_radius: f64,
+    always_see_through: bool,
+    app: &AppHandle<Wry>,
+) -> WebViewBuilder<'a> {
     // The handlers below outlive this call, so the page keeps its own handle to open a link
     // even after the entry that created it was closed.
     let opener = app.clone();
@@ -86,7 +120,7 @@ pub fn page_builder<'a>(
     // A page that hands its corner back to the window also has to be see-through: an
     // opaque page would show its own background where the window border belongs.
     let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-    let builder = if radius > 0.0 {
+    let builder = if always_see_through || radius > 0.0 {
         builder
             .with_transparent(true)
             .with_initialization_script(corner_script(radius))
@@ -137,121 +171,13 @@ fn open_in_browser(app: &AppHandle<Wry>, url: &str) {
 
 /// Script that leaves the rounded bottom-right corner of the window unpainted.
 ///
-/// The docked page is a rectangular native view, so no border radius of the workflow UI
-/// can cut it: the page has to give that corner back itself. It is stacked over the
-/// workflow UI, which draws the rounded window border, so the page only has to leave the
-/// corner transparent ([`page_builder`] makes it so).
-///
-/// Three rules make that hold on pages that build themselves differently:
-///
-/// - The corner is given back by every element that paints it. A decorative layer carries
-///   `pointer-events: none`, so it never shows up in a hit test and the document is
-///   inspected by geometry instead: an element is rounded when it covers the bottom-right
-///   point of the viewport and paints something there.
-/// - A pseudo element paints a box of its own, which the radius of its host does not cut, so
-///   a host that paints the corner through one is marked and the corner reaches it through a
-///   rule.
-/// - The corner is applied again for a short while after the page load, because a site can
-///   build the layer that paints it later than the load event.
+/// The docked page is a rectangular native view, so no border radius of the workflow UI can cut
+/// it: the page has to give that corner back itself, and only a backend that cannot shape the
+/// native view lets the page do it. The script is shared with a plugin UI panel and with the
+/// native dock surface ([`crate::native_dock::bottom_right_corner_script`]), so the corner the two
+/// give back cannot drift apart.
 fn corner_script(radius: f64) -> String {
-    format!(
-        r#"(function () {{
-  var radius = '{radius}px';
-  var transparent = 'rgba(0, 0, 0, 0)';
-  var pending = 0;
-  var ruled = false;
-  function opaque(background) {{
-    return !!background && background !== 'transparent' && background !== transparent;
-  }}
-  function paints(style) {{
-    return style.backgroundImage !== 'none' || opaque(style.backgroundColor);
-  }}
-  function addPseudoRule() {{
-    if (ruled) {{
-      return;
-    }}
-    ruled = true;
-    var rule = '[data-cs-corner]::before,[data-cs-corner]::after'
-      + '{{border-bottom-right-radius:' + radius + ' !important}}';
-    try {{
-      if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {{
-        var sheet = new CSSStyleSheet();
-        sheet.insertRule(rule, 0);
-        document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
-        return;
-      }}
-    }} catch (error) {{}}
-    var sheets = document.styleSheets;
-    for (var sheet = 0; sheet < sheets.length; sheet += 1) {{
-      try {{
-        sheets[sheet].insertRule(rule, sheets[sheet].cssRules.length);
-        return;
-      }} catch (error) {{}}
-    }}
-    try {{
-      var element = document.createElement('style');
-      element.textContent = rule;
-      (document.head || document.documentElement).appendChild(element);
-    }} catch (error) {{}}
-  }}
-  function roundCorner() {{
-    var x = window.innerWidth - 2;
-    var y = window.innerHeight - 2;
-    var elements = document.querySelectorAll('*');
-    var targets = [];
-    for (var index = 0; index < elements.length; index += 1) {{
-      var element = elements[index];
-      var rect = element.getBoundingClientRect();
-      if (rect.width < 1 || rect.height < 1) {{
-        continue;
-      }}
-      if (rect.left > x || rect.top > y || rect.right < x || rect.bottom < y) {{
-        continue;
-      }}
-      var style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden'
-        || Number(style.opacity) === 0) {{
-        continue;
-      }}
-      if (paints(style)) {{
-        targets.push(element);
-      }}
-      for (var part = 0; part < 2; part += 1) {{
-        var pseudo = window.getComputedStyle(element, part ? '::after' : '::before');
-        if (pseudo.content && pseudo.content !== 'none' && paints(pseudo)) {{
-          element.setAttribute('data-cs-corner', '');
-          addPseudoRule();
-        }}
-      }}
-    }}
-    for (var target = 0; target < targets.length; target += 1) {{
-      targets[target].style.setProperty('border-bottom-right-radius', radius, 'important');
-    }}
-    document.documentElement.style.setProperty('border-bottom-right-radius', radius, 'important');
-  }}
-  roundCorner();
-  document.addEventListener('DOMContentLoaded', roundCorner);
-  window.addEventListener('load', roundCorner);
-  window.addEventListener('resize', function () {{
-    if (pending) {{
-      return;
-    }}
-    pending = window.setTimeout(function () {{
-      pending = 0;
-      roundCorner();
-    }}, 200);
-  }});
-  var attempts = 0;
-  var retry = window.setInterval(function () {{
-    attempts += 1;
-    if (attempts > 15) {{
-      window.clearInterval(retry);
-      return;
-    }}
-    roundCorner();
-  }}, 400);
-}})();"#
-    )
+    crate::native_dock::bottom_right_corner_script(radius)
 }
 
 /// Persistent profile directory of the embedded page.
@@ -434,19 +360,16 @@ mod tests {
 
         // A window without a rounded border reports no radius, so the page keeps its
         // rectangular edge instead of turning see-through for nothing...
-        assert!(branch.contains("if radius > 0.0"));
-        // ...and an opaque page would show its own background where the border belongs.
+        assert!(branch.contains("if always_see_through || radius > 0.0"));
+        // ...unless a caller forces it, which the Linux dock does so a radius that grows later can
+        // still be given back without rebuilding the page...
         assert!(branch.contains(".with_transparent(true)"));
         assert!(branch.contains(".with_initialization_script(corner_script(radius))"));
 
-        // The script rounds the corner of every layer that paints it.
-        let script = source
-            .split("fn corner_script")
-            .nth(1)
-            .expect("the corner script is missing")
-            .split("/// Persistent profile directory")
-            .next()
-            .expect("the corner script is not terminated");
+        // The script rounds the corner of every layer that paints it, and it is the single
+        // bottom-right script the native dock surface owns, so a plugin panel and this page cannot
+        // drift apart.
+        let script = corner_script(15.0);
 
         assert!(script.contains("border-bottom-right-radius"));
         assert!(script.contains("document.documentElement"));
@@ -457,18 +380,31 @@ mod tests {
         // A pseudo element paints a box of its own, which the radius of its host cannot cut.
         assert!(script.contains("'data-cs-corner'"));
         assert!(script.contains("'::after' : '::before'"));
+        // The page does not own a second script: it reuses the shared one.
+        assert!(source.contains("crate::native_dock::bottom_right_corner_script(radius)"));
     }
 
-    /// Guard for the injected JavaScript itself: the radius has to reach the page as a
-    /// ready to use length, and the braces of the script have to survive the format
-    /// string that carries it.
+    /// Guard for the injected JavaScript itself: the radius reaches the page through the runtime
+    /// setter, and the braces of the script have to survive the format string that carries it.
     #[test]
-    fn the_corner_script_carries_the_radius_as_a_css_length() {
+    fn the_corner_script_carries_the_radius_through_the_runtime_setter() {
         let script = corner_script(15.0);
 
-        assert!(script.contains("var radius = '15px';"));
+        assert!(script.contains("state.set(15);"));
         assert!(script.contains("function roundCorner() {"));
         assert!(!script.contains("{{"));
         assert!(!script.contains("}}"));
+    }
+
+    /// The Linux dock builds its page see-through even at a zero radius, so a radius that appears
+    /// later can be given back without rebuilding the webview and losing the session.
+    #[test]
+    fn the_linux_dock_page_is_always_see_through() {
+        let source = include_str!("page.rs");
+
+        assert!(source.contains("pub fn dock_page_builder"));
+        assert!(source.contains("build_page(web_context, url, proxy, corner_radius, true, app)"));
+        // The plain builder still keys see-through on the radius it was handed.
+        assert!(source.contains("build_page(web_context, url, proxy, corner_radius, false, app)"));
     }
 }

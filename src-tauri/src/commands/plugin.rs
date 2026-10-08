@@ -32,8 +32,8 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 use crate::chat_hub::CHAT_HUB_HOST_WINDOW_LABEL;
 use crate::plugin_types::PluginError;
 use crate::plugin_ui::{
-    is_valid_tab_id, plan_tab_open, PluginUiBounds, PluginUiHost, PluginUiRuntime,
-    PluginUiTabPlan, PluginUiTabSession,
+    is_valid_tab_id, plan_tab_open, PluginUiBounds, PluginUiHost, PluginUiRuntime, PluginUiTabPlan,
+    PluginUiTabSession,
 };
 use crate::runtime_client::RuntimeSupervisor;
 
@@ -170,7 +170,9 @@ pub async fn plugin_ui_open(
     plugin_id: String,
     entry: String,
     bounds: PluginUiBounds,
+    corner_radius: Option<f64>,
 ) -> Result<(), String> {
+    let corner_radius = corner_radius.unwrap_or(0.0);
     ensure_workflow_caller(&window)?;
     if !is_valid_tab_id(&tab_id) {
         return Err("plugin_ui_tab_id_invalid".to_string());
@@ -212,7 +214,7 @@ pub async fn plugin_ui_open(
             let prefix = session.grant.prefix;
             let show_app = app.clone();
             run_plugin_host(&app, move |host| {
-                host.show(&show_app, &tab_id, &url, &prefix, bounds)
+                host.show(&show_app, &tab_id, &url, &prefix, bounds, corner_radius)
             })
             .await
         }
@@ -251,7 +253,7 @@ pub async fn plugin_ui_open(
             let show_app = app.clone();
             let show_tab = tab_id.clone();
             let result = run_plugin_host(&app, move |host| {
-                host.show(&show_app, &show_tab, &url, &prefix, bounds)
+                host.show(&show_app, &show_tab, &url, &prefix, bounds, corner_radius)
             })
             .await;
             if result.is_err() {

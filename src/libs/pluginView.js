@@ -17,7 +17,8 @@ export function createPluginProvider({ invoke } = {}) {
         tabId,
         pluginId: payload.pluginId,
         entry: payload.entry,
-        bounds: payload.bounds
+        bounds: payload.bounds,
+        cornerRadius: payload.cornerRadius ?? 0
       }),
     /** Hides every panel while keeping its tab session alive. */
     hide: () => call('plugin_ui_hide'),

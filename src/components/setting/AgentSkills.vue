@@ -108,13 +108,36 @@
             v-if="report.findings?.length"
             :data="report.findings"
             size="small"
-            class="findings"
+            class="findings skill-table"
           >
             <el-table-column prop="severity" :label="t('settings.agentSkills.severity')" width="110" />
             <el-table-column prop="rule" :label="t('settings.agentSkills.rule')" width="220" />
             <el-table-column prop="path" :label="t('settings.agentSkills.path')" width="220" />
             <el-table-column prop="detail" :label="t('settings.agentSkills.detail')" />
           </el-table>
+
+          <!-- The same findings as data-driven cards: the wide table cannot fit a narrow
+               container, so every column is shown as a labelled row instead of being cut. -->
+          <ul v-if="report.findings?.length" class="findings skill-cards">
+            <li v-for="(row, index) in report.findings" :key="index" class="skill-cards__item">
+              <div class="skill-cards__row">
+                <span class="skill-cards__label">{{ t('settings.agentSkills.severity') }}</span>
+                <span class="skill-cards__value">{{ row.severity }}</span>
+              </div>
+              <div class="skill-cards__row">
+                <span class="skill-cards__label">{{ t('settings.agentSkills.rule') }}</span>
+                <span class="skill-cards__value">{{ row.rule }}</span>
+              </div>
+              <div class="skill-cards__row">
+                <span class="skill-cards__label">{{ t('settings.agentSkills.path') }}</span>
+                <span class="skill-cards__value">{{ row.path }}</span>
+              </div>
+              <div class="skill-cards__row">
+                <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
+                <span class="skill-cards__value">{{ row.detail }}</span>
+              </div>
+            </li>
+          </ul>
 
           <!-- targets -->
           <div class="section-title">{{ t('settings.agentSkills.targets') }}</div>
@@ -152,7 +175,7 @@
       <!-- install outcomes -->
       <div v-if="outcomes.length" class="section">
         <div class="section-title">{{ t('settings.agentSkills.result') }}</div>
-        <el-table :data="outcomes" size="small">
+        <el-table :data="outcomes" size="small" class="skill-table">
           <el-table-column prop="target_id" :label="t('settings.agentSkills.target')" width="140" />
           <el-table-column :label="t('settings.agentSkills.status')" width="160">
             <template #default="{ row }">
@@ -163,12 +186,31 @@
             <template #default="{ row }">{{ row.detail || row.install_path || '-' }}</template>
           </el-table-column>
         </el-table>
+
+        <ul class="skill-cards">
+          <li v-for="(row, index) in outcomes" :key="index" class="skill-cards__item">
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.target') }}</span>
+              <span class="skill-cards__value">{{ row.target_id }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.status') }}</span>
+              <span class="skill-cards__value">
+                <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
+              </span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
+              <span class="skill-cards__value">{{ row.detail || row.install_path || '-' }}</span>
+            </div>
+          </li>
+        </ul>
       </div>
 
       <!-- installed skills -->
       <div class="section">
         <div class="section-title">{{ t('settings.agentSkills.installed') }}</div>
-        <el-table v-loading="store.loading" :data="store.skills" size="small" :empty-text="t('settings.agentSkills.empty')">
+        <el-table v-loading="store.loading" :data="store.skills" size="small" class="skill-table" :empty-text="t('settings.agentSkills.empty')">
           <el-table-column prop="name" :label="t('settings.agentSkills.name')" width="180" />
           <el-table-column prop="source" :label="t('settings.agentSkills.origin')" width="120" />
           <el-table-column :label="t('settings.agentSkills.target')" width="140">
@@ -205,6 +247,55 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <ul v-loading="store.loading" class="skill-cards">
+          <li v-for="(row, index) in store.skills" :key="`${row.target_id || ''}:${row.name}:${index}`" class="skill-cards__item">
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.name') }}</span>
+              <span class="skill-cards__value">{{ row.name }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.origin') }}</span>
+              <span class="skill-cards__value">{{ row.source }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.target') }}</span>
+              <span class="skill-cards__value">{{ row.target_id || '-' }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.state') }}</span>
+              <span class="skill-cards__value skill-cards__tags">
+                <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
+                  t('settings.agentSkills.protected')
+                }}</el-tag>
+                <el-tag v-if="row.managed" size="small" effect="plain">{{
+                  t('settings.agentSkills.managed')
+                }}</el-tag>
+                <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
+                  t('settings.agentSkills.drifted')
+                }}</el-tag>
+                <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
+                  t('settings.agentSkills.missing')
+                }}</el-tag>
+              </span>
+            </div>
+            <div class="skill-cards__actions">
+              <el-button
+                size="small"
+                text
+                type="danger"
+                :disabled="!row.uninstallable"
+                :loading="store.applying"
+                @click="uninstall(row)"
+              >
+                {{ t('settings.agentSkills.uninstall') }}
+              </el-button>
+            </div>
+          </li>
+          <li v-if="!store.loading && !store.skills?.length" class="skill-cards__empty">
+            {{ t('settings.agentSkills.empty') }}
+          </li>
+        </ul>
       </div>
 
       <!-- doctor -->
@@ -410,6 +501,10 @@ onMounted(async () => {
 
 <style lang="scss" scoped>
 .agent-skills {
+  // The page adapts to the width it is actually given, which is the dock width, not the
+  // window viewport: a named inline-size container is what the `@container` rules below read.
+  container-name: agent-skills;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--cs-space);
@@ -419,14 +514,18 @@ onMounted(async () => {
     border: 1px solid var(--cs-border-color);
     border-radius: var(--cs-border-radius-md);
     padding: var(--cs-space);
+    min-width: 0;
   }
 
   .title {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--cs-space-sm);
     font-weight: 600;
     margin-bottom: var(--cs-space);
+    min-width: 0;
 
     .actions {
       display: flex;
@@ -452,6 +551,7 @@ onMounted(async () => {
 
   .section {
     margin-bottom: var(--cs-space);
+    min-width: 0;
 
     .section-title {
       font-weight: 600;
@@ -483,12 +583,15 @@ onMounted(async () => {
   .report-head {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--cs-space-sm);
     margin-bottom: var(--cs-space-sm);
 
     .meta {
       color: var(--cs-text-color-secondary);
       font-size: 12px;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
   }
 
@@ -515,6 +618,133 @@ onMounted(async () => {
     display: flex;
     flex-direction: column;
     gap: var(--cs-space-xs);
+
+    .doctor-row {
+      overflow-wrap: anywhere;
+    }
+  }
+
+  /*
+   * Responsive projection of the three wide tables. Above the breakpoint every table keeps
+   * its desktop Element Plus layout; below it the table is replaced by a data-complete card
+   * list, so a narrow dock shows the same columns instead of a clipped or scrolling table.
+   */
+  .skill-cards {
+    display: none;
+    flex-direction: column;
+    gap: var(--cs-space-sm);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .skill-cards__item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xs);
+    min-width: 0;
+    padding: var(--cs-space-sm);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+    background: var(--cs-bg-color-deep);
+  }
+
+  .skill-cards__row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cs-space-sm);
+    min-width: 0;
+  }
+
+  .skill-cards__label {
+    flex: 0 0 auto;
+    width: 6em;
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+  }
+
+  .skill-cards__value {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .skill-cards__tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--cs-space-xs);
+  }
+
+  .skill-cards__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .skill-cards__empty {
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+  }
+
+  /*
+   * A 600px dock cannot fit the ~800px installed table, so the compact breakpoint starts
+   * below the widest table instead of at a viewport size. The narrow breakpoint then stacks
+   * the header and the form controls so nothing pushes the page sideways.
+   */
+  @container agent-skills (max-width: 860px) {
+    .skill-table {
+      display: none;
+    }
+
+    .skill-cards {
+      display: flex;
+    }
+  }
+
+  @container agent-skills (max-width: 480px) {
+    .title {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .report-head {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: var(--cs-space-xs);
+    }
+
+    .skill-cards__row {
+      flex-direction: column;
+      gap: var(--cs-space-xxs);
+    }
+
+    .skill-cards__label {
+      width: auto;
+      font-weight: 600;
+    }
+
+    .buttons :deep(.el-button) {
+      flex: 1 1 auto;
+    }
+
+    :deep(.el-radio-group) {
+      display: flex;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+
+    :deep(.el-checkbox-group) {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--cs-space-xs);
+    }
+
+    :deep(.el-checkbox) {
+      height: auto;
+      margin-right: 0;
+      white-space: normal;
+    }
   }
 }
 </style>
