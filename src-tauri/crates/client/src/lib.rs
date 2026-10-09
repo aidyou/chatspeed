@@ -487,6 +487,70 @@ fn error_from_status(status: StatusCode, body: &str) -> ClientError {
 // Discovery
 // ---------------------------------------------------------------------------
 
+/// Conservative liveness probe for the process that published discovery.
+///
+/// Only a *confirmed* exit reports `false`; every other outcome (alive, a
+/// permission error, an unrepresentable PID, an inconclusive OS error or an
+/// unknown platform) reports `true`. A live PID is still only a hint: the
+/// subsequent control-plane handshake remains authoritative, and callers must
+/// never treat this as an identity or security boundary.
+pub fn process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        // A PID that cannot round-trip through `pid_t` would make `kill` target
+        // a whole process group instead of one process, so treat it as
+        // inconclusive and fail closed.
+        if pid > i32::MAX as u32 {
+            return true;
+        }
+        // `kill(pid, 0)` probes process existence without sending a signal.
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+            return true;
+        }
+        // Only ESRCH proves the process is gone; EPERM (or any other error)
+        // leaves it inconclusive, so keep it alive.
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        // Query-only access avoids terminating or mutating the target process.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            // `ERROR_INVALID_PARAMETER` is the documented "no such process id"
+            // result; any other failure (for example access denied) is
+            // inconclusive, so fail closed.
+            return unsafe { GetLastError() } != ERROR_INVALID_PARAMETER;
+        }
+        let mut exit_code: u32 = 0;
+        let queried = unsafe { GetExitCodeProcess(handle, &mut exit_code) } != 0;
+        unsafe { CloseHandle(handle) };
+        // A successful query with a real exit code proves the process is gone.
+        // `STILL_ACTIVE` is an `i32` constant compared against the `u32` code,
+        // and a failed query is inconclusive, so both report "alive".
+        !queried || exit_code == STILL_ACTIVE as u32
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // The discovery handshake remains authoritative on platforms without a
+        // portable process-liveness API.
+        let _ = pid;
+        true
+    }
+}
+
 /// Resolves the discovery file path, failing closed instead of falling back.
 ///
 /// An explicit path always wins. Otherwise the shared launch resolver decides
@@ -520,6 +584,130 @@ pub fn discovery_absent(path: &Path) -> bool {
         std::fs::metadata(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     )
+}
+
+/// Name of the stable runtime-directory lock the runtime creates and holds.
+///
+/// The runtime refuses to start while another process holds this lock, so the
+/// client re-checks a confirmed-dead discovery under it. The client crate cannot
+/// depend on the daemon crate, so the name mirrors
+/// `chatspeed_daemon::LOCK_FILE_NAME`.
+const RUNTIME_DIR_LOCK_FILE_NAME: &str = "runtime.lock";
+
+/// Decides whether a client must start the runtime described by `config`.
+///
+/// Returns `true` when no live runtime owns `config.runtime_dir()`: discovery is
+/// genuinely absent, or it names a PID that has *confirmed* exited and no other
+/// instance holds the runtime-directory lock. Returns `false` when an already
+/// published runtime should be attached to.
+///
+/// A process-liveness probe is only a hint, never an identity: a confirmed-dead
+/// result is re-checked while the client briefly holds the runtime-dir lock, and
+/// the caller's readiness handshake remains authoritative. Only a valid document
+/// for a confirmed-dead PID is removed; a malformed or protocol-incompatible
+/// document is reported as an error and left untouched, and the lock file and
+/// its record are never deleted or overwritten.
+pub fn runtime_needs_start(config: &RuntimeLaunchConfig) -> Result<bool, ClientError> {
+    runtime_needs_start_with(config, || {})
+}
+
+/// Shared implementation of [`runtime_needs_start`].
+///
+/// `before_lock` runs after a confirmed-dead probe and before the runtime-dir
+/// lock is taken. It is a no-op in production and lets a test simulate a
+/// concurrently starting instance replacing the discovery document inside that
+/// window, proving the decision is made from a re-read under the lock.
+fn runtime_needs_start_with(
+    config: &RuntimeLaunchConfig,
+    before_lock: impl FnOnce(),
+) -> Result<bool, ClientError> {
+    let discovery_file = config.discovery_file();
+    if discovery_absent(&discovery_file) {
+        return Ok(true);
+    }
+
+    let discovery = load_discovery(Some(&discovery_file))?;
+    if process_alive(discovery.pid) {
+        // A live PID is only a hint; the caller still proves it by handshake.
+        return Ok(false);
+    }
+
+    // The PID looks dead. Take the stable runtime-dir lock before touching
+    // discovery so a concurrent start cannot be raced, then re-read: a live
+    // instance may have published between the probe and the lock.
+    before_lock();
+    let lock = open_runtime_dir_lock(config.runtime_dir())?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        // Another client (or the runtime) already holds the lock, so attach to
+        // whatever it published instead of removing it.
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(false),
+        Err(std::fs::TryLockError::Error(error)) => {
+            return Err(ClientError::Discovery(format!(
+                "cannot lock runtime directory {}: {error}",
+                config.runtime_dir().display()
+            )));
+        }
+    }
+
+    let decision = stale_decision_under_lock(&discovery_file);
+    // Release the lock explicitly so it is free before any spawn follows.
+    let _ = lock.unlock();
+    decision
+}
+
+/// Opens the stable runtime-directory lock, creating it if absent.
+///
+/// `truncate(false)` and read/write access match the runtime's own opener so the
+/// client locks the exact inode the runtime uses; the record inside is never
+/// rewritten here.
+fn open_runtime_dir_lock(runtime_dir: &Path) -> Result<std::fs::File, ClientError> {
+    let path = runtime_dir.join(RUNTIME_DIR_LOCK_FILE_NAME);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(&path).map_err(|error| {
+        ClientError::Discovery(format!(
+            "cannot open runtime directory lock {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Re-reads discovery while the caller holds the runtime-dir lock.
+///
+/// Returns `true` when the runtime must be started: the document is gone, or it
+/// still names a confirmed-dead PID and can be removed. A document that is now
+/// live returns `false`, and a malformed or protocol-incompatible document is
+/// reported as an error without being removed.
+fn stale_decision_under_lock(discovery_file: &Path) -> Result<bool, ClientError> {
+    match load_discovery(Some(discovery_file)) {
+        Ok(discovery) => {
+            if process_alive(discovery.pid) {
+                return Ok(false);
+            }
+            match std::fs::remove_file(discovery_file) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(ClientError::Discovery(format!(
+                    "cannot remove stale runtime discovery {}: {error}",
+                    discovery_file.display()
+                ))),
+            }
+        }
+        // The document vanished while the lock was being acquired: start.
+        Err(error) => {
+            if matches!(error, ClientError::Discovery(_)) && discovery_absent(discovery_file) {
+                Ok(true)
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 /// Reads, parses and protocol-checks the discovery document.
@@ -2101,6 +2289,27 @@ mod tests {
         RuntimeClient::new(&discovery(PROTOCOL_VERSION, "test-token")).expect("client")
     }
 
+    /// Spawns a trivial process, reaps it, and returns its now-dead PID.
+    #[cfg(any(unix, windows))]
+    fn reaped_child_pid() -> u32 {
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg("exit 0");
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.arg("/C").arg("exit 0");
+            command
+        };
+        let mut child = command.spawn().expect("spawn a short-lived child");
+        let pid = child.id();
+        child.wait().expect("reap the short-lived child");
+        pid
+    }
+
     fn lease_response() -> ClientLeaseResponse {
         ClientLeaseResponse {
             client_id: "tauri-main".to_string(),
@@ -2320,6 +2529,29 @@ mod tests {
         assert_eq!(protocol_major("2.1.0"), 2);
         assert_eq!(protocol_major("1"), 1);
         assert_eq!(protocol_major("not-a-version"), 0);
+    }
+
+    #[test]
+    fn process_liveness_accepts_the_current_process() {
+        assert!(process_alive(std::process::id()));
+        assert!(process_alive(0), "an invalid PID must not authorize cleanup");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn process_liveness_rejects_a_reaped_child() {
+        // A truly exited (and reaped) process is the only case that may be
+        // reported as not alive.
+        assert!(!process_alive(reaped_child_pid()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_liveness_fails_closed_for_unrepresentable_pids() {
+        // `kill` on 0 or a PID that overflows `pid_t` would target a process
+        // group, so the probe must report "alive" instead of guessing.
+        assert!(process_alive(0));
+        assert!(process_alive(u32::MAX));
     }
 
     #[test]
@@ -3097,6 +3329,158 @@ mod tests {
         let directory = dir.path().join("as-directory");
         std::fs::create_dir(&directory).expect("mkdir");
         assert!(!discovery_absent(&directory));
+    }
+
+    #[test]
+    fn runtime_needs_start_reports_a_start_when_discovery_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        assert!(runtime_needs_start(&config).expect("decision"));
+        assert!(discovery_absent(&config.discovery_file()));
+    }
+
+    #[test]
+    fn runtime_needs_start_attaches_to_a_live_pid_without_touching_discovery() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let document = discovery_on(41234, "live", std::process::id());
+        let bytes = serde_json::to_vec(&document).expect("encode");
+        std::fs::write(config.discovery_file(), &bytes).expect("write");
+
+        assert!(!runtime_needs_start(&config).expect("decision"));
+        assert_eq!(
+            std::fs::read(config.discovery_file()).expect("read"),
+            bytes,
+            "attaching must leave the live document untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_needs_start_cleans_a_confirmed_dead_pid_and_keeps_the_lock_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        // A pre-existing lock proves the client reuses the stable inode instead
+        // of deleting or recreating it.
+        let lock_path = dir.path().join("runtime.lock");
+        std::fs::write(&lock_path, b"{\"pid\":1}").expect("write lock record");
+        let inode = std::fs::metadata(&lock_path).expect("metadata").ino();
+
+        let document = discovery_on(41234, "stale", reaped_child_pid());
+        std::fs::write(
+            config.discovery_file(),
+            serde_json::to_vec(&document).expect("encode"),
+        )
+        .expect("write");
+
+        assert!(runtime_needs_start(&config).expect("decision"));
+        assert!(
+            discovery_absent(&config.discovery_file()),
+            "the confirmed-dead document must be removed"
+        );
+        assert_eq!(
+            std::fs::metadata(&lock_path)
+                .expect("lock must remain")
+                .ino(),
+            inode,
+            "the stable lock inode must never be replaced"
+        );
+        assert_eq!(
+            std::fs::read(&lock_path).expect("read lock"),
+            b"{\"pid\":1}",
+            "the lock record must never be rewritten"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn runtime_needs_start_attaches_when_a_competitor_holds_the_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let lock_path = dir.path().join("runtime.lock");
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open lock");
+        held.try_lock().expect("hold the lock");
+
+        let document = discovery_on(41234, "stale", reaped_child_pid());
+        let bytes = serde_json::to_vec(&document).expect("encode");
+        std::fs::write(config.discovery_file(), &bytes).expect("write");
+
+        assert!(
+            !runtime_needs_start(&config).expect("decision"),
+            "a held lock means a live instance owns the directory"
+        );
+        assert_eq!(
+            std::fs::read(config.discovery_file()).expect("read"),
+            bytes,
+            "a held lock must never let the document be removed"
+        );
+        let _ = held.unlock();
+    }
+
+    #[test]
+    fn runtime_needs_start_reports_invalid_documents_without_removing_them() {
+        for body in [
+            b"not json".to_vec(),
+            serde_json::to_vec(&discovery("2", "token")).expect("encode"),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config = sandbox_launch_config(dir.path());
+            std::fs::write(config.discovery_file(), &body).expect("write");
+
+            let error =
+                runtime_needs_start(&config).expect_err("an invalid document must be reported");
+            assert!(matches!(
+                error,
+                ClientError::Discovery(_) | ClientError::Protocol(_)
+            ));
+            assert!(
+                !discovery_absent(&config.discovery_file()),
+                "an invalid document must never be removed"
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn runtime_needs_start_rechecks_discovery_under_the_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let discovery_file = config.discovery_file();
+
+        // The first probe sees a confirmed-dead PID...
+        std::fs::write(
+            &discovery_file,
+            serde_json::to_vec(&discovery_on(41234, "stale", reaped_child_pid())).expect("encode"),
+        )
+        .expect("write");
+
+        // ...but a concurrently starting instance publishes a live document
+        // before the client takes the lock, so the decision must come from the
+        // re-read under the lock rather than the first probe.
+        let live = discovery_on(41235, "winner", std::process::id());
+        let live_bytes = serde_json::to_vec(&live).expect("encode");
+        let decision = runtime_needs_start_with(&config, || {
+            std::fs::write(&discovery_file, &live_bytes).expect("replace discovery under the lock");
+        })
+        .expect("decision");
+
+        assert!(
+            !decision,
+            "a live document found under the lock must attach"
+        );
+        assert_eq!(
+            std::fs::read(&discovery_file).expect("read"),
+            live_bytes,
+            "the winning document must be preserved"
+        );
     }
 
     #[test]

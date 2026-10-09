@@ -4,7 +4,8 @@
 //! chat/tool state, the workflow engine and the loopback HTTP/SSE control plane.
 //! The desktop application talks to it as one more control-plane client: it
 //! attaches to an already-published runtime when one is live, starts one only
-//! when the runtime directory genuinely has no discovery document, completes the
+//! when the runtime directory genuinely has no discovery document or the
+//! published document names a process that has confirmed exited, completes the
 //! readiness handshake, and then holds a client lease with a background
 //! heartbeat.
 //!
@@ -33,8 +34,8 @@ use chatspeed_contracts::{
     BRIDGE_SCHEMA_VERSION,
 };
 use chatspeed_runtime_client::{
-    BridgeSession, ClientError, Heartbeat, LeaseGuard, RuntimeChild, RuntimeClient,
-    RuntimeLaunchConfig,
+    runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard, RuntimeChild,
+    RuntimeClient, RuntimeLaunchConfig,
 };
 use serde::Serialize;
 #[cfg(feature = "desktop")]
@@ -337,9 +338,10 @@ impl RuntimeSupervisor {
     /// The launch configuration is the runtime's identity: a published discovery
     /// document in its runtime directory is attached to only after the readiness
     /// handshake proves it is the expected standalone runtime, and a runtime is
-    /// started only when that document is genuinely absent. A started runtime
-    /// receives every path explicitly, so an inherited environment or a
-    /// cross-profile binary can never redirect it.
+    /// started only when that document is genuinely absent or names a process
+    /// that has confirmed exited. A started runtime receives every path
+    /// explicitly, so an inherited environment or a cross-profile binary can
+    /// never redirect it.
     ///
     /// An unreachable, protocol-incompatible or malformed endpoint is reported as
     /// [`RuntimeUnavailable`] and never silently worked around.
@@ -362,10 +364,16 @@ impl RuntimeSupervisor {
         state.runtime_dir = Some(config.runtime_dir().to_path_buf());
 
         let discovery_file = config.discovery_file();
-        let attempt = if chatspeed_runtime_client::discovery_absent(&discovery_file) {
-            start_runtime(config, &discovery_file).await
-        } else {
-            attach_runtime(&discovery_file).await
+        let attempt = match runtime_needs_start(config) {
+            Ok(true) => {
+                log::info!(
+                    "[RuntimeSupervisor] no live runtime owns {}; starting one",
+                    config.runtime_dir().display()
+                );
+                start_runtime(config, &discovery_file).await
+            }
+            Ok(false) => attach_runtime(&discovery_file).await,
+            Err(error) => Err(RuntimeUnavailable::from_client_error(error)),
         };
 
         let (client, child, connection_state) = match attempt {
@@ -765,12 +773,27 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
 
 /// Starts the runtime child with a fully resolved launch configuration and waits
 /// for its readiness handshake.
+///
+/// Starting can lose a race with another client: a spawn that is refused because
+/// discovery already exists, or a child that exits while a different instance
+/// wins the runtime-dir lock, is not an error. In both cases this attaches to the
+/// winner and reports no owned child, so ownership is never misreported.
 async fn start_runtime(
     config: &RuntimeLaunchConfig,
     discovery_file: &Path,
 ) -> Result<(RuntimeClient, Option<RuntimeChild>, RuntimeConnectionState), RuntimeUnavailable> {
-    let mut child = chatspeed_runtime_client::spawn_runtime_with_config(config)
-        .map_err(RuntimeUnavailable::from_client_error)?;
+    let mut child = match chatspeed_runtime_client::spawn_runtime_with_config(config) {
+        Ok(child) => child,
+        Err(error) => {
+            // A competing client may have published discovery between the
+            // liveness check and this spawn. Attach to that live runtime instead
+            // of surfacing an error or removing its document.
+            if !chatspeed_runtime_client::discovery_absent(discovery_file) {
+                return attach_runtime(discovery_file).await;
+            }
+            return Err(RuntimeUnavailable::from_client_error(error));
+        }
+    };
     let document = match chatspeed_runtime_client::wait_for_discovery(
         Some(discovery_file),
         SPAWN_READY_TIMEOUT,
@@ -790,10 +813,21 @@ async fn start_runtime(
             return Err(RuntimeUnavailable::from_client_error(error));
         }
     };
-    // Readiness is proven; the child is long-lived from here.
-    child.silence_stderr();
+    // A competing child can still be exiting after losing the directory lock.
+    // Bind ownership to the PID proven by the readiness handshake as well as
+    // the child handle, rather than assuming every running child is the winner.
+    let owned = document.pid == child.id() && matches!(child.try_wait(), Ok(None));
     let client = RuntimeClient::new(&document).map_err(RuntimeUnavailable::from_client_error)?;
-    Ok((client, Some(child), RuntimeConnectionState::Spawned))
+    if owned {
+        // Readiness is proven; the child is long-lived from here.
+        child.silence_stderr();
+        Ok((client, Some(child), RuntimeConnectionState::Spawned))
+    } else {
+        log::info!(
+            "[RuntimeSupervisor] another runtime instance won the start race; attaching instead"
+        );
+        Ok((client, None, RuntimeConnectionState::Attached))
+    }
 }
 
 /// Attaches to an already-published runtime after a readiness handshake.
@@ -1187,6 +1221,37 @@ mod tests {
         // The Debug surface never carries a client or lease secret.
         let debug = format!("{supervisor:?}");
         assert!(!debug.contains("<redacted>"), "{debug}");
+    }
+
+    #[tokio::test]
+    async fn start_runtime_attaches_when_a_spawn_is_refused_by_an_existing_document() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let discovery_file = config.discovery_file();
+        // A protocol-incompatible document makes the spawn refuse *and* lets the
+        // attach path fail fast, without a network round trip.
+        let document = ControlPlaneDiscovery {
+            protocol_version: "2".to_string(),
+            server_instance_id: "other".to_string(),
+            pid: std::process::id(),
+            host: "127.0.0.1".to_string(),
+            port: 1,
+            token: "token".to_string(),
+            started_at: "now".to_string(),
+        };
+        std::fs::write(
+            &discovery_file,
+            serde_json::to_vec(&document).expect("encode"),
+        )
+        .expect("write");
+
+        let result = start_runtime(&config, &discovery_file).await;
+        // The spawn refusal is not surfaced: the existing document was attached
+        // to and its protocol mismatch reported instead.
+        assert!(
+            matches!(result, Err(RuntimeUnavailable::Protocol(_))),
+            "{result:?}"
+        );
     }
 
     #[cfg(feature = "desktop")]
