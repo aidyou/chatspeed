@@ -5,22 +5,30 @@
         <span>{{ t('settings.agentSkills.title') }}</span>
         <div class="actions">
           <el-tooltip :content="t('settings.agentSkills.rescan')" placement="left" :hide-after="0">
-            <span class="icon" :class="{ disabled: store.loading }" @click="rescan">
+            <span
+              class="icon-btn"
+              role="button"
+              tabindex="0"
+              :class="{ disabled: store.loading }"
+              @click="rescan"
+            >
               <cs name="refresh" />
             </span>
           </el-tooltip>
           <el-tooltip :content="t('settings.agentSkills.doctor')" placement="left" :hide-after="0">
-            <span class="icon" @click="runDoctor">
+            <span class="icon-btn" role="button" tabindex="0" @click="runDoctor">
               <cs name="check-circle" />
             </span>
           </el-tooltip>
           <el-tooltip :content="t('settings.agentSkills.reconcile')" placement="left" :hide-after="0">
             <span
-              class="icon"
+              class="icon-btn"
+              role="button"
+              tabindex="0"
               :class="{ disabled: store.reconciling }"
               @click="runReconcile"
             >
-              <cs name="refresh" />
+              <cs name="tool" />
             </span>
           </el-tooltip>
         </div>
@@ -210,29 +218,48 @@
       <!-- installed skills -->
       <div class="section">
         <div class="section-title">{{ t('settings.agentSkills.installed') }}</div>
-        <el-table v-loading="store.loading" :data="store.skills" size="small" class="skill-table" :empty-text="t('settings.agentSkills.empty')">
-          <el-table-column prop="name" :label="t('settings.agentSkills.name')" width="180" />
-          <el-table-column prop="source" :label="t('settings.agentSkills.origin')" width="120" />
-          <el-table-column :label="t('settings.agentSkills.target')" width="140">
+        <el-table
+          v-loading="store.loading"
+          :data="store.skills"
+          size="small"
+          border
+          class="data-table"
+          :empty-text="t('settings.agentSkills.empty')"
+        >
+          <el-table-column
+            prop="name"
+            :label="t('settings.agentSkills.name')"
+            min-width="120"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            prop="source"
+            :label="t('settings.agentSkills.origin')"
+            min-width="84"
+            show-overflow-tooltip
+          />
+          <el-table-column :label="t('settings.agentSkills.target')" min-width="96">
             <template #default="{ row }">{{ row.target_id || '-' }}</template>
           </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.state')" width="220">
+          <el-table-column :label="t('settings.agentSkills.state')" min-width="150">
             <template #default="{ row }">
-              <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
-                t('settings.agentSkills.protected')
-              }}</el-tag>
-              <el-tag v-if="row.managed" size="small" effect="plain">{{
-                t('settings.agentSkills.managed')
-              }}</el-tag>
-              <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
-                t('settings.agentSkills.drifted')
-              }}</el-tag>
-              <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
-                t('settings.agentSkills.missing')
-              }}</el-tag>
+              <div class="state-tags">
+                <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
+                  t('settings.agentSkills.protected')
+                }}</el-tag>
+                <el-tag v-if="row.managed" size="small" effect="plain">{{
+                  t('settings.agentSkills.managed')
+                }}</el-tag>
+                <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
+                  t('settings.agentSkills.drifted')
+                }}</el-tag>
+                <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
+                  t('settings.agentSkills.missing')
+                }}</el-tag>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.actions')" width="140">
+          <el-table-column :label="t('settings.agentSkills.actions')" width="76" align="center">
             <template #default="{ row }">
               <el-button
                 size="small"
@@ -247,79 +274,31 @@
             </template>
           </el-table-column>
         </el-table>
-
-        <ul v-loading="store.loading" class="skill-cards">
-          <li v-for="(row, index) in store.skills" :key="`${row.target_id || ''}:${row.name}:${index}`" class="skill-cards__item">
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.name') }}</span>
-              <span class="skill-cards__value">{{ row.name }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.origin') }}</span>
-              <span class="skill-cards__value">{{ row.source }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.target') }}</span>
-              <span class="skill-cards__value">{{ row.target_id || '-' }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.state') }}</span>
-              <span class="skill-cards__value skill-cards__tags">
-                <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
-                  t('settings.agentSkills.protected')
-                }}</el-tag>
-                <el-tag v-if="row.managed" size="small" effect="plain">{{
-                  t('settings.agentSkills.managed')
-                }}</el-tag>
-                <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
-                  t('settings.agentSkills.drifted')
-                }}</el-tag>
-                <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
-                  t('settings.agentSkills.missing')
-                }}</el-tag>
-              </span>
-            </div>
-            <div class="skill-cards__actions">
-              <el-button
-                size="small"
-                text
-                type="danger"
-                :disabled="!row.uninstallable"
-                :loading="store.applying"
-                @click="uninstall(row)"
-              >
-                {{ t('settings.agentSkills.uninstall') }}
-              </el-button>
-            </div>
-          </li>
-          <li v-if="!store.loading && !store.skills?.length" class="skill-cards__empty">
-            {{ t('settings.agentSkills.empty') }}
-          </li>
-        </ul>
       </div>
 
       <!-- doctor -->
       <div v-if="store.doctor" class="section">
         <div class="section-title">{{ t('settings.agentSkills.doctor') }}</div>
-        <div class="doctor">
-          <div class="doctor-row">
-            journal: needs_reconcile={{ store.doctor.journal?.needs_reconcile?.length ?? 0 }},
-            interrupted={{ store.doctor.journal?.interrupted?.length ?? 0 }}
+        <div class="metrics">
+          <div v-for="group in doctorGroups" :key="group.labelKey" class="metric-group">
+            <div class="metric-group__title">{{ t(`settings.agentSkills.${group.labelKey}`) }}</div>
+            <div class="tiles">
+              <div
+                v-for="tile in group.tiles"
+                :key="tile.labelKey"
+                class="tile"
+                :class="`tile--${tile.tone}`"
+              >
+                <span class="tile__value">{{ tile.value }}</span>
+                <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
+              </div>
+            </div>
           </div>
-          <div class="doctor-row">
-            skills: managed={{ store.doctor.skills?.managed ?? 0 }},
-            discovered={{ store.doctor.skills?.discovered ?? 0 }},
-            defined={{ store.doctor.skills?.defined ?? 0 }},
-            drifted={{ store.doctor.skills?.drifted?.length ?? 0 }}
-          </div>
-          <div class="doctor-row">
-            mcp: registered={{ store.doctor.mcp?.registered ?? 0 }},
-            enabled={{ store.doctor.mcp?.desired_enabled ?? 0 }},
-            drift={{ store.doctor.mcp?.drift?.length ?? 0 }}
-          </div>
-          <div class="doctor-row">
-            {{ t('settings.agentSkills.findings') }}:
-            {{ store.doctor.findings?.length ? store.doctor.findings.join(', ') : t('settings.agentSkills.none') }}
+          <div class="metric-summary">
+            <span class="metric-summary__label">{{ t('settings.agentSkills.findings') }}</span>
+            <span class="metric-summary__value">{{
+              store.doctor.findings?.length ? store.doctor.findings.join(', ') : t('settings.agentSkills.none')
+            }}</span>
           </div>
         </div>
       </div>
@@ -327,20 +306,25 @@
       <!-- reconcile result -->
       <div v-if="store.lastReconcile" class="section">
         <div class="section-title">{{ t('settings.agentSkills.reconcile') }}</div>
-        <div class="doctor">
-          <div class="doctor-row">
-            {{ t('settings.agentSkills.reconcileSummary', {
-              quarantines: store.lastReconcile.quarantines_finalized?.length ?? 0,
-              installs: store.lastReconcile.installs_recovered?.length ?? 0,
-              mcp: store.lastReconcile.mcp_effects_recovered?.length ?? 0,
-              staging: store.lastReconcile.staging_residue_removed ?? 0
-            }) }}
+        <div class="metrics">
+          <div class="tiles">
+            <div
+              v-for="tile in reconcileTiles"
+              :key="tile.labelKey"
+              class="tile"
+              :class="`tile--${tile.tone}`"
+            >
+              <span class="tile__value">{{ tile.value }}</span>
+              <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
+            </div>
           </div>
-          <div class="doctor-row">
-            {{ t('settings.agentSkills.stillNeedsReconcile') }}:
-            {{ store.lastReconcile.still_needs_reconcile?.length
-              ? store.lastReconcile.still_needs_reconcile.join(', ')
-              : t('settings.agentSkills.none') }}
+          <div class="metric-summary">
+            <span class="metric-summary__label">{{ t('settings.agentSkills.stillNeedsReconcile') }}</span>
+            <span class="metric-summary__value">{{
+              store.lastReconcile.still_needs_reconcile?.length
+                ? store.lastReconcile.still_needs_reconcile.join(', ')
+                : t('settings.agentSkills.none')
+            }}</span>
           </div>
         </div>
       </div>
@@ -432,6 +416,58 @@ function statusTagType(status) {
       return '';
   }
 }
+
+/**
+ * Builds one doctor/reconcile metric tile. `warn` marks a count whose non-zero value is a
+ * problem, so it highlights in the warning colour; ordinary counts stay neutral.
+ */
+function tile(labelKey, value, warn = false) {
+  return { labelKey, value, tone: warn && value > 0 ? 'warn' : 'neutral' };
+}
+
+// Structured projection of the doctor report: grouped counters replace the old raw dump so the
+// numbers read as labelled metrics instead of a debug string.
+const doctorGroups = computed(() => {
+  const doctor = store.doctor;
+  if (!doctor) return [];
+  return [
+    {
+      labelKey: 'doctorGroupJournal',
+      tiles: [
+        tile('metricNeedsReconcile', doctor.journal?.needs_reconcile?.length ?? 0, true),
+        tile('metricInterrupted', doctor.journal?.interrupted?.length ?? 0, true)
+      ]
+    },
+    {
+      labelKey: 'doctorGroupSkills',
+      tiles: [
+        tile('metricManaged', doctor.skills?.managed ?? 0),
+        tile('metricDiscovered', doctor.skills?.discovered ?? 0),
+        tile('metricDefined', doctor.skills?.defined ?? 0),
+        tile('metricDrifted', doctor.skills?.drifted?.length ?? 0, true)
+      ]
+    },
+    {
+      labelKey: 'doctorGroupMcp',
+      tiles: [
+        tile('metricRegistered', doctor.mcp?.registered ?? 0),
+        tile('metricEnabled', doctor.mcp?.desired_enabled ?? 0),
+        tile('metricDrift', doctor.mcp?.drift?.length ?? 0, true)
+      ]
+    }
+  ];
+});
+
+const reconcileTiles = computed(() => {
+  const result = store.lastReconcile;
+  if (!result) return [];
+  return [
+    tile('reconcileQuarantines', result.quarantines_finalized?.length ?? 0),
+    tile('reconcileInstalls', result.installs_recovered?.length ?? 0),
+    tile('reconcileMcpEffects', result.mcp_effects_recovered?.length ?? 0),
+    tile('reconcileStaging', result.staging_residue_removed ?? 0)
+  ];
+});
 
 async function rescan() {
   try {
@@ -529,16 +565,39 @@ onMounted(async () => {
 
     .actions {
       display: flex;
-      gap: var(--cs-space-sm);
+      gap: var(--cs-space-xs);
     }
 
-    .icon {
-      cursor: pointer;
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--cs-border-color);
+      border-radius: var(--cs-border-radius);
+      background: var(--cs-bg-color-light);
       color: var(--cs-text-color-secondary);
+      cursor: pointer;
+
+      &:hover {
+        color: var(--cs-text-color-primary);
+        border-color: var(--cs-color-primary-light);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--el-color-primary);
+        outline-offset: 1px;
+      }
 
       &.disabled {
         cursor: not-allowed;
         opacity: 0.5;
+
+        &:hover {
+          color: var(--cs-text-color-secondary);
+          border-color: var(--cs-border-color);
+        }
       }
     }
   }
@@ -550,8 +609,15 @@ onMounted(async () => {
   }
 
   .section {
-    margin-bottom: var(--cs-space);
     min-width: 0;
+    padding: var(--cs-space);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius-md);
+    background: var(--cs-bg-color-light);
+
+    + .section {
+      margin-top: var(--cs-space);
+    }
 
     .section-title {
       font-weight: 600;
@@ -612,22 +678,77 @@ onMounted(async () => {
     margin-left: var(--cs-space-xs);
   }
 
-  .doctor {
-    font-size: 12px;
-    color: var(--cs-text-color-secondary);
+  .metrics {
     display: flex;
     flex-direction: column;
-    gap: var(--cs-space-xs);
+    gap: var(--cs-space);
+  }
 
-    .doctor-row {
+  .metric-group__title {
+    margin-bottom: var(--cs-space-xs);
+    font-size: var(--cs-font-size-sm);
+    color: var(--cs-text-color-secondary);
+  }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: var(--cs-space-sm);
+  }
+
+  .tile {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xxs);
+    padding: var(--cs-space-sm);
+    border: 1px solid var(--cs-border-color);
+    border-radius: var(--cs-border-radius);
+    background: var(--cs-bg-color-deep);
+
+    .tile__value {
+      font-size: var(--cs-font-size-xl);
+      font-weight: 600;
+      color: var(--cs-text-color-primary);
+    }
+
+    .tile__label {
+      font-size: var(--cs-font-size-sm);
+      color: var(--cs-text-color-secondary);
+    }
+
+    &.tile--warn {
+      border-color: var(--cs-warning-border-color);
+      background: var(--cs-warning-bg-color);
+
+      .tile__value {
+        color: var(--cs-warning-color);
+      }
+    }
+  }
+
+  .metric-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cs-space-xs);
+    font-size: var(--cs-font-size-sm);
+
+    .metric-summary__label {
+      color: var(--cs-text-color-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .metric-summary__value {
+      color: var(--cs-text-color-primary);
       overflow-wrap: anywhere;
     }
   }
 
   /*
-   * Responsive projection of the three wide tables. Above the breakpoint every table keeps
-   * its desktop Element Plus layout; below it the table is replaced by a data-complete card
-   * list, so a narrow dock shows the same columns instead of a clipped or scrolling table.
+   * Responsive projection of the two report tables. Above the breakpoint each keeps its
+   * desktop Element Plus layout; below it the table is replaced by a data-complete card list,
+   * so a narrow dock shows the same columns instead of a clipped or scrolling table. The
+   * installed list is the exception: it is a self-fitting bordered table that stays a table
+   * at every dock width.
    */
   .skill-cards {
     display: none;
@@ -669,27 +790,17 @@ onMounted(async () => {
     overflow-wrap: anywhere;
   }
 
-  .skill-cards__tags {
+  .state-tags {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--cs-space-xs);
   }
 
-  .skill-cards__actions {
-    display: flex;
-    justify-content: flex-end;
-  }
-
-  .skill-cards__empty {
-    color: var(--cs-text-color-secondary);
-    font-size: var(--cs-font-size-sm);
-  }
-
   /*
-   * A 600px dock cannot fit the ~800px installed table, so the compact breakpoint starts
-   * below the widest table instead of at a viewport size. The narrow breakpoint then stacks
-   * the header and the form controls so nothing pushes the page sideways.
+   * A 600px dock cannot fit the findings and results tables, so the compact breakpoint swaps
+   * only those two for their card lists. The narrow breakpoint then stacks the header and the
+   * form controls so nothing pushes the page sideways.
    */
   @container agent-skills (max-width: 860px) {
     .skill-table {

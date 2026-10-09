@@ -362,9 +362,10 @@ test('the page adapts to the dock container width, never the window viewport', (
 })
 
 test('each wide table collapses into a full-data card list inside a narrow container', () => {
-  // Findings, outcomes and installed skills are the three tables that cannot fit 600px.
-  assert.equal((component.match(/<el-table[^>]*skill-table/g) || []).length, 3)
-  assert.equal((component.match(/<ul[^>]*class="[^"]*skill-cards/g) || []).length, 3)
+  // Findings and outcomes are the two report tables that cannot fit the 600px dock. The
+  // installed list is now a resident data table, so it is no longer part of the table/card pairing.
+  assert.equal((component.match(/<el-table[^>]*skill-table/g) || []).length, 2)
+  assert.equal((component.match(/<ul[^>]*class="[^"]*skill-cards/g) || []).length, 2)
 
   // The cards mirror every findings column instead of dropping any of them.
   for (const field of ['severity', 'rule', 'path', 'detail']) {
@@ -377,16 +378,18 @@ test('each wide table collapses into a full-data card list inside a narrow conta
   assert.match(component, /statusTagType\(row\.status\)/)
   assert.match(component, /row\.detail \|\| row\.install_path \|\| '-'/)
 
-  // Installed skills keep name, source, target, every state tag and the uninstall action.
+  // Installed skills render as a resident, bordered data table keeping name, source and state.
+  assert.match(component, /class="data-table"/)
+  assert.match(component, /<el-table[^>]*border/, 'installed data table keeps its grid')
   for (const field of ['name', 'source']) {
     assert.match(component, new RegExp(`prop="${field}"`), `missing installed column ${field}`)
-    assert.match(component, new RegExp(`row\\.${field}\\b`), `missing card value ${field}`)
   }
+  assert.match(component, /row\.target_id\b/, 'installed data table keeps the target column')
   for (const state of ['protected', 'managed', 'drifted', 'present']) {
     assert.match(component, new RegExp(`row\\.${state}\\b`), `missing state tag ${state}`)
   }
-  // The card uninstall is the same gated and loading-aware control, never an unconditional one.
-  assert.equal((component.match(/:disabled="!row\.uninstallable"/g) || []).length, 2)
+  // The installed uninstall is a gated and loading-aware control, never an unconditional one.
+  assert.equal((component.match(/:disabled="!row\.uninstallable"/g) || []).length, 1)
   assert.equal(
     (component.match(/:loading="store\.applying"/g) || []).length >= 2,
     true,
@@ -403,8 +406,8 @@ test('the desktop tables and their column widths are preserved', () => {
     component.indexOf('@container agent-skills (max-width: 480px)')
   )
   assert.match(compact, /\.skill-table\s*\{\s*display:\s*none/)
-  // The fixed widths that define the wide desktop tables are unchanged.
-  for (const width of [110, 220, 140, 160, 180, 120]) {
+  // The fixed widths that define the report tables and the installed action column are unchanged.
+  for (const width of [110, 220, 140, 160, 76]) {
     assert.match(component, new RegExp(`width="${width}"`), `missing table width ${width}`)
   }
 })
