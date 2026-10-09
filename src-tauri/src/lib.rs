@@ -22,6 +22,7 @@ use chatspeed_runtime_backend::owner::builtin_agents;
 // plugin filesystem lifecycle.
 pub use chatspeed_runtime_backend::plugin_types;
 pub mod chat_hub;
+pub mod dock_window;
 pub mod native_dock;
 pub mod plugin_ui;
 mod commands;
@@ -337,7 +338,7 @@ pub async fn run() -> crate::error::Result<()> {
             update_chat_hub_order,
             show_chat_hub_page,
             hide_chat_hub_page,
-            set_chat_hub_page_width,
+            set_dock_width,
             reload_chat_hub_page,
             destroy_chat_hub_page,
             get_chat_hub_view_mode,
@@ -808,6 +809,9 @@ pub async fn run() -> crate::error::Result<()> {
             app.manage(chat_hub::ChatHubPageState::new());
             // Shared bounded overlay every native dock view (ChatHub tab and plugin panel) uses.
             app.manage(native_dock::DockSurface::new());
+            // Width the Workflow window currently holds for the right dock, so the workflow UI
+            // keeps its size while the dock is open.
+            app.manage(dock_window::DockWindowState::new());
             app.manage(crate::plugin_ui::PluginUiHost::new());
             app.manage(crate::plugin_ui::PluginUiRuntime::default());
 
@@ -1126,8 +1130,8 @@ fn current_saved_window_size(
         return None;
     }
 
-    // The window may be holding the docked ChatHub page, which widened it by the width that
-    // page needs. That width belongs to the page rather than to the window, so it is handed
+    // The window may be holding the docked views, which widened it by the width the dock
+    // needs. That width belongs to the dock rather than to the window, so it is handed
     // back here and kept out of the record: reopening the app must not restore a window that
     // is wider than the workflow UI ever was.
     let width = width_without_docked_page(window, logical_size.width);
@@ -1143,29 +1147,29 @@ fn current_saved_window_size(
     })
 }
 
-/// Width of a window without the space the docked ChatHub page is holding.
+/// Width of a window without the space the right dock is holding.
 ///
-/// The page is docked inside the workflow window and widens it by the width the page needs,
-/// so a remembered size has to leave that width out. A window that does not host the page,
-/// or one whose page is hidden, keeps the width it was measured with.
+/// The dock is a column inside the Workflow window, and the window widens by its width so the
+/// workflow UI keeps its size, so a remembered size has to leave that width out. A window that
+/// does not host the dock, or one whose dock is closed, keeps the width it was measured with.
 fn width_without_docked_page(window: &tauri::Window, measured_width: f64) -> f64 {
     if window.label() != chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
         return measured_width;
     }
 
     let docked_width = window
-        .try_state::<chat_hub::ChatHubPageState>()
-        .map(|state| state.inner().grown_width())
+        .try_state::<crate::dock_window::DockWindowState>()
+        .map(|state| state.inner().grown())
         .unwrap_or(0.0);
 
     remembered_width(measured_width, docked_width)
 }
 
-/// Width a window is remembered with, leaving the width of a docked page out.
+/// Width a window is remembered with, leaving the width of the right dock out.
 ///
-/// The workflow UI always keeps [`chat_hub::CHAT_HUB_MIN_HOST_WIDTH`] next to a page, so a
-/// remembered width below it cannot describe a window the user could have had the page open
-/// in: it can only come from a window that was shrunk by hand while the page was docked.
+/// The workflow UI always keeps [`chat_hub::CHAT_HUB_MIN_HOST_WIDTH`] next to the dock, so a
+/// remembered width below it cannot describe a window the user could have had the dock open
+/// in: it can only come from a window that was shrunk by hand while the dock was open.
 pub(crate) fn remembered_width(measured_width: f64, docked_width: f64) -> f64 {
     if docked_width > 0.0 && docked_width < measured_width {
         (measured_width - docked_width).max(chat_hub::CHAT_HUB_MIN_HOST_WIDTH)

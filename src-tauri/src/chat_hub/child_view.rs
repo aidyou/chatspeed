@@ -3,8 +3,8 @@
 //! On these platforms a webview is created as a child view at an explicit rectangle, and the
 //! platform moves a child view together with its parent window, so the tabs follow the window
 //! without any per-move work. The rectangle is the one the frontend measured for the right dock,
-//! and it is the only geometry this carrier knows: the window is never widened, narrowed or
-//! split here.
+//! and it is the only geometry this carrier knows: how much room the window makes for that dock is
+//! decided once, for every platform, by [`crate::dock_window`], and never by a carrier.
 //!
 //! Every ChatHub entry has its own tab, each tab keeps its own `wry` webview (with its own
 //! browsing session) while another tab is shown, and the tabs share the bounded dock surface of
@@ -75,13 +75,17 @@ impl ChatHubPageState {
     /// other tabs are hidden, never destroyed. `bounds` is the dock rectangle the frontend
     /// measured in logical pixels. A caller that sends only the legacy `width`/`top_inset` pair is
     /// laid out at the right edge of the window instead, so an older frontend keeps working.
+    ///
+    /// `_corner_radius` is the radius a window draws at the bottom-right corner of its dock. These
+    /// platforms clip a child view to the window frame themselves, so the corner needs no help from
+    /// this carrier and the measurement is unused here.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
         url: &str,
         width: f64,
         top_inset: f64,
-        corner_radius: f64,
+        _corner_radius: f64,
         tab_id: Option<String>,
         bounds: Option<DockBounds>,
     ) -> Result<()> {
@@ -105,7 +109,7 @@ impl ChatHubPageState {
             // applied: the settings are read here. The browsing profile is the same directory on
             // every tab, so the session survives a tab close and a restart.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
-            let webview = page_builder(&mut web_context, &url, page_proxy(app), corner_radius, app)
+            let webview = page_builder(&mut web_context, &url, page_proxy(app), app)
                 .with_bounds(rect(bounds))
                 .build_as_child(&host)?;
 
@@ -153,38 +157,6 @@ impl ChatHubPageState {
             tab.webview.set_visible(false)?;
         }
         inner.active = None;
-
-        Ok(())
-    }
-
-    /// Applies a new width to the active tab.
-    ///
-    /// A drag only changes how much of the dock the tab takes; the window itself is never
-    /// resized. The rectangle keeps its top and height and stays anchored to the right edge of the
-    /// window, which is the dock this command predates.
-    pub fn set_width(&self, app: &AppHandle<Wry>, width: f64) -> Result<()> {
-        let host = host_window(app)?;
-        let (window_width, window_height) = native_dock::window_size(&host)?;
-
-        let mut inner = self.lock()?;
-        let Some(active) = inner.active.clone() else {
-            return Ok(());
-        };
-        let Some(tab) = inner.tabs.get_mut(&active) else {
-            return Ok(());
-        };
-
-        let width = clamp_width(window_width, width);
-        let bounds = DockBounds {
-            x: (window_width - width).max(0.0),
-            y: tab.bounds.y,
-            width,
-            height: tab.bounds.height,
-        }
-        .sanitize(window_width, window_height)?;
-
-        tab.webview.set_bounds(rect(bounds))?;
-        tab.bounds = bounds;
 
         Ok(())
     }
@@ -252,14 +224,6 @@ impl ChatHubPageState {
         }
     }
 
-    /// Width the dock took from the host window, in logical pixels.
-    ///
-    /// The dock no longer takes width from the window: the frontend reserves it in its own layout,
-    /// so no independent window resize is reported here.
-    pub fn grown_width(&self) -> f64 {
-        0.0
-    }
-
     /// Locks the state, reporting a poisoned lock as a plain error instead of a panic.
     fn lock(&self) -> Result<MutexGuard<'_, Inner>> {
         self.inner.lock().map_err(|_| AppError::General {
@@ -324,7 +288,7 @@ mod tests {
             .split("pub fn hide")
             .nth(1)
             .expect("the hide path is missing")
-            .split("pub fn set_width")
+            .split("pub fn reload")
             .next()
             .expect("the hide path is not terminated");
 
@@ -347,7 +311,8 @@ mod tests {
         // The tab is placed at the rectangle the frontend measured.
         assert!(rectangle.contains("LogicalPosition::new(bounds.x, bounds.y)"));
         assert!(rectangle.contains("LogicalSize::new(bounds.width, bounds.height)"));
-        // Nothing widens, narrows or splits the window any more.
+        // Making room for the dock belongs to the shared window state, so this carrier never
+        // widens, narrows or splits the window itself.
         let widening = format!("{}{}", "widen_", "host_window");
         let narrowing = format!("{}{}", "narrow_", "host_window");
         assert!(!source.contains(&widening));
@@ -363,7 +328,7 @@ mod tests {
             .split("pub fn hide")
             .nth(1)
             .expect("the hide path is missing")
-            .split("pub fn set_width")
+            .split("pub fn reload")
             .next()
             .expect("the hide path is not terminated");
 

@@ -84,10 +84,10 @@ test('the dock measures the shared surface and hands the rectangle to the carrie
   assert.doesNotMatch(workflowView, /show_chat_hub_webview|update_chat_hub_webview_bounds/)
 })
 
-test('the dock is measured only after the DOM update, and a hidden view is never resurrected', () => {
+test('the dock is measured only after the window makes room and the DOM update', () => {
   assert.match(
     chatHubBlock(),
-    /const syncDock = async \(\) => \{\s*if \(dockTornDown\) \{\s*return\s*\}\s*await nextTick\(\)\s*if \(dockTornDown\) \{\s*return\s*\}\s*return dockCoordinator\.sync\(dockSnapshot\(\)\)\s*\}/
+    /const syncDock = async \(\) => \{\s*if \(dockTornDown\) \{\s*return\s*\}\s*await syncDockWidth\(\)\s*await nextTick\(\)\s*if \(dockTornDown\) \{\s*return\s*\}\s*return dockCoordinator\.sync\(dockSnapshot\(\)\)\s*\}/
   )
   assert.match(
     chatHubBlock(),
@@ -97,6 +97,36 @@ test('the dock is measured only after the DOM update, and a hidden view is never
   // hidden dock cannot bring a view back.
   assert.match(dockedViews, /const showable = \(tab, geometry\) =>/)
   assert.match(dockedViews, /if \(!showable\(active, snapshot\.geometry\)\) \{/)
+})
+
+test('the window makes room for the dock column instead of the workflow UI', () => {
+  const syncWidth = handlerBody('syncDockWidth')
+  const releaseWidth = chatHubBlock()
+
+  // The width the workflow UI reserves is the width the window grows by, so the workflow UI keeps
+  // its own size and a native view is placed in the column the window added for it.
+  assert.match(
+    syncWidth,
+    /await invokeWrapper\('set_dock_width', \{ width: chatHubReservedWidth\.value \}\)/
+  )
+  // A window that cannot grow is reported, while the dock still opens and the layout still syncs.
+  assert.match(
+    syncWidth,
+    /catch \(error\) \{\s*console\.error\('Failed to make room for the docked views:', error\)/
+  )
+  // The width the window took for the dock is handed back when the dock goes away.
+  assert.match(
+    releaseWidth,
+    /const releaseDockWidth = \(\) =>\s*invokeWrapper\('set_dock_width', \{ width: 0 \}\)\.catch\(error => \{\s*console\.error\('Failed to hand the docked width back to the window:', error\)\s*\}\)/
+  )
+  assert.match(workflowView, /dockTornDown = true[\s\S]*?void releaseDockWidth\(\)/)
+  // The frontend keeps reserving the column, so the dock never becomes part of the workflow
+  // content and the overlaid dialogs stay clear of a native view.
+  assert.match(
+    chatHubBlock(),
+    /const chatHubReservedWidth = computed\(\(\) =>\s*dockVisible\.value && dockActiveTab\.value \? chatHubStore\.pageWidth : 0\s*\)/
+  )
+  assert.match(chatHubBlock(), /root\.style\.setProperty\('--cs-chathub-reserved-width'/)
 })
 
 test('the right dock hosts both provider kinds in one multi-tab surface', () => {

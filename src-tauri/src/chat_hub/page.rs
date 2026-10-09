@@ -16,12 +16,13 @@ use super::types::{
 use super::ChatHubPageState;
 use crate::error::{AppError, Result};
 
-/// Tells the frontend how it has to make room for the docked page.
+/// Tells the frontend how it has to make room for the docked column.
 ///
-/// Every platform reserves the right dock itself: the frontend measures the dock rectangle in
-/// its own layout and hands it to the carrier, which places a native view inside it. The
-/// carrier therefore never changes the window layout on any platform, so `reserve` is the mode
-/// everywhere.
+/// The frontend reserves the dock in its own layout on every platform: it measures the column and
+/// hands the rectangle of every docked view to its carrier, which places a native view inside it.
+/// The carriers never narrow the workflow UI behind the frontend's back; what makes room instead is
+/// the window, which grows by the width the frontend reserved (the `set_dock_width` command), so the
+/// workflow UI keeps exactly the size it had. `reserve` is therefore the mode everywhere.
 pub fn view_mode() -> &'static str {
     "reserve"
 }
@@ -51,9 +52,6 @@ pub fn clamp_width(window_width: f64, requested: f64) -> f64 {
     requested.clamp(CHAT_HUB_MIN_WIDTH, maximum)
 }
 
-/// Largest corner radius the page accepts, so a bad measurement cannot eat into the page.
-const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
-
 /// Builds the page webview with the rules that hold on every platform.
 ///
 /// The page may only navigate to web content, a new window request goes to the browser of
@@ -61,48 +59,13 @@ const MAX_PAGE_CORNER_RADIUS: f64 = 30.0;
 /// the embedded chat needs it to paste messages, and the proxy the network settings ask
 /// for is applied here: a webview can only be given one while it is built.
 ///
-/// `corner_radius` is the radius the window actually draws at its bottom right, which a
-/// rectangle stacked over the workflow UI paints over. A platform whose window keeps
-/// square corners reports none, and the page keeps its rectangular edge there.
+/// The page is opaque and knows nothing about the window's rounded corner: the dock is cut at the
+/// window itself ([`crate::native_dock::DockSurface::set_corner_radius`]), so an embedded site is
+/// never asked to give a corner back and no script reaches it.
 pub fn page_builder<'a>(
     web_context: &'a mut WebContext,
     url: &str,
     proxy: Option<ProxyConfig>,
-    corner_radius: f64,
-    app: &AppHandle<Wry>,
-) -> WebViewBuilder<'a> {
-    build_page(web_context, url, proxy, corner_radius, false, app)
-}
-
-/// Builds a page that always paints over the window corner, for the Linux dock.
-///
-/// A backend that cannot shape the native view (Wayland) lets the page give the corner back itself,
-/// and the radius can change while the page is alive because the frontend resends it with every
-/// dock snapshot. The transparency of a webview cannot be toggled without rebuilding it, and a
-/// rebuild would drop the browsing session, so such a page is created see-through and carries the
-/// shared corner script even at a zero radius. The script's runtime setter then follows every later
-/// radius, including zero, without a reload.
-#[cfg(target_os = "linux")]
-pub fn dock_page_builder<'a>(
-    web_context: &'a mut WebContext,
-    url: &str,
-    proxy: Option<ProxyConfig>,
-    corner_radius: f64,
-    app: &AppHandle<Wry>,
-) -> WebViewBuilder<'a> {
-    build_page(web_context, url, proxy, corner_radius, true, app)
-}
-
-/// Builds the page webview with the rules that hold on every platform.
-///
-/// `always_see_through` forces the see-through page and the shared corner script even at a zero
-/// radius, which the Linux dock needs so a radius that grows later can still be given back.
-fn build_page<'a>(
-    web_context: &'a mut WebContext,
-    url: &str,
-    proxy: Option<ProxyConfig>,
-    corner_radius: f64,
-    always_see_through: bool,
     app: &AppHandle<Wry>,
 ) -> WebViewBuilder<'a> {
     // The handlers below outlive this call, so the page keeps its own handle to open a link
@@ -116,17 +79,6 @@ fn build_page<'a>(
             open_in_browser(&opener, &url);
             NewWindowResponse::Deny
         });
-
-    // A page that hands its corner back to the window also has to be see-through: an
-    // opaque page would show its own background where the window border belongs.
-    let radius = corner_radius.clamp(0.0, MAX_PAGE_CORNER_RADIUS);
-    let builder = if always_see_through || radius > 0.0 {
-        builder
-            .with_transparent(true)
-            .with_initialization_script(corner_script(radius))
-    } else {
-        builder
-    };
 
     match proxy {
         Some(proxy) => builder.with_proxy_config(proxy),
@@ -167,17 +119,6 @@ fn open_in_browser(app: &AppHandle<Wry>, url: &str) {
             error
         );
     }
-}
-
-/// Script that leaves the rounded bottom-right corner of the window unpainted.
-///
-/// The docked page is a rectangular native view, so no border radius of the workflow UI can cut
-/// it: the page has to give that corner back itself, and only a backend that cannot shape the
-/// native view lets the page do it. The script is shared with a plugin UI panel and with the
-/// native dock surface ([`crate::native_dock::bottom_right_corner_script`]), so the corner the two
-/// give back cannot drift apart.
-fn corner_script(radius: f64) -> String {
-    crate::native_dock::bottom_right_corner_script(radius)
 }
 
 /// Persistent profile directory of the embedded page.
@@ -272,8 +213,8 @@ mod tests {
 
     #[test]
     fn the_frontend_is_told_to_reserve_the_dock_on_every_platform() {
-        // No carrier changes the window layout any more, so the frontend reserves the right
-        // dock itself on every platform.
+        // The frontend reserves the dock in its own layout on every platform, and the window grows
+        // by that width, so the workflow UI keeps the size it had wherever the dock is used.
         assert_eq!(view_mode(), "reserve");
     }
 
@@ -343,68 +284,24 @@ mod tests {
         assert!(source.contains(r#".join("chat_hub_page")"#));
     }
 
-    /// Guard for the rounded window border the page gives back: the stacked page is a
-    /// rectangle, so the corner can only come back from the page itself, and only on a
-    /// see-through page.
+    /// Guard for the corner: a page owns no window corner, so nothing about the rounded frame is
+    /// injected into an embedded site and the page stays opaque. The window cuts the dock's
+    /// bottom-right corner out of itself instead.
     #[test]
-    fn the_page_gives_a_rounded_window_border_back() {
-        let source = include_str!("page.rs");
-
-        let branch = source
-            .split("let radius = corner_radius.clamp")
-            .nth(1)
-            .expect("the window border branch is missing")
-            .split("match proxy {")
+    fn the_page_never_gives_a_window_corner_back_itself() {
+        // The production half of this file, so a guard cannot match its own text.
+        let source = include_str!("page.rs")
+            .split("#[cfg(test)]")
             .next()
-            .expect("the window border branch is not terminated");
+            .expect("page.rs carries a test module");
 
-        // A window without a rounded border reports no radius, so the page keeps its
-        // rectangular edge instead of turning see-through for nothing...
-        assert!(branch.contains("if always_see_through || radius > 0.0"));
-        // ...unless a caller forces it, which the Linux dock does so a radius that grows later can
-        // still be given back without rebuilding the page...
-        assert!(branch.contains(".with_transparent(true)"));
-        assert!(branch.contains(".with_initialization_script(corner_script(radius))"));
-
-        // The script rounds the corner of every layer that paints it, and it is the single
-        // bottom-right script the native dock surface owns, so a plugin panel and this page cannot
-        // drift apart.
-        let script = corner_script(15.0);
-
-        assert!(script.contains("border-bottom-right-radius"));
-        assert!(script.contains("document.documentElement"));
-        // A decorative layer carries pointer-events: none and never shows up in a hit test,
-        // so the corner is found by geometry instead of by hit testing.
-        assert!(script.contains("document.querySelectorAll('*')"));
-        assert!(script.contains("getBoundingClientRect"));
-        // A pseudo element paints a box of its own, which the radius of its host cannot cut.
-        assert!(script.contains("'data-cs-corner'"));
-        assert!(script.contains("'::after' : '::before'"));
-        // The page does not own a second script: it reuses the shared one.
-        assert!(source.contains("crate::native_dock::bottom_right_corner_script(radius)"));
-    }
-
-    /// Guard for the injected JavaScript itself: the radius reaches the page through the runtime
-    /// setter, and the braces of the script have to survive the format string that carries it.
-    #[test]
-    fn the_corner_script_carries_the_radius_through_the_runtime_setter() {
-        let script = corner_script(15.0);
-
-        assert!(script.contains("state.set(15);"));
-        assert!(script.contains("function roundCorner() {"));
-        assert!(!script.contains("{{"));
-        assert!(!script.contains("}}"));
-    }
-
-    /// The Linux dock builds its page see-through even at a zero radius, so a radius that appears
-    /// later can be given back without rebuilding the webview and losing the session.
-    #[test]
-    fn the_linux_dock_page_is_always_see_through() {
-        let source = include_str!("page.rs");
-
-        assert!(source.contains("pub fn dock_page_builder"));
-        assert!(source.contains("build_page(web_context, url, proxy, corner_radius, true, app)"));
-        // The plain builder still keys see-through on the radius it was handed.
-        assert!(source.contains("build_page(web_context, url, proxy, corner_radius, false, app)"));
+        assert!(!source.contains("corner_script"));
+        assert!(!source.contains("bottom_right_corner"));
+        assert!(!source.contains("dock_page_builder"));
+        assert!(!source.contains("with_transparent"));
+        assert!(!source.contains("with_initialization_script"));
+        // The page builder takes no corner hint at all, so no carrier can hand it one.
+        assert!(source
+            .contains("pub fn page_builder<'a>(\n    web_context: &'a mut WebContext,\n    url: &str,\n    proxy: Option<ProxyConfig>,\n    app: &AppHandle<Wry>,\n) -> WebViewBuilder<'a>"));
     }
 }

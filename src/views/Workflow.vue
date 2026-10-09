@@ -635,6 +635,27 @@ watchEffect(() => {
 })
 
 /**
+ * Grows the Workflow window by the width the dock reserves, or hands that width back at zero.
+ *
+ * The workflow UI keeps the size it had this way, and every native view is placed inside the
+ * column the window added instead of over the workflow content. A window that already fills its
+ * screen cannot grow, so the dock then takes its space from the workflow UI.
+ */
+const syncDockWidth = async () => {
+  try {
+    await invokeWrapper('set_dock_width', { width: chatHubReservedWidth.value })
+  } catch (error) {
+    console.error('Failed to make room for the docked views:', error)
+  }
+}
+
+/** Hands the width the dock reserved back to the window when the dock goes away. */
+const releaseDockWidth = () =>
+  invokeWrapper('set_dock_width', { width: 0 }).catch(error => {
+    console.error('Failed to hand the docked width back to the window:', error)
+  })
+
+/**
  * Height of the app titlebar, which a docked view has to stay below so it can never cover
  * the window controls.
  */
@@ -692,11 +713,17 @@ const dockSnapshot = () => ({
   geometry: dockGeometry()
 })
 
-/** Measures the shared surface after the DOM update, then applies the newest dock snapshot. */
+/**
+ * Makes room for the dock in the window, then applies the newest dock snapshot.
+ *
+ * The window makes room before the layout is measured, so the rectangle handed to a native view is
+ * the one the workflow UI holds next to the column the window added for the dock.
+ */
 const syncDock = async () => {
   if (dockTornDown) {
     return
   }
+  await syncDockWidth()
   await nextTick()
   if (dockTornDown) {
     return
@@ -3249,6 +3276,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   dockTornDown = true
+  // The window keeps the width the dock reserved, so it is handed back as the dock goes away.
+  void releaseDockWidth()
   unlistenPlugins?.()
   clearInterval(pluginRefreshTimer)
   dockResizeObserver?.disconnect()

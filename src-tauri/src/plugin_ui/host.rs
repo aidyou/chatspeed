@@ -97,8 +97,8 @@ impl PluginUiHost {
     /// `url` and `prefix` are built inside the runtime and never come from the frontend:
     /// `url` is accepted only when it is an asset of the exact loopback `prefix`, so a panel
     /// can never be pointed at a remote origin or at another plugin's bundle. `corner_radius` is
-    /// the radius the window draws at its bottom right, which the panel gives back on a backend
-    /// that cannot clip the native view.
+    /// the radius the window draws at the bottom-right corner of its dock, which the window is cut
+    /// at so a panel cannot paint over it.
     pub fn show(
         &self,
         app: &AppHandle<Wry>,
@@ -290,33 +290,15 @@ fn ensure_main_thread() -> Result<(), String> {
 /// else. The gateway's own `Content-Security-Policy` keeps the loaded document from pulling
 /// remote subresources.
 ///
-/// `corner_radius` is the bottom-right corner the panel has to give back; a backend that clips the
-/// native view reports `0.0` and the page stays opaque, while every other backend gets the shared
-/// bottom-right script and a see-through page.
-///
-/// `see_through` forces the see-through page and the shared script even at a zero radius, which the
-/// Linux dock needs so a radius that appears later can still be given back without rebuilding the
-/// webview and losing the session.
-fn page_builder<'a>(
-    context: &'a mut WebContext,
-    url: &str,
-    prefix: &str,
-    corner_radius: f64,
-    see_through: bool,
-) -> WebViewBuilder<'a> {
+/// The panel is opaque and owns no window corner: the bottom-right corner of the dock column is
+/// cut into the window itself ([`crate::native_dock::DockSurface::set_corner_radius`]), so a panel
+/// is never asked to give one back and no script reaches it.
+fn page_builder<'a>(context: &'a mut WebContext, url: &str, prefix: &str) -> WebViewBuilder<'a> {
     let allowed_prefix = prefix.to_string();
-    let builder = WebViewBuilder::new_with_web_context(context)
+    WebViewBuilder::new_with_web_context(context)
         .with_url(url)
         .with_navigation_handler(move |target| is_allowed_asset_url(&allowed_prefix, &target))
-        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny);
-
-    if see_through || corner_radius > 0.0 {
-        builder.with_transparent(true).with_initialization_script(
-            crate::native_dock::bottom_right_corner_script(corner_radius),
-        )
-    } else {
-        builder
-    }
+        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
 }
 
 #[cfg(target_os = "linux")]
@@ -346,14 +328,16 @@ mod carrier {
         // The band follows the rectangle the frontend measured, through the rule both dock owners
         // share.
         let band = native_dock::band_for(bounds, window_width, window_height);
-        // The backend decides how the corner is given back: a shape on the native view, or the
-        // shared script on a see-through page. The page is built once, so it is fixed per panel.
-        let native_rounding = native_dock::supports_native_rounding();
+        // The dock is a column on the right edge of the window, so its bottom-right corner is the
+        // window's own: the shape is cut into the window, which keeps the rounded frame the window
+        // draws visible under a panel that would otherwise paint over it.
+        native_dock::with_surface(app, |surface| surface.set_corner_radius(app, radius))
+            .map_err(|error| error.to_string())?;
 
         let mut tabs = host.lock_tabs()?;
 
         if !tabs.contains_key(tab_id) {
-            let page = Page::create(app, url, prefix, bounds, radius, band, native_rounding)?;
+            let page = Page::create(app, url, prefix, bounds, radius, band)?;
             tabs.insert(
                 tab_id.to_string(),
                 Tab {
@@ -368,14 +352,12 @@ mod carrier {
         // touching their sessions.
         for (id, tab) in tabs.iter_mut() {
             if id == tab_id {
-                let navigated = tab.url != url;
-                if navigated {
+                if tab.url != url {
                     tab.page.load_url(url)?;
                     tab.url = url.to_string();
                 }
                 tab.page.set_bounds(bounds)?;
-                tab.page
-                    .set_geometry(radius, band, native_rounding, navigated)?;
+                tab.page.set_geometry(radius, band);
                 tab.page.set_visible(true)?;
             } else {
                 tab.page.set_visible(false)?;
@@ -412,8 +394,8 @@ mod carrier {
         ///
         /// The holder is an overlay child aligned to the start of the shared overlay, so the panel
         /// only receives input inside its own rectangle: the workflow UI keeps every event no panel
-        /// covers. The bottom-right window corner is clipped from the native view on the backend
-        /// that supports shaping, and given back by the shared script otherwise.
+        /// covers. The bottom-right window corner is cut out of the window itself, so the panel
+        /// neither draws it nor hears about it.
         fn create(
             app: &AppHandle<Wry>,
             url: &str,
@@ -421,7 +403,6 @@ mod carrier {
             bounds: PluginUiBounds,
             radius: f64,
             band: Band,
-            native_rounding: bool,
         ) -> Result<Self, String> {
             let holder = native_dock::with_surface(app, |surface| {
                 surface.holder(app, DockOwner::Plugin, bounds)
@@ -431,18 +412,7 @@ mod carrier {
             // An ephemeral context is private to this tab: it shares no profile, no cookies
             // and no storage with the ChatHub page or with another tab.
             let mut context = WebContext::new(None);
-
-            // A backend that shapes the native view clips the corner there and keeps the page
-            // opaque; every other backend gets a see-through page and the shared bottom-right
-            // script, which follows a radius change at runtime, so it is see-through even at a zero
-            // radius.
-            let builder = if native_rounding {
-                page_builder(&mut context, url, prefix, 0.0, false)
-            } else {
-                page_builder(&mut context, url, prefix, radius, true)
-            };
-
-            let webview = builder
+            let webview = page_builder(&mut context, url, prefix)
                 .build_gtk(holder.container())
                 .map_err(|error| format!("failed to build the plugin UI webview: {error}"))?;
 
@@ -461,29 +431,13 @@ mod carrier {
             })
         }
 
-        /// Re-applies the current radius and band, and tells a see-through page about a radius it
-        /// has to draw itself.
-        fn set_geometry(
-            &self,
-            radius: f64,
-            band: Band,
-            native_rounding: bool,
-            navigated: bool,
-        ) -> Result<(), String> {
-            let previous_radius = self.shape.radius();
+        /// Re-applies the current corner radius and band to the view.
+        ///
+        /// Both belong to the reshape state, so a reused panel follows the rectangle and the radius
+        /// the frontend resent instead of the geometry it was first built with, and neither change
+        /// rebuilds the panel or drops its session.
+        fn set_geometry(&self, radius: f64, band: Band) {
             self.shape.set(radius, band);
-
-            // On a backend without a native shape the page gives the corner back itself, so the
-            // radius reaches it through the script's runtime setter. After a navigation the page
-            // re-applied the radius it was built with, so the current radius is pushed again.
-            // Neither path reloads the page or drops the session.
-            if !native_rounding && (navigated || previous_radius != radius) {
-                self.webview
-                    .evaluate_script(&native_dock::bottom_right_corner_update_script(radius))
-                    .map_err(|error| format!("failed to update the plugin UI corner: {error}"))?;
-            }
-
-            Ok(())
         }
 
         fn set_bounds(&self, bounds: PluginUiBounds) -> Result<(), String> {
@@ -589,7 +543,7 @@ mod carrier {
             // An ephemeral context is private to this tab: it shares no profile, no cookies
             // and no storage with the ChatHub page or with another tab.
             let mut context = WebContext::new(None);
-            let webview = page_builder(&mut context, url, prefix, 0.0, false)
+            let webview = page_builder(&mut context, url, prefix)
                 .with_bounds(rect(bounds))
                 .build_as_child(window)
                 .map_err(|error| format!("failed to build the plugin UI webview: {error}"))?;
@@ -735,19 +689,21 @@ mod tests {
     }
 
     /// Guard for the corner and the input band: a panel is reshaped through the shared dock state,
-    /// which composes the frame band and the rounded corner through the same rule a ChatHub tab
-    /// uses, and a radius the page gives back itself is pushed through the shared runtime setter.
+    /// which composes the frame band and the corner through the same rule a ChatHub tab uses, while
+    /// the corner itself is cut into the window rather than drawn by the panel.
     #[test]
-    fn a_panel_rounds_its_bottom_right_corner_on_the_shaping_backend() {
+    fn a_panel_cuts_the_window_corner_instead_of_drawing_it() {
         let source = production_source();
 
         assert!(source.contains("native_dock::clamp_corner_radius(corner_radius)"));
-        assert!(source.contains("native_dock::supports_native_rounding()"));
+        assert!(source.contains("surface.set_corner_radius(app, radius)"));
         assert!(source.contains("native_dock::band_for(bounds, window_width, window_height)"));
         assert!(source.contains("ViewShape::install(&webview.webview())"));
-        assert!(source.contains("native_dock::bottom_right_corner_update_script(radius)"));
-        // The fallback reuses the single script the native dock surface owns.
-        assert!(source.contains("crate::native_dock::bottom_right_corner_script("));
+        // No corner reaches the panel: neither a script nor a see-through page.
+        assert!(!source.contains("bottom_right_corner"));
+        assert!(!source.contains("with_transparent"));
+        assert!(!source.contains("with_initialization_script"));
+        assert!(!source.contains("supports_native_rounding"));
         // The obsolete one-shot native rounding call is gone: the shared state owns it now.
         let obsolete = format!("{}{}", "round_bottom_", "right");
         assert!(!source.contains(&obsolete));

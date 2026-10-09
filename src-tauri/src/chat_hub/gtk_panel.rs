@@ -3,8 +3,8 @@
 //! Every ChatHub entry has its own tab, each tab keeps its own `wry` webview (with its own
 //! browsing session) while another tab is shown, and every webview is placed at the rectangle
 //! the frontend measured for the right dock. The rectangle is the only geometry the carrier
-//! knows: it never widens, narrows or splits the window, so the workflow UI keeps exactly the
-//! layout the frontend gave it.
+//! knows: how much room the window makes for that dock is decided once, for every platform, by
+//! [`crate::dock_window`], and never by a carrier.
 //!
 //! The native views are bounded overlay children of the shared dock surface
 //! ([`crate::native_dock`]): a holder aligned to the start of the overlay with the rectangle as
@@ -18,7 +18,6 @@ use std::sync::{Mutex, MutexGuard};
 use tauri::{AppHandle, PhysicalSize, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix, WebViewExtUnix};
 
-use super::page::dock_page_builder;
 use super::{clamp_width, host_window, page_builder, page_data_directory, page_proxy};
 use crate::db::chat_hub::parse_chat_hub_url;
 use crate::error::{AppError, Result};
@@ -105,9 +104,10 @@ impl ChatHubPageState {
         // The band follows the rectangle the frontend measured, and both dock owners compute it
         // through the same rule.
         let band = native_dock::band_for(bounds, window_width, window_height);
-        // The backend decides how the corner is given back: a shape applied to the native view, or
-        // the shared script on a see-through page. The page is built once, so it is fixed per tab.
-        let native_rounding = native_dock::supports_native_rounding();
+        // The dock is a column on the right edge of the window, so its bottom-right corner is the
+        // window's own: the shape is cut into the window, which keeps the rounded frame the window
+        // draws visible under a view that would otherwise paint over it.
+        native_dock::with_surface(app, |surface| surface.set_corner_radius(app, radius))?;
 
         let mut inner = self.lock()?;
         if !inner.tabs.contains_key(&key) {
@@ -119,17 +119,8 @@ impl ChatHubPageState {
             // applied: the settings are read here. The browsing profile is the same directory on
             // every tab, so the session survives a tab close and a restart.
             let mut web_context = WebContext::new(Some(page_data_directory(app)));
-
-            // A backend that shapes the native view clips the corner there and keeps the page
-            // opaque; every other backend has no window shape, so it gets a see-through page and
-            // the shared bottom-right script. That page follows a radius change at runtime, which
-            // is why it is see-through even at a zero radius.
-            let builder = if native_rounding {
-                page_builder(&mut web_context, &url, page_proxy(app), 0.0, app)
-            } else {
-                dock_page_builder(&mut web_context, &url, page_proxy(app), radius, app)
-            };
-            let webview = builder.build_gtk(holder.container())?;
+            let webview = page_builder(&mut web_context, &url, page_proxy(app), app)
+                .build_gtk(holder.container())?;
 
             // The native view is reshaped from this state on every allocation, so a later show
             // that only moves the rectangle or changes the radius updates the state instead of
@@ -162,8 +153,7 @@ impl ChatHubPageState {
             message: "the ChatHub tab is missing".to_string(),
         })?;
 
-        let navigated = tab.url != url;
-        if navigated {
+        if tab.url != url {
             tab.webview.load_url(&url)?;
             tab.url = url;
         }
@@ -174,17 +164,7 @@ impl ChatHubPageState {
 
         // The rectangle and the radius both feed the same reshape state, so a reused tab follows
         // whatever the frontend resent instead of the geometry it was first built with.
-        let previous_radius = tab.shape.radius();
         tab.shape.set(radius, band);
-
-        // On a backend without a native shape the page gives the corner back itself, so the radius
-        // reaches it through the script's runtime setter. After a navigation the page re-applied the
-        // radius it was built with, so the current radius is pushed again. Neither path reloads the
-        // page or drops the session.
-        if !native_rounding && (navigated || previous_radius != radius) {
-            tab.webview
-                .evaluate_script(&native_dock::bottom_right_corner_update_script(radius))?;
-        }
 
         tab.holder.set_visible(true);
         inner.active = Some(key);
@@ -199,42 +179,6 @@ impl ChatHubPageState {
             tab.holder.set_visible(false);
         }
         inner.active = None;
-
-        Ok(())
-    }
-
-    /// Applies a new width to the active tab.
-    ///
-    /// A drag only changes how much of the dock the tab takes; the window itself is never
-    /// resized. The rectangle keeps its top and height and stays anchored to the right edge of the
-    /// window, which is the dock this command predates.
-    pub fn set_width(&self, app: &AppHandle<Wry>, width: f64) -> Result<()> {
-        let host = host_window(app)?;
-        let (window_width, window_height) = native_dock::window_size(&host)?;
-
-        let mut inner = self.lock()?;
-        let Some(active) = inner.active.clone() else {
-            return Ok(());
-        };
-        let Some(tab) = inner.tabs.get_mut(&active) else {
-            return Ok(());
-        };
-
-        let width = clamp_width(window_width, width);
-        let bounds = DockBounds {
-            x: (window_width - width).max(0.0),
-            y: tab.bounds.y,
-            width,
-            height: tab.bounds.height,
-        }
-        .sanitize(window_width, window_height)?;
-
-        tab.holder.set_bounds(bounds);
-        tab.shape.set(
-            tab.shape.radius(),
-            native_dock::band_for(bounds, window_width, window_height),
-        );
-        tab.bounds = bounds;
 
         Ok(())
     }
@@ -316,14 +260,6 @@ impl ChatHubPageState {
         }
     }
 
-    /// Width the dock took from the host window, in logical pixels.
-    ///
-    /// The dock no longer takes width from the window: the frontend reserves it in its own layout,
-    /// so no independent window resize is reported here.
-    pub fn grown_width(&self) -> f64 {
-        0.0
-    }
-
     /// Locks the state, reporting a poisoned lock as a plain error instead of a panic.
     fn lock(&self) -> Result<MutexGuard<'_, Inner>> {
         self.inner.lock().map_err(|_| AppError::General {
@@ -382,7 +318,7 @@ mod tests {
             .split("pub fn hide")
             .nth(1)
             .expect("the hide path is missing")
-            .split("pub fn set_width")
+            .split("pub fn reload")
             .next()
             .expect("the hide path is not terminated");
 
@@ -406,7 +342,8 @@ mod tests {
         assert!(source.contains(".sanitize(window_width, window_height)?"));
         // An older caller that sends only a width still gets a rectangle.
         assert!(source.contains("legacy_bounds(width, top_inset, window_width, window_height)"));
-        // Nothing widens, narrows or splits the window any more.
+        // Making room for the dock belongs to the shared window state, so this carrier never widens,
+        // narrows or splits the window itself.
         let widening = format!("{}{}", "widen_", "host_window");
         let narrowing = format!("{}{}", "narrow_", "host_window");
         assert!(!source.contains(&widening));
@@ -422,7 +359,7 @@ mod tests {
         let source = production_source();
 
         assert!(source.contains("surface.holder(app, DockOwner::ChatHub, bounds)"));
-        assert!(source.contains("builder.build_gtk(holder.container())"));
+        assert!(source.contains(".build_gtk(holder.container())"));
         let fixed_container_use = format!("{}{}", "Fixed::", "new");
         assert!(!source.contains(&fixed_container_use));
         assert!(!source.contains("add_overlay"));
@@ -491,27 +428,28 @@ mod tests {
         assert_eq!(show.matches(&build).count(), 1);
         // Every show re-applies the current radius and the current band to the shared state.
         assert!(show.contains("tab.shape.set(radius, band)"));
-        // A radius the page gives back itself is pushed through the runtime setter, which the
-        // navigation path also uses so a fresh document does not keep the radius it was built with.
-        assert!(show.contains("let navigated = tab.url != url;"));
-        assert!(show.contains("native_dock::bottom_right_corner_update_script(radius)"));
+        // A radius change never reaches the page: the corner is a property of the window, so a
+        // reused tab changes no document and drops no session.
+        assert!(!show.contains("evaluate_script"));
+        assert!(!show.contains("reload"));
     }
 
-    /// Guard for the corner the page gives back: the carrier either clips the native view on the
-    /// backend that supports shaping, or builds a see-through page that gives the corner back with
-    /// the shared script and follows a radius change at runtime.
+    /// Guard for the corner: the carrier cuts it into the window, because the dock is a column on
+    /// the window's right edge and a rectangular view would otherwise paint over the rounded frame.
     #[test]
-    fn the_page_rounds_its_bottom_right_corner_natively_or_by_script() {
+    fn the_carrier_cuts_the_window_corner_out_of_the_dock() {
         let source = production_source();
 
         assert!(source.contains("native_dock::clamp_corner_radius(corner_radius)"));
-        assert!(source.contains("let native_rounding = native_dock::supports_native_rounding();"));
-        // The page is built once, either opaque behind a native shape or see-through with the
-        // shared script.
-        assert!(source.contains("page_builder(&mut web_context, &url, page_proxy(app), 0.0, app)"));
-        assert!(source
-            .contains("dock_page_builder(&mut web_context, &url, page_proxy(app), radius, app)"));
-        // The native view is reshaped through the shared state, which carries the band as well.
+        // The shape belongs to the window, so it is applied through the shared surface and never
+        // through a script or a see-through page.
+        assert!(source.contains("surface.set_corner_radius(app, radius)"));
+        assert!(source.contains("page_builder(&mut web_context, &url, page_proxy(app), app)"));
+        assert!(!source.contains("dock_page_builder"));
+        assert!(!source.contains("bottom_right_corner"));
+        assert!(!source.contains("supports_native_rounding"));
+        // The native view is still reshaped through the shared state, which carries the band as
+        // well.
         assert!(source.contains("ViewShape::install(&webview.webview())"));
         // The obsolete four-corner script is gone: only the shared bottom-right corner is rounded.
         let four_corner = format!("{}{}", "page_corners_", "script");

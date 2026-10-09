@@ -106,11 +106,12 @@ pub async fn update_chat_hub_order(
 /// The work runs on the platform main thread because it creates a real webview. Each `tab_id`
 /// keeps its own webview (and its browsing session) while another tab is shown, and `bounds` is
 /// the dock rectangle the frontend measured in its own layout, in logical pixels. The carrier
-/// never changes the window layout, so this rectangle is the authoritative geometry.
+/// places the view at that rectangle and never resizes the window itself: how much room the window
+/// makes for the dock column is decided once, by [`set_dock_width`].
 ///
 /// `width` and `top_inset` are kept for an older caller that sends no `bounds`: they describe the
 /// same right dock, and the carrier turns them into the rectangle. `corner_radius` is the radius
-/// of the rounded dock border the page gives back at its corners.
+/// the window draws at its bottom right corner, which the carrier clips the dock column with.
 #[tauri::command]
 pub async fn show_chat_hub_page(
     app: AppHandle,
@@ -133,10 +134,16 @@ pub async fn hide_chat_hub_page(app: AppHandle) -> AppResult<()> {
     chat_hub::run_on_page_thread(&app, |state, app| state.hide(app)).await
 }
 
-/// Applies a new width to the active docked tab.
+/// Makes room for the right dock in the Workflow window.
+///
+/// `width` is the space the frontend reserves on its right for the docked views, in logical
+/// pixels, and zero when the dock is closed. The window grows by the width the dock does not hold
+/// yet, so the workflow UI keeps the size it had, and hands that width back when the dock goes
+/// away. The window is capped at the work area of its screen and moved back onto the screen when
+/// making room would push it out, so the dock can never move a part of the window out of view.
 #[tauri::command]
-pub async fn set_chat_hub_page_width(app: AppHandle, width: f64) -> AppResult<()> {
-    chat_hub::run_on_page_thread(&app, move |state, app| state.set_width(app, width)).await
+pub async fn set_dock_width(app: AppHandle, width: f64) -> AppResult<()> {
+    crate::dock_window::apply_docked_width(&app, width).await
 }
 
 /// Reloads one ChatHub tab's current page, keeping its webview and its session.
