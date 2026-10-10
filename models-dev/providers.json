@@ -94,7 +94,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 137,
+      "modelCount": 139,
       "name": "AIHubMix",
       "responses": false
     },
@@ -215,7 +215,7 @@
       "documentationUrl": "https://ambient.xyz",
       "id": "ambient",
       "logo": "https://models.dev/logos/ambient.svg",
-      "modelCount": 12,
+      "modelCount": 14,
       "name": "Ambient",
       "protocol": "openai",
       "responses": false
@@ -442,7 +442,7 @@
       "documentationUrl": "https://developers.cloudflare.com/workers-ai/models/",
       "id": "cloudflare-workers-ai",
       "logo": "https://models.dev/logos/cloudflare-workers-ai.svg",
-      "modelCount": 27,
+      "modelCount": 28,
       "name": "Cloudflare Workers AI",
       "protocol": "openai",
       "responses": false
@@ -532,7 +532,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 71,
+      "modelCount": 72,
       "name": "Deep Infra",
       "responses": false
     },
@@ -552,7 +552,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 101,
+      "modelCount": 102,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 297,
+      "modelCount": 305,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -612,7 +612,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 66,
+      "modelCount": 62,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -801,7 +801,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 78,
+      "modelCount": 81,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -961,7 +961,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 397,
+      "modelCount": 386,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1041,7 +1041,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 218,
+      "modelCount": 214,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1097,6 +1097,16 @@
       "responses": false
     },
     {
+      "api": "https://api.lowrouter.ai/v1",
+      "documentationUrl": "https://lowrouter.ai/docs/models/available",
+      "id": "lowrouter",
+      "logo": "https://models.dev/logos/lowrouter.svg",
+      "modelCount": 8,
+      "name": "LowRouter",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.lucidquery.com/v1",
       "documentationUrl": "https://lucidquery.com/docs",
       "id": "lucidquery",
@@ -1141,7 +1151,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 196,
+      "modelCount": 198,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1385,8 +1395,8 @@
       "documentationUrl": "https://novita.ai/docs/guides/introduction",
       "id": "novita-ai",
       "logo": "https://models.dev/logos/novita-ai.svg",
-      "modelCount": 107,
-      "name": "NovitaAI",
+      "modelCount": 84,
+      "name": "Novita AI",
       "protocol": "openai",
       "responses": false
     },
@@ -1416,7 +1426,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 151,
+      "modelCount": 152,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1490,7 +1500,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 390,
+      "modelCount": 379,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1963,7 +1973,7 @@
       "documentationUrl": "https://docs.tinfoil.sh",
       "id": "tinfoil",
       "logo": "https://models.dev/logos/tinfoil.svg",
-      "modelCount": 9,
+      "modelCount": 8,
       "name": "Tinfoil",
       "protocol": "openai",
       "responses": false
@@ -2063,7 +2073,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 117,
+      "modelCount": 118,
       "name": "Venice AI",
       "responses": false
     },
@@ -2071,7 +2081,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 408,
+      "modelCount": 409,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2300,9 +2310,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "0ea0c20f354b57e1662b9ff7004733684f4fcbd4d409949041390e151a47a5ef",
-    "generatedAt": "2026-10-09T10:36:32Z",
+    "catalogSha256": "5e7ecfcb5ef30b7142fa3852d7840332ac944fd55f6a9d8d5355104661130331",
+    "generatedAt": "2026-10-10T09:52:53Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "7c34dc20aaec8145b9dfc04a105e719b959b0792"
+    "revision": "5dd0d3e446b66ceb8edd98e366ee700702377833"
   }
 }
