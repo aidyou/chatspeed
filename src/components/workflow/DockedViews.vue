@@ -1,9 +1,8 @@
 <template>
   <aside v-show="visible" class="docked-views" :style="{ width: `${width}px` }">
     <div class="docked-views__header">
-      <!-- The tab strip only exists once a second tab can be told apart from the first: a
-           single tab needs no strip, but the refresh action stays reachable either way. -->
-      <div v-if="tabs.length > 1" class="docked-views__tabs" role="tablist">
+      <!-- Every tab stays visible so the close control is available even when only one tab is open. -->
+      <div v-if="tabs.length > 0" class="docked-views__tabs" role="tablist">
         <div
           v-for="tab in tabs"
           :key="tab.id"
@@ -102,6 +101,12 @@ defineExpose({ getSurfaceElement: () => surfaceEl.value })
   background: var(--cs-bg-color);
   border-left: 1px solid var(--cs-border-color);
   box-sizing: border-box;
+
+  // Fixed content needs its own clip; trusted tabs never install the native window shape.
+  .app-container.linux &,
+  .app-container.macos & {
+    border-bottom-right-radius: var(--cs-border-radius-lg);
+  }
 
   &__header {
     display: flex;

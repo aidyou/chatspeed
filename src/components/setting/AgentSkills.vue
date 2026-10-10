@@ -36,7 +36,7 @@
 
       <p class="hint">{{ t('settings.agentSkills.hint') }}</p>
 
-      <!-- source -->
+      <!-- step 1: source -->
       <div class="section">
         <div class="section-title">{{ t('settings.agentSkills.source') }}</div>
         <el-radio-group v-model="sourceKind" size="small">
@@ -50,28 +50,31 @@
         </el-radio-group>
 
         <div class="fields">
-          <el-input
-            v-if="sourceKind === 'local_directory' || sourceKind === 'local_zip'"
-            v-model="sourcePath"
-            :placeholder="
-              sourceKind === 'local_zip'
-                ? t('settings.agentSkills.zipPlaceholder')
-                : t('settings.agentSkills.directoryPlaceholder')
-            "
-          >
-            <template #prepend>{{ t('settings.agentSkills.path') }}</template>
-          </el-input>
+          <div v-if="sourceKind === 'local_directory' || sourceKind === 'local_zip'" class="field">
+            <label class="field__label">{{ t('settings.agentSkills.path') }}</label>
+            <el-input
+              v-model="sourcePath"
+              :placeholder="
+                sourceKind === 'local_zip'
+                  ? t('settings.agentSkills.zipPlaceholder')
+                  : t('settings.agentSkills.directoryPlaceholder')
+              "
+            />
+          </div>
 
           <template v-else>
-            <el-input v-model="githubRepository" placeholder="owner/repository">
-              <template #prepend>{{ t('settings.agentSkills.repository') }}</template>
-            </el-input>
-            <el-input v-model="githubPath" placeholder="skills/demo">
-              <template #prepend>{{ t('settings.agentSkills.path') }}</template>
-            </el-input>
-            <el-input v-model="githubRef" placeholder="main">
-              <template #prepend>{{ t('settings.agentSkills.ref') }}</template>
-            </el-input>
+            <div class="field">
+              <label class="field__label">{{ t('settings.agentSkills.repository') }}</label>
+              <el-input v-model="githubRepository" placeholder="owner/repository" />
+            </div>
+            <div class="field">
+              <label class="field__label">{{ t('settings.agentSkills.path') }}</label>
+              <el-input v-model="githubPath" placeholder="skills/demo" />
+            </div>
+            <div class="field">
+              <label class="field__label">{{ t('settings.agentSkills.ref') }}</label>
+              <el-input v-model="githubRef" placeholder="main" />
+            </div>
           </template>
 
           <div class="buttons">
@@ -88,95 +91,99 @@
           :closable="false"
           :title="store.lastError"
         />
+      </div>
 
-        <!-- check result -->
-        <div v-if="report" class="report">
-          <div class="report-head">
-            <el-tag :type="verdictTagType" size="small" effect="dark">{{ report.verdict }}</el-tag>
-            <span class="meta">{{ report.skill_name || '-' }}</span>
-            <span class="meta">{{ report.checker_version }}</span>
-            <span class="meta">{{
-              t('settings.agentSkills.size', { files: report.file_count, bytes: report.total_bytes })
-            }}</span>
-          </div>
+      <!-- step 2: check result -->
+      <div v-if="report" class="section">
+        <div class="section-title">{{ t('settings.agentSkills.verdict') }}</div>
 
-          <div class="permissions">
-            <el-tag
-              v-for="(allowed, name) in report.permissions"
-              :key="name"
-              size="small"
-              :type="allowed === false ? 'info' : 'warning'"
-              effect="plain"
-            >
-              {{ t(`settings.agentSkills.permission.${name}`) }}
-            </el-tag>
-          </div>
+        <div class="report-head">
+          <el-tag :type="verdictTagType" size="small" effect="dark">{{ report.verdict }}</el-tag>
+          <span class="meta">{{ report.skill_name || '-' }}</span>
+          <span class="meta">{{ report.checker_version }}</span>
+          <span class="meta">{{
+            t('settings.agentSkills.size', { files: report.file_count, bytes: report.total_bytes })
+          }}</span>
+        </div>
 
-          <el-table
-            v-if="report.findings?.length"
-            :data="report.findings"
+        <div class="permissions">
+          <el-tag
+            v-for="(allowed, name) in report.permissions"
+            :key="name"
             size="small"
-            class="findings skill-table"
+            :type="allowed === false ? 'info' : 'warning'"
+            effect="plain"
           >
-            <el-table-column prop="severity" :label="t('settings.agentSkills.severity')" width="110" />
-            <el-table-column prop="rule" :label="t('settings.agentSkills.rule')" width="220" />
-            <el-table-column prop="path" :label="t('settings.agentSkills.path')" width="220" />
-            <el-table-column prop="detail" :label="t('settings.agentSkills.detail')" />
-          </el-table>
+            {{ t(`settings.agentSkills.permission.${name}`) }}
+          </el-tag>
+        </div>
 
-          <!-- The same findings as data-driven cards: the wide table cannot fit a narrow
-               container, so every column is shown as a labelled row instead of being cut. -->
-          <ul v-if="report.findings?.length" class="findings skill-cards">
-            <li v-for="(row, index) in report.findings" :key="index" class="skill-cards__item">
-              <div class="skill-cards__row">
-                <span class="skill-cards__label">{{ t('settings.agentSkills.severity') }}</span>
-                <span class="skill-cards__value">{{ row.severity }}</span>
-              </div>
-              <div class="skill-cards__row">
-                <span class="skill-cards__label">{{ t('settings.agentSkills.rule') }}</span>
-                <span class="skill-cards__value">{{ row.rule }}</span>
-              </div>
-              <div class="skill-cards__row">
-                <span class="skill-cards__label">{{ t('settings.agentSkills.path') }}</span>
-                <span class="skill-cards__value">{{ row.path }}</span>
-              </div>
-              <div class="skill-cards__row">
-                <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
-                <span class="skill-cards__value">{{ row.detail }}</span>
-              </div>
-            </li>
-          </ul>
+        <el-table
+          v-if="report.findings?.length"
+          :data="report.findings"
+          size="small"
+          class="findings skill-table"
+        >
+          <el-table-column prop="severity" :label="t('settings.agentSkills.severity')" width="110" />
+          <el-table-column prop="rule" :label="t('settings.agentSkills.rule')" width="220" />
+          <el-table-column prop="path" :label="t('settings.agentSkills.path')" width="220" />
+          <el-table-column prop="detail" :label="t('settings.agentSkills.detail')" />
+        </el-table>
 
-          <!-- targets -->
-          <div class="section-title">{{ t('settings.agentSkills.targets') }}</div>
-          <el-checkbox-group v-model="selection">
-            <el-tooltip
-              v-for="target in store.targets"
-              :key="target.id"
-              :disabled="target.supported"
-              :content="target.unsupported_reason || ''"
-              placement="top"
-            >
-              <el-checkbox :value="target.id" :disabled="!target.supported">
-                {{ target.id }}
-                <span v-if="target.external" class="external">{{
-                  t('settings.agentSkills.external')
-                }}</span>
-              </el-checkbox>
-            </el-tooltip>
-          </el-checkbox-group>
+        <!-- The same findings as data-driven cards: the wide table cannot fit a narrow
+             container, so every column is shown as a labelled row instead of being cut. -->
+        <ul v-if="report.findings?.length" class="findings skill-cards">
+          <li v-for="(row, index) in report.findings" :key="index" class="skill-cards__item">
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.severity') }}</span>
+              <span class="skill-cards__value">{{ row.severity }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.rule') }}</span>
+              <span class="skill-cards__value">{{ row.rule }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.path') }}</span>
+              <span class="skill-cards__value">{{ row.path }}</span>
+            </div>
+            <div class="skill-cards__row">
+              <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
+              <span class="skill-cards__value">{{ row.detail }}</span>
+            </div>
+          </li>
+        </ul>
+      </div>
 
-          <div class="buttons">
-            <el-button
-              type="primary"
-              size="small"
-              :loading="store.applying"
-              :disabled="!canInstall"
-              @click="install"
-            >
-              {{ t('settings.agentSkills.install') }}
-            </el-button>
-          </div>
+      <!-- step 3: install targets -->
+      <div v-if="report" class="section">
+        <div class="section-title">{{ t('settings.agentSkills.targets') }}</div>
+        <el-checkbox-group v-model="selection">
+          <el-tooltip
+            v-for="target in store.targets"
+            :key="target.id"
+            :disabled="target.supported"
+            :content="target.unsupported_reason || ''"
+            placement="top"
+          >
+            <el-checkbox :value="target.id" :disabled="!target.supported">
+              {{ target.id }}
+              <span v-if="target.external" class="external">{{
+                t('settings.agentSkills.external')
+              }}</span>
+            </el-checkbox>
+          </el-tooltip>
+        </el-checkbox-group>
+
+        <div class="buttons">
+          <el-button
+            type="primary"
+            size="small"
+            :loading="store.applying"
+            :disabled="!canInstall"
+            @click="install"
+          >
+            {{ t('settings.agentSkills.install') }}
+          </el-button>
         </div>
       </div>
 
@@ -217,7 +224,10 @@
 
       <!-- installed skills -->
       <div class="section">
-        <div class="section-title">{{ t('settings.agentSkills.installed') }}</div>
+        <div class="section-title">
+          {{ t('settings.agentSkills.installed') }}
+          <span class="count">{{ store.skills.length }}</span>
+        </div>
         <el-table
           v-loading="store.loading"
           :data="store.skills"
@@ -229,19 +239,23 @@
           <el-table-column
             prop="name"
             :label="t('settings.agentSkills.name')"
-            min-width="120"
+            min-width="96"
             show-overflow-tooltip
           />
           <el-table-column
             prop="source"
             :label="t('settings.agentSkills.origin')"
-            min-width="84"
+            min-width="64"
             show-overflow-tooltip
           />
-          <el-table-column :label="t('settings.agentSkills.target')" min-width="96">
+          <el-table-column
+            :label="t('settings.agentSkills.target')"
+            min-width="72"
+            show-overflow-tooltip
+          >
             <template #default="{ row }">{{ row.target_id || '-' }}</template>
           </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.state')" min-width="150">
+          <el-table-column :label="t('settings.agentSkills.state')" min-width="100">
             <template #default="{ row }">
               <div class="state-tags">
                 <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
@@ -546,11 +560,16 @@ onMounted(async () => {
   gap: var(--cs-space);
 
   .card {
-    background: var(--cs-bg-color);
-    border: 1px solid var(--cs-border-color);
-    border-radius: var(--cs-border-radius-md);
-    padding: var(--cs-space);
+    // The dock already provides the outer surface and a matching background, so this wrapper
+    // stays transparent: a bordered, rounded card here just repeats the dock frame and reads
+    // as a stray outline that blends into the content.
+    // `border-box` is the actual fix for the horizontal scrollbar: the global `.card` sets
+    // `width: 100%`, and without a global border-box reset the inherited padding and border
+    // were added on top of that 100%, overflowing the dock and triggering its `overflow: auto`.
+    box-sizing: border-box;
     min-width: 0;
+    margin-bottom: 0;
+    padding: var(--cs-space);
   }
 
   .title {
@@ -610,10 +629,8 @@ onMounted(async () => {
 
   .section {
     min-width: 0;
-    padding: var(--cs-space);
-    border: 1px solid var(--cs-border-color);
-    border-radius: var(--cs-border-radius-md);
-    background: var(--cs-bg-color-light);
+    padding-top: var(--cs-space-sm);
+    border-top: 1px solid var(--cs-border-color);
 
     + .section {
       margin-top: var(--cs-space);
@@ -622,6 +639,13 @@ onMounted(async () => {
     .section-title {
       font-weight: 600;
       margin-bottom: var(--cs-space-sm);
+
+      .count {
+        margin-left: var(--cs-space-xs);
+        color: var(--cs-text-color-secondary);
+        font-weight: 400;
+        font-size: var(--cs-font-size-sm);
+      }
     }
   }
 
@@ -632,6 +656,18 @@ onMounted(async () => {
     margin-top: var(--cs-space-sm);
   }
 
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cs-space-xxs);
+    min-width: 0;
+  }
+
+  .field__label {
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+  }
+
   .buttons {
     display: flex;
     flex-wrap: wrap;
@@ -640,10 +676,6 @@ onMounted(async () => {
 
   .alert {
     margin-top: var(--cs-space-sm);
-  }
-
-  .report {
-    margin-top: var(--cs-space);
   }
 
   .report-head {

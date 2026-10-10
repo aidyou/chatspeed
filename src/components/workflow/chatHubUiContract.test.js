@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { compileStyleAsync, parse } from 'vue/compiler-sfc'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 
@@ -134,8 +135,8 @@ test('the right dock hosts both provider kinds in one multi-tab surface', () => 
     workflowView,
     /<DockedViews\s+ref="dockRef"[\s\S]*?:visible="dockVisible"[\s\S]*?:width="chatHubStore\.pageWidth"[\s\S]*?:tabs="dockTabViews"[\s\S]*?:active-tab-id="dockActiveTabId"[\s\S]*?>/
   )
-  // One tab needs no strip, but the refresh action stays reachable either way.
-  assert.match(dockedComponent, /<div v-if="tabs\.length > 1" class="docked-views__tabs" role="tablist">/)
+  // Every tab stays visible so its close control is available even when it is the only tab.
+  assert.match(dockedComponent, /<div v-if="tabs\.length > 0" class="docked-views__tabs" role="tablist">/)
   assert.match(dockedComponent, /class="docked-views__tab-label"[\s\S]*?@click="\$emit\('select', tab\.id\)"/)
   // Only a refresh action: no add button and no global close.
   assert.match(dockedComponent, /class="docked-views__action"[\s\S]*?:aria-label="\$t\('common\.refresh'\)"[\s\S]*?@click="\$emit\('reload'\)"/)
@@ -212,6 +213,10 @@ test('closing a tab releases exactly that tab and the active close falls back to
     chatHubBlock(),
     /const closeDockTab = tabId => \{[\s\S]*?const neighbor = dockTabs\.value\[index\] \|\| dockTabs\.value\[index - 1\] \|\| null[\s\S]*?dockActiveTabId\.value = neighbor\.id/
   )
+  assert.match(
+    chatHubBlock(),
+    /if \(neighbor\) \{[\s\S]*?\} else \{\s*dockActiveTabId\.value = ''\s*dockVisible\.value = false\s*\}/
+  )
   // Hiding preserves every tab and its session.
   assert.match(chatHubBlock(), /const toggleDock = \(\) => \{\s*if \(dockVisible\.value\) \{\s*dockVisible\.value = false\s*return syncDock\(\)/)
 })
@@ -242,6 +247,28 @@ test('the trusted skills tab renders host Vue and never loads remote content', (
     chatHubBlock(),
     /if \(tab\.kind === 'trusted'\) \{\s*trustedReloadKey\.value \+= 1\s*return Promise\.resolve\(\)\s*\}/
   )
+})
+
+test('the Vue dock clips its corner without requiring a native tab to open first', async () => {
+  const { descriptor } = parse(dockedComponent)
+  const style = descriptor.styles.find(block => block.lang === 'scss')
+  assert.ok(style, 'the dock has an SCSS style block')
+  const compiled = await compileStyleAsync({
+    source: style.content,
+    filename: 'DockedViews.vue',
+    id: 'data-v-dock-corner-test',
+    scoped: true,
+    preprocessLang: 'scss'
+  })
+  assert.deepEqual(compiled.errors, [])
+  assert.match(compiled.code, /\.docked-views\[data-v-dock-corner-test\]\s*\{[^}]*overflow: hidden;/)
+  for (const platform of ['linux', 'macos']) {
+    assert.match(
+      compiled.code,
+      new RegExp(`\\.app-container\\.${platform} \\.docked-views\\[data-v-dock-corner-test\\][^{]*\\{[^}]*border-bottom-right-radius: var\\(--cs-border-radius-lg\\);`)
+    )
+  }
+  assert.doesNotMatch(compiled.code, /\.app-container\.windows[^}]*border-bottom-right-radius/)
 })
 
 test('the splitter owns the width and clamps it with the limits the backend enforces', () => {
