@@ -5,7 +5,7 @@
       "documentationUrl": "https://doc.302.ai",
       "id": "302ai",
       "logo": "https://models.dev/logos/302ai.svg",
-      "modelCount": 122,
+      "modelCount": 124,
       "name": "302.AI",
       "protocol": "openai",
       "responses": false
@@ -442,7 +442,7 @@
       "documentationUrl": "https://developers.cloudflare.com/workers-ai/models/",
       "id": "cloudflare-workers-ai",
       "logo": "https://models.dev/logos/cloudflare-workers-ai.svg",
-      "modelCount": 28,
+      "modelCount": 27,
       "name": "Cloudflare Workers AI",
       "protocol": "openai",
       "responses": false
@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 305,
+      "modelCount": 302,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1233,7 +1233,7 @@
       "documentationUrl": "https://moark.com/docs/openapi/v1#tag/%E6%96%87%E6%9C%AC%E7%94%9F%E6%88%90",
       "id": "moark",
       "logo": "https://models.dev/logos/moark.svg",
-      "modelCount": 2,
+      "modelCount": 10,
       "name": "Moark",
       "protocol": "openai",
       "responses": false
@@ -1335,7 +1335,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 32,
+      "modelCount": 51,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -2310,9 +2310,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "5e7ecfcb5ef30b7142fa3852d7840332ac944fd55f6a9d8d5355104661130331",
-    "generatedAt": "2026-10-10T09:52:53Z",
+    "catalogSha256": "ffb55b5a51866428646d0bd88cdb34e92afe57957fb67e5255cd2311ae090c3d",
+    "generatedAt": "2026-10-11T10:02:39Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "5dd0d3e446b66ceb8edd98e366ee700702377833"
+    "revision": "0428f848a456745f9f8cfde2ffde642a95d99fb5"
   }
 }
