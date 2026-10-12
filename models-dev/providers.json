@@ -602,7 +602,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 302,
+      "modelCount": 303,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 446,
+      "modelCount": 445,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1335,7 +1335,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 51,
+      "modelCount": 56,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -2081,7 +2081,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 409,
+      "modelCount": 402,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2310,9 +2310,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "ffb55b5a51866428646d0bd88cdb34e92afe57957fb67e5255cd2311ae090c3d",
-    "generatedAt": "2026-10-11T10:02:39Z",
+    "catalogSha256": "14be04bee45880d3c17fc6b78d715da633aa7e0518babbc43ea025457ed2037e",
+    "generatedAt": "2026-10-12T10:53:25Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "0428f848a456745f9f8cfde2ffde642a95d99fb5"
+    "revision": "f7c2bea8cbed95510971c66239d641b4b6d351cc"
   }
 }
