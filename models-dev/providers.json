@@ -94,8 +94,18 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 139,
+      "modelCount": 152,
       "name": "AIHubMix",
+      "responses": false
+    },
+    {
+      "api": "https://api.aimlapi.com/v1",
+      "documentationUrl": "https://docs.aimlapi.com",
+      "id": "aimlapi",
+      "logo": "https://models.dev/logos/aimlapi.svg",
+      "modelCount": 181,
+      "name": "AI/ML API",
+      "protocol": "openai",
       "responses": false
     },
     {
@@ -113,10 +123,10 @@
       "documentationUrl": "https://docs.aixy-gateway.com/integrations/overview",
       "id": "aixy",
       "logo": "https://models.dev/logos/aixy.svg",
-      "modelCount": 1,
+      "modelCount": 7,
       "name": "Aixy",
       "protocol": "openai",
-      "responses": false
+      "responses": true
     },
     {
       "api": "https://aki.io/v1",
@@ -432,7 +442,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 52,
+      "modelCount": 57,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -532,7 +542,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 72,
+      "modelCount": 73,
       "name": "Deep Infra",
       "responses": false
     },
@@ -602,7 +612,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 303,
+      "modelCount": 320,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -612,7 +622,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 62,
+      "modelCount": 63,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -951,7 +961,7 @@
       "documentationUrl": "https://kenari.id/docs",
       "id": "kenari",
       "logo": "https://models.dev/logos/kenari.svg",
-      "modelCount": 60,
+      "modelCount": 64,
       "name": "Kenari",
       "protocol": "openai",
       "responses": false
@@ -961,7 +971,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 386,
+      "modelCount": 387,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1041,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 214,
+      "modelCount": 215,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1101,7 +1111,7 @@
       "documentationUrl": "https://lowrouter.ai/docs/models/available",
       "id": "lowrouter",
       "logo": "https://models.dev/logos/lowrouter.svg",
-      "modelCount": 8,
+      "modelCount": 12,
       "name": "LowRouter",
       "protocol": "openai",
       "responses": false
@@ -1151,7 +1161,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 198,
+      "modelCount": 202,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1161,7 +1171,7 @@
       "documentationUrl": "https://dev.meta.ai/docs",
       "id": "meta",
       "logo": "https://models.dev/logos/meta.svg",
-      "modelCount": 5,
+      "modelCount": 6,
       "name": "Meta",
       "protocol": "openai",
       "responses": false
@@ -1325,7 +1335,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 611,
+      "modelCount": 616,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1465,18 +1475,18 @@
       "responses": false
     },
     {
-      "api": "https://opencode.ai/zen/v1",
-      "documentationUrl": "https://opencode.ai/docs/zen",
+      "api": "https://opencode.ai/inference/v1",
+      "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 120,
-      "name": "OpenCode Zen",
+      "modelCount": 121,
+      "name": "OpenCode",
       "protocol": "openai",
       "responses": false
     },
     {
-      "api": "https://opencode.ai/zen/go/v1",
-      "documentationUrl": "https://opencode.ai/docs/go",
+      "api": "https://opencode.ai/inference/go/v1",
+      "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
       "modelCount": 36,
@@ -1500,7 +1510,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 379,
+      "modelCount": 380,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1608,6 +1618,16 @@
       "responses": false
     },
     {
+      "api": "https://api.pinference.ai/api/v1",
+      "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
+      "id": "prime",
+      "logo": "https://models.dev/logos/prime.svg",
+      "modelCount": 60,
+      "name": "Prime Inference",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "http://localhost:8080/v1",
       "documentationUrl": "https://docs.privatemode.ai/api/overview",
       "id": "privatemode-ai",
@@ -1708,7 +1728,7 @@
       "documentationUrl": "https://help.sap.com/docs/sap-ai-core",
       "id": "sap-ai-core",
       "logo": "https://models.dev/logos/sap-ai-core.svg",
-      "modelCount": 50,
+      "modelCount": 55,
       "name": "SAP AI Core",
       "responses": false
     },
@@ -2310,9 +2330,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "14be04bee45880d3c17fc6b78d715da633aa7e0518babbc43ea025457ed2037e",
-    "generatedAt": "2026-10-12T10:53:25Z",
+    "catalogSha256": "f5fa732522d23cb794c588a03fee37c8d38b415131886012b303b628184d10be",
+    "generatedAt": "2026-10-13T10:38:50Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "f7c2bea8cbed95510971c66239d641b4b6d351cc"
+    "revision": "74dac73b3587dde8032641951d87530819dbb4e8"
   }
 }
