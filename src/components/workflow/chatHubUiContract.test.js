@@ -30,7 +30,7 @@ const section = (text, start, end) => {
 const chatHubBlock = () =>
   section(
     workflowView,
-    '// Docked views (ChatHub sites and plugin UI in one right dock)',
+    '// Docked views (ChatHub sites, plugin UI and the Agent Skills surface in one right dock)',
     '// Component refs'
   )
 
@@ -90,10 +90,13 @@ test('the dock is measured only after the window makes room and the DOM update',
     chatHubBlock(),
     /const syncDock = async \(\) => \{\s*if \(dockTornDown\) \{\s*return\s*\}\s*await syncDockWidth\(\)\s*await nextTick\(\)\s*if \(dockTornDown\) \{\s*return\s*\}\s*return dockCoordinator\.sync\(dockSnapshot\(\)\)\s*\}/
   )
+  // A layout burst collapses into one pending sync, so a resize reported several times does
+  // not run one snapshot per callback.
   assert.match(
     chatHubBlock(),
-    /const onDockLayoutResize = \(\) => \{\s*nextTick\(\(\) => \{\s*if \(!dockNativeActive\.value\) \{\s*return\s*\}\s*void syncDock\(\)\s*\}\)\s*\}/
+    /const onDockLayoutResize = \(\) => \{\s*if \(dockLayoutSyncPending\) \{\s*return\s*\}\s*dockLayoutSyncPending = true\s*nextTick\(\(\) => \{\s*dockLayoutSyncPending = false\s*if \(!dockNativeActive\.value\) \{\s*return\s*\}\s*void syncDock\(\)\s*\}\)\s*\}/
   )
+  assert.match(workflowView, /let dockLayoutSyncPending = false/)
   // The coordinator refuses to show without a usable rectangle, so a layout change of a
   // hidden dock cannot bring a view back.
   assert.match(dockedViews, /const showable = \(tab, geometry\) =>/)
@@ -130,7 +133,7 @@ test('the window makes room for the dock column instead of the workflow UI', () 
   assert.match(chatHubBlock(), /root\.style\.setProperty\('--cs-chathub-reserved-width'/)
 })
 
-test('the right dock hosts both provider kinds in one multi-tab surface', () => {
+test('the right dock hosts every provider kind in one multi-tab surface', () => {
   assert.match(
     workflowView,
     /<DockedViews\s+ref="dockRef"[\s\S]*?:visible="dockVisible"[\s\S]*?:width="chatHubStore\.pageWidth"[\s\S]*?:tabs="dockTabViews"[\s\S]*?:active-tab-id="dockActiveTabId"[\s\S]*?>/
@@ -158,11 +161,14 @@ test('the tab close control is a sibling button, never nested in the tab button'
 })
 
 test('showing a chat entry only drives the one shared coordinator', () => {
-  // Every native command of both providers goes through one serial, latest-intent
+  // Every native command of every provider goes through one serial, latest-intent
   // coordinator (see src/libs/dockedViews.js), so a late reply of one provider can never
   // paint over a newer action of the other.
   assert.match(workflowView, /import \{ createChatHubProvider \} from '@\/libs\/chatHubView'/)
-  assert.match(workflowView, /import \{ createDockedViewsCoordinator \} from '@\/libs\/dockedViews'/)
+  assert.match(
+    workflowView,
+    /import \{\s*createDockedViewsCoordinator,\s*hydrateDockLayout,\s*serializeDockLayout\s*\} from '@\/libs\/dockedViews'/
+  )
   assert.match(chatHubBlock(), /const dockCoordinator = createDockedViewsCoordinator\(\{[\s\S]*?chatHub: chatHubProvider,[\s\S]*?plugin: pluginProvider,/)
   assert.match(chatHubBlock(), /const chatHubProvider = createChatHubProvider\(\{ invoke: invokeWrapper \}\)/)
 
@@ -191,8 +197,8 @@ test('showing a chat entry only drives the one shared coordinator', () => {
   )
 })
 
-test('one coordinator serializes both providers and awaits the inactive hide', () => {
-  assert.match(dockedViews, /const providers = \{ chatHub, plugin \}/)
+test('one coordinator serializes every provider and awaits the inactive hide', () => {
+  assert.match(dockedViews, /const providers = \{ chatHub, plugin, agentSkills \}/)
   assert.match(dockedViews, /const enqueue = task => \{\s*const next = queue\.then\(task, task\)/)
   // The provider that must not stay visible is hidden and awaited before the active one is
   // shown.
@@ -207,7 +213,7 @@ test('one coordinator serializes both providers and awaits the inactive hide', (
 test('closing a tab releases exactly that tab and the active close falls back to a neighbour', () => {
   assert.match(
     dockedViews,
-    /const closeTab = tab =>\s*tab\.kind === 'chatHub'\s*\?\s*providers\.chatHub\.destroy\(tab\.tabId\)\s*:\s*providers\.plugin\.close\(tab\.tabId\)/
+    /const closeTab = tab => \{\s*if \(tab\.kind === 'chatHub'\) \{\s*return providers\.chatHub\.destroy\(tab\.tabId\)\s*\}[\s\S]*?return providers\[tab\.kind\]\.close\(tab\.tabId\)\s*\}/
   )
   assert.match(
     chatHubBlock(),
@@ -233,20 +239,21 @@ test('each chat entry owns one tab and a repeated click reuses it', () => {
   )
 })
 
-test('the dock names the trusted skills tab from i18n and every other tab from its source', () => {
+test('the dock names ChatHub tabs from their source and ordinary plugins from their id', () => {
   assert.match(chatHubBlock(), /return hubOf\(tab\.hubId\)\?\.name \|\| ''/)
-  assert.match(chatHubBlock(), /tab\.kind === 'trusted' \? t\('settings\.agentSkills\.title'\) : tab\.pluginId/)
+  assert.match(chatHubBlock(), /return tab\.pluginId/)
 })
 
-test('the trusted skills tab renders host Vue and never loads remote content', () => {
-  assert.match(dockedComponent, /<AgentSkills v-if="trustedActive" :key="trustedKey" \/>/)
-  assert.match(dockedComponent, /import AgentSkills from '@\/components\/setting\/AgentSkills\.vue'/)
+test('the trusted skills surface opens as a native dock tab like every other provider', () => {
+  // The dock itself stays a plain placeholder; the trusted surface is a native child view.
+  assert.doesNotMatch(dockedComponent, /AgentSkills|trustedActive|trustedKey/)
   assert.doesNotMatch(dockedComponent, /iframe|src=|https?:|file:/)
-  // A trusted reload remounts the component instead of issuing a native command.
-  assert.match(
-    chatHubBlock(),
-    /if \(tab\.kind === 'trusted'\) \{\s*trustedReloadKey\.value \+= 1\s*return Promise\.resolve\(\)\s*\}/
-  )
+  const launch = chatHubBlock().match(/if \(plugin\.id === AGENT_SKILLS_PLUGIN_ID\) \{([\s\S]*?)\n  \}/)?.[1]
+  assert.ok(launch, 'Agent Skills has its own launcher branch')
+  // It joins the dock as its own kind instead of opening a second window.
+  assert.match(launch, /return openDockTab\(\{[\s\S]*?kind: AGENT_SKILLS_TAB_KIND,\s*pluginId: plugin\.id/)
+  assert.doesNotMatch(launch, /invokeWrapper|chatHubStore|toggleDock|dockCoordinator/)
+  assert.doesNotMatch(chatHubBlock(), /open_agent_skills_window|trustedReloadKey|kind: 'trusted'/)
 })
 
 test('the Vue dock clips its corner without requiring a native tab to open first', async () => {
@@ -342,6 +349,13 @@ test('overlays and toasts stay inside the workflow UI while the page is docked',
   assert.match(
     globalStyles,
     /\.el-notification\.right \{\s*right: calc\(16px \+ var\(--cs-chathub-reserved-width, 0px\)\) !important;/
+  )
+})
+
+test('the ChatHub entry keeps the most recently docked ChatHub visible while another dock tab is active', () => {
+  assert.match(
+    chatHubBlock(),
+    /const activeChatHubId = computed\(\(\) =>[\s\S]*?dockActiveTab\.value\?\.kind === 'chatHub'[\s\S]*?return \[\.\.\.dockTabs\.value\]\.reverse\(\)\.find\(tab => tab\.kind === 'chatHub'\)\?\.hubId \|\| 0/
   )
 })
 
@@ -489,4 +503,105 @@ test('the workflow-side dock view state is not persisted into workflow settings'
   assert.match(workflowView, /import \{ useChatHubStore \} from '@\/stores\/chatHub'/)
   assert.doesNotMatch(workflowView, /settings\.chatHub/)
   assert.match(chatHubStore, /defineStore\('chat_hub'/)
+})
+
+test('the dock layout of one window is remembered in that window alone', () => {
+  const block = chatHubBlock()
+
+  // The layout is presentation state of one window, so it is keyed by the window label and kept in
+  // that window's session storage instead of the workflow settings.
+  assert.match(
+    block,
+    /const dockStorageKey = `chatspeed\.workflow\.dockLayout:\$\{settingStore\.windowLabel\}`/
+  )
+  // The helpers stay pure data: only the workflow view owns storage access.
+  assert.doesNotMatch(dockedViews, /localStorage|sessionStorage/)
+
+  // Every change is remembered synchronously, so a hard reload finds the same dock again.
+  assert.match(
+    block,
+    /watch\(\[dockTabs, dockActiveTabId, dockVisible\], persistDockLayout, \{\s*deep: true,\s*flush: 'sync'\s*\}\)/
+  )
+  assert.match(block, /if \(dockTornDown \|\| dockHydrating\) \{\s*return\s*\}/)
+
+  // Only the identities plus the active and visible state are written.
+  assert.match(
+    block,
+    /serializeDockLayout\(\{\s*tabs: dockTabs\.value,\s*activeTabId: dockActiveTabId\.value,\s*visible: dockVisible\.value\s*\}\)/
+  )
+  assert.match(
+    dockedViews,
+    /export function serializeDockLayout\(\{ tabs = \[\], activeTabId = '', visible = false \} = \{\}\)/
+  )
+  // The remembered descriptor keeps no runtime-verified value: no url, no entry, no token.
+  const descriptor = section(
+    dockedViews,
+    'const descriptorOf = tab => {',
+    'The remembered form of the current dock layout'
+  )
+  assert.match(descriptor, /\{ kind: 'chatHub', hubId: tab\.hubId \}/)
+  assert.match(descriptor, /\{ kind: 'plugin', pluginId: tab\.pluginId \}/)
+  assert.doesNotMatch(descriptor, /url|entry|token/)
+})
+
+test('a saved dock is applied only once the inventories that own its tabs answered', () => {
+  const block = chatHubBlock()
+
+  // A pristine empty dock before a restore must never erase the layout that is still to come back.
+  assert.match(
+    block,
+    /if \(!dockLayoutSettled && !dockTabs\.value\.length && !dockVisible\.value\) \{\s*return\s*\}/
+  )
+  assert.match(block, /dockLayoutSettled = true/)
+
+  // Every stored tab is validated again against the inventories that are authoritative now.
+  assert.match(block, /const restored = hydrateDockLayout\(raw, \{/)
+  assert.match(
+    dockedViews,
+    /export function hydrateDockLayout\(raw, \{ hubs = \[\], plugins = \[\] \} = \{\}\)/
+  )
+  assert.match(block, /hubs: chatHubStore\.list,\s*plugins: pluginUiPlugins\.value/)
+
+  // Until both inventories answered the restore is deferred, and a teardown stops it entirely.
+  assert.match(
+    block,
+    /const maybeRestoreDockLayout = \(\) => \{\s*if \(dockLayoutSettled \|\| dockTornDown\) \{\s*return\s*\}\s*if \(!dockHubsReady \|\| !pluginStore\.inventory \|\| pluginStore\.lastError\) \{\s*return\s*\}\s*restoreDockLayout\(\)\s*\}/
+  )
+  assert.match(workflowView, /dockHubsReady = true/)
+  assert.match(workflowView, /maybeRestoreDockLayout\(\)\n/)
+  // The plugin inventory answers asynchronously, so its refresh is the other restore trigger.
+  assert.match(
+    handlerBody('refreshPlugins'),
+    /await pluginStore\.loadInventory\(\)[\s\S]*?maybeRestoreDockLayout\(\)/
+  )
+  // A stored layout that no longer applies is dropped instead of being retried on every reload.
+  assert.match(block, /sessionStorage\.removeItem\(dockStorageKey\)/)
+
+  // The native views are rebuilt by the existing serial coordinator, which owns their ordering.
+  assert.match(handlerBody('restoreDockLayout'), /void syncDock\(\)/)
+})
+
+test('restoring the dock never touches the workflow runtime and never replays a url', () => {
+  const restore = handlerBody('restoreDockLayout')
+
+  for (const body of [restore, handlerBody('persistDockLayout')]) {
+    assert.doesNotMatch(body, /emitWorkflowSignal|sendSignal|SIGNAL_TYPES/)
+    assert.doesNotMatch(body, /stopWorkflow|clearContext|resumeWorkflow|selectWorkflow\(/)
+  }
+  // A chat page url comes from the live hub list on restore, never from storage.
+  assert.doesNotMatch(restore, /url|entry/)
+
+  // A remembered tab answers to the same id a live click gives it.
+  assert.match(chatHubBlock(), /const chatHubTabId = hubId => `chathub:\$\{hubId\}`/)
+  assert.match(chatHubBlock(), /const pluginTabId = pluginId => `plugin:\$\{pluginId\}`/)
+  assert.match(dockedViews, /const CHAT_HUB_TAB_PREFIX = 'chathub:'/)
+  assert.match(dockedViews, /const PLUGIN_TAB_PREFIX = 'plugin:'/)
+  assert.match(chatHubBlock(), /const AGENT_SKILLS_TAB_KIND = 'agentSkills'/)
+  assert.match(dockedViews, /export const DOCK_AGENT_SKILLS_KIND = 'agentSkills'/)
+
+  // Unmounting still releases every native view after the persisted state stopped being written.
+  assert.match(
+    workflowView,
+    /onBeforeUnmount\(\(\) => \{\s*dockTornDown = true[\s\S]*?void dockCoordinator\.dispose\(\)/
+  )
 })

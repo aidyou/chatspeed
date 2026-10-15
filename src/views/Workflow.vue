@@ -377,16 +377,14 @@
       </el-container>
     </div>
 
-    <!-- One right dock shared by the chat-site pages and the plugin panels. It is a plain
-         Vue column: each tab's native webview is painted by the carrier over the measured
-         surface, and only the trusted agent-skills tab renders in this webview. -->
+    <!-- One right dock shared by the chat-site pages, ordinary plugin panels and the trusted
+         Agent Skills surface, which is a native child view of this window like the others. -->
     <DockedViews
       ref="dockRef"
       :visible="dockVisible"
       :width="chatHubStore.pageWidth"
       :tabs="dockTabViews"
       :active-tab-id="dockActiveTabId"
-      :trusted-key="trustedReloadKey"
       @select="onSelectDockTab"
       @close="onCloseDockTab"
       @reload="onReloadDockTab" />
@@ -471,7 +469,15 @@ import { usePluginStore } from '@/stores/plugin'
 import { createPluginProvider, verifiedPluginUis } from '@/libs/pluginView'
 import ChatHubSplitter from '@/components/workflow/ChatHubSplitter.vue'
 import { createChatHubProvider } from '@/libs/chatHubView'
-import { createDockedViewsCoordinator } from '@/libs/dockedViews'
+import {
+  AGENT_SKILLS_PLUGIN_ID,
+  createAgentSkillsProvider
+} from '@/libs/agentSkillsView'
+import {
+  createDockedViewsCoordinator,
+  hydrateDockLayout,
+  serializeDockLayout
+} from '@/libs/dockedViews'
 
 // Composables
 import { useWorkflowSidebar } from '@/composables/workflow/useWorkflowSidebar'
@@ -504,21 +510,26 @@ const chatHubStore = useChatHubStore()
 const pluginStore = usePluginStore()
 
 // ============================================================
-// Docked views (ChatHub sites and plugin UI in one right dock)
+// Docked views (ChatHub sites, plugin UI and the Agent Skills surface in one right dock)
 //
-// The dock is one surface shared by chat-site pages and plugin panels: every tab owns its
-// own native webview, while the dock column, the tab strip and the toolbar stay plain Vue.
-// The layer is pure view state - it only decides which tab is docked, how wide the dock is
-// and which rectangle the native view covers. It never stops, clears, rebuilds or otherwise
-// touches the workflow session, task, message or approval state.
+// The dock is one surface shared by chat-site pages, plugin panels and the trusted Agent Skills
+// view: every tab owns its own native webview, while the dock column, the tab strip and the
+// toolbar stay plain Vue. The layer is pure view state - it only decides which tab is docked, how
+// wide the dock is and which rectangle the native view covers. It never stops, clears, rebuilds or
+// otherwise touches the workflow session, task, message or approval state.
 //
-// Every native command of both providers goes through one serial, latest-intent coordinator
+// The layout of one window survives a page reload through session storage of that window: only the
+// identity of a docked tab, the visible one and the visibility are remembered, while the runtime's
+// inventories decide again on reload which of them still exists.
+//
+// Every native command of every provider goes through one serial, latest-intent coordinator
 // (src/libs/dockedViews.js), so a slow hide of one provider can never resolve after the
 // show of the other and leave two native views stacked on the same rectangle.
 // ============================================================
 
-/** Built-in plugin whose management page is a trusted host component, never a webview. */
-const TRUSTED_PLUGIN_ID = 'agent-skills'
+/** Stable tab id and kind of the trusted Agent Skills surface, which is one tab for one view. */
+const AGENT_SKILLS_TAB_ID = 'agentSkills'
+const AGENT_SKILLS_TAB_KIND = 'agentSkills'
 /** Most plugin panels the dock opens; the plugin host enforces the same limit. */
 const MAX_PLUGIN_TABS = 8
 
@@ -527,15 +538,29 @@ const pluginUiPlugins = computed(() =>
   verifiedPluginUis(pluginStore.inventory, !!pluginStore.lastError)
 )
 
-/** Tabs docked right now: `{ id, kind: 'chatHub' | 'plugin' | 'trusted', hubId?, pluginId?, entry? }`. */
+/** Tabs docked right now: `{ id, kind: 'chatHub' | 'plugin', hubId?, pluginId?, entry? }`. */
 const dockTabs = ref([])
 /** Visible tab id, empty when the dock has no active tab. */
 const dockActiveTabId = ref('')
 /** Whether the dock column is on screen. Hiding it keeps every tab and its session alive. */
 const dockVisible = ref(false)
-/** Remount token for the trusted tab; a reload bumps it instead of issuing a native command. */
-const trustedReloadKey = ref(0)
 const dockRef = ref(null)
+/**
+ * Key one window remembers its dock layout under. The layout is presentation state of that
+ * window, so it lives in this window's session storage instead of the workflow settings, and two
+ * workflow windows never share a dock.
+ */
+const dockStorageKey = `chatspeed.workflow.dockLayout:${settingStore.windowLabel}`
+
+// Set once the saved layout is restored, or once this session takes the dock state over before a
+// restore: either way an untouched empty dock must never erase the layout still to be restored.
+let dockLayoutSettled = false
+// Set while the saved layout is being applied, so the writer does not persist the intermediate
+// refs of the restore.
+let dockHydrating = false
+// Set once the chat hub inventory answered, which is what makes a restore safe: an inventory that
+// is unready or failed must not drop the tabs a reload should bring back.
+let dockHubsReady = false
 
 let unlistenPlugins = null
 let pluginRefreshTimer = null
@@ -543,9 +568,13 @@ let dockResizeObserver = null
 // Set on unmount so a layout update that was already waiting for the DOM cannot apply a
 // snapshot after every native view was released.
 let dockTornDown = false
+// Set while a layout change is already waiting for the DOM update, so a burst of layout
+// callbacks collapses into one layout sync instead of one per callback.
+let dockLayoutSyncPending = false
 
 const chatHubProvider = createChatHubProvider({ invoke: invokeWrapper })
 const pluginProvider = createPluginProvider({ invoke: invokeWrapper })
+const agentSkillsProvider = createAgentSkillsProvider({ invoke: invokeWrapper })
 
 /**
  * Maps a failed dock action to the message shown to the user. A plugin panel and a chat
@@ -561,6 +590,7 @@ const dockErrorKey = action => {
     case 'chatHub.destroy':
       return 'workflow.chatHub.closeFailed'
     case 'plugin.show':
+    case 'agentSkills.show':
       return 'workflow.plugin.openFailed'
     default:
       return ''
@@ -570,6 +600,7 @@ const dockErrorKey = action => {
 const dockCoordinator = createDockedViewsCoordinator({
   chatHub: chatHubProvider,
   plugin: pluginProvider,
+  agentSkills: agentSkillsProvider,
   onError: (error, action) => {
     console.error(`Failed to ${action} the docked view:`, error)
     const key = dockErrorKey(action)
@@ -587,9 +618,10 @@ const dockTabTitle = tab => {
   if (tab.kind === 'chatHub') {
     return hubOf(tab.hubId)?.name || ''
   }
-  // The trusted skills tab shows the same title as its settings page; any other plugin
-  // only has its plugin id to be named by.
-  return tab.kind === 'trusted' ? t('settings.agentSkills.title') : tab.pluginId
+  if (tab.kind === AGENT_SKILLS_TAB_KIND) {
+    return t('settings.agentSkills.title')
+  }
+  return tab.pluginId
 }
 
 const dockTabViews = computed(() =>
@@ -598,18 +630,19 @@ const dockTabViews = computed(() =>
 const dockActiveTab = computed(
   () => dockTabs.value.find(tab => tab.id === dockActiveTabId.value) || null
 )
-const activeChatHubId = computed(() =>
-  dockActiveTab.value?.kind === 'chatHub' ? dockActiveTab.value.hubId : 0
-)
+const activeChatHubId = computed(() => {
+  if (dockActiveTab.value?.kind === 'chatHub') {
+    return dockActiveTab.value.hubId
+  }
+  return [...dockTabs.value].reverse().find(tab => tab.kind === 'chatHub')?.hubId || 0
+})
 const activePluginId = computed(() =>
   dockActiveTab.value && dockActiveTab.value.kind !== 'chatHub'
     ? dockActiveTab.value.pluginId
     : ''
 )
-/** Whether a native webview is currently the docked content (a trusted tab is plain Vue). */
-const dockNativeActive = computed(
-  () => dockVisible.value && !!dockActiveTab.value && dockActiveTab.value.kind !== 'trusted'
-)
+/** Whether a native webview is currently the docked content. */
+const dockNativeActive = computed(() => dockVisible.value && !!dockActiveTab.value)
 
 /**
  * Space the workflow UI reserves on its right for the docked views.
@@ -731,6 +764,106 @@ const syncDock = async () => {
   return dockCoordinator.sync(dockSnapshot())
 }
 
+/**
+ * Remembers the dock layout of this window, synchronously on every change, so a page reload finds
+ * the same tabs, the same visible one and the same visibility again.
+ *
+ * Only the identity of a tab is stored: a chat page url, a plugin entry and a capability are all
+ * runtime-verified values, so they are never written and are verified again on restore instead.
+ */
+const persistDockLayout = () => {
+  if (dockTornDown || dockHydrating) {
+    return
+  }
+  // Before a restore, an untouched empty dock must not erase the layout that is still to come
+  // back; the first real change makes this session's dock state authoritative.
+  if (!dockLayoutSettled && !dockTabs.value.length && !dockVisible.value) {
+    return
+  }
+  dockLayoutSettled = true
+  try {
+    sessionStorage.setItem(
+      dockStorageKey,
+      serializeDockLayout({
+        tabs: dockTabs.value,
+        activeTabId: dockActiveTabId.value,
+        visible: dockVisible.value
+      })
+    )
+  } catch (error) {
+    // A blocked or full session storage keeps the dock usable; only the reload memory is lost.
+    console.error('Failed to remember the dock layout:', error)
+  }
+}
+
+watch([dockTabs, dockActiveTabId, dockVisible], persistDockLayout, {
+  deep: true,
+  flush: 'sync'
+})
+
+/**
+ * Applies the dock layout this window had before a reload.
+ *
+ * Every stored tab is validated again against the inventories that are authoritative now, so a hub
+ * that no longer exists and a plugin the runtime no longer confirms are dropped, while the trusted
+ * Agent Skills surface is only restored from the runtime confirming its plugin. The native views
+ * are recreated by the existing serial coordinator, which owns their ordering and the rectangle
+ * they need.
+ */
+const restoreDockLayout = () => {
+  if (dockLayoutSettled || dockTornDown) {
+    return
+  }
+  let raw = null
+  try {
+    raw = sessionStorage.getItem(dockStorageKey)
+  } catch (error) {
+    console.error('Failed to read the saved dock layout:', error)
+    return
+  }
+  const restored = hydrateDockLayout(raw, {
+    hubs: chatHubStore.list,
+    plugins: pluginUiPlugins.value
+  })
+  dockHydrating = true
+  dockTabs.value = restored.tabs
+  dockActiveTabId.value = restored.activeTabId
+  dockVisible.value = restored.visible
+  dockHydrating = false
+  dockLayoutSettled = true
+  if (!restored.tabs.length) {
+    // Nothing the runtime still offers survived, so the saved layout is dropped instead of being
+    // retried on every reload.
+    if (raw) {
+      try {
+        sessionStorage.removeItem(dockStorageKey)
+      } catch (error) {
+        console.error('Failed to drop the saved dock layout:', error)
+      }
+    }
+    return
+  }
+  // Turning the dock back on is a layout change like any other, so the window makes room and the
+  // coordinator places the view at the measured rectangle.
+  void syncDock()
+}
+
+/**
+ * Restores the saved dock once every inventory that owns a tab has answered.
+ *
+ * Until then the saved layout stays untouched, so an inventory that is still loading, or one that
+ * failed closed, can never erase the tabs a reload should bring back.
+ */
+const maybeRestoreDockLayout = () => {
+  if (dockLayoutSettled || dockTornDown) {
+    return
+  }
+  if (!dockHubsReady || !pluginStore.inventory || pluginStore.lastError) {
+    return
+  }
+  restoreDockLayout()
+}
+
 const activateDockTab = tabId => {
   dockActiveTabId.value = tabId
   dockVisible.value = true
@@ -792,15 +925,11 @@ const onCloseDockTab = tabId => closeDockTab(tabId)
 
 /**
  * Reloads the visible tab. A ChatHub page reloads in place, a plugin panel renews its
- * capability through the same queue, and the trusted skills tab simply remounts.
+ * capability through the same queue.
  */
 const onReloadDockTab = () => {
   const tab = dockActiveTab.value
   if (!tab) {
-    return Promise.resolve()
-  }
-  if (tab.kind === 'trusted') {
-    trustedReloadKey.value += 1
     return Promise.resolve()
   }
   return dockCoordinator.reload(tab.id)
@@ -822,22 +951,26 @@ const onCloseChatHub = () => {
 
 const onChatHubEntryToggled = () => toggleDock()
 
-/** The docked kind for a verified plugin: the built-in skills bundle is trusted Vue content. */
-const pluginTabKind = plugin => (plugin.id === TRUSTED_PLUGIN_ID ? 'trusted' : 'plugin')
-
 const onSelectPluginEntry = plugin => {
-  if (!plugin) {
+  if (!plugin || !pluginUiPlugins.value.some(candidate => candidate.id === plugin.id)) {
     return Promise.resolve()
   }
-  const existing = dockTabs.value.find(
-    tab => tab.kind !== 'chatHub' && tab.pluginId === plugin.id
-  )
-  if (!existing && dockTabs.value.filter(tab => tab.kind !== 'chatHub').length >= MAX_PLUGIN_TABS) {
+  if (plugin.id === AGENT_SKILLS_PLUGIN_ID) {
+    // The trusted surface is a native child view of this window, so it opens in the same dock as
+    // the other tabs; a repeated click reuses its one tab instead of opening a second window.
+    return openDockTab({
+      id: AGENT_SKILLS_TAB_ID,
+      kind: AGENT_SKILLS_TAB_KIND,
+      pluginId: plugin.id
+    })
+  }
+  const existing = dockTabs.value.find(tab => tab.kind === 'plugin' && tab.pluginId === plugin.id)
+  if (!existing && dockTabs.value.filter(tab => tab.kind === 'plugin').length >= MAX_PLUGIN_TABS) {
     return Promise.resolve()
   }
   return openDockTab({
     id: pluginTabId(plugin.id),
-    kind: pluginTabKind(plugin),
+    kind: 'plugin',
     pluginId: plugin.id,
     entry: plugin.ui?.entry || ''
   })
@@ -853,6 +986,18 @@ const onClosePluginEntry = () => {
 const onTogglePluginEntry = () => toggleDock()
 
 /**
+ * Closes the trusted Agent Skills tab.
+ *
+ * The child page reports that the runtime no longer confirms its plugin through a controlled
+ * event instead of closing anything itself, so this window owns the tab (and the native view) and
+ * the parent Workflow window is never touched.
+ */
+const closeAgentSkillsTab = () => {
+  const tab = dockTabs.value.find(item => item.kind === AGENT_SKILLS_TAB_KIND)
+  return tab ? closeDockTab(tab.id) : Promise.resolve()
+}
+
+/**
  * Applies a width the splitter reported. The same geometry is re-measured after the DOM
  * update, so the native view and the reserved space never drift apart. The backend clamps
  * the width again.
@@ -863,11 +1008,18 @@ const onChatHubPageResize = width => {
 }
 
 /**
- * Re-measures the shared surface after a layout change. A hidden dock or a trusted tab has
- * no native view, so the update never resurrects one.
+ * Re-measures the shared surface after a layout change. A hidden dock has
+ * no native view, so the update never resurrects one. The dock surface reports several times
+ * while the window makes room for the dock, and a window resize arrives beside the observer,
+ * so a burst collapses into one pending sync instead of one snapshot per callback.
  */
 const onDockLayoutResize = () => {
+  if (dockLayoutSyncPending) {
+    return
+  }
+  dockLayoutSyncPending = true
   nextTick(() => {
+    dockLayoutSyncPending = false
     if (!dockNativeActive.value) {
       return
     }
@@ -880,16 +1032,28 @@ const refreshPlugins = async () => {
     await pluginStore.loadInventory()
   } catch {
     // The store keeps the unavailable state, which hides every plugin tab below.
+    return
   }
+  // The plugin inventory is one of the two inventories that own a dock tab, so a saved layout may
+  // only be restored once it answered.
+  maybeRestoreDockLayout()
 }
 
-// The plugin inventory is the authority for which panels may stay docked: a disabled,
-// replaced or unverifiable plugin (including the trusted skills tab) is closed right away,
-// so the dock fails closed instead of showing a page the runtime no longer confirms.
+// The plugin inventory is the authority for which panels and which trusted surface may stay
+// docked: a disabled, replaced or unverifiable plugin is closed right away, so the dock fails
+// closed instead of showing a view the runtime no longer confirms.
 watch(pluginUiPlugins, plugins => {
   const allowed = new Map(plugins.map(plugin => [plugin.id, plugin.ui?.entry || '']))
   for (const tab of [...dockTabs.value]) {
     if (tab.kind === 'chatHub') {
+      continue
+    }
+    // The trusted surface renders the application route, not a plugin asset, so it is judged by
+    // the plugin id alone instead of by the entry.
+    if (tab.kind === AGENT_SKILLS_TAB_KIND) {
+      if (!allowed.has(AGENT_SKILLS_PLUGIN_ID)) {
+        void closeDockTab(tab.id)
+      }
       continue
     }
     if (allowed.get(tab.pluginId) !== tab.entry) {
@@ -917,6 +1081,7 @@ const inputAreaRef = ref(null)
 
 // Unlisten refs
 const unlistenFocusInput = ref(null)
+const unlistenAgentSkills = ref(null)
 
 // OS type
 const osType = ref('')
@@ -3205,8 +3370,16 @@ onMounted(async () => {
   await refreshPlugins()
   unlistenPlugins = await listen('cs://plugins-changed', refreshPlugins)
   pluginRefreshTimer = setInterval(refreshPlugins, 5000)
+  // The trusted surface reports through this controlled event that the runtime no longer confirms
+  // it, so its tab (and its native view) is released here instead of the child closing anything.
+  unlistenAgentSkills.value = await listen('cs://agent-skills-invalidated', () => {
+    void closeAgentSkillsTab()
+  })
   // The dock surface is measured once it exists, and every later layout change updates the
-  // native view through the same coordinator.
+  // native view through the same coordinator. The surface observer catches the dock's own
+  // reflow, while a window resize is routed to the same handler as well: the dock is anchored
+  // to the right edge at a fixed width, so a window that only gets wider moves the surface
+  // without changing its size and the observer would leave the native view at its old offset.
   await nextTick()
   const dockSurface = dockRef.value?.getSurfaceElement?.()
   if (dockSurface && typeof ResizeObserver !== 'undefined') {
@@ -3237,12 +3410,18 @@ onMounted(async () => {
   await agentStore.fetchAgents()
   try {
     await chatHubStore.load()
+    // The hub inventory is the other inventory that owns a dock tab, so a restore may only run
+    // once it answered: a list that failed to load must not drop the saved chat tabs.
+    dockHubsReady = true
     // How the page is docked and how wide it may be both belong to the backend.
     await chatHubStore.loadViewLayout()
     await chatHubStore.startSyncListener()
   } catch (error) {
     console.error('Failed to load chat hubs:', error)
   }
+  // The saved dock is applied only once both inventories answered; a plugin inventory that is
+  // still loading defers the restore to a successful refresh below.
+  maybeRestoreDockLayout()
   await fetchSystemSkills()
   try {
     defaultImageRecognitionPrompt.value = await invokeWrapper(
@@ -3266,6 +3445,8 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('resize', updateMaxWidth)
+  // A window resize feeds the same coalesced layout sync as the surface observer, so a window
+  // that is only made wider does not leave the docked view at its previous offset.
   window.addEventListener('resize', onDockLayoutResize)
   startTodayCostRefresh()
   isInitializing.value = false
@@ -3280,7 +3461,10 @@ onBeforeUnmount(() => {
   void releaseDockWidth()
   unlistenPlugins?.()
   clearInterval(pluginRefreshTimer)
+  unlistenAgentSkills.value?.()
   dockResizeObserver?.disconnect()
+  // A layout sync still waiting for the DOM update must not run after the dock was released.
+  dockLayoutSyncPending = false
   window.removeEventListener('resize', onDockLayoutResize)
   // Releases every docked native view; the intent is cleared first so no queued command
   // can resurrect one during teardown.
