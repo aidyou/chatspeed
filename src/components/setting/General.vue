@@ -1,7 +1,6 @@
 <template>
-  <el-tabs v-model="generalTab" class="general-tabs">
-    <el-tab-pane :label="$t('settings.general.generalTab')" name="general">
-  <div class="card">
+  <div class="general-settings">
+    <div class="card">
     <div class="title">{{ $t('settings.general.generalSettings') }}</div>
     <div class="list">
       <div class="item">
@@ -894,9 +893,7 @@
       </div>
     </div>
   </div>
-
-  </el-tab-pane>
-  </el-tabs>
+  </div>
 
   <el-dialog v-model="configExportVisible" :title="$t('settings.general.exportConfiguration')" width="560px" @closed="configExportCategories = []">
     <el-checkbox-group v-model="configExportCategories">
@@ -984,7 +981,6 @@ const { settings } = storeToRefs(settingStore)
 const { versionInfo, downloadProgress, downloadError, isUpdateReady, isCheckingForUpdates } =
   storeToRefs(updateStore)
 
-const generalTab = ref('general')
 const currentVersion = ref('')
 const manualUpdateStatus = computed(() => {
   if (downloadError.value) {
@@ -1880,12 +1876,9 @@ const getAllBackups = () => {
 </script>
 
 <style lang="scss">
-.general-tabs {
+.general-settings {
   min-height: 100%;
-
-  .el-tab-pane {
-    padding-bottom: var(--cs-space);
-  }
+  padding-bottom: var(--cs-space);
 }
 
 .auto-width-select {

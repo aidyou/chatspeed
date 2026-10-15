@@ -102,7 +102,7 @@ const menuItems = computed(() => [
   { label: t('settings.type.chatHub'), icon: 'connected', id: 'chatHub' },
   { label: t('settings.type.mcp'), icon: 'mcp', id: 'mcp' },
   { label: t('settings.type.skill'), icon: 'skill', id: 'skill' },
-  { label: t('settings.type.plugin'), icon: 'function', id: 'plugin' },
+  { label: t('settings.type.plugin'), icon: 'plugin', id: 'plugin' },
   { label: t('settings.type.privacy'), icon: 'privacy', id: 'privacy' },
   { label: t('settings.type.about'), icon: 'about', id: 'about' },
   { label: t('settings.type.scraperTest'), icon: 'extract', id: 'scraperTest', hide: true }
