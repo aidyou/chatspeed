@@ -31,6 +31,11 @@ const routes = [
     name: "proxy-switcher",
     component: () => import("@/views/ProxySwitcher.vue"),
   },
+  {
+    path: "/agent-skills",
+    name: "agent-skills",
+    component: () => import("@/views/AgentSkills.vue"),
+  },
 ];
 
 const router = createRouter({

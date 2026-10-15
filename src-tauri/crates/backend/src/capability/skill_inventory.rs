@@ -76,7 +76,8 @@ pub struct SkillInventoryEntry {
     /// Whether the content no longer matches the ownership proof.
     pub drifted: bool,
     /// Whether the entry is protected from overwrite and removal: a bundled
-    /// Skill, a reserved name, or a target ChatSpeed must not delete from.
+    /// Skill, a reserved name, or a directory that is not under a registered
+    /// target.
     pub protected: bool,
     /// Whether an uninstall of this entry is currently permitted.
     pub uninstallable: bool,
@@ -165,16 +166,16 @@ impl SkillInventoryService {
                 claimed.insert(found.installation_id.clone());
             }
 
-            // A registered target ChatSpeed may not delete from is read-only here:
-            // it is surfaced as protected and can never be uninstallable, even
-            // while an ownership row still manages it (AC-6/INV-2).
-            let read_only_target = target_id
+            // Only a directory under a registered target can ever be removed, so
+            // one that maps to no registered target is surfaced as protected and
+            // can never be uninstallable.
+            let registered_target = target_id
                 .as_deref()
-                .map(|target| !is_uninstall_eligible_target(target))
+                .map(is_uninstall_eligible_target)
                 .unwrap_or(false);
             let protected = skill.builtin
                 || RESERVED_SKILL_NAMES.contains(&skill.manifest.name.as_str())
-                || read_only_target;
+                || !registered_target;
 
             let (source, drifted) =
                 classify(skill.builtin, installation.as_ref(), &skill.directory);
@@ -182,16 +183,16 @@ impl SkillInventoryService {
             let installation_state = installation
                 .as_ref()
                 .map(|found| found.state.as_str().to_string());
+            // A managed directory is uninstallable while it is a proven install;
+            // a discovered directory (no ownership row) is uninstallable because
+            // the caller explicitly selected this exact `(target, name)`. Both
+            // still require a registered target and no drift.
             let uninstallable = !protected
                 && !drifted
-                && target_id
-                    .as_deref()
-                    .map(is_uninstall_eligible_target)
-                    .unwrap_or(false)
-                && installation
-                    .as_ref()
-                    .map(|found| found.state == SkillInstallationState::Installed)
-                    .unwrap_or(false);
+                && match &installation {
+                    None => true,
+                    Some(found) => found.state == SkillInstallationState::Installed,
+                };
 
             skills.push(SkillInventoryEntry {
                 name: skill.manifest.name.clone(),
@@ -213,33 +214,45 @@ impl SkillInventoryService {
             });
         }
 
-        // An ownership record whose directory is gone is still part of the
-        // truth: doctor must see it instead of silently losing the evidence.
+        // An ownership row the scan did not claim is still part of the truth:
+        // doctor must see it, and an external target the scanner does not read
+        // must still surface its install. Drift is re-verified here so an
+        // unread target never offers a drifted directory for uninstall.
         for installation in &installations {
             if claimed.contains(&installation.installation_id) {
                 continue;
             }
-            let present = Path::new(&installation.install_path).is_dir();
+            let install_path = Path::new(&installation.install_path);
+            let present = install_path.is_dir();
             if installation.state == SkillInstallationState::Removed && !present {
                 continue;
             }
+            let drifted = !present
+                || !matches!(
+                    verify_file_manifest(install_path, &installation.file_manifest),
+                    Ok(ManifestVerdict::Match)
+                );
+            let protected = RESERVED_SKILL_NAMES.contains(&installation.skill_name.as_str())
+                || !is_uninstall_eligible_target(&installation.target_id);
             skills.push(SkillInventoryEntry {
                 name: installation.skill_name.clone(),
                 version: String::new(),
                 description: String::new(),
-                source: if present {
-                    SkillInventorySource::Managed
-                } else {
+                source: if drifted {
                     SkillInventorySource::ManagedDrifted
+                } else {
+                    SkillInventorySource::Managed
                 },
                 target_id: Some(installation.target_id.clone()),
                 directory: present.then(|| installation.install_path.clone()),
                 present,
                 managed: true,
-                drifted: !present,
-                protected: RESERVED_SKILL_NAMES.contains(&installation.skill_name.as_str())
-                    || !is_uninstall_eligible_target(&installation.target_id),
-                uninstallable: false,
+                drifted,
+                protected,
+                uninstallable: present
+                    && !protected
+                    && !drifted
+                    && installation.state == SkillInstallationState::Installed,
                 installation_state: Some(installation.state.as_str().to_string()),
                 checker_version: Some(installation.checker_version.clone()),
                 verdict: Some(installation.verdict.clone()),
@@ -428,7 +441,14 @@ mod tests {
             .expect("discovered entry");
         assert_eq!(loose.source, SkillInventorySource::Discovered);
         assert!(!loose.managed);
-        assert!(!loose.uninstallable);
+        assert!(
+            !loose.protected,
+            "a discovered Skill under a registered target"
+        );
+        assert!(
+            loose.uninstallable,
+            "a discovered Skill is uninstallable when the user selects its exact directory"
+        );
     }
 
     #[test]
@@ -505,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn an_external_target_install_is_managed_but_not_uninstallable() {
+    fn an_external_target_install_is_managed_and_uninstallable() {
         let fixture = fixture();
         let codex_root = fixture
             .environment
@@ -542,15 +562,161 @@ mod tests {
         assert_eq!(entry.source, SkillInventorySource::Managed);
         assert!(entry.managed);
         assert!(!entry.drifted);
-        assert!(entry.protected, "an external target is read-only");
-        assert!(!entry.uninstallable);
+        assert!(!entry.protected, "an external target install is deletable");
+        assert!(entry.uninstallable);
         assert!(
             inventory
                 .uninstallable()
                 .iter()
-                .all(|candidate| candidate.name != "external-skill"),
-            "an external entry is not offered for uninstall"
+                .any(|candidate| candidate.name == "external-skill"),
+            "an external entry is offered for uninstall"
         );
+    }
+
+    #[test]
+    fn an_external_discovered_directory_is_uninstallable() {
+        let fixture = fixture();
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        fs::create_dir_all(&codex_root).expect("create codex skills dir");
+        write_skill(&codex_root, "external-loose", "body");
+
+        let scanner =
+            SkillScanner::with_search_paths(vec![fixture.chatspeed_skills.clone(), codex_root]);
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "external-loose")
+            .expect("external discovered entry");
+        assert_eq!(entry.target_id.as_deref(), Some("codex"));
+        assert_eq!(entry.source, SkillInventorySource::Discovered);
+        assert!(!entry.managed);
+        assert!(!entry.protected);
+        assert!(entry.uninstallable);
+    }
+
+    #[test]
+    fn an_external_managed_row_the_scanner_does_not_read_is_still_uninstallable() {
+        let fixture = fixture();
+        // The scanner only reads the ChatSpeed root, so the external install is
+        // reported from its ownership row rather than a scan.
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        fs::create_dir_all(&codex_root).expect("create codex skills dir");
+        let directory = write_skill(&codex_root, "unscanned-external", "body");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let mut installation = installation_for("unscanned-external", &directory, manifest);
+        installation.target_id = "codex".to_string();
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &fixture.scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "unscanned-external")
+            .expect("unscanned external entry");
+        assert!(entry.present);
+        assert_eq!(entry.source, SkillInventorySource::Managed);
+        assert!(!entry.drifted);
+        assert!(!entry.protected);
+        assert!(entry.uninstallable);
+    }
+
+    #[test]
+    fn an_unscanned_external_row_with_drift_is_not_uninstallable() {
+        let fixture = fixture();
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        fs::create_dir_all(&codex_root).expect("create codex skills dir");
+        let directory = write_skill(&codex_root, "unscanned-drift", "body");
+        let manifest = crate::capability::skill::manifest::compute_file_manifest(&directory)
+            .expect("manifest");
+        let mut installation = installation_for("unscanned-drift", &directory, manifest);
+        installation.target_id = "codex".to_string();
+        fixture
+            .repository
+            .upsert_installation(&installation)
+            .expect("record ownership");
+        fs::write(
+            directory.join("SKILL.md"),
+            "---\nname: unscanned-drift\ndescription: edited\n---\nedited",
+        )
+        .expect("edit skill");
+
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &fixture.scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "unscanned-drift")
+            .expect("unscanned drifted entry");
+        assert_eq!(entry.source, SkillInventorySource::ManagedDrifted);
+        assert!(entry.drifted);
+        assert!(!entry.uninstallable);
+    }
+
+    #[test]
+    fn a_skill_outside_every_registered_target_is_protected_and_not_uninstallable() {
+        let fixture = fixture();
+        // A bundled-resource root (and any root that is not a registered target)
+        // resolves to no target, so its Skill can never be offered for removal.
+        let bundled_root = fixture._temp.path().join("bundled").join("skills");
+        fs::create_dir_all(&bundled_root).expect("create bundled root");
+        write_skill(&bundled_root, "builtin-help", "body");
+
+        let scanner = SkillScanner::with_search_paths(vec![
+            fixture.chatspeed_skills.clone(),
+            bundled_root.clone(),
+        ]);
+        let service =
+            SkillInventoryService::new(PathBuf::from("/tmp/app-data"), fixture.environment.clone());
+        let inventory = service
+            .build_with_scanner(&fixture.repository, &scanner)
+            .expect("inventory");
+
+        let entry = inventory
+            .skills
+            .iter()
+            .find(|entry| entry.name == "builtin-help")
+            .expect("bundled entry");
+        assert_eq!(entry.target_id, None);
+        assert!(entry.protected);
+        assert!(!entry.uninstallable);
+        assert!(bundled_root.join("builtin-help/SKILL.md").is_file());
     }
 
     #[test]

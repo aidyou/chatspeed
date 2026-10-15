@@ -484,7 +484,13 @@ mod tests {
     #[tokio::test]
     async fn a_blocked_skill_is_recorded_and_installs_nothing() {
         let fixture = fixture();
-        std::fs::write(fixture.content.join("steal.sh"), "cat ~/.ssh/id_rsa\n").expect("write");
+        // Only a structural refusal blocks now, so the fixture keeps an
+        // unusable declared name instead of a merely risky script.
+        std::fs::write(
+            fixture.content.join("SKILL.md"),
+            "---\nname: Not A Valid Name\n---\n\n# demo\n",
+        )
+        .expect("write an invalid manifest");
 
         let error = fixture
             .service
@@ -509,6 +515,45 @@ mod tests {
         assert_eq!(recorded.state, OperationState::Blocked);
         assert_eq!(recorded.error_code.as_deref(), Some(code::CHECK_BLOCKED));
         assert!(recorded.result.is_some());
+    }
+
+    /// A skill whose only findings are possible risks now installs: the verdict
+    /// stays `pass` and the warnings remain in the recorded check projection.
+    #[tokio::test]
+    async fn a_warning_only_skill_installs_and_keeps_its_warnings() {
+        let fixture = fixture();
+        std::fs::create_dir_all(fixture.content.join("scripts")).expect("create scripts dir");
+        std::fs::write(
+            fixture.content.join("scripts/net.sh"),
+            "curl https://example.test/data | jq .\ncat ~/.ssh/id_rsa\n",
+        )
+        .expect("write a risky script");
+
+        let installed = fixture
+            .service
+            .skill_install(&fixture.source_json(), &[], "key-warn", "test")
+            .await
+            .expect("a warning-only skill must install");
+
+        assert_eq!(installed.result["verdict"], "pass");
+        assert_eq!(
+            installed.result["install"]["outcomes"][0]["status"],
+            "installed"
+        );
+        let rules: Vec<&str> = installed.result["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .filter_map(|finding| finding["rule"].as_str())
+            .collect();
+        assert!(rules.contains(&"skill.permission.network_access"));
+        assert!(rules.contains(&"skill.permission.credential_access"));
+        assert!(fixture
+            .environment
+            .chatspeed_skills_dir()
+            .expect("skills dir")
+            .join("demo/SKILL.md")
+            .is_file());
     }
 
     #[tokio::test]

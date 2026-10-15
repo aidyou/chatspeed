@@ -19,7 +19,7 @@
 
 use std::sync::Mutex;
 
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Window, Wry};
 
 use crate::chat_hub::host_window;
 use crate::error::{AppError, Result};
@@ -221,7 +221,7 @@ pub async fn apply_docked_width(app: &AppHandle<Wry>, width: f64) -> Result<()> 
 ///
 /// The work area is used instead of the full resolution so the window never grows under a panel
 /// or over a dock the user keeps at the side of the screen.
-fn screen_area(host: &WebviewWindow<Wry>, scale_factor: f64) -> Option<ScreenArea> {
+fn screen_area(host: &Window<Wry>, scale_factor: f64) -> Option<ScreenArea> {
     let monitor = host.current_monitor().ok().flatten()?;
     let work_area = monitor.work_area();
     let left = work_area.position.x as f64 / scale_factor;

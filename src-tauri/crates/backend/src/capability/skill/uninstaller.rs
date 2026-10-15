@@ -1,20 +1,34 @@
-//! Ownership-bound Agent Skill uninstallation.
+//! Explicit Agent Skill uninstallation.
 //!
-//! A directory is only removed when ChatSpeed can prove all of:
+//! Deletion is only ever attempted for a `(target, name)` pair that passes
+//! every gate below, and the path that is removed is always derived as
+//! `registered_target_root.join(name)` — never a caller-supplied path
+//! (AC-3/AC-4/INV-5):
 //!
-//! * the target is one ChatSpeed may delete from — its own directory or the
-//!   shared canonical Agents directory — so an external tool's target is
-//!   read-only even when a ChatSpeed ownership row exists (AC-6/INV-2);
-//! * a durable installation row exists for this `(target, name)`;
-//! * the row was created for exactly this path;
-//! * the in-directory ownership marker matches the row;
-//! * the content still matches the recorded manifest (no drift);
-//! * the name is not reserved.
+//! * the name is not reserved;
+//! * the id is a registered target, and `target_preflight::verify_delete_root`
+//!   proves its root and every existing ancestor is a real directory (never a
+//!   symbolic link) and that the id canonically owns the directory it resolves
+//!   to (AC-7/INV-6);
+//! * the joined path sits directly under that root and is itself a real
+//!   directory, never a symbolic link;
+//! * for a managed directory a durable installation row exists for exactly
+//!   this path, its ownership marker matches the row, and the content still
+//!   matches the recorded manifest (no drift) — drifted user content is never
+//!   deleted (AC-7/INV-6).
 //!
-//! Anything else is refused with zero deletion (AC-7/INV-6). The directory is
-//! first renamed to a sibling quarantine inside the same target, then the row
-//! is finalized and the quarantine is removed, so an interrupted uninstall is
-//! always recognizable rather than half-deleted.
+//! A directory with no ownership row is a *discovered* Skill. It may be removed
+//! only because the caller explicitly asked for this exact `(target, name)` —
+//! the UI has already shown the user the concrete directory — and it is still
+//! subject to the same registered-target, exact-path and real-directory gates.
+//! It is deleted directly, because there is no durable row that could finalize a
+//! quarantine; the intent and the observation are journaled by [`SkillUninstaller::uninstall`].
+//!
+//! A managed directory is first renamed to a sibling quarantine inside the same
+//! target, then the row is finalized and the quarantine is removed, so an
+//! interrupted uninstall is always recognizable rather than half-deleted.
+//!
+//! Anything else is refused with zero deletion (AC-7/INV-6).
 
 use std::path::{Path, PathBuf};
 
@@ -30,17 +44,40 @@ use crate::capability::target_preflight;
 use crate::capability::targets::{SkillTargetId, TargetEnvironment};
 use crate::capability::types::{EffectOutcome, SkillInstallation, SkillInstallationState};
 
-/// Target ids whose managed Skill directories ChatSpeed may ever delete:
-/// ChatSpeed's own directory and the shared canonical Agents directory.
+/// Whether `target_id` is a registered Agent Skill target ChatSpeed may delete
+/// from.
 ///
-/// Every other registered target belongs to an external tool, so a ChatSpeed
-/// ownership record there is not authority to delete: those targets are refused
-/// read-only and their directories are preserved (AC-6/INV-2).
+/// Every registered target is a candidate, including an external tool's target
+/// and one that still has no ChatSpeed ownership row. The id alone is never
+/// authority to delete: `target_preflight::verify_delete_root` makes the
+/// physical decision, refusing an unsupported target, a directory chain that
+/// contains a symbolic link, and an id that only aliases a higher-priority
+/// target's directory. An unregistered id is never eligible.
 pub fn is_uninstall_eligible_target(target_id: &str) -> bool {
-    matches!(
-        SkillTargetId::parse(target_id),
-        Some(SkillTargetId::Chatspeed | SkillTargetId::Agents)
-    )
+    SkillTargetId::parse(target_id).is_some()
+}
+
+/// The physical kind of the exact skill path a delete would touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillPathKind {
+    /// Nothing exists at the path.
+    Missing,
+    /// A real directory: the only kind ChatSpeed will ever delete.
+    RealDirectory,
+    /// A symbolic link, a regular file, or something that cannot be inspected.
+    Unsafe,
+}
+
+/// Classifies the exact skill path without following a final symbolic link, so
+/// a linked directory can never be deleted through.
+fn classify_skill_path(path: &Path) -> SkillPathKind {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => SkillPathKind::Unsafe,
+        Ok(metadata) if metadata.is_dir() => SkillPathKind::RealDirectory,
+        Ok(_) => SkillPathKind::Unsafe,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillPathKind::Missing,
+        Err(_) => SkillPathKind::Unsafe,
+    }
 }
 
 /// What an uninstall did on one target.
@@ -141,8 +178,10 @@ impl SkillUninstaller {
         if RESERVED_SKILL_NAMES.contains(&skill_name) {
             return Ok(None);
         }
-        // An external target is never converged: any ownership row or leftover
-        // quarantine there is preserved rather than acted on (AC-6/INV-2).
+        // Convergence follows the same delete eligibility as an explicit uninstall:
+        // any registered target is a candidate, and only durable proof (marker +
+        // manifest) is ever acted on, so an unproven or drifted external
+        // directory is still preserved untouched.
         if !is_uninstall_eligible_target(target_id) {
             return Ok(None);
         }
@@ -233,15 +272,14 @@ impl SkillUninstaller {
             );
         }
 
-        // Deletion is only ever authorized for ChatSpeed's own directories;
-        // an external tool's target is read-only here even when a ChatSpeed
-        // ownership row exists (AC-6/INV-2).
+        // Only a registered target is ever touched: an unregistered id has no
+        // verified directory and is refused before anything is resolved.
         if !is_uninstall_eligible_target(target_id) {
             return self.refuse(
                 target_id,
                 skill_name,
                 None,
-                "this target is external to ChatSpeed and is never uninstalled",
+                "this target is not a registered Agent Skill target",
             );
         }
 
@@ -255,7 +293,20 @@ impl SkillUninstaller {
                 return self.refuse(target_id, skill_name, None, failure.detail());
             }
         };
+        // The delete is bound to exactly one path: `root.join(name)`. A name
+        // that would resolve anywhere but directly under the verified root (for
+        // example one containing a path separator) is refused, so no request can
+        // reach an arbitrary directory (AC-3/AC-4/INV-5).
         let install_path = target_root.join(skill_name);
+        if install_path.parent() != Some(target_root.as_path()) {
+            return self.refuse(
+                target_id,
+                skill_name,
+                None,
+                "the skill name does not resolve to a directory directly under the target root",
+            );
+        }
+        let path_kind = classify_skill_path(&install_path);
 
         let recorded = match repository.get_installation(target_id, skill_name) {
             Ok(recorded) => recorded,
@@ -269,14 +320,11 @@ impl SkillUninstaller {
             }
         };
         let Some(recorded) = recorded else {
-            return UninstallOutcome {
-                target_id: target_id.to_string(),
-                skill_name: skill_name.to_string(),
-                status: UninstallOutcomeStatus::NotFound,
-                install_path: Some(install_path.to_string_lossy().to_string()),
-                quarantine_path: None,
-                detail: Some("no recorded installation owns this name".to_string()),
-            };
+            // No ownership row: a directory here is a discovered Skill the user
+            // explicitly selected for this exact `(target, name)`. There is no
+            // durable proof or quarantine to reconcile, so it is removed
+            // directly under the same target/path/real-directory gates.
+            return self.uninstall_discovered(target_id, skill_name, &install_path, path_kind);
         };
 
         if recorded.install_path != install_path.to_string_lossy() {
@@ -326,10 +374,21 @@ impl SkillUninstaller {
                 "the recorded installation belongs to a different path",
             );
         }
-        if !install_path.exists() {
+        match path_kind {
             // The directory is already gone; finalize the row instead of
             // guessing about a deletion that already happened.
-            return self.finalize_row(repository, &recorded);
+            SkillPathKind::Missing => return self.finalize_row(repository, &recorded),
+            // A linked or non-directory path is never deleted through: the only
+            // deletion authority is a real directory at the exact target path.
+            SkillPathKind::Unsafe => {
+                return self.refuse(
+                    target_id,
+                    skill_name,
+                    Some(&install_path),
+                    "the installed path is a symbolic link or is not a directory",
+                );
+            }
+            SkillPathKind::RealDirectory => {}
         }
 
         match ownership::has_proof(&install_path, &recorded) {
@@ -420,6 +479,63 @@ impl SkillUninstaller {
             outcome.status = UninstallOutcomeStatus::Removed;
         }
         outcome
+    }
+
+    /// Removes a discovered (unowned) Skill directory the caller explicitly
+    /// selected.
+    ///
+    /// No ownership row exists, so there is no marker or manifest proof to
+    /// check. The authority is only the caller's explicit request for this exact
+    /// `(target, name)`, which reached here only after a registered target
+    /// passed `verify_delete_root` and the joined path was proven to sit
+    /// directly under that root. A symbolic link or a non-directory is refused
+    /// rather than followed, so a discovered entry can never delete through a
+    /// link that leaves the verified target. There is no durable row that could
+    /// finalize a quarantine, so the directory is removed directly; the intent
+    /// and the observation are journaled by [`SkillUninstaller::uninstall`].
+    fn uninstall_discovered(
+        &self,
+        target_id: &str,
+        skill_name: &str,
+        install_path: &Path,
+        path_kind: SkillPathKind,
+    ) -> UninstallOutcome {
+        match path_kind {
+            SkillPathKind::Missing => UninstallOutcome {
+                target_id: target_id.to_string(),
+                skill_name: skill_name.to_string(),
+                status: UninstallOutcomeStatus::NotFound,
+                install_path: Some(install_path.to_string_lossy().to_string()),
+                quarantine_path: None,
+                detail: Some(
+                    "no ownership record and no directory exist for this name".to_string(),
+                ),
+            },
+            SkillPathKind::Unsafe => self.refuse(
+                target_id,
+                skill_name,
+                Some(install_path),
+                "the discovered path is a symbolic link or is not a directory",
+            ),
+            SkillPathKind::RealDirectory => match std::fs::remove_dir_all(install_path) {
+                Ok(()) => UninstallOutcome {
+                    target_id: target_id.to_string(),
+                    skill_name: skill_name.to_string(),
+                    status: UninstallOutcomeStatus::Removed,
+                    install_path: Some(install_path.to_string_lossy().to_string()),
+                    quarantine_path: None,
+                    detail: Some(
+                        "the explicitly selected discovered directory was removed".to_string(),
+                    ),
+                },
+                Err(error) => self.refuse(
+                    target_id,
+                    skill_name,
+                    Some(install_path),
+                    format!("failed to remove the discovered skill directory: {error}"),
+                ),
+            },
+        }
     }
 
     /// Completes an uninstall whose content is already quarantined.
@@ -764,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unmanaged_directory_is_never_deleted() {
+    fn a_discovered_directory_is_removed_when_explicitly_selected() {
         let fixture = fixture();
         let skills_dir = fixture
             .environment
@@ -783,8 +899,16 @@ mod tests {
             )
             .expect("uninstall");
 
-        assert_eq!(outcome.status, UninstallOutcomeStatus::NotFound);
-        assert!(skills_dir.join("demo/handwritten.md").is_file());
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Removed);
+        assert!(!skills_dir.join("demo").exists());
+        assert!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .is_none(),
+            "no ownership row is invented for a discovered directory"
+        );
     }
 
     #[test]
@@ -848,14 +972,14 @@ mod tests {
     }
 
     #[test]
-    fn an_external_target_without_an_install_is_still_refused() {
+    fn an_unregistered_target_is_refused_and_deletes_nothing() {
         let fixture = fixture();
         let uninstaller = SkillUninstaller::new(fixture.environment.clone());
         let outcome = uninstaller
             .uninstall(
                 &fixture.repository,
-                &operation(&fixture, "uninstall-1"),
-                "codex",
+                &operation(&fixture, "uninstall-unknown-target"),
+                "not-a-registered-target",
                 "demo",
             )
             .expect("uninstall");
@@ -863,9 +987,85 @@ mod tests {
     }
 
     #[test]
-    fn an_external_install_is_refused_and_retained() {
+    fn an_external_target_without_a_directory_is_not_found() {
+        let fixture = fixture();
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-1"),
+                "codex",
+                "demo",
+            )
+            .expect("uninstall");
+        assert_eq!(outcome.status, UninstallOutcomeStatus::NotFound);
+    }
+
+    #[test]
+    fn an_external_discovered_directory_is_removed_when_explicitly_selected() {
+        let fixture = fixture();
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        let directory = codex_root.join("demo");
+        std::fs::create_dir_all(&directory).expect("create discovered directory");
+        std::fs::write(directory.join("SKILL.md"), "---\nname: demo\n---\n").expect("write");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-external-discovered"),
+                "codex",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Removed);
+        assert!(!directory.exists());
+        assert!(
+            fixture
+                .repository
+                .get_installation("codex", "demo")
+                .expect("lookup")
+                .is_none(),
+            "no ownership row is invented for a discovered external directory"
+        );
+    }
+
+    #[test]
+    fn a_name_that_escapes_the_target_root_is_refused() {
+        let fixture = fixture();
+        let chatspeed_home = fixture.environment.chatspeed_home.clone().expect("home");
+        // A sibling of the target root with the escaped name must survive: the
+        // delete is bound to exactly `root.join(name)`.
+        let escaped = chatspeed_home.join("evil");
+        std::fs::create_dir_all(&escaped).expect("create escaped dir");
+        std::fs::write(escaped.join("keep.md"), "keep me").expect("write");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-escape"),
+                "chatspeed",
+                "../evil",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(escaped.join("keep.md").is_file());
+    }
+
+    #[test]
+    fn an_external_install_is_removed_with_proof() {
         let fixture = fixture();
         let install_path = installed_into(&fixture, SkillTargetId::Codex);
+        let target_root = install_path.parent().expect("parent").to_path_buf();
 
         let uninstaller = SkillUninstaller::new(fixture.environment.clone());
         let outcome = uninstaller
@@ -877,15 +1077,51 @@ mod tests {
             )
             .expect("uninstall");
 
-        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
-        assert!(install_path.join("SKILL.md").is_file());
-        assert!(install_path.join("notes.md").is_file());
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Removed);
+        assert!(!install_path.exists());
+        assert!(
+            !std::fs::read_dir(&target_root)
+                .expect("read target root")
+                .flatten()
+                .any(|entry| is_quarantine_entry(&entry.file_name().to_string_lossy())),
+            "the proven quarantine is removed, not left behind"
+        );
         let row = fixture
             .repository
             .get_installation("codex", "demo")
             .expect("lookup")
             .expect("row");
-        assert_eq!(row.state, SkillInstallationState::Installed);
+        assert_eq!(row.state, SkillInstallationState::Removed);
+    }
+
+    #[test]
+    fn an_external_drifted_install_is_refused_and_kept() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Codex);
+        std::fs::write(install_path.join("notes.md"), "edited by hand").expect("edit");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-external-drift"),
+                "codex",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(install_path.join("notes.md").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("codex", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Installed,
+            "a drifted external install is left exactly as it was"
+        );
     }
 
     #[test]
@@ -994,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_never_converges_an_external_target() {
+    fn reconcile_recovers_a_proven_external_install() {
         let fixture = fixture();
         let install_path = installed_into(&fixture, SkillTargetId::Codex);
         let installation_id = fixture
@@ -1013,7 +1249,10 @@ mod tests {
             .reconcile_owned_directory(&fixture.repository, "codex", "demo")
             .expect("reconcile");
 
-        assert!(converged.is_none());
+        assert_eq!(
+            converged.map(|outcome| outcome.status),
+            Some(UninstallOutcomeStatus::Finalized)
+        );
         assert!(install_path.join("SKILL.md").is_file());
         assert_eq!(
             fixture
@@ -1022,8 +1261,42 @@ mod tests {
                 .expect("lookup")
                 .expect("row")
                 .state,
+            SkillInstallationState::Installed
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_a_drifted_external_install_untouched() {
+        let fixture = fixture();
+        let install_path = installed_into(&fixture, SkillTargetId::Codex);
+        let installation_id = fixture
+            .repository
+            .get_installation("codex", "demo")
+            .expect("lookup")
+            .expect("row")
+            .installation_id;
+        fixture
+            .repository
+            .set_installation_state(&installation_id, SkillInstallationState::Installing)
+            .expect("mark installing");
+        std::fs::write(install_path.join("notes.md"), "edited by hand").expect("edit");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let converged = uninstaller
+            .reconcile_owned_directory(&fixture.repository, "codex", "demo")
+            .expect("reconcile");
+
+        assert!(converged.is_none());
+        assert!(install_path.join("notes.md").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("codex", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
             SkillInstallationState::Installing,
-            "an external row is left exactly as it was"
+            "drifted external content is never converged"
         );
     }
 
@@ -1408,5 +1681,76 @@ mod tests {
                 .expect("row");
             assert_eq!(row.state, SkillInstallationState::Installed);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_discovered_skill_directory_is_refused_and_the_target_is_kept() {
+        let fixture = fixture();
+        let codex_root = fixture
+            .environment
+            .home_dir
+            .clone()
+            .expect("home")
+            .join(".codex")
+            .join("skills");
+        std::fs::create_dir_all(&codex_root).expect("create codex skills dir");
+        let outside = fixture._temp.path().join("discovered-outside");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        std::fs::write(outside.join("keep.md"), "keep me").expect("write outside content");
+        let link = codex_root.join("demo");
+        std::os::unix::fs::symlink(&outside, &link).expect("symlink skill dir");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-symlink-discovered"),
+                "codex",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(outside.join("keep.md").is_file());
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "the link itself is preserved"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_managed_skill_directory_is_refused_and_the_content_is_kept() {
+        let fixture = fixture();
+        let install_path = installed(&fixture);
+        let outside = fixture._temp.path().join("managed-outside");
+        std::fs::rename(&install_path, &outside).expect("move content aside");
+        std::os::unix::fs::symlink(&outside, &install_path).expect("symlink skill dir");
+
+        let uninstaller = SkillUninstaller::new(fixture.environment.clone());
+        let outcome = uninstaller
+            .uninstall(
+                &fixture.repository,
+                &operation(&fixture, "uninstall-symlink-managed"),
+                "chatspeed",
+                "demo",
+            )
+            .expect("uninstall");
+
+        assert_eq!(outcome.status, UninstallOutcomeStatus::Refused);
+        assert!(outside.join("SKILL.md").is_file());
+        assert_eq!(
+            fixture
+                .repository
+                .get_installation("chatspeed", "demo")
+                .expect("lookup")
+                .expect("row")
+                .state,
+            SkillInstallationState::Installed
+        );
     }
 }

@@ -474,7 +474,7 @@ mod carrier {
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod carrier {
     use super::*;
-    use tauri::WebviewWindow;
+    use tauri::Window;
     use wry::dpi::{LogicalPosition, LogicalSize};
     use wry::{Rect, WebContext, WebView};
 
@@ -532,7 +532,7 @@ mod carrier {
 
     impl Page {
         fn create(
-            window: &WebviewWindow<Wry>,
+            window: &Window<Wry>,
             url: &str,
             prefix: &str,
             bounds: PluginUiBounds,

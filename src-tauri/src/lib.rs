@@ -21,6 +21,7 @@ use chatspeed_runtime_backend::owner::builtin_agents;
 // `/control/v1`, so it names only these types and never compiles the runtime's
 // plugin filesystem lifecycle.
 pub use chatspeed_runtime_backend::plugin_types;
+pub mod agent_skills;
 pub mod chat_hub;
 pub mod dock_window;
 pub mod native_dock;
@@ -445,6 +446,9 @@ pub async fn run() -> crate::error::Result<()> {
             open_url,
             show_window,
             open_proxy_switcher_window,
+            show_agent_skills_view,
+            hide_agent_skills_view,
+            close_agent_skills_view,
             toggle_window_always_on_top,
             get_window_always_on_top,
             quit_window,
@@ -729,6 +733,13 @@ pub async fn run() -> crate::error::Result<()> {
                     {
                         let _ = plugin_ui_host.clear();
                     }
+                    // The Agent Skills surface is docked into this window as a child webview, so
+                    // it goes away with the window; only its handle is released here.
+                    if let Some(agent_skills) =
+                        app_handle.try_state::<agent_skills::AgentSkillsView>()
+                    {
+                        agent_skills.release();
+                    }
                     if let Some(dock) = app_handle.try_state::<native_dock::DockSurface>() {
                         // The shared overlay and its native views are torn down with the window, so
                         // only the tracked state is reset here.
@@ -807,6 +818,9 @@ pub async fn run() -> crate::error::Result<()> {
             // ChatHubPageState
             // Owns the docked ChatHub tabs inside the Workflow window.
             app.manage(chat_hub::ChatHubPageState::new());
+            // The trusted Agent Skills surface docked into the Workflow window. It is a Tauri
+            // child webview of that window, never a window of its own.
+            app.manage(agent_skills::AgentSkillsView::new());
             // Shared bounded overlay every native dock view (ChatHub tab and plugin panel) uses.
             app.manage(native_dock::DockSurface::new());
             // Width the Workflow window currently holds for the right dock, so the workflow UI

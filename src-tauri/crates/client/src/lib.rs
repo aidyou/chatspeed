@@ -414,6 +414,27 @@ pub fn stream_envelope_cursor(envelope: &StreamEnvelope) -> String {
 /// Default request timeout; a loopback control plane answers immediately.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Longer request timeout granted to the two exact Skill mutation routes by the
+/// default policy.
+///
+/// `POST /control/v1/skill-check` and `POST /control/v1/skill-install` may
+/// materialize a remote GitHub archive inside the runtime before they answer,
+/// and the runtime budgets 60 s for that download. The ordinary 30 s would abort
+/// the request at the client first, which surfaced as a spurious transport
+/// error even though the download itself was healthy. Only these exact routes
+/// get the longer budget under [`RuntimeClient::new`]; every other route keeps
+/// the client's configured timeout, so nothing is delayed globally. A caller
+/// that passes an explicit timeout to [`RuntimeClient::with_timeout`] replaces
+/// this budget with its own value on every route.
+const SKILL_MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The one route allowed the longer [`SKILL_MUTATION_TIMEOUT`] budget by default.
+const SKILL_CHECK_PATH: &str = "/control/v1/skill-check";
+
+/// The other route allowed the longer [`SKILL_MUTATION_TIMEOUT`] budget by
+/// default.
+const SKILL_INSTALL_PATH: &str = "/control/v1/skill-install";
+
 /// Query parameter names that must never carry the bearer token. The runtime
 /// rejects these as well; rejecting them here keeps a misconfigured caller from
 /// putting a credential into a URL that ends up in logs or error messages.
@@ -829,6 +850,11 @@ pub struct RuntimeClient {
     token: String,
     http: reqwest::Client,
     timeout: Duration,
+    /// Extended budget reserved for the two exact Skill mutation routes under
+    /// the default policy. `None` when the caller passed an explicit timeout to
+    /// [`RuntimeClient::with_timeout`], which then applies to every route
+    /// verbatim instead of being floored to [`SKILL_MUTATION_TIMEOUT`].
+    skill_mutation_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for RuntimeClient {
@@ -854,8 +880,12 @@ pub struct PluginUiAssetResponse {
 
 impl RuntimeClient {
     /// Builds a client for a discovery document, validating it first.
+    ///
+    /// Uses the default timeout policy: the two exact Skill mutation routes get
+    /// [`SKILL_MUTATION_TIMEOUT`] because they may run a remote download before
+    /// they answer, while every other route uses [`DEFAULT_TIMEOUT`].
     pub fn new(discovery: &ControlPlaneDiscovery) -> Result<Self, ClientError> {
-        Self::with_timeout(discovery, DEFAULT_TIMEOUT)
+        Self::with_policy(discovery, DEFAULT_TIMEOUT, Some(SKILL_MUTATION_TIMEOUT))
     }
 
     /// Builds a client with an explicit per-request timeout.
@@ -865,10 +895,26 @@ impl RuntimeClient {
     /// bypassing [`load_discovery`]. Redirects are never followed and proxies
     /// are never consulted: both would let the bearer token leave the loopback
     /// endpoint. There is no total request timeout on the client itself, so a
-    /// long SSE stream is not cut off; normal requests apply `timeout` each.
+    /// long SSE stream is not cut off.
+    ///
+    /// `timeout` is an explicit override, so it applies verbatim to every route,
+    /// including the two Skill mutation routes; a caller can impose a budget
+    /// tighter than the default [`SKILL_MUTATION_TIMEOUT`], which is never
+    /// forced back up as a floor.
     pub fn with_timeout(
         discovery: &ControlPlaneDiscovery,
         timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        Self::with_policy(discovery, timeout, None)
+    }
+
+    /// Shared constructor. `skill_mutation_timeout` carries the default policy's
+    /// extended Skill-route budget, or `None` when `timeout` is the caller's
+    /// explicit override that must apply to every route verbatim.
+    fn with_policy(
+        discovery: &ControlPlaneDiscovery,
+        timeout: Duration,
+        skill_mutation_timeout: Option<Duration>,
     ) -> Result<Self, ClientError> {
         validate_protocol_major(discovery)?;
         let http = reqwest::Client::builder()
@@ -884,6 +930,7 @@ impl RuntimeClient {
             token: discovery.token.clone(),
             http,
             timeout,
+            skill_mutation_timeout,
         })
     }
 
@@ -1464,11 +1511,27 @@ impl RuntimeClient {
     }
 
     /// Builds a request carrying the bearer token in the header only, with the
-    /// configured per-request timeout.
+    /// per-request timeout this path resolves to.
     fn build(&self, method: Method, path: &str) -> Result<reqwest::RequestBuilder, ClientError> {
         Ok(self
             .build_without_timeout(method, path)?
-            .timeout(self.timeout))
+            .timeout(self.request_timeout(path)))
+    }
+
+    /// The effective per-request timeout for one path.
+    ///
+    /// Under the default policy the two exact Skill mutation routes get the
+    /// extended [`SKILL_MUTATION_TIMEOUT`] budget because they may run a remote
+    /// download before answering. An explicit [`RuntimeClient::with_timeout`]
+    /// override stores no extended budget, so that timeout applies to every
+    /// route verbatim and is never floored. Every other path always keeps the
+    /// configured timeout, so no request is delayed globally.
+    fn request_timeout(&self, path: &str) -> Duration {
+        if matches!(path, SKILL_CHECK_PATH | SKILL_INSTALL_PATH) {
+            self.skill_mutation_timeout.unwrap_or(self.timeout)
+        } else {
+            self.timeout
+        }
     }
 
     /// Builds a request with no total timeout, for streaming responses.
@@ -2360,6 +2423,15 @@ mod tests {
         where
             F: Fn(&Recorded) -> Vec<u8> + Send + Sync + 'static,
         {
+            Self::start_with_delay(Duration::ZERO, handler).await
+        }
+
+        /// Starts a server that answers only after `delay`, so a test can prove
+        /// which timeout actually applied to a request.
+        async fn start_with_delay<F>(delay: Duration, handler: F) -> Self
+        where
+            F: Fn(&Recorded) -> Vec<u8> + Send + Sync + 'static,
+        {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
             let addr = listener.local_addr().expect("addr");
             let recorded = Arc::new(Mutex::new(Vec::new()));
@@ -2373,6 +2445,7 @@ mod tests {
                     let Some(request) = read_request(&mut stream).await else {
                         continue;
                     };
+                    tokio::time::sleep(delay).await;
                     let response = handler(&request);
                     sink.lock().expect("record").push(request);
                     let _ = stream.write_all(&response).await;
@@ -2908,6 +2981,165 @@ mod tests {
         assert!(
             stream.timeout().is_none(),
             "a stream must not carry a total timeout"
+        );
+    }
+
+    #[test]
+    fn skill_mutation_routes_get_a_longer_request_timeout() {
+        let client = client();
+        for path in [SKILL_CHECK_PATH, SKILL_INSTALL_PATH] {
+            let request = client
+                .build(Method::POST, path)
+                .expect("build")
+                .build()
+                .expect("request");
+            assert_eq!(
+                request.timeout().copied(),
+                Some(SKILL_MUTATION_TIMEOUT),
+                "{path} must outlive the runtime's own 60 s download budget"
+            );
+        }
+
+        for path in [
+            META_PATH,
+            "/control/v1/skills",
+            "/control/v1/skill-uninstall",
+        ] {
+            let request = client
+                .build(Method::GET, path)
+                .expect("build")
+                .build()
+                .expect("request");
+            assert_eq!(
+                request.timeout().copied(),
+                Some(DEFAULT_TIMEOUT),
+                "{path} must keep the ordinary timeout"
+            );
+        }
+
+        let explicit = RuntimeClient::with_timeout(
+            &discovery(PROTOCOL_VERSION, "test-token"),
+            Duration::from_secs(300),
+        )
+        .expect("client");
+        let request = explicit
+            .build(Method::POST, SKILL_CHECK_PATH)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert_eq!(
+            request.timeout().copied(),
+            Some(Duration::from_secs(300)),
+            "a caller-configured longer timeout must still be honored"
+        );
+
+        // A caller's explicit timeout wins even when it is *tighter* than the
+        // default Skill budget: it must never be floored back up to 120 s.
+        let tighter = RuntimeClient::with_timeout(
+            &discovery(PROTOCOL_VERSION, "test-token"),
+            Duration::from_millis(250),
+        )
+        .expect("client");
+        for path in [SKILL_CHECK_PATH, SKILL_INSTALL_PATH, META_PATH] {
+            let request = tighter
+                .build(Method::POST, path)
+                .expect("build")
+                .build()
+                .expect("request");
+            assert_eq!(
+                request.timeout().copied(),
+                Some(Duration::from_millis(250)),
+                "{path} must apply the caller's explicit timeout verbatim"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_skill_response_outlives_the_ordinary_request_timeout() {
+        // The default policy is exercised with a shrunken ordinary timeout so the
+        // test never waits out the real 30 s / 120 s budgets. It is built through
+        // the private constructor that pins the default Skill budget, rather than
+        // the explicit-override `with_timeout` which would replace it verbatim.
+        let ordinary = Duration::from_millis(150);
+        let default_policy = |document: &ControlPlaneDiscovery| {
+            RuntimeClient::with_policy(document, ordinary, Some(SKILL_MUTATION_TIMEOUT))
+                .expect("client")
+        };
+
+        // A normal route keeps the ordinary timeout, so the delayed answer
+        // aborts the request.
+        let slow = FakeServer::start_with_delay(Duration::from_millis(400), |_| {
+            http_response("200 OK", "{}")
+        })
+        .await;
+        let document = discovery_on(slow.addr.port(), "instance-a", 42);
+        let client = default_policy(&document);
+        let error = client
+            .get(META_PATH)
+            .await
+            .expect_err("the ordinary timeout must still cut a slow route off");
+        assert!(
+            matches!(error, ClientError::Transport(_)),
+            "unexpected {error:?}"
+        );
+
+        // The same ordinary timeout still lets a Skill mutation route wait for
+        // the delayed answer, because the default policy grants it the longer
+        // budget.
+        let slower = FakeServer::start_with_delay(Duration::from_millis(400), |_| {
+            http_response("200 OK", "{}")
+        })
+        .await;
+        let document = discovery_on(slower.addr.port(), "instance-a", 42);
+        let client = default_policy(&document);
+        let value = client
+            .post(SKILL_CHECK_PATH, &json!({}))
+            .await
+            .expect("a skill check slower than the ordinary timeout must still answer");
+        assert_eq!(value, json!({}));
+    }
+
+    #[tokio::test]
+    async fn the_loopback_control_plane_never_uses_an_environment_proxy() {
+        let server = FakeServer::start(|_| http_response("200 OK", "{}")).await;
+        let proxy = FakeServer::start(|_| http_response("200 OK", "{}")).await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+
+        // The proxy decision is made when the client is built, so the environment
+        // is only overridden around the build, without holding the lock across an
+        // await point. Every touched variable is saved first and restored after,
+        // so the test cannot leak shared process state into its neighbors, and
+        // the bypass lists are cleared so a `NO_PROXY` entry cannot hide a real
+        // proxy use and make the assertion pass for the wrong reason.
+        let client = {
+            let _guard = crate::ENV_LOCK.lock().expect("env lock");
+            let saved: Vec<(&str, Option<std::ffi::OsString>)> =
+                ["HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"]
+                    .into_iter()
+                    .map(|key| (key, std::env::var_os(key)))
+                    .collect();
+            let proxy_url = format!("http://127.0.0.1:{}", proxy.addr.port());
+            std::env::set_var("HTTP_PROXY", &proxy_url);
+            std::env::set_var("http_proxy", &proxy_url);
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+            let client = RuntimeClient::new(&document).expect("client");
+            for (key, value) in saved {
+                restore_env(key, value);
+            }
+            client
+        };
+
+        let value = client
+            .get(META_PATH)
+            .await
+            .expect("a direct loopback request");
+
+        assert_eq!(value, json!({}));
+        assert_eq!(server.requests().len(), 1);
+        assert!(
+            proxy.requests().is_empty(),
+            "the bearer token must never be sent to an environment proxy"
         );
     }
 

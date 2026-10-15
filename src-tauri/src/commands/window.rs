@@ -36,6 +36,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use rust_i18n::t;
 use serde_json::Value;
@@ -43,7 +44,9 @@ use serde_json::Value;
 use crate::constants::{
     ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP, WORKFLOW_WINDOW_ALWAYS_ON_TOP,
 };
-use tauri::{command, Emitter, Manager}; //window::Color, WindowEvent,
+use crate::plugin_types::PluginError;
+use crate::runtime_client::RuntimeSupervisor;
+use tauri::{command, Emitter, Manager, State}; //window::Color, WindowEvent,
 
 use crate::error::{AppError, Result};
 
@@ -144,6 +147,122 @@ pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
         })?;
 
     Ok(())
+}
+
+/// The built-in plugin whose trusted management surface the docked view renders.
+const AGENT_SKILLS_PLUGIN_ID: &str = "agent-skills";
+
+/// Shows the docked Agent Skills surface at the rectangle the frontend measured.
+///
+/// The runtime inventory is the only authority for whether the surface may open: the built-in
+/// `agent-skills` bundle must be enabled with a UI the runtime verified, so a disabled,
+/// uninstalled or replaced plugin is never reachable through this path. The check runs while the
+/// plugin UI gate is held, so a concurrent lifecycle mutation cannot race the open.
+///
+/// The surface is docked into the Workflow window, so a call from any other window is refused. It
+/// is a same-window child webview, never a second top-level window, and the creation result
+/// travels back to the caller instead of being flattened into a log line.
+///
+/// # Example
+/// ```js
+/// import { invoke } from '@tauri-apps/api/core'
+///
+/// await invoke('show_agent_skills_view', {
+///   bounds: { x: 100, y: 40, width: 600, height: 700 },
+///   cornerRadius: 8
+/// });
+/// ```
+#[command]
+pub async fn show_agent_skills_view(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    runtime: State<'_, crate::plugin_ui::PluginUiRuntime>,
+    bounds: crate::native_dock::DockBounds,
+    corner_radius: Option<f64>,
+) -> std::result::Result<(), String> {
+    crate::commands::plugin::ensure_workflow_caller(&window)?;
+    let corner_radius = corner_radius.unwrap_or(0.0);
+
+    let _gate = runtime.serialize().await;
+    let inventory = crate::commands::plugin::runtime_plugin::inventory(supervisor.inner().as_ref())
+        .await
+        .map_err(plugin_wire_error)?;
+    if !agent_skills_ui_verified(&inventory) {
+        return Err(plugin_wire_error(PluginError::not_installed(
+            "the agent-skills plugin is not installed, enabled and verified",
+        )));
+    }
+
+    crate::agent_skills::run_on_view_thread(&app, move |view, app| {
+        view.show(app, bounds, corner_radius)
+    })
+    .await
+}
+
+/// Hides the docked Agent Skills surface while keeping its browsing session.
+#[command]
+pub async fn hide_agent_skills_view(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+) -> std::result::Result<(), String> {
+    crate::commands::plugin::ensure_workflow_caller(&window)?;
+
+    crate::agent_skills::run_on_view_thread(&app, |view, _app| view.hide()).await
+}
+
+/// Releases the docked Agent Skills surface, and only that surface.
+///
+/// The child webview is closed without touching the Workflow window it is docked into, so the
+/// workflow UI and every other docked view stay in place.
+#[command]
+pub async fn close_agent_skills_view(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+) -> std::result::Result<(), String> {
+    crate::commands::plugin::ensure_workflow_caller(&window)?;
+
+    crate::agent_skills::run_on_view_thread(&app, |view, app| view.close(app)).await
+}
+
+/// Whether the runtime inventory proves the built-in Agent Skills surface may open.
+///
+/// The check mirrors the frontend filter (see `verifiedPluginUis`): the snapshot
+/// must use the schema this desktop understands, and the plugin must be a
+/// built-in bundle that is enabled with a verified UI. Anything else fails
+/// closed, so an unconfirmed snapshot can never reach the dock.
+fn agent_skills_ui_verified(inventory: &Value) -> bool {
+    if inventory.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return false;
+    }
+
+    inventory
+        .get("plugins")
+        .and_then(Value::as_array)
+        .map(|plugins| {
+            plugins.iter().any(|plugin| {
+                plugin.get("id").and_then(Value::as_str) == Some(AGENT_SKILLS_PLUGIN_ID)
+                    && plugin.get("kind").and_then(Value::as_str) == Some("builtin")
+                    && plugin.get("state").and_then(Value::as_str) == Some("enabled")
+                    && plugin
+                        .get("ui")
+                        .and_then(|ui| ui.get("verified"))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Serializes a plugin failure into the stable `{"code","message"}` envelope the
+/// frontend already branches on.
+fn plugin_wire_error(error: PluginError) -> String {
+    serde_json::to_string(&error).unwrap_or_else(|_| {
+        format!(
+            "{{\"code\":\"{}\",\"message\":\"plugin error could not be serialized\"}}",
+            error.code
+        )
+    })
 }
 
 /// Show the window by windowLabel

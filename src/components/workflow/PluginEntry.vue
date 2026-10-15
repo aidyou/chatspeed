@@ -1,10 +1,10 @@
 <template>
   <div class="plugin-entry">
     <el-dropdown trigger="click" placement="right" @command="onCommand">
-      <button class="plugin-entry__button" :class="{ active: !!activePlugin }" type="button"
+      <button class="plugin-entry__button" :class="{ active: !!activePluginId }" type="button"
         :aria-label="$t('workflow.plugin.title')">
         <el-tooltip :content="$t('workflow.plugin.title')" placement="right" :hide-after="0" :enterable="false">
-          <cs name="function" size="var(--cs-font-size-lg)" />
+          <cs name="plugin" size="var(--cs-font-size-lg)" />
         </el-tooltip>
       </button>
       <template #dropdown>
@@ -17,7 +17,7 @@
             :key="plugin.id"
             :command="plugin.id"
             :class="{ active: plugin.id === activePluginId }">
-            <cs name="function" size="16px" />
+            <cs name="plugin" size="16px" />
             <span>{{ plugin.id }}</span>
             <cs v-if="plugin.id === activePluginId" name="check" size="14px" />
           </el-dropdown-item>
@@ -28,27 +28,17 @@
         </el-dropdown-menu>
       </template>
     </el-dropdown>
-    <div v-if="activePlugin" class="plugin-entry__current">
-      <el-tooltip :content="activePlugin.id" placement="right" :hide-after="0" :enterable="false">
-        <button class="plugin-entry__current-button" type="button" :aria-label="activePlugin.id" @click="emit('toggle')">
-          <cs name="function" size="16px" />
-        </button>
-      </el-tooltip>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-
 const props = defineProps({
   plugins: { type: Array, default: () => [] },
   activePluginId: { type: String, default: '' }
 })
 
-const emit = defineEmits(['select', 'close', 'toggle'])
+const emit = defineEmits(['select', 'close'])
 const CLOSE_COMMAND = 'close'
-const activePlugin = computed(() => props.plugins.find(plugin => plugin.id === props.activePluginId) || null)
 
 const onCommand = command => {
   if (command === CLOSE_COMMAND) {
@@ -68,8 +58,7 @@ const onCommand = command => {
   flex-shrink: 0;
 }
 
-.plugin-entry__button,
-.plugin-entry__current-button {
+.plugin-entry__button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -86,11 +75,6 @@ const onCommand = command => {
     color: var(--el-color-primary);
     background: var(--cs-hover-bg-color);
   }
-}
-
-.plugin-entry__current {
-  width: 36px;
-  height: 36px;
 }
 
 .plugin-entry__menu {

@@ -11,6 +11,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+.cs-plugin:before {
+  content: "\e92d";
+}
+
 .cs-sandbox:before {
   content: "\e6a8";
 }

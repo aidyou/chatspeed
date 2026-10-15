@@ -3,8 +3,19 @@
 //! The checker is the only safety gate that can authorize an install (INV-4).
 //! It never executes Skill content, never runs a shell, never installs a
 //! dependency and never calls a model: it reads the staged files and applies
-//! static rules. Anything it cannot prove benign is `inconclusive`, which
-//! installs nothing — the same as `blocked`. There is no `force`.
+//! static rules. There is no `force`.
+//!
+//! Structural rules refuse. A bundle whose entries cannot be materialized or
+//! verified — an unsafe filesystem entry or symlink, a missing or invalid
+//! manifest or declared name, an unreadable, non-UTF-8, unknown-binary or
+//! oversize file — is `blocked` or `inconclusive`, and neither can install.
+//!
+//! Content and permission rules only warn. Static reading cannot prove what a
+//! script will actually do, so a *possible* risk — a credential or sensitive
+//! path, an elevation, a dynamic eval, a process, network or download call, or
+//! an encoded payload — is recorded as a warning and never refuses the install.
+//! The warnings stay in the report, so the user still sees every possible risk
+//! before opting in.
 //!
 //! Every report carries [`SKILL_CHECKER_VERSION`] so a later upgrade can be
 //! told apart from an older verdict without rewriting history.
@@ -24,7 +35,7 @@ use crate::capability::targets::TargetEnvironment;
 
 /// Rule vocabulary version. Bump whenever a rule is added, removed or changes
 /// severity; recorded verdicts keep the version they were produced with.
-pub const SKILL_CHECKER_VERSION: &str = "skill-checker.v1";
+pub const SKILL_CHECKER_VERSION: &str = "skill-checker.v2";
 
 /// Maximum bytes of one file the checker will read as text.
 pub const MAX_SCANNED_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -36,6 +47,101 @@ const TEXT_EXTENSIONS: &[&str] = &[
     "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "pl",
     "lua", "sql", "html", "htm", "css", "scss", "xml", "svg",
 ];
+
+/// Extensions whose content is documentation, markup or an inert asset.
+///
+/// Long encoded runs are expected here — an embedded image, a quoted example —
+/// so the encoded-payload rule demands a real decoder-to-execution relationship
+/// instead of a bare blob. This is not an exemption: every rule, including the
+/// encoded-payload rule, still applies to these files.
+const PROSE_EXTENSIONS: &[&str] = &[
+    "md", "markdown", "txt", "rst", "adoc", "html", "htm", "svg", "css", "scss", "xml",
+];
+
+/// Concrete credential files and Keychain stores.
+///
+/// These are paths a credential-reading instruction has to name. A bare mention
+/// of "keychain" as a physical keyring is matched separately by the Keychain
+/// operation evidence below, so descriptive prose does not convict a file.
+const CREDENTIAL_PATH_PATTERNS: &[&str] = &[
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    ".aws/credentials",
+    ".git-credentials",
+    ".netrc",
+    "authorized_keys",
+    "/.ssh/",
+    "login.keychain",
+    ".keychain-db",
+    "/library/keychains/",
+];
+
+/// Explicit Keychain reads, exports and mutating operations.
+///
+/// These name an actual operation on the macOS Keychain, which is what makes a
+/// credential-access finding provable rather than incidental.
+const KEYCHAIN_OPERATION_TOKENS: &[&str] = &[
+    "dump-keychain",
+    "find-generic-password",
+    "find-internet-password",
+    "find-keychain",
+    "unlock-keychain",
+    "lock-keychain",
+    "export-keychain",
+    "import-keychain",
+    "add-generic-password",
+    "add-internet-password",
+    "delete-keychain",
+    "create-keychain",
+    "keychain-dump",
+    "security export",
+    "security import",
+];
+
+/// Tokens that can turn encoded data back into bytes or code.
+const DECODER_TOKENS: &[&str] = &[
+    "base64",
+    "atob(",
+    "fromcharcode",
+    "\\x",
+    "b64decode",
+    "base64_decode",
+    "frombase64string",
+];
+
+/// Decoder tokens that name an actual decoding call, as opposed to the word
+/// `base64` that labels inert MIME payloads such as `data:image/*;base64,`.
+const STRONG_DECODER_TOKENS: &[&str] = &[
+    "atob(",
+    "fromcharcode",
+    "b64decode",
+    "base64_decode",
+    "frombase64string",
+];
+
+/// Tokens that run decoded data as code or as a process.
+const EXECUTION_SINK_TOKENS: &[&str] = &[
+    "eval(",
+    "exec(",
+    "invoke-expression",
+    "iex(",
+    "child_process",
+    "os.system",
+    "process::command",
+    "subprocess",
+    "spawn(",
+    "sh -c",
+    "bash -c",
+    "powershell",
+    "cmd.exe",
+];
+
+/// Minimum length of a base64-ish run that counts as an encoded payload.
+const OBFUSCATION_MIN_RUN: usize = 200;
+
+/// How close two tokens must be before they are read as one command.
+const COMMAND_PROXIMITY_BYTES: usize = 160;
 
 /// The outcome of one check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -67,7 +173,7 @@ pub enum CheckSeverity {
     Block,
     /// Refuses the content because it could not be analyzed.
     Inconclusive,
-    /// Recorded for the user; does not refuse the content.
+    /// A possible risk recorded for the user; does not refuse the content.
     Warn,
 }
 
@@ -640,23 +746,24 @@ fn looks_binary(text: &str) -> bool {
 fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
     let lowered = text.to_ascii_lowercase();
 
+    // Credential access needs concrete evidence: a named credential store or an
+    // actual Keychain operation. A bare "keychain" mention in prose is not
+    // access, so it is deliberately not part of the pattern list.
+    if let Some(detail) = credential_access_detail(&lowered) {
+        findings.push(SkillFinding {
+            rule: "skill.permission.credential_access".to_string(),
+            severity: CheckSeverity::Warn,
+            path: Some(relative.to_string()),
+            detail,
+        });
+    }
+
+    // Every rule below names a possible risk, not a proven one, so each warns
+    // and none of them can refuse the install.
     let rule_sets: &[(&str, CheckSeverity, &[&str])] = &[
         (
-            "skill.permission.credential_access",
-            CheckSeverity::Block,
-            &[
-                "id_rsa",
-                ".aws/credentials",
-                ".git-credentials",
-                ".netrc",
-                "authorized_keys",
-                "/.ssh/",
-                "keychain",
-            ],
-        ),
-        (
             "skill.permission.sensitive_path",
-            CheckSeverity::Block,
+            CheckSeverity::Warn,
             &[
                 "/etc/passwd",
                 "/etc/shadow",
@@ -671,7 +778,7 @@ fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
         ),
         (
             "skill.permission.elevation",
-            CheckSeverity::Block,
+            CheckSeverity::Warn,
             &["sudo ", "runas /", "doas "],
         ),
         (
@@ -738,40 +845,199 @@ fn scan_text(relative: &str, text: &str, findings: &mut Vec<SkillFinding>) {
         }
     }
 
-    if contains_obfuscated_blob(text) {
+    if contains_obfuscated_blob(relative, text, &lowered) {
         findings.push(SkillFinding {
             rule: "skill.content.obfuscated_payload".to_string(),
-            severity: CheckSeverity::Block,
+            severity: CheckSeverity::Warn,
             path: Some(relative.to_string()),
-            detail: "the content contains a long encoded blob next to an eval/exec call"
-                .to_string(),
+            detail: "the content decodes a long encoded blob into executable behaviour".to_string(),
         });
     }
 }
 
-/// An encoded blob of suspicious length next to a decoder or evaluator.
-fn contains_obfuscated_blob(text: &str) -> bool {
-    let lowered = text.to_ascii_lowercase();
-    let has_decoder = lowered.contains("base64")
-        || lowered.contains("atob(")
-        || lowered.contains("fromcharcode")
-        || lowered.contains("\\x");
-    if !has_decoder {
+/// The detail of a credential-access finding, when the file shows concrete
+/// evidence of reading credentials.
+///
+/// The rule accepts either a named credential store or an actual Keychain
+/// operation. It deliberately rejects the bare word "keychain", which is how
+/// ordinary prose describes a physical keyring.
+fn credential_access_detail(lowered: &str) -> Option<String> {
+    if let Some(pattern) = CREDENTIAL_PATH_PATTERNS
+        .iter()
+        .find(|pattern| lowered.contains(**pattern))
+    {
+        return Some(format!(
+            "the content references the credential path '{pattern}'"
+        ));
+    }
+    if let Some(operation) = KEYCHAIN_OPERATION_TOKENS
+        .iter()
+        .find(|token| lowered.contains(**token))
+    {
+        return Some(format!(
+            "the content performs the Keychain operation '{operation}'"
+        ));
+    }
+    // `security` is the macOS Keychain CLI; it only touches a Keychain when the
+    // tool name and the word "keychain" appear in the same command.
+    if tokens_within(
+        lowered,
+        &["security "],
+        &["keychain"],
+        COMMAND_PROXIMITY_BYTES,
+    ) {
+        return Some("the content invokes the 'security' tool against a Keychain".to_string());
+    }
+    None
+}
+
+/// An encoded blob that can become code, as opposed to inert encoded data.
+///
+/// Executable content keeps the strict rule: a long encoded run behind any
+/// decoder is reported on its own. Documentation, markup and inert assets must
+/// additionally show a decoding *call* whose result reaches an execution sink,
+/// so an embedded image or a quoted example is not mistaken for a payload.
+fn contains_obfuscated_blob(relative: &str, text: &str, lowered: &str) -> bool {
+    let prose = is_prose_extension(relative);
+    // In prose the payload of an embedded `data:image/*;base64,` URI is inert
+    // asset data, so its bytes are not counted as encoded-payload evidence.
+    let runs = base64_runs(text, prose);
+    if runs.is_empty() {
         return false;
     }
-    let mut run = 0usize;
-    for character in text.chars() {
-        let encoded = character.is_ascii_alphanumeric() || matches!(character, '+' | '/' | '=');
-        if encoded {
-            run += 1;
-            if run >= 200 {
-                return true;
+    if !prose {
+        return DECODER_TOKENS.iter().any(|token| lowered.contains(*token));
+    }
+    // Prose: a decoding call must be attached to the run and must feed an
+    // execution sink nearby. Anything less is not an executable payload.
+    runs.iter().any(|&(run_start, run_len)| {
+        let run_end = run_start + run_len;
+        token_positions(lowered, STRONG_DECODER_TOKENS)
+            .into_iter()
+            .filter(|position| position.abs_diff(run_start) <= COMMAND_PROXIMITY_BYTES)
+            .any(|decoder| {
+                // The sink either wraps the decoding call (`eval(atob(blob))`)
+                // or follows the decoded blob in the same statement.
+                token_near(
+                    lowered,
+                    EXECUTION_SINK_TOKENS,
+                    decoder,
+                    COMMAND_PROXIMITY_BYTES,
+                ) || token_near(
+                    lowered,
+                    EXECUTION_SINK_TOKENS,
+                    run_end,
+                    COMMAND_PROXIMITY_BYTES,
+                )
+            })
+    })
+}
+
+/// Base64-ish runs whose length reaches the encoded-payload threshold.
+///
+/// When `ignore_data_uris` is set, the payload of an embedded `data:image` URI
+/// is skipped because those bytes are an inert asset rather than a payload.
+fn base64_runs(text: &str, ignore_data_uris: bool) -> Vec<(usize, usize)> {
+    let inert = if ignore_data_uris {
+        data_uri_payload_ranges(text)
+    } else {
+        Vec::new()
+    };
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    for (index, character) in text.char_indices() {
+        if is_base64_character(character) && !is_in_inert_range(&inert, index) {
+            start.get_or_insert(index);
+        } else if let Some(begin) = start.take() {
+            if index - begin >= OBFUSCATION_MIN_RUN {
+                runs.push((begin, index - begin));
             }
-        } else {
-            run = 0;
         }
     }
-    false
+    if let Some(begin) = start {
+        if text.len() - begin >= OBFUSCATION_MIN_RUN {
+            runs.push((begin, text.len() - begin));
+        }
+    }
+    runs
+}
+
+/// Byte ranges of the base64 payload inside embedded `data:image/...;base64,`
+/// URIs.
+///
+/// An embedded image is inert asset data; recognizing it here keeps a real
+/// image from being read as an obfuscated payload.
+fn data_uri_payload_ranges(lowered: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for (start, _) in lowered.match_indices("data:image/") {
+        let rest = &lowered[start..];
+        let Some(comma) = rest.find(',') else {
+            continue;
+        };
+        if !rest[..comma].contains(";base64") {
+            continue;
+        }
+        let payload_start = start + comma + 1;
+        let payload_len = lowered[payload_start..]
+            .chars()
+            .take_while(|character| is_base64_character(*character))
+            .count();
+        if payload_len > 0 {
+            ranges.push((payload_start, payload_start + payload_len));
+        }
+    }
+    ranges
+}
+
+/// Whether `index` falls inside one of `ranges` (half-open).
+fn is_in_inert_range(ranges: &[(usize, usize)], index: usize) -> bool {
+    ranges
+        .iter()
+        .any(|(start, end)| index >= *start && index < *end)
+}
+
+/// One base64 alphabet character, matching the run definition the payload rule
+/// has always used.
+fn is_base64_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '+' | '/' | '=')
+}
+
+/// Whether the file is documentation, markup or an inert asset.
+fn is_prose_extension(relative: &str) -> bool {
+    Path::new(relative)
+        .extension()
+        .map(|extension| {
+            PROSE_EXTENSIONS.contains(&extension.to_string_lossy().to_ascii_lowercase().as_str())
+        })
+        .unwrap_or(false)
+}
+
+/// Byte offsets where any of `tokens` occurs in `text`.
+///
+/// `to_ascii_lowercase` preserves byte offsets, so the offsets found in the
+/// lowered text are valid in the original.
+fn token_positions(text: &str, tokens: &[&str]) -> Vec<usize> {
+    let mut positions = Vec::new();
+    for token in tokens {
+        positions.extend(text.match_indices(token).map(|(index, _)| index));
+    }
+    positions
+}
+
+/// Whether a token from `tokens` occurs within `window` bytes of `position`.
+fn token_near(text: &str, tokens: &[&str], position: usize, window: usize) -> bool {
+    token_positions(text, tokens)
+        .into_iter()
+        .any(|other| other.abs_diff(position) <= window)
+}
+
+/// Whether a token from `first` occurs within `window` bytes of a token from
+/// `second`.
+fn tokens_within(text: &str, first: &[&str], second: &[&str], window: usize) -> bool {
+    let left = token_positions(text, first);
+    let right = token_positions(text, second);
+    left.iter()
+        .any(|left| right.iter().any(|right| left.abs_diff(*right) <= window))
 }
 
 /// Reads the declared Skill name from `SKILL.md` front matter or `skill.json`.
@@ -898,8 +1164,11 @@ mod tests {
         assert!(finding_rules(&report).contains(&"skill.manifest.invalid_name".to_string()));
     }
 
+    /// Credential, sensitive-path and elevation mentions are possible risks, so
+    /// they warn: the declared permissions are still recorded, the install is
+    /// still allowed, and no finding refuses the content.
     #[test]
-    fn credential_and_sensitive_path_access_blocks() {
+    fn credential_and_sensitive_path_access_warns() {
         let temp = TempDir::new().expect("temp dir");
         let root = temp.path().join("demo");
         write_skill(
@@ -912,18 +1181,27 @@ mod tests {
         );
 
         let report = check_directory(&root).expect("check");
-        assert_eq!(report.verdict, CheckVerdict::Blocked);
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(report.is_pass());
+        assert!(report.refusal().is_none());
         let rules = finding_rules(&report);
         assert!(rules.contains(&"skill.permission.credential_access".to_string()));
         assert!(rules.contains(&"skill.permission.sensitive_path".to_string()));
         assert!(rules.contains(&"skill.permission.elevation".to_string()));
+        // A possible risk still populates the declared permission profile.
         assert!(report.permissions.reads_credentials);
         assert!(report.permissions.writes_sensitive_paths);
         assert!(report.permissions.requires_elevation);
+        assert!(report
+            .findings
+            .iter()
+            .all(|finding| finding.severity == CheckSeverity::Warn));
     }
 
+    /// An encoded blob that is decoded and evaluated is a possible risk, so it
+    /// warns: the finding is kept, the verdict stays `pass` and nothing refuses.
     #[test]
-    fn an_obfuscated_payload_blocks() {
+    fn an_obfuscated_payload_warns() {
         let temp = TempDir::new().expect("temp dir");
         let root = temp.path().join("demo");
         let blob = "A".repeat(240);
@@ -937,8 +1215,177 @@ mod tests {
         );
 
         let report = check_directory(&root).expect("check");
-        assert_eq!(report.verdict, CheckVerdict::Blocked);
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "skill.content.obfuscated_payload")
+            .expect("the encoded payload is reported");
+        assert_eq!(finding.severity, CheckSeverity::Warn);
+        assert!(report.permissions.uses_dynamic_eval);
+        assert!(report.refusal().is_none());
+    }
+
+    /// The user's first false positive: a long, valid PNG data URI in a
+    /// reference file is inert asset data, not an encoded payload.
+    #[test]
+    fn an_embedded_image_data_uri_in_markdown_does_not_block() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("color-expert");
+        // A real 1x1 PNG payload, repeated past the encoded-run threshold. The
+        // checker must read it as data and never execute it.
+        let payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==".repeat(3);
+        let body = format!(
+            "---\nname: color-expert\n---\n\n# Color spaces\n\n![swatch](data:image/png;base64,{payload})\n\nThe image above is generated from the swatch table.\n"
+        );
+        write_skill(
+            &root,
+            "color-expert",
+            &[("references/color-spaces.md", &body)],
+        );
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).is_empty());
+    }
+
+    /// The same blob is still found when it is not an image data URI, so the
+    /// image exclusion is what removes it rather than a shorter run definition.
+    #[test]
+    fn an_image_data_uri_payload_is_not_counted_as_an_encoded_run() {
+        let payload = "A".repeat(300);
+        let text = format!("see ![](data:image/png;base64,{payload})");
+
+        assert_eq!(base64_runs(&text, false).len(), 1);
+        assert!(base64_runs(&text, true).is_empty());
+    }
+
+    /// The user's second false positive: a physical keyring described in prose
+    /// must not be read as credential access.
+    #[test]
+    fn descriptive_keychain_prose_does_not_block() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("color-expert");
+        write_skill(
+            &root,
+            "color-expert",
+            &[(
+                "references/digital-color-fidget.md",
+                "A physical color wheel makes a satisfying pin/keychain gift; attach it to your keys or a bag.\n",
+            )],
+        );
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).is_empty());
+        assert!(!report.permissions.reads_credentials);
+    }
+
+    /// Credential paths and explicit Keychain operations are still detected, but
+    /// now as warnings that keep the verdict at `pass`.
+    #[test]
+    fn credential_paths_and_keychain_commands_warn() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("demo");
+        write_skill(
+            &root,
+            "demo",
+            &[
+                (
+                    "scripts/paths.sh",
+                    "cat ~/.aws/credentials\ncat ~/.ssh/id_rsa\ncat ~/.netrc\n",
+                ),
+                (
+                    "scripts/keychain.sh",
+                    "security find-generic-password -s acme -w\n",
+                ),
+                (
+                    "scripts/dump.sh",
+                    "security dump-keychain\ncp ~/Library/Keychains/login.keychain-db /tmp/leak\n",
+                ),
+            ],
+        );
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).contains(&"skill.permission.credential_access".to_string()));
+        assert!(report.permissions.reads_credentials);
+        assert!(report.refusal().is_none());
+    }
+
+    /// A fenced code block is not a markdown bypass: an encoded blob that is
+    /// evaluated inside documentation is still reported, now as a warning.
+    #[test]
+    fn a_fenced_markdown_blob_with_eval_still_warns() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("demo");
+        let blob = "A".repeat(240);
+        let body = format!(
+            "---\nname: demo\n---\n\n# demo\n\n```js\nconst p = atob(\"{blob}\");\neval(p);\n```\n"
+        );
+        write_skill(&root, "demo", &[("references/example.md", &body)]);
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
         assert!(finding_rules(&report).contains(&"skill.content.obfuscated_payload".to_string()));
+        assert!(report.refusal().is_none());
+    }
+
+    /// A sink that wraps the decoding call (`eval(atob(blob))`) is caught too.
+    #[test]
+    fn a_wrapped_decoder_and_sink_in_markdown_warns() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("demo");
+        let blob = "A".repeat(240);
+        let body =
+            format!("---\nname: demo\n---\n\n# demo\n\n```js\neval(atob(\"{blob}\"));\n```\n");
+        write_skill(&root, "demo", &[("references/wrapped.md", &body)]);
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).contains(&"skill.content.obfuscated_payload".to_string()));
+        assert!(report.refusal().is_none());
+    }
+
+    /// A plain long string with no decoder stays harmless.
+    #[test]
+    fn a_plain_long_string_does_not_block() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("demo");
+        let long = "a".repeat(400);
+        write_skill(
+            &root,
+            "demo",
+            &[("references/notes.md", &format!("# notes\n\n{long}\n"))],
+        );
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).is_empty());
+    }
+
+    /// The benign reference shape reports the current version, a pass verdict,
+    /// consistent permissions and no refusal.
+    #[test]
+    fn a_benign_reference_skill_reports_the_current_version_and_permissions() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("color-expert");
+        let payload = "A".repeat(300);
+        let body = format!(
+            "---\nname: color-expert\n---\n\n# guide\n\npin/keychain\n![i](data:image/png;base64,{payload})\n"
+        );
+        write_skill(&root, "color-expert", &[("references/guide.md", &body)]);
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.checker_version, SKILL_CHECKER_VERSION);
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(report.is_pass());
+        assert!(report.validate().is_ok());
+        assert!(report.refusal().is_none());
+        assert!(report.permissions.reads_files);
+        assert!(!report.permissions.reads_credentials);
+        assert!(!report.permissions.uses_dynamic_eval);
+        assert!(!report.permissions.contains_binary_content);
     }
 
     #[test]
@@ -956,6 +1403,25 @@ mod tests {
         let rules = finding_rules(&report);
         assert!(rules.contains(&"skill.permission.network_access".to_string()));
         assert!(report.permissions.uses_network);
+    }
+
+    /// The user's shape: a heuristic dynamic-eval mention is only a possible
+    /// risk, so it warns, keeps `pass` and still records the permission.
+    #[test]
+    fn a_dynamic_eval_possible_risk_only_warns() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path().join("demo");
+        write_skill(
+            &root,
+            "demo",
+            &[("scripts/tool.js", "const value = eval(userInput);\n")],
+        );
+
+        let report = check_directory(&root).expect("check");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+        assert!(finding_rules(&report).contains(&"skill.permission.dynamic_eval".to_string()));
+        assert!(report.permissions.uses_dynamic_eval);
+        assert!(report.refusal().is_none());
     }
 
     #[test]
@@ -1080,5 +1546,156 @@ mod tests {
         assert!(!crate::capability::staging_dir(&app_data)
             .join("op-skill-zip")
             .exists());
+    }
+
+    /// One HTTP request as a proxy receives it.
+    struct ProxiedRequest {
+        request_line: String,
+        headers: Vec<(String, String)>,
+    }
+
+    impl ProxiedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    /// A one-shot loopback HTTP proxy.
+    ///
+    /// It accepts one connection, records the request line (an HTTP proxy
+    /// receives the target in absolute form) and the headers, then answers with
+    /// `body`. Everything stays on the loopback interface, so the test never
+    /// reaches github.com.
+    struct RecordingProxy {
+        addr: std::net::SocketAddr,
+        handle: Option<std::thread::JoinHandle<ProxiedRequest>>,
+    }
+
+    impl RecordingProxy {
+        fn start(body: Vec<u8>, content_type: &str) -> Self {
+            use std::io::{Read as _, Write as _};
+
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind proxy");
+            let addr = listener.local_addr().expect("proxy addr");
+            let content_type = content_type.to_string();
+            let handle = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept proxy connection");
+                let mut buffer = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let read = stream.read(&mut chunk).expect("read proxied request");
+                    if read == 0 {
+                        break;
+                    }
+                    buffer.extend_from_slice(&chunk[..read]);
+                    if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                    if buffer.len() > 1 << 20 {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buffer).to_string();
+                let mut lines = head.split("\r\n");
+                let request_line = lines.next().unwrap_or_default().to_string();
+                let headers = lines
+                    .take_while(|line| !line.is_empty())
+                    .filter_map(|line| line.split_once(':'))
+                    .map(|(name, value)| {
+                        (name.trim().to_ascii_lowercase(), value.trim().to_string())
+                    })
+                    .collect();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write headers");
+                stream.write_all(&body).expect("write body");
+                stream.flush().expect("flush");
+                ProxiedRequest {
+                    request_line,
+                    headers,
+                }
+            });
+            Self {
+                addr,
+                handle: Some(handle),
+            }
+        }
+
+        fn finish(mut self) -> ProxiedRequest {
+            self.handle
+                .take()
+                .expect("proxy handle")
+                .join()
+                .expect("proxy thread")
+        }
+    }
+
+    /// One valid Skill archive a proxy can serve.
+    fn skill_archive() -> Vec<u8> {
+        use std::io::Write as _;
+        use zip::write::SimpleFileOptions;
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("demo/SKILL.md", SimpleFileOptions::default())
+                .expect("start entry");
+            writer
+                .write_all(b"---\nname: demo\ndescription: demo\n---\n\n# demo\n")
+                .expect("write entry");
+            writer.finish().expect("finish");
+        }
+        buffer.into_inner()
+    }
+
+    #[tokio::test]
+    async fn the_github_download_uses_the_user_proxy_and_authenticates() {
+        let proxy = RecordingProxy::start(skill_archive(), "application/zip");
+        let temp = TempDir::new().expect("temp dir");
+        let resolver = SkillSourceResolver {
+            app_data_dir: temp.path().join("app-data"),
+            download_origin: Some("http://origin.invalid".to_string()),
+            proxy_type: ProxyType::Http(
+                format!("http://127.0.0.1:{}", proxy.addr.port()),
+                Some("user".to_string()),
+                Some("secret".to_string()),
+            ),
+        };
+        let source = SkillSource::GitHub {
+            owner: "acme".to_string(),
+            repo: "skills".to_string(),
+            git_ref: None,
+            path: None,
+        };
+        let environment =
+            TargetEnvironment::injected(temp.path().join("home"), temp.path().join("chatspeed"));
+
+        let report = resolver
+            .check(&source, &environment, "op-skill-proxy")
+            .await
+            .expect("a proxied download must succeed");
+        assert_eq!(report.verdict, CheckVerdict::Pass);
+
+        let recorded = proxy.finish();
+        // An HTTP proxy receives the absolute target, so the download provably
+        // went through it instead of opening a direct connection.
+        assert_eq!(
+            recorded.request_line,
+            "GET http://origin.invalid/acme/skills/zip/HEAD HTTP/1.1"
+        );
+        assert_eq!(
+            recorded.header("proxy-authorization"),
+            Some("Basic dXNlcjpzZWNyZXQ="),
+            "the configured proxy credentials must be sent: {:?}",
+            recorded.headers
+        );
     }
 }

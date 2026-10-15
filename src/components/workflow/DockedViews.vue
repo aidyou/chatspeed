@@ -40,29 +40,22 @@
       </div>
     </div>
 
-    <!-- The measured rectangle the native webview covers. Trusted content is rendered as
-         host-native Vue instead, so it never needs a native view. -->
-    <div ref="surfaceEl" class="docked-views__surface">
-      <AgentSkills v-if="trustedActive" :key="trustedKey" />
-    </div>
+    <!-- The measured rectangle the native webview covers. -->
+    <div ref="surfaceEl" class="docked-views__surface" />
   </aside>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-
-import AgentSkills from '@/components/setting/AgentSkills.vue'
+import { ref } from 'vue'
 
 /**
  * The shared right dock.
  *
  * The dock is plain Vue: it lays out the tab strip, the toolbar and a surface placeholder.
  * A native tab is a second native webview the carrier paints over the measured surface, so
- * the dock itself never renders a chat site or a plugin page. The one exception is a
- * trusted plugin (the built-in agent-skills bundle), whose management UI is a trusted Vue
- * component and is rendered here directly instead of being given a native view.
+ * the dock itself never renders a chat site or a plugin page.
  */
-const props = defineProps({
+defineProps({
   /** Whether the dock column is on screen. Hiding it keeps every tab alive. */
   visible: { type: Boolean, default: false },
   /** Dock width in logical pixels, owned by the shared width store. */
@@ -70,18 +63,12 @@ const props = defineProps({
   /** Resolved tabs: `{ id, title, kind }`. */
   tabs: { type: Array, default: () => [] },
   /** The visible tab id, empty when the dock has no active tab. */
-  activeTabId: { type: String, default: '' },
-  /** Changes when the trusted tab has to remount, which is how that tab reloads. */
-  trustedKey: { type: Number, default: 0 }
+  activeTabId: { type: String, default: '' }
 })
 
 defineEmits(['select', 'close', 'reload'])
 
 const surfaceEl = ref(null)
-
-const trustedActive = computed(
-  () => props.tabs.find(tab => tab.id === props.activeTabId)?.kind === 'trusted'
-)
 
 /** The element the native view must cover. The view layer measures it after the DOM update. */
 defineExpose({ getSurfaceElement: () => surfaceEl.value })
@@ -102,7 +89,7 @@ defineExpose({ getSurfaceElement: () => surfaceEl.value })
   border-left: 1px solid var(--cs-border-color);
   box-sizing: border-box;
 
-  // Fixed content needs its own clip; trusted tabs never install the native window shape.
+  // Clip the Vue shell to the same corner as the native dock surface.
   .app-container.linux &,
   .app-container.macos & {
     border-bottom-right-radius: var(--cs-border-radius-lg);

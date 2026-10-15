@@ -1,6 +1,9 @@
 <template>
-  <div class="app-container" :class="[windowType, windowStore.os]">
+  <div
+    class="app-container"
+    :class="[windowType, windowStore.os, { 'app-container--docked': isAgentSkillsChild }]">
     <div
+      v-if="!isAgentSkillsChild"
       class="titlebar"
       data-tauri-drag-region
       @pointerdown="handleDragStart"
@@ -26,6 +29,7 @@ import { setI18nLanguage } from '@/i18n'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { listen } from '@tauri-apps/api/event'
 
 import { ElMessage } from 'element-plus'
@@ -60,6 +64,14 @@ const requiresApiKeyUnlock = ['main', 'assistant', 'workflow', 'settings', 'prox
 
 const { settings } = storeToRefs(settingStore)
 const windowType = ref('main')
+
+// The trusted Agent Skills surface is a Tauri child webview docked into the Workflow window, inside
+// the shared frame and the dock column the window already draws. This shell therefore drops the
+// draggable titlebar and the window frame it paints for a top-level window, and only for that
+// child: every other webview and window keeps them. The child's own webview label is the gate, so
+// an ordinary page that happens to render the same route is never mistaken for the trusted child.
+const AGENT_SKILLS_CHILD_LABEL = 'agent_skills'
+const isAgentSkillsChild = getCurrentWebview().label === AGENT_SKILLS_CHILD_LABEL
 
 const isSystemDark = usePreferredDark()
 const isDark = useDark({
@@ -381,6 +393,16 @@ body {
     // Correct border syntax and apply a subtle shadow
     border: 0.5px solid var(--cs-border-color);
     box-shadow: 0 0 5px var(--cs-shadow-color);
+  }
+
+  // The trusted surface is a child webview docked inside the shared window frame: the window that
+  // owns it already draws the rounded frame, the border and the shadow, so painting them again here
+  // would double the frame around the child. It comes last so it wins over the per-OS frame rules
+  // above at the same specificity, and only the docked child carries the class.
+  &.app-container--docked {
+    border-radius: 0;
+    border: 0;
+    box-shadow: none;
   }
 }
 </style>

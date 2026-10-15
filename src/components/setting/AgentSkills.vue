@@ -36,313 +36,341 @@
 
       <p class="hint">{{ t('settings.agentSkills.hint') }}</p>
 
-      <!-- step 1: source -->
-      <div class="section">
-        <div class="section-title">{{ t('settings.agentSkills.source') }}</div>
-        <el-radio-group v-model="sourceKind" size="small">
-          <el-radio-button value="local_directory">
-            {{ t('settings.agentSkills.sourceLocal') }}
-          </el-radio-button>
-          <el-radio-button value="local_zip">
-            {{ t('settings.agentSkills.sourceZip') }}
-          </el-radio-button>
-          <el-radio-button value="github">{{ t('settings.agentSkills.sourceGithub') }}</el-radio-button>
-        </el-radio-group>
-
-        <div class="fields">
-          <div v-if="sourceKind === 'local_directory' || sourceKind === 'local_zip'" class="field">
-            <label class="field__label">{{ t('settings.agentSkills.path') }}</label>
-            <el-input
-              v-model="sourcePath"
-              :placeholder="
-                sourceKind === 'local_zip'
-                  ? t('settings.agentSkills.zipPlaceholder')
-                  : t('settings.agentSkills.directoryPlaceholder')
-              "
-            />
+      <el-tabs v-model="activeTab" class="skill-tabs">
+        <el-tab-pane :label="t('settings.agentSkills.tabList')" name="list">
+          <!-- installed skills -->
+          <div class="section">
+            <div class="section-title">
+              {{ t('settings.agentSkills.installed') }}
+              <span class="count">{{ store.skills.length }}</span>
+            </div>
+            <el-table
+              v-loading="store.loading"
+              :data="store.skills"
+              size="small"
+              border
+              class="data-table"
+              :empty-text="t('settings.agentSkills.empty')"
+            >
+              <el-table-column
+                prop="name"
+                :label="t('settings.agentSkills.name')"
+                min-width="96"
+                show-overflow-tooltip
+              />
+              <el-table-column
+                :label="t('settings.agentSkills.origin')"
+                min-width="64"
+                show-overflow-tooltip
+              >
+                <template #default="{ row }">
+                  <span :title="row.source">{{ sourceLabel(row.source) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="t('settings.agentSkills.target')"
+                min-width="72"
+                show-overflow-tooltip
+              >
+                <template #default="{ row }">{{ targetLabel(row.target_id) }}</template>
+              </el-table-column>
+              <el-table-column :label="t('settings.agentSkills.state')" min-width="100">
+                <template #default="{ row }">
+                  <div class="state-tags">
+                    <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
+                      t('settings.agentSkills.protected')
+                    }}</el-tag>
+                    <el-tag v-if="row.managed" size="small" effect="plain">{{
+                      t('settings.agentSkills.managed')
+                    }}</el-tag>
+                    <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
+                      t('settings.agentSkills.drifted')
+                    }}</el-tag>
+                    <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
+                      t('settings.agentSkills.missing')
+                    }}</el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('settings.agentSkills.actions')" width="76" align="center">
+                <template #default="{ row }">
+                  <el-button
+                    size="small"
+                    text
+                    type="danger"
+                    :disabled="!row.uninstallable"
+                    :loading="store.applying"
+                    @click="uninstall(row)"
+                    :title="row.directory || ''"
+                  >
+                    {{ t('settings.agentSkills.uninstall') }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
 
-          <template v-else>
-            <div class="field">
-              <label class="field__label">{{ t('settings.agentSkills.repository') }}</label>
-              <el-input v-model="githubRepository" placeholder="owner/repository" />
+          <!-- doctor -->
+          <div v-if="store.doctor" class="section">
+            <div class="section-title">{{ t('settings.agentSkills.doctor') }}</div>
+            <div class="metrics">
+              <div v-for="group in doctorGroups" :key="group.labelKey" class="metric-group">
+                <div class="metric-group__title">{{ t(`settings.agentSkills.${group.labelKey}`) }}</div>
+                <div class="tiles">
+                  <div
+                    v-for="tile in group.tiles"
+                    :key="tile.labelKey"
+                    class="tile"
+                    :class="`tile--${tile.tone}`"
+                  >
+                    <span class="tile__value">{{ tile.value }}</span>
+                    <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="metric-summary">
+                <span class="metric-summary__label">{{ t('settings.agentSkills.findings') }}</span>
+                <span class="metric-summary__value">{{
+                  store.doctor.findings?.length ? doctorFindingsText : t('settings.agentSkills.none')
+                }}</span>
+              </div>
             </div>
-            <div class="field">
-              <label class="field__label">{{ t('settings.agentSkills.path') }}</label>
-              <el-input v-model="githubPath" placeholder="skills/demo" />
-            </div>
-            <div class="field">
-              <label class="field__label">{{ t('settings.agentSkills.ref') }}</label>
-              <el-input v-model="githubRef" placeholder="main" />
-            </div>
-          </template>
-
-          <div class="buttons">
-            <el-button size="small" :loading="store.checking" :disabled="!canCheck" @click="check">
-              {{ t('settings.agentSkills.check') }}
-            </el-button>
           </div>
-        </div>
 
-        <el-alert
-          v-if="store.lastError"
-          class="alert"
-          type="error"
-          :closable="false"
-          :title="store.lastError"
-        />
-      </div>
-
-      <!-- step 2: check result -->
-      <div v-if="report" class="section">
-        <div class="section-title">{{ t('settings.agentSkills.verdict') }}</div>
-
-        <div class="report-head">
-          <el-tag :type="verdictTagType" size="small" effect="dark">{{ report.verdict }}</el-tag>
-          <span class="meta">{{ report.skill_name || '-' }}</span>
-          <span class="meta">{{ report.checker_version }}</span>
-          <span class="meta">{{
-            t('settings.agentSkills.size', { files: report.file_count, bytes: report.total_bytes })
-          }}</span>
-        </div>
-
-        <div class="permissions">
-          <el-tag
-            v-for="(allowed, name) in report.permissions"
-            :key="name"
-            size="small"
-            :type="allowed === false ? 'info' : 'warning'"
-            effect="plain"
-          >
-            {{ t(`settings.agentSkills.permission.${name}`) }}
-          </el-tag>
-        </div>
-
-        <el-table
-          v-if="report.findings?.length"
-          :data="report.findings"
-          size="small"
-          class="findings skill-table"
-        >
-          <el-table-column prop="severity" :label="t('settings.agentSkills.severity')" width="110" />
-          <el-table-column prop="rule" :label="t('settings.agentSkills.rule')" width="220" />
-          <el-table-column prop="path" :label="t('settings.agentSkills.path')" width="220" />
-          <el-table-column prop="detail" :label="t('settings.agentSkills.detail')" />
-        </el-table>
-
-        <!-- The same findings as data-driven cards: the wide table cannot fit a narrow
-             container, so every column is shown as a labelled row instead of being cut. -->
-        <ul v-if="report.findings?.length" class="findings skill-cards">
-          <li v-for="(row, index) in report.findings" :key="index" class="skill-cards__item">
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.severity') }}</span>
-              <span class="skill-cards__value">{{ row.severity }}</span>
+          <!-- reconcile result -->
+          <div v-if="store.lastReconcile" class="section">
+            <div class="section-title">{{ t('settings.agentSkills.reconcile') }}</div>
+            <div class="metrics">
+              <div class="tiles">
+                <div
+                  v-for="tile in reconcileTiles"
+                  :key="tile.labelKey"
+                  class="tile"
+                  :class="`tile--${tile.tone}`"
+                >
+                  <span class="tile__value">{{ tile.value }}</span>
+                  <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
+                </div>
+              </div>
+              <div class="metric-summary">
+                <span class="metric-summary__label">{{ t('settings.agentSkills.stillNeedsReconcile') }}</span>
+                <span class="metric-summary__value">{{
+                  store.lastReconcile.still_needs_reconcile?.length
+                    ? store.lastReconcile.still_needs_reconcile.join(', ')
+                    : t('settings.agentSkills.none')
+                }}</span>
+              </div>
             </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.rule') }}</span>
-              <span class="skill-cards__value">{{ row.rule }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.path') }}</span>
-              <span class="skill-cards__value">{{ row.path }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
-              <span class="skill-cards__value">{{ row.detail }}</span>
-            </div>
-          </li>
-        </ul>
-      </div>
+          </div>
+        </el-tab-pane>
 
-      <!-- step 3: install targets -->
-      <div v-if="report" class="section">
-        <div class="section-title">{{ t('settings.agentSkills.targets') }}</div>
-        <el-checkbox-group v-model="selection">
-          <el-tooltip
-            v-for="target in store.targets"
-            :key="target.id"
-            :disabled="target.supported"
-            :content="target.unsupported_reason || ''"
-            placement="top"
-          >
-            <el-checkbox :value="target.id" :disabled="!target.supported">
-              {{ target.id }}
-              <span v-if="target.external" class="external">{{
-                t('settings.agentSkills.external')
+        <el-tab-pane :label="t('settings.agentSkills.tabInstall')" name="install">
+          <!-- step 1: source -->
+          <div class="section">
+            <div class="section-title">{{ t('settings.agentSkills.source') }}</div>
+            <p class="source-help">{{ t('settings.agentSkills.installHint') }}</p>
+            <el-radio-group v-model="sourceKind" size="small">
+              <el-radio-button value="github">
+                {{ t('settings.agentSkills.sourceGithub') }}
+              </el-radio-button>
+              <el-radio-button value="local_directory">
+                {{ t('settings.agentSkills.sourceLocal') }}
+              </el-radio-button>
+              <el-radio-button value="local_zip">
+                {{ t('settings.agentSkills.sourceZip') }}
+              </el-radio-button>
+            </el-radio-group>
+
+            <div class="fields">
+              <div v-if="sourceKind === 'local_directory' || sourceKind === 'local_zip'" class="field">
+                <label class="field__label">{{ t('settings.agentSkills.path') }}</label>
+                <el-input
+                  v-model="sourcePath"
+                  :placeholder="
+                    sourceKind === 'local_zip'
+                      ? t('settings.agentSkills.zipPlaceholder')
+                      : t('settings.agentSkills.directoryPlaceholder')
+                  "
+                />
+              </div>
+
+              <template v-else>
+                <div class="field">
+                  <label class="field__label">{{ t('settings.agentSkills.skillName') }}</label>
+                  <el-input v-model="githubRepository" :placeholder="t('settings.agentSkills.skillNamePlaceholder')" />
+                </div>
+                <div class="field">
+                  <label class="field__label">{{ t('settings.agentSkills.skillPath') }}</label>
+                  <el-input v-model="githubPath" :placeholder="t('settings.agentSkills.skillPathPlaceholder')" />
+                </div>
+                <div class="field">
+                  <label class="field__label">{{ t('settings.agentSkills.ref') }}</label>
+                  <el-input v-model="githubRef" :placeholder="t('settings.agentSkills.refPlaceholder')" />
+                </div>
+              </template>
+
+              <div class="buttons">
+                <el-button size="small" :loading="store.checking" :disabled="!canCheck" @click="check">
+                  {{ t('settings.agentSkills.check') }}
+                </el-button>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- step 2: check result -->
+          <div v-if="report" class="section">
+            <div class="section-title">{{ t('settings.agentSkills.verdict') }}</div>
+
+            <div class="report-head">
+              <el-tag :type="verdictTagType" size="small" effect="dark">
+                {{ verdictLabel(report.verdict) }}
+              </el-tag>
+              <el-tag v-if="report.source_kind" size="small" effect="plain">
+                {{ sourceLabel(report.source_kind) }}
+              </el-tag>
+              <span class="meta">{{ report.skill_name || '-' }}</span>
+              <span class="meta">{{ report.checker_version }}</span>
+              <span class="meta">{{
+                t('settings.agentSkills.size', { files: report.file_count, bytes: report.total_bytes })
               }}</span>
-            </el-checkbox>
-          </el-tooltip>
-        </el-checkbox-group>
+            </div>
 
-        <div class="buttons">
-          <el-button
-            type="primary"
-            size="small"
-            :loading="store.applying"
-            :disabled="!canInstall"
-            @click="install"
-          >
-            {{ t('settings.agentSkills.install') }}
+            <!-- Static checks are heuristics: they never run the code, so a pass is not a proof of
+                 safety. This warning sits right above the install controls to be read before acting. -->
+            <p class="warning">{{ t('settings.agentSkills.staticCheckWarning') }}</p>
+
+            <div class="permissions">
+              <el-tag
+                v-for="(allowed, name) in report.permissions"
+                :key="name"
+                size="small"
+                :type="allowed === false ? 'info' : 'warning'"
+                effect="plain"
+              >
+                {{ t(`settings.agentSkills.permission.${name}`) }}
+              </el-tag>
+            </div>
+
+            <el-table
+              v-if="report.findings?.length"
+              :data="report.findings"
+              size="small"
+              class="findings skill-table"
+            >
+              <el-table-column :label="t('settings.agentSkills.severity')" width="110">
+                <template #default="{ row }">{{ severityLabel(row.severity) }}</template>
+              </el-table-column>
+              <el-table-column :label="t('settings.agentSkills.rule')" width="220">
+                <!-- The machine rule id stays available on hover; the visible text is the localized group. -->
+                <template #default="{ row }">
+                  <span :title="row.rule">{{ ruleLabel(row.rule) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="path" :label="t('settings.agentSkills.path')" width="220" />
+              <el-table-column prop="detail" :label="t('settings.agentSkills.detail')" />
+            </el-table>
+
+            <!-- The same findings as data-driven cards: the wide table cannot fit a narrow
+                 container, so every column is shown as a labelled row instead of being cut. -->
+            <ul v-if="report.findings?.length" class="findings skill-cards">
+              <li v-for="(row, index) in report.findings" :key="index" class="skill-cards__item">
+                <div class="skill-cards__row">
+                  <span class="skill-cards__label">{{ t('settings.agentSkills.severity') }}</span>
+                  <span class="skill-cards__value">{{ severityLabel(row.severity) }}</span>
+                </div>
+                <div class="skill-cards__row">
+                  <span class="skill-cards__label">{{ t('settings.agentSkills.rule') }}</span>
+                  <span class="skill-cards__value" :title="row.rule">{{ ruleLabel(row.rule) }}</span>
+                </div>
+                <div class="skill-cards__row">
+                  <span class="skill-cards__label">{{ t('settings.agentSkills.path') }}</span>
+                  <span class="skill-cards__value">{{ row.path }}</span>
+                </div>
+                <div class="skill-cards__row">
+                  <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
+                  <span class="skill-cards__value">{{ row.detail }}</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <!-- step 3: install targets -->
+          <div v-if="report" class="section">
+            <div class="section-title">{{ t('settings.agentSkills.targets') }}</div>
+            <el-checkbox-group v-model="selection">
+              <el-tooltip
+                v-for="target in store.targets"
+                :key="target.id"
+                :disabled="target.supported"
+                :content="target.unsupported_reason || ''"
+                placement="top"
+              >
+                <el-checkbox :value="target.id" :disabled="!target.supported">
+                  {{ targetLabel(target.id) }}
+                  <span v-if="target.external" class="external">{{
+                    t('settings.agentSkills.external')
+                  }}</span>
+                </el-checkbox>
+              </el-tooltip>
+            </el-checkbox-group>
+
+            <div class="buttons">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="store.applying"
+                :disabled="!canInstall"
+                @click="install"
+              >
+                {{ t('settings.agentSkills.install') }}
+              </el-button>
+            </div>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+
+    <el-dialog
+      v-model="uninstallDialogVisible"
+      class="skill-uninstall-dialog"
+      append-to-body
+      modal-class="skill-uninstall-overlay"
+      :title="t('settings.agentSkills.uninstallConfirmTitle')"
+      :width="dialogWidth"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!store.applying"
+      :show-close="!store.applying"
+      @closed="uninstallRow = null"
+    >
+      <p class="skill-uninstall-dialog__message">{{ uninstallDialogMessage }}</p>
+      <template #footer>
+        <div class="skill-uninstall-dialog__footer">
+          <el-button :disabled="store.applying" @click="closeUninstallDialog">
+            {{ t('settings.agentSkills.cancel') }}
+          </el-button>
+          <el-button type="danger" :loading="store.applying" @click="confirmUninstall">
+            {{ t('settings.agentSkills.uninstall') }}
           </el-button>
         </div>
-      </div>
+      </template>
+    </el-dialog>
 
-      <!-- install outcomes -->
-      <div v-if="outcomes.length" class="section">
-        <div class="section-title">{{ t('settings.agentSkills.result') }}</div>
-        <el-table :data="outcomes" size="small" class="skill-table">
-          <el-table-column prop="target_id" :label="t('settings.agentSkills.target')" width="140" />
-          <el-table-column :label="t('settings.agentSkills.status')" width="160">
-            <template #default="{ row }">
-              <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.detail')">
-            <template #default="{ row }">{{ row.detail || row.install_path || '-' }}</template>
-          </el-table-column>
-        </el-table>
-
-        <ul class="skill-cards">
-          <li v-for="(row, index) in outcomes" :key="index" class="skill-cards__item">
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.target') }}</span>
-              <span class="skill-cards__value">{{ row.target_id }}</span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.status') }}</span>
-              <span class="skill-cards__value">
-                <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
-              </span>
-            </div>
-            <div class="skill-cards__row">
-              <span class="skill-cards__label">{{ t('settings.agentSkills.detail') }}</span>
-              <span class="skill-cards__value">{{ row.detail || row.install_path || '-' }}</span>
-            </div>
-          </li>
-        </ul>
-      </div>
-
-      <!-- installed skills -->
-      <div class="section">
-        <div class="section-title">
-          {{ t('settings.agentSkills.installed') }}
-          <span class="count">{{ store.skills.length }}</span>
-        </div>
-        <el-table
-          v-loading="store.loading"
-          :data="store.skills"
-          size="small"
-          border
-          class="data-table"
-          :empty-text="t('settings.agentSkills.empty')"
-        >
-          <el-table-column
-            prop="name"
-            :label="t('settings.agentSkills.name')"
-            min-width="96"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            prop="source"
-            :label="t('settings.agentSkills.origin')"
-            min-width="64"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            :label="t('settings.agentSkills.target')"
-            min-width="72"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">{{ row.target_id || '-' }}</template>
-          </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.state')" min-width="100">
-            <template #default="{ row }">
-              <div class="state-tags">
-                <el-tag v-if="row.protected" size="small" type="info" effect="plain">{{
-                  t('settings.agentSkills.protected')
-                }}</el-tag>
-                <el-tag v-if="row.managed" size="small" effect="plain">{{
-                  t('settings.agentSkills.managed')
-                }}</el-tag>
-                <el-tag v-if="row.drifted" size="small" type="warning" effect="plain">{{
-                  t('settings.agentSkills.drifted')
-                }}</el-tag>
-                <el-tag v-if="!row.present" size="small" type="danger" effect="plain">{{
-                  t('settings.agentSkills.missing')
-                }}</el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('settings.agentSkills.actions')" width="76" align="center">
-            <template #default="{ row }">
-              <el-button
-                size="small"
-                text
-                type="danger"
-                :disabled="!row.uninstallable"
-                :loading="store.applying"
-                @click="uninstall(row)"
-              >
-                {{ t('settings.agentSkills.uninstall') }}
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-
-      <!-- doctor -->
-      <div v-if="store.doctor" class="section">
-        <div class="section-title">{{ t('settings.agentSkills.doctor') }}</div>
-        <div class="metrics">
-          <div v-for="group in doctorGroups" :key="group.labelKey" class="metric-group">
-            <div class="metric-group__title">{{ t(`settings.agentSkills.${group.labelKey}`) }}</div>
-            <div class="tiles">
-              <div
-                v-for="tile in group.tiles"
-                :key="tile.labelKey"
-                class="tile"
-                :class="`tile--${tile.tone}`"
-              >
-                <span class="tile__value">{{ tile.value }}</span>
-                <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="metric-summary">
-            <span class="metric-summary__label">{{ t('settings.agentSkills.findings') }}</span>
-            <span class="metric-summary__value">{{
-              store.doctor.findings?.length ? store.doctor.findings.join(', ') : t('settings.agentSkills.none')
-            }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- reconcile result -->
-      <div v-if="store.lastReconcile" class="section">
-        <div class="section-title">{{ t('settings.agentSkills.reconcile') }}</div>
-        <div class="metrics">
-          <div class="tiles">
-            <div
-              v-for="tile in reconcileTiles"
-              :key="tile.labelKey"
-              class="tile"
-              :class="`tile--${tile.tone}`"
-            >
-              <span class="tile__value">{{ tile.value }}</span>
-              <span class="tile__label">{{ t(`settings.agentSkills.${tile.labelKey}`) }}</span>
-            </div>
-          </div>
-          <div class="metric-summary">
-            <span class="metric-summary__label">{{ t('settings.agentSkills.stillNeedsReconcile') }}</span>
-            <span class="metric-summary__value">{{
-              store.lastReconcile.still_needs_reconcile?.length
-                ? store.lastReconcile.still_needs_reconcile.join(', ')
-                : t('settings.agentSkills.none')
-            }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
+    <el-dialog
+      v-model="operationErrorVisible"
+      append-to-body
+      modal-class="skill-uninstall-overlay"
+      :title="t('settings.agentSkills.operationFailed')"
+      :width="dialogWidth"
+      :close-on-click-modal="false"
+    >
+      <p class="skill-uninstall-dialog__message">{{ operationError }}</p>
+      <template #footer>
+        <el-button type="primary" @click="operationErrorVisible = false">
+          {{ t('settings.agentSkills.confirm') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -354,15 +382,24 @@ import { ElMessage } from 'element-plus';
 import { mutationOutcomes, verdictAllowsInstall } from '@/libs/capability.js';
 import { useCapabilityStore } from '@/stores/capability';
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const store = useCapabilityStore();
 
-const sourceKind = ref('local_directory');
+// The inventory is the default view: a user opening this page usually wants to see and act on
+// what is already installed, while the install flow is a deliberate second step.
+const activeTab = ref('list');
+
+const sourceKind = ref('github');
 const sourcePath = ref('');
 const githubRepository = ref('');
 const githubPath = ref('');
 const githubRef = ref('main');
 const selection = ref([]);
+const uninstallDialogVisible = ref(false);
+const uninstallRow = ref(null);
+const operationErrorVisible = ref(false);
+const operationError = ref('');
+const dialogWidth = 'min(420px, calc(100vw - 32px))';
 
 const report = computed(() => store.checkReport);
 const repositoryParts = computed(() => githubRepository.value.trim().split('/').filter(Boolean));
@@ -370,7 +407,7 @@ const repositoryParts = computed(() => githubRepository.value.trim().split('/').
 const canCheck = computed(() => {
   if (store.checking) return false;
   if (sourceKind.value === 'github') {
-    return repositoryParts.value.length === 2 && githubPath.value.trim() !== '';
+    return repositoryParts.value.length === 2;
   }
   return sourcePath.value.trim() !== '';
 });
@@ -379,7 +416,14 @@ const canInstall = computed(
   () => verdictAllowsInstall(report.value) && selection.value.length > 0 && !store.applying
 );
 
-const outcomes = computed(() => mutationOutcomes(store.lastMutation));
+const uninstallDialogMessage = computed(() =>
+  uninstallRow.value
+    ? t('settings.agentSkills.uninstallConfirm', {
+        name: uninstallRow.value.name,
+        directory: uninstallRow.value.directory || '-'
+      })
+    : ''
+);
 
 /** The strict source document the backend accepts; empty fields are omitted. */
 const sourceDocument = computed(() => {
@@ -411,24 +455,50 @@ const verdictTagType = computed(() => {
   }
 });
 
-function statusTagType(status) {
-  switch (status) {
-    case 'installed':
-    case 'removed':
-    case 'finalized':
-      return 'success';
-    case 'skipped_existing':
-    case 'already_installed':
-    case 'not_found':
-      return 'info';
-    case 'unsupported':
-    case 'blocked':
-    case 'refused':
-    case 'failed':
-      return 'warning';
-    default:
-      return '';
+/**
+ * Resolves a backend enum through its localized label map. An unknown value keeps the raw
+ * machine code as evidence instead of inventing a translation, and the caller decides what
+ * readable fallback an unlabeled value gets.
+ */
+function localizedEnum(group, value, fallback) {
+  if (value && te(`settings.agentSkills.${group}.${value}`)) {
+    return t(`settings.agentSkills.${group}.${value}`);
   }
+  return fallback ?? value ?? '-';
+}
+
+const verdictLabel = value => localizedEnum('verdictLabel', value);
+const severityLabel = value => localizedEnum('severityLabel', value);
+const sourceLabel = value => localizedEnum('sourceLabel', value);
+const targetLabel = value => localizedEnum('targetLabel', value);
+const doctorFindingLabel = value => localizedEnum('doctorFinding', value);
+
+/**
+ * Rule ids are only known for the permission/content/manifest families; anything else still gets
+ * a readable generic label so the column never shows a bare machine string.
+ */
+function ruleLabel(value) {
+  const family = typeof value === 'string' ? value.split('.')[1] : '';
+  return localizedEnum('ruleLabel', family, t('settings.agentSkills.ruleLabel.generic'));
+}
+
+const doctorFindingsText = computed(() =>
+  (store.doctor?.findings ?? []).map(doctorFindingLabel).join(', ')
+);
+
+function showOperationError(message) {
+  operationError.value = message || t('settings.agentSkills.operationFailed');
+  operationErrorVisible.value = true;
+}
+
+// A resolved transport request can still carry a refused filesystem effect.
+function mutationFailure(mutation, successStatuses) {
+  const results = mutationOutcomes(mutation);
+  if (!results.length) return t('settings.agentSkills.operationFailed');
+  const failures = results.filter(result => !successStatuses.includes(result.status));
+  return failures
+    .map(result => result.detail || result.status || t('settings.agentSkills.operationFailed'))
+    .join('\n');
 }
 
 /**
@@ -487,7 +557,7 @@ async function rescan() {
   try {
     await store.loadInventory();
   } catch (error) {
-    ElMessage.error(error.message);
+    showOperationError(error.message);
   }
 }
 
@@ -495,7 +565,7 @@ async function runDoctor() {
   try {
     await store.loadDoctor();
   } catch (error) {
-    ElMessage.error(error.message);
+    showOperationError(error.message);
   }
 }
 
@@ -504,7 +574,7 @@ async function runReconcile() {
     await store.reconcile();
     ElMessage.success(t('settings.agentSkills.reconcileDone'));
   } catch (error) {
-    ElMessage.error(error.message);
+    showOperationError(error.message);
   }
 }
 
@@ -512,34 +582,59 @@ async function check() {
   try {
     await store.checkSource(sourceDocument.value);
   } catch (error) {
-    ElMessage.error(error.message);
+    showOperationError(error.message);
   }
 }
 
 async function install() {
   try {
-    await store.install({
+    const result = await store.install({
       source: sourceDocument.value,
       targets: [...selection.value]
     });
+    const failure = mutationFailure(result, ['installed', 'already_installed']);
+    if (failure) {
+      showOperationError(failure);
+      return;
+    }
     ElMessage.success(t('settings.agentSkills.installDone'));
   } catch (error) {
-    // A blocked verdict and an unsupported target are legitimate results, so
-    // the message is shown but the page keeps the per-target outcome list.
-    ElMessage.error(error.message);
+    showOperationError(error.message);
   }
 }
 
-async function uninstall(row) {
+function openUninstallDialog(row) {
+  uninstallRow.value = row;
+  uninstallDialogVisible.value = true;
+}
+
+function closeUninstallDialog() {
+  if (!store.applying) uninstallDialogVisible.value = false;
+}
+
+async function confirmUninstall() {
+  const row = uninstallRow.value;
+  if (!row) return;
   try {
-    await store.uninstall({
+    const result = await store.uninstall({
       skillName: row.name,
       targets: row.target_id ? [row.target_id] : []
     });
+    uninstallDialogVisible.value = false;
+    const failure = mutationFailure(result, ['removed', 'finalized']);
+    if (failure) {
+      showOperationError(failure);
+      return;
+    }
     ElMessage.success(t('settings.agentSkills.uninstallDone'));
   } catch (error) {
-    ElMessage.error(error.message);
+    uninstallDialogVisible.value = false;
+    showOperationError(error.message);
   }
+}
+
+function uninstall(row) {
+  openUninstallDialog(row);
 }
 
 onMounted(async () => {
@@ -627,6 +722,26 @@ onMounted(async () => {
     font-size: 12px;
   }
 
+  .skill-tabs {
+    // The tab strip already divides the two panes, so the first section in each pane drops its
+    // own top rule instead of drawing a second divider directly under the tabs.
+    :deep(.el-tab-pane) > .section:first-child {
+      padding-top: 0;
+      border-top: none;
+    }
+  }
+
+  .warning {
+    margin: 0 0 var(--cs-space-sm);
+    padding: var(--cs-space-xs) var(--cs-space-sm);
+    border: 1px solid var(--cs-warning-border-color);
+    border-radius: var(--cs-border-radius);
+    background: var(--cs-warning-bg-color);
+    color: var(--cs-warning-color);
+    font-size: var(--cs-font-size-sm);
+    overflow-wrap: anywhere;
+  }
+
   .section {
     min-width: 0;
     padding-top: var(--cs-space-sm);
@@ -647,6 +762,24 @@ onMounted(async () => {
         font-size: var(--cs-font-size-sm);
       }
     }
+  }
+
+  .source-help {
+    margin: calc(var(--cs-space-xs) * -1) 0 var(--cs-space-sm);
+    color: var(--cs-text-color-secondary);
+    font-size: var(--cs-font-size-sm);
+  }
+
+  .skill-uninstall-dialog__message {
+    margin: 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .skill-uninstall-dialog__footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--cs-space-sm);
   }
 
   .fields {
@@ -672,10 +805,6 @@ onMounted(async () => {
     display: flex;
     flex-wrap: wrap;
     gap: var(--cs-space-sm);
-  }
-
-  .alert {
-    margin-top: var(--cs-space-sm);
   }
 
   .report-head {

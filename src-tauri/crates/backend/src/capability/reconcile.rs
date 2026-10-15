@@ -147,10 +147,11 @@ impl CapabilityApplicationService {
 
         // Only targets that resolve to a real, verified directory *and* are
         // eligible for deletion are converged; an unverified path never receives
-        // a filesystem probe (INV-5/D-5), and an external tool's target keeps
-        // every ownership row and quarantine it has (AC-6/INV-2). A target that
-        // only aliases a higher-priority target's directory is likewise left
-        // alone by `reconcile_owned_directory` (AC-7/INV-2).
+        // a filesystem probe (INV-5/D-5), and only durable proof is ever acted
+        // on, so an unproven external directory keeps its row and quarantine
+        // untouched. A target that only aliases a higher-priority target's
+        // directory is likewise left alone by `reconcile_owned_directory`
+        // (AC-7/INV-2).
         let supported: HashSet<String> = self
             .skill_targets()
             .iter()

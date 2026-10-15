@@ -85,7 +85,7 @@ test('a provider without an invoke adapter resolves instead of throwing', async 
   await provider.clear()
 })
 
-test('both native providers share the one dock coordinator', () => {
+test('every native provider shares the one dock coordinator', () => {
   const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
   const workflow = read('../views/Workflow.vue')
   const sidebar = read('../components/workflow/WorkflowSidebar.vue')
@@ -109,15 +109,25 @@ test('both native providers share the one dock coordinator', () => {
   assert.match(workflow, /<PluginEntry[\s\S]*?<ChatHubEntry[\s\S]*?class="workflow-side-rail__item workflow-side-rail__terminal"/)
   assert.match(sidebar, /<PluginEntry[\s\S]*?<ChatHubEntry[\s\S]*?class="workflow-terminal-entry compact-terminal-entry"/)
 
-  // The plugin entry stays a pure view control and never carries a url or a native command.
+  // The plugin entry only contains the launcher and dropdown. The opened plugin is shown
+  // in the dock tab strip; ChatHub keeps its separate entry and latest-logo behavior.
+  assert.match(entry, /name="plugin"/)
+  assert.doesNotMatch(entry, /name="function"/)
+  assert.doesNotMatch(entry, /plugin-entry__current|@click="emit\('toggle'\)"/)
   assert.doesNotMatch(entry, /chatHub|https?:|file:|plugin_ui_open/)
 
-  // The trusted skills tab is host-native Vue rendered in the dock, never a native page.
-  assert.match(workflow, /const TRUSTED_PLUGIN_ID = 'agent-skills'/)
-  assert.match(workflow, /const pluginTabKind = plugin => \(plugin\.id === TRUSTED_PLUGIN_ID \? 'trusted' : 'plugin'\)/)
+  // Agent Skills is a third native provider of the same dock, launched as a tab named from
+  // i18n rather than as a second top-level window.
+  assert.match(workflow, /agentSkills: agentSkillsProvider/)
+  assert.match(workflow, /createAgentSkillsProvider\(\{ invoke: invokeWrapper \}\)/)
+  assert.match(
+    workflow,
+    /if \(plugin\.id === AGENT_SKILLS_PLUGIN_ID\) \{[\s\S]*?return openDockTab\(\{[\s\S]*?kind: AGENT_SKILLS_TAB_KIND,[\s\S]*?\}\)/
+  )
+  assert.doesNotMatch(workflow, /open_agent_skills_window|TRUSTED_PLUGIN_ID/)
   assert.match(workflow, /verifiedPluginUis\(pluginStore\.inventory, !!pluginStore\.lastError\)/)
-  assert.match(workflow, /t\('settings\.agentSkills\.title'\)/)
-  assert.match(dock, /<AgentSkills v-if="trustedActive" :key="trustedKey" \/>/)
+  assert.doesNotMatch(workflow, /pluginTabKind|trustedReloadKey|kind: 'trusted'/)
+  assert.doesNotMatch(dock, /AgentSkills|trustedActive|trustedKey/)
   assert.doesNotMatch(dock, /plugin_ui_open|https?:|file:/)
 
   // A removed, disabled or replaced plugin tab is closed right away, so the dock fails
@@ -135,5 +145,6 @@ test('the plugin tab limit matches the host limit and the same entry is deduped'
   assert.match(workflow, /const MAX_PLUGIN_TABS = 8/)
   // The tab id is derived from the plugin id, so clicking the same entry reuses its tab.
   assert.match(workflow, /const pluginTabId = pluginId => `plugin:\$\{pluginId\}`/)
-  assert.match(workflow, /tab\.kind !== 'chatHub' && tab\.pluginId === plugin\.id/)
+  // The trusted surface does not count against the ordinary plugin panel limit.
+  assert.match(workflow, /tab\.kind === 'plugin' && tab\.pluginId === plugin\.id/)
 })

@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { ref, computed } from 'vue'
 import { compileStyleAsync, compileTemplate, parse as parseSfc } from 'vue/compiler-sfc'
-import { parseCapabilityError } from '../../libs/capability.js'
+import { mutationOutcomes, parseCapabilityError } from '../../libs/capability.js'
 
 const component = readFileSync(new URL('./AgentSkills.vue', import.meta.url), 'utf8')
 const plugin = readFileSync(new URL('./Plugin.vue', import.meta.url), 'utf8')
@@ -32,17 +32,62 @@ function loadPluginStore(invoke) {
   )
 }
 
-test('the Agent Skills page is separate from the prompt Skill page', () => {
+test('the Agent Skills page is separate from the prompt Skill settings page', () => {
   // File-based Agent Skills never share the database prompt skill store.
   assert.doesNotMatch(component, /useSkillStore|stores\/skill/)
   assert.match(component, /import { useCapabilityStore } from '@\/stores\/capability'/)
-  // The prompt page keeps its own menu entry, and the new page is additive.
+  // The original prompt Skill page remains in the settings center; Agent Skills is a docked page.
   assert.match(settings, /id: 'skill'/)
-  assert.match(general, /v-model="generalTab"/)
-  assert.doesNotMatch(general, /name="agentSkills"|<agent-skills \/>/)
-  assert.match(settings, /id: 'plugin'/)
-  assert.match(settings, /<plugin \/>/)
+  assert.match(settings, /components\/setting\/Skill\.vue/)
+  assert.match(settings, /settingType === 'skill'/)
+  assert.match(settings, /<skill \/>/)
   assert.doesNotMatch(settings, /id: 'agentSkills'/)
+  assert.doesNotMatch(settings, /components\/setting\/AgentSkills\.vue/)
+  // The plugin tab keeps the dedicated plugin icon.
+  assert.match(settings, /icon: 'plugin', id: 'plugin'/)
+  assert.match(settings, /<plugin \/>/)
+  // The general page is a single pane: no nested tab, no leftover tab state or styles.
+  assert.doesNotMatch(general, /el-tabs|el-tab-pane|generalTab|general-tabs/)
+  assert.doesNotMatch(general, /name="agentSkills"|<agent-skills \/>/)
+})
+
+test('the page splits the inventory and the install flow into ordered tabs', () => {
+  // The list tab is declared first and is the default active tab.
+  assert.match(component, /const activeTab = ref\('list'\)/)
+  assert.match(component, /<el-tabs v-model="activeTab" class="skill-tabs">/)
+  const names = [...component.matchAll(/<el-tab-pane[^>]*name="([^"]+)"/g)].map(match => match[1])
+  assert.deepEqual(names, ['list', 'install'], 'the install tab must be the second tab')
+  // Both tab labels come from i18n, never from a literal.
+  assert.match(component, /:label="t\('settings\.agentSkills\.tabList'\)"/)
+  assert.match(component, /:label="t\('settings\.agentSkills\.tabInstall'\)"/)
+
+  // The first pane owns the installed list plus the doctor and reconcile reports.
+  const listPane = component.slice(
+    component.indexOf('name="list"'),
+    component.indexOf('name="install"')
+  )
+  for (const key of ['installed', 'doctor', 'reconcile']) {
+    assert.match(listPane, new RegExp(`settings\\.agentSkills\\.${key}`), `list pane is missing ${key}`)
+  }
+  assert.doesNotMatch(
+    listPane,
+    /settings\.agentSkills\.(source|targets|check)\b/,
+    'install controls leaked into the list pane'
+  )
+
+  // The second pane owns source, check report, targets and install.
+  const installPane = component.slice(
+    component.indexOf('name="install"'),
+    component.indexOf('</el-tabs>')
+  )
+  for (const key of ['source', 'targets', 'install']) {
+    assert.match(
+      installPane,
+      new RegExp(`settings\\.agentSkills\\.${key}`),
+      `install pane is missing ${key}`
+    )
+  }
+  assert.match(installPane, /t\('settings\.agentSkills\.check'\)/)
 })
 
 test('check, install and uninstall all go through the capability service', () => {
@@ -232,16 +277,130 @@ test('source adapter generates canonical JSON for directory, ZIP and GitHub', ()
   assert.deepEqual(json(), { kind: 'github', owner: 'owner', repo: 'repo' })
 })
 
-test('the page surfaces every refusal state instead of hiding it', () => {
-  for (const status of ['skipped_existing', 'unsupported', 'blocked', 'refused', 'failed']) {
-    assert.match(component, new RegExp(`'${status}'`), `missing ${status} handling`)
-  }
+test('the page shows mutation failures in a dialog without a last-operation table', () => {
+  assert.match(component, /const failures = results\.filter/)
+  assert.match(component, /result\.detail \|\| result\.status/)
+  assert.match(component, /v-model="operationErrorVisible"/)
+  assert.doesNotMatch(component, /statusTagType|const outcomes =|settings\.agentSkills\.result|:data="outcomes"/)
   // Findings and permissions from the check report are rendered.
   assert.match(component, /report\.findings/)
   assert.match(component, /report\.permissions/)
   assert.match(component, /report\.checker_version/)
   // An uninstall is only offered when the backend says it is permitted.
   assert.match(component, /:disabled="!row\.uninstallable"/)
+  // Uninstall shows the exact directory for confirmation before forwarding the mutation.
+  assert.match(component, /<el-dialog[\s\S]*uninstallDialogVisible/)
+  assert.match(component, /append-to-body/)
+  assert.doesNotMatch(component, /:teleported=/)
+  assert.match(component, /openUninstallDialog\(row\)/)
+  assert.match(component, /row\.directory/)
+  assert.doesNotMatch(component, /ElMessageBox/)
+})
+
+test('uninstall opens confirmation before mutation and cancel leaves the skill untouched', async () => {
+  const { descriptor } = parseSfc(component)
+  const calls = []
+  const store = {
+    applying: false,
+    uninstall: async payload => {
+      calls.push(payload)
+      return { result: { outcomes: [{ target_id: 'chatspeed', status: 'removed' }] } }
+    }
+  }
+  const page = runInNewContext(
+    descriptor.scriptSetup.content.replace(/^import .*;\n/gm, '') +
+      '\n({ uninstall, closeUninstallDialog, confirmUninstall, uninstallDialogVisible, uninstallDialogMessage })',
+    {
+      ref,
+      computed,
+      watch: () => {},
+      onMounted: () => {},
+      useCapabilityStore: () => store,
+      useI18n: () => ({ t: (key, values) => values ? `${values.name}\n${values.directory}` : key }),
+      mutationOutcomes,
+      verdictAllowsInstall: () => false,
+      ElMessage: { success: () => {}, error: error => assert.fail(error) }
+    }
+  )
+  const row = { name: 'demo', directory: '/sandbox/skills/demo', target_id: 'chatspeed' }
+  page.uninstall(row)
+  assert.equal(page.uninstallDialogVisible.value, true)
+  assert.equal(page.uninstallDialogMessage.value, 'demo\n/sandbox/skills/demo')
+  assert.equal(calls.length, 0)
+  page.closeUninstallDialog()
+  assert.equal(page.uninstallDialogVisible.value, false)
+  assert.equal(calls.length, 0)
+  page.uninstall(row)
+  await page.confirmUninstall()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].skillName, row.name)
+  assert.deepEqual([...calls[0].targets], ['chatspeed'])
+  assert.equal(page.uninstallDialogVisible.value, false)
+})
+
+test('uninstall feedback follows the effect outcome, not transport success', async () => {
+  const { descriptor } = parseSfc(component)
+  const successes = []
+  let result
+  let failure
+  const store = {
+    uninstall: async () => {
+      if (failure) throw failure
+      return result
+    }
+  }
+  const page = runInNewContext(
+    descriptor.scriptSetup.content.replace(/^import .*;\n/gm, '') +
+      '\n({ uninstall, confirmUninstall, install, uninstallDialogVisible, operationErrorVisible, operationError })',
+    {
+      ref, computed, watch: () => {}, onMounted: () => {},
+      useCapabilityStore: () => store,
+      useI18n: () => ({ t: key => key }),
+      mutationOutcomes, verdictAllowsInstall: () => false,
+      ElMessage: { success: message => successes.push(message), error: error => assert.fail(error) }
+    }
+  )
+  const row = { name: 'demo', target_id: 'chatspeed', directory: '/sandbox/skills/demo' }
+  for (const status of ['removed', 'finalized']) {
+    result = { result: { outcomes: [{ status }] } }
+    page.uninstall(row)
+    await page.confirmUninstall()
+    assert.equal(page.uninstallDialogVisible.value, false)
+    assert.equal(page.operationErrorVisible.value, false)
+  }
+  assert.deepEqual(successes, Array(2).fill('settings.agentSkills.uninstallDone'))
+  for (const status of ['refused', 'failed', 'unsupported', 'not_found', 'unknown']) {
+    result = { result: { outcomes: [{ status, detail: 'Permission denied (os error 13)' }] } }
+    page.operationErrorVisible.value = false
+    page.uninstall(row)
+    await page.confirmUninstall()
+    assert.equal(page.uninstallDialogVisible.value, false)
+    assert.equal(page.operationErrorVisible.value, true)
+    assert.equal(page.operationError.value, 'Permission denied (os error 13)')
+  }
+  for (const malformed of [null, { result: { outcomes: [] } }, { result: { outcomes: [{}] } }]) {
+    result = malformed
+    page.operationErrorVisible.value = false
+    page.uninstall(row)
+    await page.confirmUninstall()
+    assert.equal(page.operationErrorVisible.value, true)
+    assert.equal(page.operationError.value, 'settings.agentSkills.operationFailed')
+  }
+  failure = new Error('inventory refresh failed')
+  page.uninstall(row)
+  await page.confirmUninstall()
+  assert.equal(page.uninstallDialogVisible.value, false)
+  assert.equal(page.operationError.value, failure.message)
+  assert.equal(successes.length, 2, 'failures must never produce a success toast')
+
+  failure = null
+  store.install = async () => ({ result: { install: { outcomes: [{ status: 'blocked' }] } } })
+  await page.install()
+  assert.equal(page.operationError.value, 'blocked')
+  assert.equal(successes.length, 2)
+  store.install = async () => ({ result: { install: { outcomes: [{ status: 'installed' }] } } })
+  await page.install()
+  assert.equal(successes.at(-1), 'settings.agentSkills.installDone')
 })
 
 test('user-visible copy comes from i18n and never from a literal', () => {
@@ -316,6 +475,172 @@ test('every permission the checker can report has a label', () => {
   }
 })
 
+test('the report enums and finding codes render through localized helpers, never as raw values', () => {
+  // A backend enum or code must never be the visible text of a user-facing field.
+  assert.doesNotMatch(component, /\{\{\s*report\.verdict\s*\}\}/)
+  assert.doesNotMatch(component, /\{\{\s*row\.severity\s*\}\}/)
+  assert.doesNotMatch(component, /\{\{\s*row\.rule\s*\}\}/)
+  assert.doesNotMatch(component, /\{\{\s*target\.id\s*\}\}/)
+  assert.doesNotMatch(component, /\{\{\s*row\.target_id\s*\|\|\s*'-'\s*\}\}/)
+  assert.doesNotMatch(component, /store\.doctor\.findings\.join/)
+
+  // Each enum family has a helper and the template routes the field through it.
+  for (const helper of [
+    'verdictLabel',
+    'severityLabel',
+    'ruleLabel',
+    'sourceLabel',
+    'targetLabel',
+    'doctorFindingLabel'
+  ]) {
+    assert.match(
+      component,
+      new RegExp(`(const ${helper} =|function ${helper}\\()`),
+      `missing localized helper ${helper}`
+    )
+  }
+  assert.match(component, /verdictLabel\(report\.verdict\)/)
+  assert.match(component, /sourceLabel\(report\.source_kind\)/)
+  assert.match(component, /severityLabel\(row\.severity\)/)
+  assert.match(component, /ruleLabel\(row\.rule\)/)
+  assert.match(component, /targetLabel\(target\.id\)/)
+  assert.match(component, /targetLabel\(row\.target_id\)/)
+  assert.match(component, /sourceLabel\(row\.source\)/)
+  assert.match(component, /doctorFindingsText/)
+})
+
+test('every locale localizes the same enum families, sorted and non-empty', () => {
+  const families = {
+    verdictLabel: ['pass', 'blocked', 'inconclusive'],
+    severityLabel: ['block', 'inconclusive', 'warn'],
+    ruleLabel: ['permission', 'content', 'manifest', 'generic'],
+    sourceLabel: ['github', 'local_directory', 'local_zip', 'installed', 'directory'],
+    targetLabel: [
+      'chatspeed',
+      'agents',
+      'claude-code',
+      'codex',
+      'opencode',
+      'cursor',
+      'windsurf',
+      'cline',
+      'trae-cn',
+      'dsh',
+      'workbuddy',
+      'qoder'
+    ],
+    doctorFinding: [
+      'operation_interrupted',
+      'operation_needs_reconcile',
+      'skill_drifted',
+      'skill_directory_missing',
+      'mcp_drift',
+      'staging_residue',
+      'quarantine_residue'
+    ]
+  }
+  const reference = Object.fromEntries(
+    Object.keys(families).map(family => [
+      family,
+      Object.keys(locales[0].messages.settings.agentSkills[family])
+    ])
+  )
+  for (const locale of locales) {
+    const surface = locale.messages.settings.agentSkills
+    for (const [family, values] of Object.entries(families)) {
+      assert.ok(surface[family], `${locale.name} is missing the ${family} map`)
+      assert.deepEqual(
+        Object.keys(surface[family]),
+        reference[family],
+        `${locale.name}.${family} surface differs`
+      )
+      assert.deepEqual(
+        Object.keys(surface[family]),
+        [...Object.keys(surface[family])].sort(),
+        `${locale.name}.${family} keys are not sorted`
+      )
+      for (const value of values) {
+        assert.equal(
+          typeof surface[family][value],
+          'string',
+          `${locale.name}.${family}.${value} must be a string`
+        )
+        assert.notEqual(
+          surface[family][value].trim(),
+          '',
+          `${locale.name}.${family}.${value} must not be empty`
+        )
+      }
+    }
+  }
+})
+
+test('the static-check warning is visible in every locale and marks findings as possible risk', () => {
+  for (const locale of locales) {
+    const warning = locale.messages.settings.agentSkills.staticCheckWarning
+    assert.equal(typeof warning, 'string', `${locale.name} is missing the static-check warning`)
+    assert.ok(warning.trim().length > 40, `${locale.name} warning is too short to be meaningful`)
+  }
+  // The warning is rendered next to the report/install surface, not just defined.
+  assert.match(component, /t\('settings\.agentSkills\.staticCheckWarning'\)/)
+  // The passing verdict must read as a heuristic, never as a proven-safe statement.
+  const english = locales.find(locale => locale.name === 'en').messages.settings.agentSkills
+  assert.match(english.verdict, /heuristic/i)
+  assert.match(english.verdictLabel.pass, /heuristic|cannot prove|possible risk/i)
+})
+
+test('the localized helpers resolve known codes and keep unknown codes as raw evidence', () => {
+  const { descriptor } = parseSfc(component)
+  const english = locales.find(locale => locale.name === 'en').messages
+  const resolve = key =>
+    key.split('.').reduce((node, part) => (node == null ? undefined : node[part]), english)
+  const page = runInNewContext(
+    descriptor.scriptSetup.content.replace(/^import .*;\n/gm, '') +
+      '\n({ verdictLabel, severityLabel, ruleLabel, sourceLabel, targetLabel, doctorFindingLabel })',
+    {
+      ref,
+      computed,
+      watch: () => {},
+      onMounted: () => {},
+      useCapabilityStore: () => ({}),
+      useI18n: () => ({
+        t: (key, values) => {
+          const value = resolve(key)
+          if (value === undefined) return key
+          return values
+            ? value.replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ''))
+            : value
+        },
+        te: key => resolve(key) !== undefined
+      }),
+      mutationOutcomes,
+      verdictAllowsInstall: () => true,
+      ElMessage: { success: () => {}, error: () => {} }
+    }
+  )
+  const surface = english.settings.agentSkills
+
+  assert.equal(page.verdictLabel('pass'), surface.verdictLabel.pass)
+  assert.equal(page.verdictLabel('blocked'), surface.verdictLabel.blocked)
+  assert.equal(page.severityLabel('warn'), surface.severityLabel.warn)
+  assert.equal(page.sourceLabel('local_directory'), surface.sourceLabel.local_directory)
+  assert.equal(page.sourceLabel('managed_drifted'), surface.sourceLabel.managed_drifted)
+  assert.equal(page.targetLabel('chatspeed'), surface.targetLabel.chatspeed)
+  assert.equal(page.targetLabel('claude-code'), surface.targetLabel['claude-code'])
+  assert.equal(page.doctorFindingLabel('mcp_drift'), surface.doctorFinding.mcp_drift)
+
+  // A rule id is reduced to its family; an unknown family still reads as the generic label.
+  assert.equal(page.ruleLabel('skill.permission.sensitive_path'), surface.ruleLabel.permission)
+  assert.equal(page.ruleLabel('skill.content.binary'), surface.ruleLabel.content)
+  assert.equal(page.ruleLabel('skill.something.new'), surface.ruleLabel.generic)
+  assert.equal(page.ruleLabel('not-a-rule'), surface.ruleLabel.generic)
+
+  // Unknown and missing codes fall back to the raw machine value, never to a guess.
+  assert.equal(page.verdictLabel('future-verdict'), 'future-verdict')
+  assert.equal(page.targetLabel('future-target'), 'future-target')
+  assert.equal(page.targetLabel(undefined), '-')
+})
+
 test('plugin management contains only plugin lifecycle and status, not skill management', () => {
   assert.doesNotMatch(plugin, /AgentSkills|agent-skills|useCapabilityStore|stores\/capability/)
   assert.doesNotMatch(plugin, /useSkillStore|stores\/skill/)
@@ -362,28 +687,24 @@ test('the page adapts to the dock container width, never the window viewport', (
 })
 
 test('each wide table collapses into a full-data card list inside a narrow container', () => {
-  // Findings and outcomes are the two report tables that cannot fit the 600px dock. The
-  // installed list is now a resident data table, so it is no longer part of the table/card pairing.
-  assert.equal((component.match(/<el-table[^>]*skill-table/g) || []).length, 2)
-  assert.equal((component.match(/<ul[^>]*class="[^"]*skill-cards/g) || []).length, 2)
+  // Findings remain responsive; operation feedback now lives in toasts and dialogs.
+  assert.equal((component.match(/<el-table[^>]*skill-table/g) || []).length, 1)
+  assert.equal((component.match(/<ul[^>]*class="[^"]*skill-cards/g) || []).length, 1)
 
-  // The cards mirror every findings column instead of dropping any of them.
-  for (const field of ['severity', 'rule', 'path', 'detail']) {
+  // The cards mirror every findings column instead of dropping any of them. Severity and rule
+  // are localized labels; the path and detail stay the raw machine evidence.
+  for (const field of ['path', 'detail']) {
     assert.match(component, new RegExp(`prop="${field}"`), `missing findings column ${field}`)
+  }
+  for (const field of ['severity', 'rule', 'path', 'detail']) {
     assert.match(component, new RegExp(`row\\.${field}\\b`), `missing card value ${field}`)
   }
-
-  // Outcomes keep their target, status tag and detail, including the install path fallback.
-  assert.match(component, /prop="target_id"/)
-  assert.match(component, /statusTagType\(row\.status\)/)
-  assert.match(component, /row\.detail \|\| row\.install_path \|\| '-'/)
 
   // Installed skills render as a resident, bordered data table keeping name, source and state.
   assert.match(component, /class="data-table"/)
   assert.match(component, /<el-table[^>]*border/, 'installed data table keeps its grid')
-  for (const field of ['name', 'source']) {
-    assert.match(component, new RegExp(`prop="${field}"`), `missing installed column ${field}`)
-  }
+  assert.match(component, /prop="name"/, 'missing installed name column')
+  assert.match(component, /sourceLabel\(row\.source\)/, 'the installed source column is localized')
   assert.match(component, /row\.target_id\b/, 'installed data table keeps the target column')
   for (const state of ['protected', 'managed', 'drifted', 'present']) {
     assert.match(component, new RegExp(`row\\.${state}\\b`), `missing state tag ${state}`)
@@ -406,8 +727,8 @@ test('the desktop tables and their column widths are preserved', () => {
     component.indexOf('@container agent-skills (max-width: 480px)')
   )
   assert.match(compact, /\.skill-table\s*\{\s*display:\s*none/)
-  // The fixed widths that define the report tables and the installed action column are unchanged.
-  for (const width of [110, 220, 140, 160, 76]) {
+  // Findings and installed action column retain their widths.
+  for (const width of [110, 220, 76]) {
     assert.match(component, new RegExp(`width="${width}"`), `missing table width ${width}`)
   }
 })

@@ -21,7 +21,7 @@
 //! the window itself, which is what keeps a native view from painting over the rounded frame the
 //! window draws.
 
-use tauri::{AppHandle, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, Manager, Window, Wry};
 
 use crate::error::{AppError, Result};
 
@@ -96,7 +96,7 @@ impl DockBounds {
 }
 
 /// Logical size of the host window client area, for clamping a measured rectangle.
-pub fn window_size(host: &WebviewWindow<Wry>) -> Result<(f64, f64)> {
+pub fn window_size(host: &Window<Wry>) -> Result<(f64, f64)> {
     let scale_factor = host.scale_factor()?;
     let size = host.inner_size()?.to_logical::<f64>(scale_factor);
     Ok((size.width, size.height))
@@ -145,6 +145,8 @@ pub enum DockOwner {
     ChatHub,
     /// A plugin UI panel.
     Plugin,
+    /// The trusted Agent Skills surface.
+    AgentSkills,
 }
 
 #[cfg(target_os = "linux")]

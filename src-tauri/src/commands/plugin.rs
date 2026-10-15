@@ -60,8 +60,9 @@ fn wire_error(error: PluginError) -> String {
 /// Refuses a plugin UI command that does not come from the Workflow window.
 ///
 /// The native panels are docked into the Workflow window, so a call from any
-/// other window is a mistake the host must not honour.
-fn ensure_workflow_caller(window: &Window) -> Result<(), String> {
+/// other window is a mistake the host must not honour. The docked Agent Skills
+/// surface shares the same rule (see `commands::window`).
+pub(crate) fn ensure_workflow_caller(window: &Window) -> Result<(), String> {
     if window.label() == CHAT_HUB_HOST_WINDOW_LABEL {
         Ok(())
     } else {
@@ -139,6 +140,13 @@ pub async fn plugin_uninstall(
 async fn invalidate_plugin_ui(app: &AppHandle, runtime: &PluginUiRuntime) {
     if let Err(error) = runtime.revoke_all().await {
         log::warn!("[PluginUi] capability cleanup failed: {error}");
+    }
+    // The Agent Skills surface is a trusted view docked next to the panels, not a panel of its
+    // own, so it is released separately; closing it never touches the Workflow window.
+    if let Err(error) =
+        crate::agent_skills::run_on_view_thread(app, |view, app| view.close(app)).await
+    {
+        log::warn!("[PluginUi] Agent Skills view cleanup failed: {error}");
     }
     let close_app = app.clone();
     if let Err(error) = run_plugin_host(app, move |host| host.close_all(&close_app)).await {

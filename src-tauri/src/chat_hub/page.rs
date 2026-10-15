@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, WebviewWindow, Wry};
+use tauri::{AppHandle, Manager, Window, Wry};
 use tauri_plugin_opener::OpenerExt;
 use wry::{NewWindowResponse, ProxyConfig, WebContext, WebViewBuilder};
 
@@ -28,8 +28,14 @@ pub fn view_mode() -> &'static str {
 }
 
 /// The window the page is docked to.
-pub fn host_window(app: &AppHandle<Wry>) -> Result<WebviewWindow<Wry>> {
-    app.get_webview_window(CHAT_HUB_HOST_WINDOW_LABEL)
+///
+/// The Workflow window is looked up as a plain window instead of as a webview window: another
+/// carrier may add its own child webview to that window (the Agent Skills surface does), and a
+/// window that gained a child webview stops being reported as a webview window, which would make
+/// the dock believe its host had gone. The dock only needs the window itself, so the lookup goes
+/// through `get_window`, which a child webview never changes.
+pub fn host_window(app: &AppHandle<Wry>) -> Result<Window<Wry>> {
+    app.get_window(CHAT_HUB_HOST_WINDOW_LABEL)
         .ok_or_else(|| AppError::General {
             message: format!(
                 "ChatHub host window '{}' is not available",
@@ -282,6 +288,22 @@ mod tests {
         let source = include_str!("page.rs");
 
         assert!(source.contains(r#".join("chat_hub_page")"#));
+    }
+
+    /// Guard for the host lookup: the Workflow window is looked up as a plain window, so a child
+    /// webview another carrier added to it can never make the dock believe its host has gone.
+    #[test]
+    fn the_host_window_is_looked_up_as_a_plain_window() {
+        let source = include_str!("page.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("page.rs carries a test module");
+
+        assert!(source.contains("app.get_window(CHAT_HUB_HOST_WINDOW_LABEL)"));
+        assert!(source.contains("-> Result<Window<Wry>>"));
+        // A webview lookup would answer `None` once another carrier added a child webview.
+        assert!(!source.contains(concat!("get_webview_", "window")));
+        assert!(!source.contains(concat!("Webview", "Window")));
     }
 
     /// Guard for the corner: a page owns no window corner, so nothing about the rounded frame is
