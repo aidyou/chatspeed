@@ -55,7 +55,7 @@
       "documentationUrl": "https://agnes-ai.com/doc",
       "id": "agnes",
       "logo": "https://models.dev/logos/agnes.svg",
-      "modelCount": 3,
+      "modelCount": 4,
       "name": "Agnes AI",
       "protocol": "openai",
       "responses": false
@@ -103,7 +103,7 @@
       "documentationUrl": "https://docs.aimlapi.com",
       "id": "aimlapi",
       "logo": "https://models.dev/logos/aimlapi.svg",
-      "modelCount": 181,
+      "modelCount": 177,
       "name": "AI/ML API",
       "protocol": "openai",
       "responses": false
@@ -123,7 +123,7 @@
       "documentationUrl": "https://docs.aixy-gateway.com/integrations/overview",
       "id": "aixy",
       "logo": "https://models.dev/logos/aixy.svg",
-      "modelCount": 7,
+      "modelCount": 11,
       "name": "Aixy",
       "protocol": "openai",
       "responses": true
@@ -381,6 +381,16 @@
       "responses": false
     },
     {
+      "api": "https://api.inference.boundless.network/v1",
+      "documentationUrl": "https://inference.boundless.network/models",
+      "id": "boundless",
+      "logo": "https://models.dev/logos/boundless.svg",
+      "modelCount": 20,
+      "name": "Boundless",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "documentationUrl": "https://inference-docs.cerebras.ai/models/overview",
       "id": "cerebras",
       "logo": "https://models.dev/logos/cerebras.svg",
@@ -483,7 +493,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 107,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -503,7 +513,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 69,
+      "modelCount": 70,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -612,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 326,
+      "modelCount": 328,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 216,
+      "modelCount": 215,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 447,
+      "modelCount": 439,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1111,7 +1121,7 @@
       "documentationUrl": "https://lowrouter.ai/docs/models/available",
       "id": "lowrouter",
       "logo": "https://models.dev/logos/lowrouter.svg",
-      "modelCount": 12,
+      "modelCount": 31,
       "name": "LowRouter",
       "protocol": "openai",
       "responses": false
@@ -1335,7 +1345,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 618,
+      "modelCount": 612,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1436,7 +1446,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 152,
+      "modelCount": 153,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1479,7 +1489,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 122,
+      "modelCount": 123,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1540,7 +1550,7 @@
       "documentationUrl": "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/catalog//",
       "id": "ovhcloud",
       "logo": "https://models.dev/logos/ovhcloud.svg",
-      "modelCount": 13,
+      "modelCount": 12,
       "name": "OVHcloud AI Endpoints",
       "protocol": "openai",
       "responses": false
@@ -1601,7 +1611,7 @@
       "documentationUrl": "https://creator.poe.com/docs/external-applications/openai-compatible-api",
       "id": "poe",
       "logo": "https://models.dev/logos/poe.svg",
-      "modelCount": 137,
+      "modelCount": 142,
       "name": "Poe",
       "protocol": "openai",
       "responses": false
@@ -1622,7 +1632,7 @@
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
       "logo": "https://models.dev/logos/prime.svg",
-      "modelCount": 64,
+      "modelCount": 65,
       "name": "Prime Inference",
       "protocol": "openai",
       "responses": false
@@ -1758,7 +1768,7 @@
       "documentationUrl": "https://www.scaleway.com/en/docs/generative-apis/",
       "id": "scaleway",
       "logo": "https://models.dev/logos/scaleway.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "Scaleway",
       "protocol": "openai",
       "responses": false
@@ -1788,7 +1798,7 @@
       "documentationUrl": "https://platform.sensenova.cn/docs",
       "id": "sensenova",
       "logo": "https://models.dev/logos/sensenova.svg",
-      "modelCount": 5,
+      "modelCount": 6,
       "name": "SenseNova (China)",
       "protocol": "openai",
       "responses": false
@@ -2103,7 +2113,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 118,
+      "modelCount": 119,
       "name": "Venice AI",
       "responses": false
     },
@@ -2340,9 +2350,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "4f5849fdec897ac114c5c871f9fc34880ca93be931606fb6e7562ae1132c921c",
-    "generatedAt": "2026-10-14T08:45:16Z",
+    "catalogSha256": "75c6231bd35376ee0ea395913988f00de2dc4d65046f8509b46a4a569893f07b",
+    "generatedAt": "2026-10-15T08:20:16Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "3f0ea8c37467b7d037b1e1db1fcd5e17bdd88b2c"
+    "revision": "2fbf9b9184715cd21b2969b7e112d681163baf94"
   }
 }
