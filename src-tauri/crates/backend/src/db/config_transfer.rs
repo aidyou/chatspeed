@@ -745,13 +745,16 @@ fn validate_agent_models(row: &BTreeMap<String, Value>) -> Result<(), StoreError
     let object = value
         .as_object()
         .ok_or_else(|| StoreError::InvalidData("agent models must be an object".into()))?;
-    const ALLOWED: &[&str] = &["plan", "act", "vision", "utility", "lite"];
+    const ALLOWED: &[&str] = &["plan", "act", "vision", "utility", "lite", "decisionEnabled", "decision"];
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return Err(StoreError::InvalidData(
             "agent models contains an unsupported field".into(),
         ));
     }
-    for value in object.values().filter(|value| !value.is_null()) {
+    for key in ["plan", "act", "vision", "utility", "lite", "decision"] {
+        let Some(value) = object.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
         let model = value
             .as_object()
             .ok_or_else(|| StoreError::InvalidData("agent model entry must be an object".into()))?;
@@ -772,6 +775,13 @@ fn validate_agent_models(row: &BTreeMap<String, Value>) -> Result<(), StoreError
         {
             return Err(StoreError::InvalidData(
                 "agent model entry has an invalid shape".into(),
+            ));
+        }
+    }
+    if let Some(value) = object.get("decisionEnabled") {
+        if !value.is_boolean() {
+            return Err(StoreError::InvalidData(
+                "agent models decisionEnabled must be a boolean".into(),
             ));
         }
     }
@@ -1553,6 +1563,23 @@ mod tests {
                 ConfigCategory::Sandbox
             ])
         );
+    }
+
+    #[test]
+    fn agent_models_with_decision_configuration_are_valid() {
+        let row = BTreeMap::from([(
+            "models".to_string(),
+            Value::String(
+                serde_json::json!({
+                    "act": {"id": 1, "model": "act-model"},
+                    "decisionEnabled": true,
+                    "decision": {"id": 2, "model": "decision-model"}
+                })
+                .to_string(),
+            )),
+        ]);
+
+        assert!(validate_agent_models(&row).is_ok());
     }
 
     #[test]

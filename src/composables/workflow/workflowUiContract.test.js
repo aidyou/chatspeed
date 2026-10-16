@@ -244,7 +244,7 @@ test('empty new workflows require an authorized directory before accepting input
 })
 
 test('child session panes preserve a confirm received while snapshot hydration is in flight', async () => {
-  const [workflowView, messageList, sessionPane, sessionMessages, workflowCore, engine, workflowCommand, workflowDb] = await Promise.all([
+  const [workflowView, messageList, sessionPane, sessionMessages, workflowCore, engine, workflowCommand, workflowDb, workflowStore] = await Promise.all([
     readFile('src/views/Workflow.vue', 'utf8'),
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
     readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8'),
@@ -252,7 +252,8 @@ test('child session panes preserve a confirm received while snapshot hydration i
     readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
     readFile('src-tauri/crates/backend/src/workflow/react/engine.rs', 'utf8'),
     readFile('src-tauri/crates/backend/src/commands/workflow.rs', 'utf8'),
-    readFile('src-tauri/crates/backend/src/db/workflow.rs', 'utf8')
+    readFile('src-tauri/crates/backend/src/db/workflow.rs', 'utf8'),
+    readFile('src/stores/workflow.js', 'utf8')
   ])
 
   assert.match(messageList, /<cs name="fullscreen-off"\s*\/>/)
@@ -282,13 +283,18 @@ test('child session panes preserve a confirm received while snapshot hydration i
   assert.match(sessionMessages, /fetchSnapshot: \(\) => invokeWrapper\('get_workflow_snapshot', \{ sessionId: targetSessionId \}\)/, 'child hydration must use the canonical snapshot')
   assert.match(
     sessionPane,
-    /const loadEarlierMessagePage = async done => \{[\s\S]*?messageProjection\.revealEarlierMessages\(\)[\s\S]*?workflowStore\.loadEarlierMessages\(\)[\s\S]*?childSession\.loadEarlierMessages\(\)/,
+    /const loadEarlierMessagePage = async done => \{[\s\S]*?\} catch \(error\) \{[\s\S]*?Failed to load earlier messages[\s\S]*?\} finally \{[\s\S]*?done\?\.\(\)/,
     'session panes must load a backend page when the projected window has no locally hidden messages'
   )
   assert.match(
+    workflowStore,
+    /const responseShape[\s\S]*?Invalid earlier workflow message page response/,
+    'primary pagination must expose the actual malformed response shape'
+  )
+  assert.match(
     sessionMessages,
-    /messageWindowBeforeId\.value = snapshot\.messageWindowBeforeId \?\? null[\s\S]*?const loadEarlierMessages = async \(\) =>[\s\S]*?invokeWrapper\('get_earlier_workflow_message_page'/,
-    'child session pagination must retain the snapshot cursor and use the regular message page endpoint'
+    /const responseShape[\s\S]*?Invalid earlier workflow message page response/,
+    'child pagination must expose the actual malformed response shape'
   )
   assert.match(sessionMessages, /applyEvent,[\s\S]*?isCurrent: \(\) => revision === loadRevision\.value && targetSessionId === sessionId\.value,[\s\S]*?onListenerRegistered: stop =>/, 'the listener must be retained from registration through snapshot replay for the active child session')
   assert.match(sessionPane, /const resolvedIsApprovalSubmitting = \(sessionId, toolCallId\) =>[\s\S]*?childSession\.isApprovalSubmitting\(toolCallId\)/)

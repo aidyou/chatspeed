@@ -250,26 +250,65 @@ pub async fn get_earlier_workflow_message_page(
     session_id: &str,
     before_message_id: &str,
 ) -> Result<Value, String> {
-    command_call(
+    let value = command_call(
         supervisor,
         "get_earlier_workflow_message_page",
         json!({ "session_id": session_id, "before_message_id": before_message_id }),
     )
-    .await
+    .await?;
+    let restored = restore_tauri_wire(value);
+    validate_workflow_message_page_response(&restored)?;
+    Ok(restored)
 }
 
-/// Loads an older completed-task window of workflow messages.
+fn validate_workflow_message_page_response(value: &Value) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err(format!(
+            "Invalid runtime response for get_earlier_workflow_message_page: expected object, got {}",
+            json_value_shape(value)
+        ));
+    };
+    if !object.get("messages").is_some_and(Value::is_array) {
+        return Err(format!(
+            "Invalid runtime response for get_earlier_workflow_message_page: expected `messages` array, got keys [{}]",
+            object.keys().map(String::as_str).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if !object
+        .get("hiddenEarlierMessageCount")
+        .is_some_and(Value::is_number)
+    {
+        return Err(
+            "Invalid runtime response for get_earlier_workflow_message_page: missing numeric `hiddenEarlierMessageCount`"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn json_value_shape(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 pub async fn get_earlier_workflow_messages(
     supervisor: &RuntimeSupervisor,
     session_id: &str,
     before_message_id: &str,
 ) -> Result<Value, String> {
-    command_call(
+    let value = command_call(
         supervisor,
         "get_earlier_workflow_messages",
         json!({ "session_id": session_id, "before_message_id": before_message_id }),
     )
-    .await
+    .await?;
+    Ok(restore_tauri_wire(value))
 }
 
 /// Reads the persisted workflow agent config.
@@ -877,6 +916,23 @@ mod tests {
         assert_eq!(encode_path_segment("../x"), "..%2Fx");
         assert_eq!(encode_path_segment("a?b=c"), "a%3Fb%3Dc");
         assert_eq!(encode_path_segment("a b"), "a%20b");
+    }
+
+    #[test]
+    fn restore_tauri_wire_converts_message_page_metadata_for_frontend() {
+        let response = json!({
+            "messages": [],
+            "before_message_id": "12",
+            "hidden_earlier_message_count": 301,
+            "has_more_in_current_task": false
+        });
+
+        let restored = restore_tauri_wire(response);
+
+        assert_eq!(restored["beforeMessageId"], json!("12"));
+        assert_eq!(restored["hiddenEarlierMessageCount"], json!(301));
+        assert_eq!(restored["hasMoreInCurrentTask"], json!(false));
+        assert!(restored.get("before_message_id").is_none());
     }
 
     #[test]

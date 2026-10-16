@@ -1,6 +1,9 @@
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const projectRoot = fileURLToPath(new URL('../', import.meta.url))
+const viteConfig = resolve(projectRoot, 'vite.config.js')
+
 export async function startVite({ createServer, input = process.stdin, options = {} }) {
   let server
   let stopping = false
@@ -48,7 +51,10 @@ export async function startVite({ createServer, input = process.stdin, options =
 
 async function main() {
   const { createServer } = await import('vite')
-  await startVite({ createServer })
+  await startVite({
+    createServer,
+    options: { root: projectRoot, configFile: viteConfig }
+  })
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

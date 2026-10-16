@@ -46,11 +46,15 @@ pub fn workflow_command_router() -> Router<ControlPlaneState> {
     Router::new().route(WORKFLOW_COMMANDS_PATH, post(dispatch_workflow_command))
 }
 
-/// `POST /control/v1/workflow-commands/{command}`.
-///
-/// The command is validated against the allowlist first, so an arbitrary path
-/// segment can never reach a handler. Mutations then run through the canonical
-/// idempotency wrapper, and the response keeps the Tauri camelCase shape.
+/// Read-only history commands must not pass through the mutation idempotency
+/// replay cache: their JSON body can legitimately exceed the cache's bounded
+/// replay size, and an oversized body must never be converted into a successful
+/// empty response.
+const READ_ONLY_WORKFLOW_COMMANDS: [&str; 2] = [
+    "get_earlier_workflow_message_page",
+    "get_earlier_workflow_messages",
+];
+
 async fn dispatch_workflow_command(
     State(state): State<ControlPlaneState>,
     Path(command): Path<String>,
@@ -63,6 +67,17 @@ async fn dispatch_workflow_command(
             "not_found",
             format!("Unknown workflow command: {command}"),
         );
+    }
+
+    if READ_ONLY_WORKFLOW_COMMANDS.contains(&command.as_str()) {
+        let params = match parse_command_body(&body) {
+            Ok(params) => params,
+            Err(response) => return response,
+        };
+        return match state.svc.workflow_command(&command, params).await {
+            Ok(value) => axum::Json::<serde_json::Value>(value).into_response(),
+            Err(error) => dto::application_error_response(&error),
+        };
     }
 
     with_idempotency(
@@ -122,6 +137,13 @@ mod tests {
             "drop_everything"
         ));
         assert!(!crate::commands::workflow::is_known_workflow_command(""));
+    }
+
+    #[test]
+    fn history_pages_bypass_mutation_idempotency_replay() {
+        assert!(READ_ONLY_WORKFLOW_COMMANDS.contains(&"get_earlier_workflow_message_page"));
+        assert!(READ_ONLY_WORKFLOW_COMMANDS.contains(&"get_earlier_workflow_messages"));
+        assert!(!READ_ONLY_WORKFLOW_COMMANDS.contains(&"update_workflow_status"));
     }
 
     #[test]

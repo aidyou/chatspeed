@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { createServer as createHttpServer } from 'node:http'
+import { createServer as createHttpServer, request as createHttpRequest } from 'node:http'
 import test from 'node:test'
 import { executeTauri, needsRuntimeBuild, runBuild } from './tauri.mjs'
 import { startVite } from './tauri-vite.mjs'
@@ -177,6 +177,23 @@ test('the real project Vite configuration loads and can restart after shutdown',
     const port = handle.server.httpServer.address().port
     try {
       assert.equal((await fetch(`http://127.0.0.1:${port}/@vite/client`)).status, 200)
+      const absoluteRequest = await new Promise((resolve, reject) => {
+        const request = createHttpRequest({
+          hostname: '127.0.0.1',
+          port,
+          path: `http://127.0.0.1:${port}/src/App.vue`,
+          headers: { host: `127.0.0.1:${port}` }
+        }, response => {
+          let body = ''
+          response.setEncoding('utf8')
+          response.on('data', chunk => { body += chunk })
+          response.on('end', () => resolve({ status: response.statusCode, body }))
+        })
+        request.on('error', reject)
+        request.end()
+      })
+      assert.equal(absoluteRequest.status, 200)
+      assert.match(absoluteRequest.body, /<script setup>/)
     } finally {
       await handle.shutdown()
     }

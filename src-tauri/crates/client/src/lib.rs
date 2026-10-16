@@ -414,7 +414,7 @@ pub fn stream_envelope_cursor(envelope: &StreamEnvelope) -> String {
 /// Default request timeout; a loopback control plane answers immediately.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Longer request timeout granted to the two exact Skill mutation routes by the
+/// Longer request timeout granted to the two exact Skill mutation routes by
 /// default policy.
 ///
 /// `POST /control/v1/skill-check` and `POST /control/v1/skill-install` may
@@ -427,6 +427,21 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// that passes an explicit timeout to [`RuntimeClient::with_timeout`] replaces
 /// this budget with its own value on every route.
 const SKILL_MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The full database backup command can compress and encrypt a large data set.
+/// It deliberately has no total request timeout; only connection establishment
+/// is bounded by the HTTP client's connect timeout.
+const BACKUP_SETTING_PATH: &str = "/control/v1/data-commands/backup_setting";
+
+/// The full database restore command can decrypt, decompress and replace a
+/// large data set. It uses the same no-total-timeout policy as backup.
+const RESTORE_SETTING_PATH: &str = "/control/v1/data-commands/restore_setting";
+
+/// The configuration package export writes and validates a selected data set.
+const EXPORT_CONFIG_PACKAGE_PATH: &str = "/control/v1/data-commands/export_config_package";
+
+/// Finite budget for configuration package export requests.
+const DATA_ARCHIVE_MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The one route allowed the longer [`SKILL_MUTATION_TIMEOUT`] budget by default.
 const SKILL_CHECK_PATH: &str = "/control/v1/skill-check";
@@ -1062,8 +1077,12 @@ impl RuntimeClient {
         }
         let mut attempt = 0;
         loop {
-            let response = self
-                .build(Method::POST, path)?
+            let request = if matches!(path, BACKUP_SETTING_PATH | RESTORE_SETTING_PATH) {
+                self.build_without_timeout(Method::POST, path)?
+            } else {
+                self.build(Method::POST, path)?
+            };
+            let response = request
                 .header("Idempotency-Key", idempotency_key)
                 .json(body)
                 .send()
@@ -1522,12 +1541,15 @@ impl RuntimeClient {
     ///
     /// Under the default policy the two exact Skill mutation routes get the
     /// extended [`SKILL_MUTATION_TIMEOUT`] budget because they may run a remote
-    /// download before answering. An explicit [`RuntimeClient::with_timeout`]
-    /// override stores no extended budget, so that timeout applies to every
-    /// route verbatim and is never floored. Every other path always keeps the
-    /// configured timeout, so no request is delayed globally.
+    /// download before answering. Full database backup and restore deliberately
+    /// bypass the total timeout, while configuration package exports use a finite
+    /// archive budget. Every other path keeps the configured timeout.
     fn request_timeout(&self, path: &str) -> Duration {
-        if matches!(path, SKILL_CHECK_PATH | SKILL_INSTALL_PATH) {
+        if path == EXPORT_CONFIG_PACKAGE_PATH {
+            self.skill_mutation_timeout
+                .map(|timeout| timeout.max(DATA_ARCHIVE_MUTATION_TIMEOUT))
+                .unwrap_or(self.timeout)
+        } else if matches!(path, SKILL_CHECK_PATH | SKILL_INSTALL_PATH) {
             self.skill_mutation_timeout.unwrap_or(self.timeout)
         } else {
             self.timeout
@@ -3052,6 +3074,52 @@ mod tests {
                 "{path} must apply the caller's explicit timeout verbatim"
             );
         }
+    }
+
+    #[test]
+    fn large_data_mutations_use_their_intended_timeout_policy() {
+        let client = client();
+        let backup = client
+            .build_without_timeout(Method::POST, BACKUP_SETTING_PATH)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert!(
+            backup.timeout().is_none(),
+            "full database backups must not have a total request timeout"
+        );
+
+        let restore = client
+            .build_without_timeout(Method::POST, RESTORE_SETTING_PATH)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert!(
+            restore.timeout().is_none(),
+            "full database restores must not have a total request timeout"
+        );
+
+        let export = client
+            .build(Method::POST, EXPORT_CONFIG_PACKAGE_PATH)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert_eq!(
+            export.timeout().copied(),
+            Some(DATA_ARCHIVE_MUTATION_TIMEOUT)
+        );
+
+        let explicit = RuntimeClient::with_timeout(
+            &discovery(PROTOCOL_VERSION, "test-token"),
+            Duration::from_millis(250),
+        )
+        .expect("client");
+        let export = explicit
+            .build(Method::POST, EXPORT_CONFIG_PACKAGE_PATH)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert_eq!(export.timeout().copied(), Some(Duration::from_millis(250)));
     }
 
     #[tokio::test]

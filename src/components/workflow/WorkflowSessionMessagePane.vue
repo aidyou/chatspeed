@@ -240,6 +240,8 @@ const loadEarlierMessagePage = async done => {
         ? await workflowStore.loadEarlierMessages()
         : await childSession.loadEarlierMessages()
     if (loaded) messageProjection.revealEarlierMessages()
+  } catch (error) {
+    console.warn('[Workflow] Failed to load earlier messages:', error)
   } finally {
     done?.()
   }

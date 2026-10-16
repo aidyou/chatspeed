@@ -1892,7 +1892,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
       sessionId: workflowId,
       beforeMessageId
     });
-    const responseMessages = Array.isArray(page?.messages) ? page.messages : [];
+    if (!page || !Array.isArray(page.messages)) {
+      const responseShape =
+        page === null
+          ? 'null'
+          : page && typeof page === 'object'
+            ? `object keys: ${Object.keys(page).join(', ') || '(none)'}`
+            : typeof page;
+      throw new Error(`Invalid earlier workflow message page response (${responseShape})`);
+    }
+    const responseMessages = page.messages;
+    const nextBeforeMessageId = page.beforeMessageId ?? beforeMessageId;
+    const nextHiddenEarlierMessageCount = Number(page.hiddenEarlierMessageCount);
+    if (!Number.isFinite(nextHiddenEarlierMessageCount) || nextHiddenEarlierMessageCount < 0) {
+      throw new Error('Invalid earlier workflow message page metadata');
+    }
 
     if (
       currentWorkflowId.value !== workflowId ||
@@ -1908,8 +1922,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const previousMessages = messages.value;
     const mergedMessages = mergeWorkflowMessagePages(earlierMessages, previousMessages);
     messages.value = mergedMessages;
-    messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId;
-    hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0;
+    messageWindowBeforeId.value = nextBeforeMessageId;
+    hiddenEarlierMessageCount.value = nextHiddenEarlierMessageCount;
     return earlierMessages.length > 0;
   };
 

@@ -270,6 +270,16 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
       sessionId: targetSessionId,
       beforeMessageId
     })
+    if (!page || !Array.isArray(page.messages)) {
+      const responseShape =
+        page === null
+          ? 'null'
+          : page && typeof page === 'object'
+            ? `object keys: ${Object.keys(page).join(', ') || '(none)'}`
+            : typeof page
+      throw new Error(`Invalid earlier workflow message page response (${responseShape})`)
+    }
+
     if (
       targetSessionId !== sessionId.value ||
       loadRevision.value !== requestRevision ||
@@ -278,12 +288,17 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
       return false
     }
 
-    const earlierMessages = (Array.isArray(page?.messages) ? page.messages : []).map(message =>
+    const earlierMessages = page.messages.map(message =>
       normalizeSnapshotMessage(message, targetSessionId)
     )
+    const nextBeforeMessageId = page.beforeMessageId ?? beforeMessageId
+    const nextHiddenEarlierMessageCount = Number(page.hiddenEarlierMessageCount)
+    if (!Number.isFinite(nextHiddenEarlierMessageCount) || nextHiddenEarlierMessageCount < 0) {
+      throw new Error('Invalid earlier workflow message page metadata')
+    }
     messages.value = mergeWorkflowMessagePages(earlierMessages, messages.value)
-    messageWindowBeforeId.value = page.beforeMessageId ?? beforeMessageId
-    hiddenEarlierMessageCount.value = Number(page.hiddenEarlierMessageCount) || 0
+    messageWindowBeforeId.value = nextBeforeMessageId
+    hiddenEarlierMessageCount.value = nextHiddenEarlierMessageCount
     return earlierMessages.length > 0
   }
 

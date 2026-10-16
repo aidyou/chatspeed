@@ -6,7 +6,6 @@ use regex;
 use rust_i18n::t;
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use zip::ZipArchive;
@@ -213,9 +212,11 @@ impl DbBackup {
         })?;
 
         let mut zip = ZipWriter::new(zip_file);
+        // ZIP64 is required because a single database can exceed the legacy 4 GiB limit.
         let options: zip::write::SimpleFileOptions = FileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o600);
+            .unix_permissions(0o600)
+            .large_file(true);
         zip.start_file(entry_name, options).map_err(|e| {
             StoreError::IoError(
                 t!(
@@ -788,9 +789,12 @@ impl DbBackup {
         })?;
 
         let mut zip = ZipWriter::new(file);
+        // User files can also exceed the legacy ZIP limits; stream them without
+        // buffering entire files in memory.
         let options: zip::write::SimpleFileOptions = FileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
+            .unix_permissions(0o644)
+            .large_file(true);
 
         // Helper closure to add directory contents to zip
         let add_dir_to_zip =
@@ -837,19 +841,7 @@ impl DbBackup {
                             )
                         })?;
 
-                        let mut buffer = Vec::new();
-                        file.read_to_end(&mut buffer).map_err(|e| {
-                            error!("Failed to read file: {}", e);
-                            StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_read_file_for_zip",
-                                    error = e.to_string()
-                                )
-                                .to_string(),
-                            )
-                        })?;
-
-                        zip.write_all(&buffer).map_err(|e| {
+                        std::io::copy(&mut file, zip).map_err(|e| {
                             error!("Failed to write to zip: {}", e);
                             StoreError::IoError(
                                 t!("db.backup.failed_to_write_to_zip", error = e.to_string())

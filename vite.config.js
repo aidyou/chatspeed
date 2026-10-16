@@ -10,9 +10,25 @@ import path from 'path';
 
 const host = process.env.TAURI_DEV_HOST;
 
+function normalizeDevServerRequestUrl() {
+  return {
+    name: 'normalize-dev-server-request-url',
+    configureServer(server) {
+      server.middlewares.use((request, _response, next) => {
+        if (request.url && /^https?:\/\//i.test(request.url)) {
+          const url = new URL(request.url)
+          request.url = `${url.pathname}${url.search}`
+        }
+        next()
+      })
+    }
+  }
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [
+    normalizeDevServerRequestUrl(),
     vue(),
     AutoImport({
       resolvers: [ElementPlusResolver()],
