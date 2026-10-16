@@ -45,8 +45,29 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
-/// Maximum request body size accepted by the control plane.
+/// Maximum request body size accepted by the ordinary management routes.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// Maximum request body size for the routes that legitimately carry a large
+/// payload: the runtime chat surface, workflow create/signal, and the
+/// workflow/data compatibility command routes.
+///
+/// A desktop chat turn or a workflow message can embed base64 image DataURLs,
+/// so these routes need headroom beyond the 1 MiB management default. The bound
+/// stays explicit and finite, so a single request can never allocate without
+/// limit. It is deliberately not the global default: an ordinary management
+/// route must still reject anything over 1 MiB.
+pub(crate) const LARGE_PAYLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Maximum response body the idempotency replay cache will retain.
+///
+/// Mutations such as `add_message` echo content, so their replay body needs the
+/// same headroom as an accepted large request. This bound is independent of the
+/// request policy and the completed cache also has a total byte budget.
+const IDEMPOTENCY_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Total completed response-body bytes retained across the LRU cache.
+const IDEMPOTENCY_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
 
 /// Maximum number of completed idempotency results retained for replay.
 const IDEMPOTENCY_CACHE_SIZE: usize = 1024;
@@ -103,6 +124,10 @@ pub(crate) enum Reservation {
 
 /// Instance-local idempotency tracker.
 ///
+/// Both entry count and retained body bytes bound the completed replay cache;
+/// in-flight reservations remain separate so eviction never duplicates an
+/// executing mutation.
+///
 /// In-flight reservations live in a dedicated map outside the bounded replay
 /// cache, so they can never be evicted while executing. `reserve` and
 /// `complete` are synchronous and therefore atomic with respect to each other:
@@ -111,6 +136,7 @@ pub(crate) enum Reservation {
 pub(crate) struct IdempotencyTracker {
     in_flight: std::sync::Mutex<HashMap<String, Arc<InFlightReservation>>>,
     done: std::sync::Mutex<LruCache<String, DoneEntry>>,
+    done_max_bytes: usize,
 }
 
 impl IdempotencyTracker {
@@ -120,6 +146,7 @@ impl IdempotencyTracker {
             done: std::sync::Mutex::new(LruCache::new(
                 NonZeroUsize::new(done_capacity).expect("non-zero"),
             )),
+            done_max_bytes: IDEMPOTENCY_CACHE_MAX_BYTES,
         }
     }
 
@@ -169,13 +196,24 @@ impl IdempotencyTracker {
         reservation: &Arc<InFlightReservation>,
         done: IdempotencyDone,
     ) {
-        self.done.lock().unwrap().put(
-            key.to_string(),
-            DoneEntry {
-                body_hash: reservation.body_hash,
-                result: done,
-            },
-        );
+        {
+            let mut cache = self.done.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut retained_bytes: usize =
+                cache.iter().map(|(_, entry)| entry.result.body.len()).sum();
+            while retained_bytes + done.body.len() > self.done_max_bytes {
+                let Some((_, evicted)) = cache.pop_lru() else {
+                    break;
+                };
+                retained_bytes -= evicted.result.body.len();
+            }
+            cache.put(
+                key.to_string(),
+                DoneEntry {
+                    body_hash: reservation.body_hash,
+                    result: done,
+                },
+            );
+        }
         self.release(key, reservation);
     }
 
@@ -698,16 +736,22 @@ fn build_router(state: ControlPlaneState) -> Router {
         .route("/control/v1/agents/{agent_id}/delete", post(delete_agent))
         .route(
             "/control/v1/workflows",
-            get(list_workflows).post(create_workflow),
+            get(list_workflows)
+                .post(create_workflow)
+                .layer(axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES)),
         )
         .route("/control/v1/workflows/{session_id}", get(get_workflow))
         .route(
             "/control/v1/workflows/{session_id}/start",
-            post(start_workflow),
+            post(start_workflow).layer(axum::extract::DefaultBodyLimit::max(
+                LARGE_PAYLOAD_BODY_BYTES,
+            )),
         )
         .route(
             "/control/v1/workflows/{session_id}/signal",
-            post(signal_workflow),
+            post(signal_workflow).layer(axum::extract::DefaultBodyLimit::max(
+                LARGE_PAYLOAD_BODY_BYTES,
+            )),
         )
         .route(
             "/control/v1/workflows/{session_id}/stop",
@@ -725,8 +769,24 @@ fn build_router(state: ControlPlaneState) -> Router {
         // Skill and MCP inventory/doctor facts are exposed from the same
         // CapabilityApplicationService the Tauri adapters use, so the CLI and
         // the desktop can never disagree about them (AC-1/AC-11).
-        .merge(crate::workflow::react::client::http::workflow_commands::workflow_command_router())
-        .merge(crate::workflow::react::client::http::data_commands::data_command_router())
+        //
+        // The workflow/data compatibility command routers carry a single large
+        // payload route family (`add_workflow_message`, `add_message` with an
+        // image DataURL), so they get the large-payload limit. It is applied to
+        // the sub-router before the merge; the outer default still wraps the
+        // route, but this inner layer runs later and therefore wins for these
+        // routes only.
+        .merge(
+            crate::workflow::react::client::http::workflow_commands::workflow_command_router()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    LARGE_PAYLOAD_BODY_BYTES,
+                )),
+        )
+        .merge(
+            crate::workflow::react::client::http::data_commands::data_command_router().layer(
+                axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES),
+            ),
+        )
         .route("/control/v1/skill-targets", get(list_skill_targets))
         .route("/control/v1/skills", get(list_capability_skills))
         .route("/control/v1/mcp-servers", get(list_capability_mcp_servers))
@@ -2417,7 +2477,12 @@ fn snake_json_response(value: Result<serde_json::Value, serde_json::Error>) -> R
 /// Executes a mutation with instance-local idempotency semantics:
 /// - no `Idempotency-Key` header: execute directly;
 /// - same key + same body: replay the stored response (no double effect);
-/// - same key + different body: `409 conflict`.
+/// - same key + different body: `409 conflict`;
+/// - a response larger than the replay-cache bound is recorded as an explicit
+///   `500` so a retry replays that failure instead of re-executing the effect.
+///
+/// Read commands must not call this at all: they bypass the replay cache, so a
+/// large read response is never truncated and never conflicts on a reused key.
 pub(crate) async fn with_idempotency<F, Fut, T>(
     state: &ControlPlaneState,
     headers: &HeaderMap,
@@ -2488,13 +2553,13 @@ where
                 .await
                 .into_response();
             let status = response.status();
-            let stored = match axum::body::to_bytes(response.into_body(), MAX_BODY_BYTES).await {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
-                Err(_) => String::new(),
-            };
-            let done = IdempotencyDone {
-                status,
-                body: stored,
+            // Large request bodies do not widen the retained response bound.
+            // Read responses bypass capture entirely.
+            let done = match capture_idempotency_body(response, IDEMPOTENCY_RESPONSE_MAX_BYTES).await {
+                Ok(body) => IdempotencyDone { status, body },
+                // Keep the failure under the key: the effect may have run, so
+                // a retry must not execute it again.
+                Err(failure) => failure,
             };
 
             state.idempotency.complete(&key, &reservation, done.clone());
@@ -2502,6 +2567,31 @@ where
 
             replay_response(done.status, done.body)
         }
+    }
+}
+
+/// Captures a mutation response body for the bounded idempotency replay cache.
+///
+/// The `limit` is passed in explicitly so the cache bound stays separate from
+/// the request bound and can never be widened by a request-size change. On
+/// failure it returns the explicit error response the caller must return *and*
+/// cache, so an unretainable response can never become an empty success.
+async fn capture_idempotency_body(
+    response: Response,
+    limit: usize,
+) -> Result<String, IdempotencyDone> {
+    match axum::body::to_bytes(response.into_body(), limit).await {
+        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).to_string()),
+        Err(_) => Err(IdempotencyDone {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: serde_json::json!({
+                "error": {
+                    "code": "idempotency_response_capture_failed",
+                    "message": "The mutation response could not be retained; its effect may have applied. Retrying this key replays the failure without re-executing the mutation."
+                }
+            })
+            .to_string(),
+        }),
     }
 }
 
@@ -4664,6 +4754,32 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_completed_cache_obeys_its_byte_budget() {
+        let mut tracker = IdempotencyTracker::new(8);
+        tracker.done_max_bytes = 32;
+        for key in ["first", "second", "third"] {
+            let reservation = match tracker.reserve(key, 1) {
+                Reservation::Execute(reservation) => reservation,
+                _ => panic!("a new key must execute"),
+            };
+            tracker.complete(
+                key,
+                &reservation,
+                idempotency_done(StatusCode::OK, &"x".repeat(16)),
+            );
+        }
+        let cache = tracker.done.lock().expect("cache lock");
+        assert_eq!(cache.len(), 2);
+        assert!(cache.peek("first").is_none());
+        assert!(cache.peek("second").is_some());
+        assert!(cache.peek("third").is_some());
+        assert_eq!(
+            cache.iter().map(|(_, entry)| entry.result.body.len()).sum::<usize>(),
+            32
+        );
+    }
+
+    #[test]
     fn idempotency_duplicate_after_completion_replays_without_reexecution() {
         let tracker = IdempotencyTracker::new(IDEMPOTENCY_CACHE_SIZE);
         let reservation = match tracker.reserve("k", 1) {
@@ -4892,6 +5008,437 @@ mod tests {
             "concurrent duplicate idempotency must not double-create"
         );
 
+        app.handle.shutdown();
+    }
+
+    /// Builds a JSON object body whose `pad` string holds `padding` filler bytes.
+    fn oversized_json_body(padding: usize) -> String {
+        let mut body = String::with_capacity(padding + 16);
+        body.push_str("{\"pad\":\"");
+        for _ in 0..padding {
+            body.push('x');
+        }
+        body.push_str("\"}");
+        body
+    }
+
+    /// A read command carrying an `Idempotency-Key` must not touch the mutation
+    /// replay cache: a response larger than the cache bound stays intact, the key
+    /// never conflicts with different parameters, and the next read observes the
+    /// new value instead of a cached one.
+    #[tokio::test]
+    async fn large_read_responses_bypass_the_replay_cache() {
+        let (app, _env) = spawn_test_app().await;
+        insert_agent(&app, "agent-1").await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let created = http
+            .post(auth_url(&app, "/control/v1/workflows"))
+            .header("Authorization", &auth)
+            .body(serde_json::json!({ "agent_id": "agent-1" }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let session_id = created
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Store a > 1 MiB todo list through the mutation compat route. The large
+        // request body also proves the compat route accepts more than the
+        // management limit.
+        let huge_todo =
+            serde_json::json!([{ "id": "t1", "content": "a".repeat(1_200_000) }]);
+        let todo_list = serde_json::to_string(&huge_todo).unwrap();
+        let write = http
+            .post(auth_url(
+                &app,
+                "/control/v1/workflow-commands/update_workflow_todo_list",
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "todo-write-1")
+            .body(
+                serde_json::json!({ "session_id": session_id.clone(), "todo_list": todo_list })
+                    .to_string(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(write.status(), StatusCode::OK);
+
+        let read_url = auth_url(&app, "/control/v1/workflow-commands/workflow_get_tasks");
+        let read_body = serde_json::json!({ "session_id": session_id.clone() }).to_string();
+        let first = http
+            .post(&read_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "read-key-1")
+            .body(read_body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_bytes = first.bytes().await.unwrap();
+        assert!(
+            first_bytes.len() > MAX_BODY_BYTES,
+            "an oversized read response must not be truncated to an empty success"
+        );
+
+        // Same key + different parameters must not conflict for a read.
+        let other = http
+            .post(&read_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "read-key-1")
+            .body(serde_json::json!({ "session_id": "other-session" }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(other.status(), StatusCode::CONFLICT);
+
+        // A later read with the same key observes the new value: nothing stale
+        // was cached.
+        let updated_todo = serde_json::json!([{ "id": "t2", "content": "second" }]);
+        let updated = serde_json::to_string(&updated_todo).unwrap();
+        let write2 = http
+            .post(auth_url(
+                &app,
+                "/control/v1/workflow-commands/update_workflow_todo_list",
+            ))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "todo-write-2")
+            .body(
+                serde_json::json!({ "session_id": session_id.clone(), "todo_list": updated })
+                    .to_string(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(write2.status(), StatusCode::OK);
+
+        let reread = http
+            .post(&read_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "read-key-1")
+            .body(read_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reread.status(), StatusCode::OK);
+        let reread_json: serde_json::Value = reread.json().await.unwrap();
+        assert_eq!(reread_json[0]["id"], "t2");
+
+        app.handle.shutdown();
+    }
+
+    /// A data-command read bypasses the replay cache exactly like a workflow
+    /// read, even though it also arrives with an `Idempotency-Key`.
+    #[tokio::test]
+    async fn large_data_command_read_responses_bypass_the_replay_cache() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let add = http
+            .post(auth_url(&app, "/control/v1/data-commands/add_conversation"))
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "conv-add-1")
+            .body(serde_json::json!({ "title": "b".repeat(1_200_000) }).to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let conversation_id: i64 = add.json().await.expect("conversation id");
+        let message_body = serde_json::json!({
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content": "c".repeat(MAX_BODY_BYTES + 128),
+            "metadata": null
+        });
+        let message_url = auth_url(&app, "/control/v1/data-commands/add_message");
+        let mut responses = Vec::new();
+        for _ in 0..2 {
+            let response = http
+                .post(&message_url)
+                .header("Authorization", &auth)
+                .header("Idempotency-Key", "large-message-1")
+                .json(&message_body)
+                .send()
+                .await
+                .expect("large message mutation");
+            assert_eq!(response.status(), StatusCode::OK);
+            let value: serde_json::Value = response.json().await.expect("message response");
+            assert_eq!(value[1], message_body["content"]);
+            responses.push(value);
+        }
+        assert_eq!(
+            responses[0], responses[1],
+            "retry replays the original message id"
+        );
+        let stored = http
+            .post(auth_url(
+                &app,
+                "/control/v1/data-commands/get_messages_for_conversation",
+            ))
+            .header("Authorization", &auth)
+            .json(&serde_json::json!({ "conversation_id": conversation_id }))
+            .send()
+            .await
+            .expect("read saved messages")
+            .json::<serde_json::Value>()
+            .await
+            .expect("messages JSON");
+        assert_eq!(stored.as_array().expect("message array").len(), 1);
+
+        let read_url = auth_url(&app, "/control/v1/data-commands/get_all_conversations");
+        let first = http
+            .post(&read_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "conv-read-1")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_bytes = first.bytes().await.unwrap();
+        assert!(
+            first_bytes.len() > MAX_BODY_BYTES,
+            "an oversized data-command read response must not be truncated"
+        );
+
+        // Same key + different parameters must not conflict for a read.
+        let other = http
+            .post(&read_url)
+            .header("Authorization", &auth)
+            .header("Idempotency-Key", "conv-read-1")
+            .body("{\"unused\":true}")
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(other.status(), StatusCode::CONFLICT);
+
+        app.handle.shutdown();
+    }
+
+    /// The large-payload routes accept more than the 1 MiB management limit, while
+    /// an ordinary management route still rejects it and the large routes stay
+    /// bounded above.
+    #[tokio::test]
+    async fn large_payload_routes_raise_the_limit_only_where_authorized() {
+        let (app, _env) = spawn_test_app().await;
+        let http = client();
+        let auth = format!("Bearer {}", auth_token(&app));
+
+        let over_management = oversized_json_body(MAX_BODY_BYTES + 1);
+
+        // The runtime chat surface accepts a > 1 MiB body; the handler may still
+        // reject the payload semantically, but never with 413.
+        let chat = http
+            .post(auth_url(&app, "/control/v1/chats/probe/start"))
+            .header("Authorization", &auth)
+            .body(over_management.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(chat.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // The workflow and data compatibility routes accept a > 1 MiB body too.
+        for path in [
+            "/control/v1/workflows",
+            "/control/v1/workflows/probe/start",
+            "/control/v1/workflows/probe/signal",
+            "/control/v1/workflow-commands/update_workflow_title",
+            "/control/v1/data-commands/get_all_config",
+        ] {
+            let response = http
+                .post(auth_url(&app, path))
+                .header("Authorization", &auth)
+                .body(over_management.clone())
+                .send()
+                .await
+                .unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "{path} must accept a > 1 MiB body"
+            );
+        }
+
+        // These management routes keep the 1 MiB default.
+        for path in [
+            "/control/v1/skill-install",
+            "/control/v1/models/list",
+            "/control/v1/chats/probe/stop",
+        ] {
+            let response = http
+                .post(auth_url(&app, path))
+                .header("Authorization", &auth)
+                .header("Idempotency-Key", "management-limit")
+                .body(over_management.clone())
+                .send()
+                .await
+                .expect("management limit response");
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+        }
+
+        // Beyond the new bound the large routes are still bounded.
+        let too_big = http
+            .post(auth_url(
+                &app,
+                "/control/v1/workflow-commands/update_workflow_title",
+            ))
+            .header("Authorization", &auth)
+            .body(oversized_json_body(LARGE_PAYLOAD_BODY_BYTES + 1))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(too_big.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        app.handle.shutdown();
+    }
+
+    /// A response that cannot be retained must be reported as an explicit error,
+    /// never converted into an empty success.
+    #[tokio::test]
+    async fn capture_reports_an_unretainable_body_as_an_explicit_failure() {
+        let response = (StatusCode::OK, "x".repeat(64)).into_response();
+        let failure = capture_idempotency_body(response, 8)
+            .await
+            .expect_err("an oversized body must not be captured as an empty success");
+        assert_eq!(failure.status, StatusCode::INTERNAL_SERVER_ERROR);
+        let error: serde_json::Value = serde_json::from_str(&failure.body).expect("failure JSON");
+        assert_eq!(error["error"]["code"], "idempotency_response_capture_failed");
+
+        let response = (StatusCode::OK, "small".to_string()).into_response();
+        let captured = capture_idempotency_body(response, 64)
+            .await
+            .expect("a body within the bound must be captured");
+        assert_eq!(captured, "small");
+    }
+
+    /// Executions of the oversized-response probe mutation route.
+    #[cfg(not(feature = "desktop"))]
+    static OVERSIZED_PROBE_EXECUTIONS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Test-only mutation whose response deliberately exceeds the replay-cache
+    /// bound, counting every execution.
+    #[cfg(not(feature = "desktop"))]
+    async fn oversized_response_probe(
+        State(state): State<ControlPlaneState>,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        with_idempotency(&state, &headers, &body, |_state, _body| async move {
+            OVERSIZED_PROBE_EXECUTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (
+                StatusCode::OK,
+                "x".repeat(IDEMPOTENCY_RESPONSE_MAX_BYTES + 64),
+            )
+        })
+        .await
+    }
+
+    /// Builds a minimal control-plane state around an isolated service so a test
+    /// can mount one extra probe route without touching the real listener.
+    #[cfg(not(feature = "desktop"))]
+    fn probe_control_plane_state(svc: Arc<WorkflowApplicationService>) -> ControlPlaneState {
+        let bridge = svc.bridge_registry();
+        ControlPlaneState {
+            svc,
+            token: Arc::new("probe-token".to_string()),
+            server_instance_id: Arc::new("probe-instance".to_string()),
+            idempotency: Arc::new(IdempotencyTracker::new(IDEMPOTENCY_CACHE_SIZE)),
+            runtime: None,
+            chat: None,
+            terminal: None,
+            chat_streams: Arc::new(
+                crate::workflow::react::client::http::chat_commands::ChatStreamBroker::new(),
+            ),
+            bridge,
+            web_provider: None,
+        }
+    }
+
+    /// A mutation whose response exceeds the bounded replay cache must fail
+    /// explicitly, and retrying the same key must replay that failure instead of
+    /// re-executing the mutation.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn an_oversized_mutation_response_fails_and_never_reexecutes_on_retry() {
+        let (app, _env) = spawn_test_app().await;
+        OVERSIZED_PROBE_EXECUTIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let state = probe_control_plane_state(app.svc.clone());
+        let router = Router::new()
+            .route(
+                "/control/v1/test/oversized-mutation",
+                post(oversized_response_probe),
+            )
+            .layer(axum::extract::DefaultBodyLimit::max(
+                LARGE_PAYLOAD_BODY_BYTES,
+            ))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("probe listener");
+        let port = listener.local_addr().expect("probe addr").port();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("probe server");
+        });
+
+        let http = client();
+        let url = format!("http://127.0.0.1:{port}/control/v1/test/oversized-mutation");
+
+        let first = http
+            .post(&url)
+            .header("Idempotency-Key", "oversized-key-1")
+            .body("{}")
+            .send()
+            .await
+            .expect("first probe");
+        assert_eq!(first.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let first_body: serde_json::Value = first.json().await.expect("first json");
+        assert_eq!(
+            first_body["error"]["code"],
+            "idempotency_response_capture_failed"
+        );
+        assert_eq!(
+            OVERSIZED_PROBE_EXECUTIONS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+
+        let retry = http
+            .post(&url)
+            .header("Idempotency-Key", "oversized-key-1")
+            .body("{}")
+            .send()
+            .await
+            .expect("retry probe");
+        assert_eq!(retry.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let retry_body: serde_json::Value = retry.json().await.expect("retry json");
+        assert_eq!(
+            retry_body["error"]["code"],
+            "idempotency_response_capture_failed"
+        );
+        assert_eq!(
+            OVERSIZED_PROBE_EXECUTIONS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "retry must replay the recorded failure, not re-execute the mutation"
+        );
+
+        let _ = shutdown_tx.send(());
+        let _ = server.await;
         app.handle.shutdown();
     }
 

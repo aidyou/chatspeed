@@ -18,13 +18,14 @@
 //! frontend wire is unchanged. The turn itself keeps running on the runtime when
 //! the desktop task ends, and a disconnect never kills the runtime executor.
 
-use crate::ai::traits::chat::{ChatResponse, ModelDetails};
+use crate::ai::traits::chat::{ChatResponse, FinishReason, MessageType, ModelDetails};
 use crate::runtime_client::RuntimeSupervisor;
 use chatspeed_contracts::{
     ChatResponseDto, ChatStartRequest, ChatStopRequest, ChatStreamEvent, ListModelsRequest,
     ModelDetailsDto,
 };
 use chatspeed_runtime_client::{ChatEventStream, ClientError, RuntimeClient};
+use rust_i18n::t;
 use serde_json::{json, Value};
 use tauri::Emitter;
 
@@ -85,7 +86,12 @@ pub(crate) async fn chat_completion(
         return Err("The runtime did not accept the chat turn".to_string());
     }
 
-    tokio::spawn(forward_chat_events(window, stream));
+    tokio::spawn(forward_chat_events(
+        window,
+        chat_id,
+        request.model.clone(),
+        stream,
+    ));
     Ok(())
 }
 
@@ -136,41 +142,181 @@ fn with_window_label(metadata: Option<Value>, window_label: &str) -> Value {
 }
 
 /// Forwards the runtime's typed SSE events onto the window's `chat_stream` event.
-async fn forward_chat_events(window: tauri::Window, mut stream: ChatEventStream) {
+///
+/// The runtime publishes the canonical terminal chunk (a `finished` or `error`
+/// response) before its typed terminal envelope, so a normal turn is forwarded
+/// verbatim and the typed envelope is a no-op. A typed error that arrived without
+/// its canonical chunk, a clean EOF and a read error would otherwise leave the UI
+/// waiting forever, so the tail reports exactly one synthesized error chunk for
+/// them. The runtime ends the SSE stream a client fell behind on, so the lagged
+/// case reaches the desktop as that same EOF.
+async fn forward_chat_events(
+    window: tauri::Window,
+    chat_id: String,
+    model: String,
+    mut stream: ChatEventStream,
+) {
+    let mut tail = ChatStreamTail::new(chat_id, window.label().to_string(), model);
     loop {
         match stream.next_event().await {
-            Ok(Some(envelope)) => {
-                let ChatStreamEvent::Response { response } = envelope.event else {
-                    // Finished / error / cancelled closes the turn.
-                    break;
-                };
-                match to_chat_response(response) {
-                    Some(chat_response) => {
-                        if let Err(error) = window.emit("chat_stream", chat_response) {
-                            log::error!(
-                                "Failed to emit chat_stream for window '{}': {}",
-                                window.label(),
-                                error
-                            );
+            Ok(Some(envelope)) => match envelope.event {
+                ChatStreamEvent::Response { response } => match to_chat_response(response) {
+                    Some(response) => {
+                        let terminal = tail.forward_chunk(&response);
+                        emit_chat_response(&window, response);
+                        if terminal {
+                            break;
                         }
                     }
                     None => log::error!(
                         "Failed to map a runtime chat chunk for window '{}'",
                         window.label()
                     ),
+                },
+                event => {
+                    if let Some(response) = tail.terminal_response(&event) {
+                        emit_chat_response(&window, response);
+                    }
+                    break;
                 }
+            },
+            Ok(None) => {
+                if let Some(response) = tail.detached_response(None) {
+                    emit_chat_response(&window, response);
+                }
+                break;
             }
-            Ok(None) => break,
             Err(error) => {
                 log::warn!(
                     "Chat stream for window '{}' ended: {}",
                     window.label(),
                     error
                 );
+                if let Some(response) = tail.detached_response(Some(&error.to_string())) {
+                    emit_chat_response(&window, response);
+                }
                 break;
             }
         }
     }
+}
+
+/// Emits one canonical chat chunk onto the window's `chat_stream` event.
+fn emit_chat_response(window: &tauri::Window, response: ChatResponse) {
+    if let Err(error) = window.emit("chat_stream", response) {
+        log::error!(
+            "Failed to emit chat_stream for window '{}': {}",
+            window.label(),
+            error
+        );
+    }
+}
+
+/// The tail state of one forwarded chat stream.
+///
+/// It records whether the UI already received the turn's canonical terminal chunk
+/// so a normal finish is never reported twice, and turns every other end of the
+/// stream into exactly one canonical error chunk. It performs no I/O, so the
+/// forwarder's terminal contract is verifiable without a window.
+struct ChatStreamTail {
+    chat_id: String,
+    window_label: String,
+    model: String,
+    ended: bool,
+}
+
+impl ChatStreamTail {
+    fn new(chat_id: String, window_label: String, model: String) -> Self {
+        Self {
+            chat_id,
+            window_label,
+            model,
+            ended: false,
+        }
+    }
+
+    /// Records one forwarded chunk; returns `true` when it was the terminal one.
+    fn forward_chunk(&mut self, response: &ChatResponse) -> bool {
+        let terminal = matches!(response.r#type, MessageType::Finished | MessageType::Error);
+        if terminal {
+            self.ended = true;
+        }
+        terminal
+    }
+
+    /// Completes typed-only terminal envelopes using the canonical UI contract.
+    /// A prior terminal response wins, preventing duplicate completion.
+    fn terminal_response(&mut self, event: &ChatStreamEvent) -> Option<ChatResponse> {
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        match event {
+            ChatStreamEvent::Error { error } => {
+                Some(self.error_response(&stream_error_message(&self.model, &error.message)))
+            }
+            ChatStreamEvent::Finished { finish_reason } => Some(ChatResponse {
+                chat_id: self.chat_id.clone(),
+                chunk: String::new(),
+                r#type: MessageType::Finished,
+                metadata: Some(json!({ "windowLabel": self.window_label.as_str() })),
+                finish_reason: (*finish_reason).map(|reason| match reason {
+                    chatspeed_contracts::FinishReasonDto::Stop => FinishReason::Stop,
+                    chatspeed_contracts::FinishReasonDto::Length => FinishReason::Length,
+                    chatspeed_contracts::FinishReasonDto::ToolCalls => FinishReason::ToolCalls,
+                    chatspeed_contracts::FinishReasonDto::ContentFilter => {
+                        FinishReason::ContentFilter
+                    }
+                    chatspeed_contracts::FinishReasonDto::Complete => FinishReason::Complete,
+                    chatspeed_contracts::FinishReasonDto::Error => FinishReason::Error,
+                }),
+            }),
+            ChatStreamEvent::Cancelled => Some(ChatResponse {
+                chat_id: self.chat_id.clone(),
+                chunk: String::new(),
+                r#type: MessageType::Finished,
+                metadata: Some(json!({ "windowLabel": self.window_label.as_str() })),
+                finish_reason: Some(FinishReason::Stop),
+            }),
+            ChatStreamEvent::Response { .. } => None,
+        }
+    }
+
+    /// Reports a stream that ended without a typed envelope.
+    ///
+    /// A clean EOF (`error` is `None`) and a read error both end the UI, unless
+    /// the turn already ended normally.
+    fn detached_response(&mut self, error: Option<&str>) -> Option<ChatResponse> {
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        let cause = match error {
+            Some(error) => error.to_string(),
+            None => t!("tools.error.network_error").to_string(),
+        };
+        Some(self.error_response(&stream_error_message(&self.model, &cause)))
+    }
+
+    /// Builds the canonical error chunk that ends the UI for this turn.
+    fn error_response(&self, message: &str) -> ChatResponse {
+        ChatResponse {
+            chat_id: self.chat_id.clone(),
+            chunk: json!({ "status": 500, "message": message }).to_string(),
+            r#type: MessageType::Error,
+            metadata: Some(json!({ "windowLabel": self.window_label.as_str() })),
+            finish_reason: Some(FinishReason::Error),
+        }
+    }
+}
+
+/// Renders the existing chat stream error key for a synthesized stream end.
+///
+/// `provider` carries the model that was streaming, because the desktop adapter
+/// receives a provider id and a model rather than a provider display name, and
+/// `details` carries the concrete cause.
+fn stream_error_message(model: &str, cause: &str) -> String {
+    t!("chat.error.stream_processing_failed", provider = model, details = cause).to_string()
 }
 
 /// Converts a runtime chat DTO back into the canonical chunk the UI consumes.
@@ -191,7 +337,7 @@ fn model_details(model: ModelDetailsDto) -> Result<ModelDetails, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chatspeed_contracts::MessageTypeDto;
+    use chatspeed_contracts::{ErrorDetail, FinishReasonDto, MessageTypeDto};
 
     #[tokio::test]
     async fn a_disconnected_runtime_reports_availability_instead_of_running_locally() {
@@ -259,5 +405,122 @@ mod tests {
             serde_json::to_value(&details).expect("details json"),
             serde_json::to_value(&dto).expect("dto json")
         );
+    }
+
+    fn chunk(
+        chat_id: &str,
+        text: &str,
+        kind: MessageType,
+        reason: Option<FinishReason>,
+    ) -> ChatResponse {
+        ChatResponse {
+            chat_id: chat_id.to_string(),
+            chunk: text.to_string(),
+            r#type: kind,
+            metadata: Some(json!({ "windowLabel": "main" })),
+            finish_reason: reason,
+        }
+    }
+
+    /// Reads the canonical `{ status, message }` error chunk the UI parses.
+    fn error_message(response: &ChatResponse) -> String {
+        let parsed: Value = serde_json::from_str(&response.chunk).expect("canonical error chunk");
+        assert_eq!(parsed["status"], json!(500));
+        parsed["message"]
+            .as_str()
+            .expect("error chunk carries a message")
+            .to_string()
+    }
+
+    fn typed_error(message: &str) -> ChatStreamEvent {
+        ChatStreamEvent::Error {
+            error: ErrorDetail {
+                code: "chat_stream_detached".to_string(),
+                message: message.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_normal_finish_forwards_its_terminal_chunk_without_a_second_one() {
+        let mut tail =
+            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+
+        assert!(!tail.forward_chunk(&chunk("chat-1", "think", MessageType::Reasoning, None)));
+        assert!(tail.forward_chunk(&chunk(
+            "chat-1",
+            "done",
+            MessageType::Finished,
+            Some(FinishReason::Complete),
+        )));
+
+        // The runtime's typed terminal after the canonical chunk must not
+        // synthesize a second terminal chunk.
+        assert!(tail
+            .terminal_response(&ChatStreamEvent::Finished {
+                finish_reason: Some(FinishReasonDto::Complete),
+            })
+            .is_none());
+        assert!(tail.detached_response(None).is_none());
+    }
+
+    #[test]
+    fn a_typed_error_without_its_chunk_reaches_the_ui_exactly_once() {
+        let mut tail =
+            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+        assert!(!tail.forward_chunk(&chunk("chat-1", "think", MessageType::Reasoning, None)));
+
+        let event = typed_error("The chat turn stopped producing output");
+        let response = tail.terminal_response(&event).expect("one synthesized error");
+        assert_eq!(response.chat_id, "chat-1");
+        assert_eq!(response.r#type, MessageType::Error);
+        assert_eq!(response.finish_reason, Some(FinishReason::Error));
+        assert_eq!(response.metadata, Some(json!({ "windowLabel": "main" })));
+        assert!(error_message(&response).contains("stopped producing output"));
+
+        // Duplicate protection: no later end may add another terminal chunk.
+        assert!(tail.terminal_response(&event).is_none());
+        assert!(tail.detached_response(None).is_none());
+    }
+
+    #[test]
+    fn an_eof_or_read_error_ends_the_ui_with_one_error_chunk() {
+        let mut eof =
+            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+        let eof_response = eof.detached_response(None).expect("one synthesized error");
+        assert_eq!(eof_response.chat_id, "chat-1");
+        assert_eq!(eof_response.r#type, MessageType::Error);
+        assert_eq!(eof_response.finish_reason, Some(FinishReason::Error));
+        assert_eq!(eof_response.metadata, Some(json!({ "windowLabel": "main" })));
+        assert!(!error_message(&eof_response).is_empty());
+        assert!(eof.detached_response(None).is_none());
+
+        let mut read =
+            ChatStreamTail::new("chat-2".to_string(), "main".to_string(), "gpt-4".to_string());
+        let read_response = read
+            .detached_response(Some("connection reset"))
+            .expect("one synthesized error");
+        assert_eq!(read_response.chat_id, "chat-2");
+        assert!(error_message(&read_response).contains("connection reset"));
+    }
+
+    #[test]
+    fn typed_only_completion_and_cancellation_end_the_ui_once() {
+        for event in [
+            ChatStreamEvent::Finished {
+                finish_reason: Some(FinishReasonDto::Complete),
+            },
+            ChatStreamEvent::Cancelled,
+        ] {
+            let mut tail =
+                ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+            assert!(!tail.forward_chunk(&chunk("chat-1", "hi", MessageType::Text, None)));
+            let response = tail.terminal_response(&event).expect("terminal UI chunk");
+            assert_eq!(response.r#type, MessageType::Finished);
+            assert_eq!(response.chat_id, "chat-1");
+            assert_eq!(response.metadata, Some(json!({ "windowLabel": "main" })));
+            assert!(tail.terminal_response(&event).is_none());
+            assert!(tail.detached_response(None).is_none());
+        }
     }
 }

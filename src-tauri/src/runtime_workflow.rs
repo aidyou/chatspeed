@@ -52,12 +52,20 @@ const WORKFLOW_COMMANDS_ROUTE: &str = "/control/v1/workflow-commands";
 
 /// Response keys whose values are opaque persisted payloads.
 ///
-/// The control plane re-cases every response key to snake_case, including the
-/// contents of `serde_json::Value` fields. These payloads already carry their
-/// final shape (their inner keys are persisted snake_case), so their keys are
-/// re-cased but their contents are copied verbatim instead of being recursed
-/// into.
-const OPAQUE_RESPONSE_KEYS: [&str; 3] = ["metadata", "execution_context", "event_data"];
+/// Canonical HTTP routes normalize structural keys, but preserve dynamic JSON
+/// inside these fields. Keep this boundary aligned with the server's
+/// `dto::to_snake_case_keys`; compatibility command responses are already in
+/// their historical Tauri shape and must not be recursively reinterpreted.
+const OPAQUE_RESPONSE_KEYS: [&str; 8] = [
+    "metadata",
+    "execution_context",
+    "event_data",
+    "arguments",
+    "details",
+    "input_schema",
+    "schema",
+    "config",
+];
 
 /// Lists workflows through the runtime control plane.
 pub async fn list_workflows(supervisor: &RuntimeSupervisor) -> Result<Vec<Workflow>, String> {
@@ -933,6 +941,63 @@ mod tests {
         assert_eq!(restored["hiddenEarlierMessageCount"], json!(301));
         assert_eq!(restored["hasMoreInCurrentTask"], json!(false));
         assert!(restored.get("before_message_id").is_none());
+    }
+
+    #[test]
+    fn restore_tauri_wire_preserves_opaque_key_collisions() {
+        let response = json!({
+            "message_window_before_id": "12",
+            "messages": [{
+                "message_kind": "tool",
+                "metadata": {
+                    "projectId": 17,
+                    "project_id": 18,
+                    "nested_value": { "keep_this": true }
+                },
+                "arguments": { "toolName": "external-key" }
+            }]
+        });
+
+        let restored = restore_tauri_wire(response);
+
+        assert_eq!(restored["messageWindowBeforeId"], json!("12"));
+        assert_eq!(
+            restored["messages"][0]["metadata"],
+            json!({
+                "projectId": 17,
+                "project_id": 18,
+                "nested_value": { "keep_this": true }
+            })
+        );
+        assert_eq!(
+            restored["messages"][0]["arguments"]["toolName"],
+            json!("external-key")
+        );
+    }
+
+    #[test]
+    fn canonical_snapshot_round_trip_preserves_every_opaque_boundary() {
+        let payload = json!({
+            "projectId": 17,
+            "project_id": 18,
+            "nestedItems": [{ "file_path": "a", "filePath": "b" }]
+        });
+        let mut snapshot = json!({
+            "workflow": { "agentId": "a1" },
+            "messages": [{ "messageKind": "tool", "metadata": payload.clone() }],
+            "messageWindowBeforeId": "12"
+        });
+        for key in OPAQUE_RESPONSE_KEYS {
+            snapshot[snake_to_camel(key)] = payload.clone();
+        }
+        let wire = chatspeed_runtime_backend::workflow::react::client::http::dto::to_snake_case_keys(
+            snapshot.clone(),
+        );
+        assert_eq!(wire["workflow"]["agent_id"], json!("a1"));
+        for key in OPAQUE_RESPONSE_KEYS {
+            assert_eq!(wire[key], payload, "opaque boundary: {key}");
+        }
+        assert_eq!(restore_tauri_wire(wire), snapshot);
     }
 
     #[test]

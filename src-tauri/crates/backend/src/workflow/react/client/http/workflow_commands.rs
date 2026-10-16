@@ -9,8 +9,10 @@
 //!
 //! This is a desktop compatibility adapter, not a plugin API and not a second
 //! control plane: the router is mounted into the one canonical server, so it
-//! inherits the same bearer auth, the same body limit and the same
-//! instance-local idempotency as every other mutation.
+//! inherits the same bearer auth and the same instance-local idempotency as every
+//! other mutation. The canonical server gives this route family the bounded
+//! large-payload body limit, because it is the route that carries
+//! `add_workflow_message`; read-only commands are excluded from the replay cache.
 //!
 //! # Mounting
 //!
@@ -20,7 +22,10 @@
 //! ```ignore
 //! let router = Router::new()
 //!     // ... existing routes ...
-//!     .merge(crate::workflow::react::client::http::workflow_commands::workflow_command_router());
+//!     .merge(
+//!         crate::workflow::react::client::http::workflow_commands::workflow_command_router()
+//!             .layer(DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES)),
+//!     );
 //! ```
 //!
 //! The handler uses the server's `with_idempotency`, which must be visible to
@@ -46,13 +51,27 @@ pub fn workflow_command_router() -> Router<ControlPlaneState> {
     Router::new().route(WORKFLOW_COMMANDS_PATH, post(dispatch_workflow_command))
 }
 
-/// Read-only history commands must not pass through the mutation idempotency
-/// replay cache: their JSON body can legitimately exceed the cache's bounded
-/// replay size, and an oversized body must never be converted into a successful
-/// empty response.
-const READ_ONLY_WORKFLOW_COMMANDS: [&str; 2] = [
+/// Read-only commands that must not pass through the mutation idempotency
+/// replay cache.
+///
+/// A read can legitimately return a JSON body larger than the cache's bounded
+/// replay size; routing it through the cache would truncate that body into an
+/// empty success and would also turn a reused key with different parameters into
+/// a spurious `409 conflict`. Every entry here was verified to perform no durable
+/// mutation, so bypassing the cache is safe. Mutating commands stay on
+/// `with_idempotency`.
+const READ_ONLY_WORKFLOW_COMMANDS: [&str; 11] = [
     "get_earlier_workflow_message_page",
     "get_earlier_workflow_messages",
+    "list_pending_sub_agent_approvals",
+    "get_workflow_agent_config",
+    "workflow_get_tasks",
+    "search_workspace_files",
+    "get_system_skills",
+    "get_workflow_session_key",
+    "get_auto_approved_tools",
+    "get_workflow_dispatcher_metrics",
+    "get_workflow_efficiency_report",
 ];
 
 async fn dispatch_workflow_command(
@@ -144,6 +163,56 @@ mod tests {
         assert!(READ_ONLY_WORKFLOW_COMMANDS.contains(&"get_earlier_workflow_message_page"));
         assert!(READ_ONLY_WORKFLOW_COMMANDS.contains(&"get_earlier_workflow_messages"));
         assert!(!READ_ONLY_WORKFLOW_COMMANDS.contains(&"update_workflow_status"));
+    }
+
+    #[test]
+    fn every_read_only_command_bypasses_the_cache_and_no_mutation_does() {
+        // Each bypass entry is a real allowlisted command.
+        for command in READ_ONLY_WORKFLOW_COMMANDS {
+            assert!(
+                crate::commands::workflow::is_known_workflow_command(command),
+                "{command} is not an allowlisted workflow command"
+            );
+        }
+
+        // Every verified pure read is bypassed.
+        for read in [
+            "get_earlier_workflow_message_page",
+            "get_earlier_workflow_messages",
+            "list_pending_sub_agent_approvals",
+            "get_workflow_agent_config",
+            "workflow_get_tasks",
+            "search_workspace_files",
+            "get_system_skills",
+            "get_workflow_session_key",
+            "get_auto_approved_tools",
+            "get_workflow_dispatcher_metrics",
+            "get_workflow_efficiency_report",
+        ] {
+            assert!(
+                READ_ONLY_WORKFLOW_COMMANDS.contains(&read),
+                "{read} must bypass the replay cache"
+            );
+        }
+
+        // No command with a durable effect is treated as a read.
+        for mutation in [
+            "add_workflow_message",
+            "update_workflow_status",
+            "update_workflow_todo_list",
+            "workflow_begin_new_context_frame",
+            "workflow_approve_plan",
+            "delete_workflow",
+            "delete_last_workflow_message",
+            "remove_auto_approved_tool",
+            "remove_shell_policy_item",
+            "update_workflow_agent_id",
+        ] {
+            assert!(
+                !READ_ONLY_WORKFLOW_COMMANDS.contains(&mutation),
+                "{mutation} must stay on with_idempotency"
+            );
+        }
     }
 
     #[test]

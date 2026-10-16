@@ -1,7 +1,9 @@
 //! Allowlisted runtime-owned data command router.
 //!
 //! This extension is mounted into the single canonical control plane. It is
-//! intentionally an explicit command allowlist, not a generic RPC surface.
+//! intentionally an explicit command allowlist, not a generic RPC surface. Each
+//! command's [`DataCommandKind`] decides its transport: reads run directly, while
+//! mutations go through the shared instance-local idempotency path.
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -11,6 +13,7 @@ use axum::Router;
 
 use super::dto;
 use super::server::{with_idempotency, ControlPlaneState};
+use crate::runtime_data::DataCommandKind;
 
 /// Route template for runtime-owned data commands.
 pub const DATA_COMMANDS_PATH: &str = "/control/v1/data-commands/{command}";
@@ -26,13 +29,34 @@ async fn dispatch_data_command(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let Some(_kind) = crate::runtime_data::data_command_kind(&command) else {
+    let Some(kind) = crate::runtime_data::data_command_kind(&command) else {
         return dto::error_response(
             StatusCode::NOT_FOUND,
             "not_found",
             format!("Unknown data command: {command}"),
         );
     };
+
+    // Reads never touch the mutation replay cache: a read can return a body
+    // larger than the cache's bounded size, and routing it through the cache
+    // would truncate that body and could turn a reused key with different
+    // parameters into a spurious conflict. Only mutations are idempotent.
+    if kind == DataCommandKind::Read {
+        let params = match parse_body(&body) {
+            Ok(params) => params,
+            Err(response) => return response,
+        };
+        return match crate::runtime_data::dispatch_data_command(
+            state.svc.as_ref(),
+            &command,
+            params,
+        )
+        .await
+        {
+            Ok(value) => axum::Json::<serde_json::Value>(value).into_response(),
+            Err(error) => dto::application_error_response(&error),
+        };
+    }
 
     with_idempotency(
         &state,

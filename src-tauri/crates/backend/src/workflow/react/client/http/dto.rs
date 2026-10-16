@@ -122,26 +122,43 @@ pub fn capability_error_response(error: &crate::capability::error::CapabilityErr
     error_response(status, code, error.redacted_message())
 }
 
-/// Converts camelCase JSON keys to snake_case, recursively.
+/// Response keys whose values are persisted or caller-defined JSON payloads.
 ///
-/// Used at the HTTP boundary for payloads that come from Tauri-shaped
-/// structures (`Workflow`, `WorkflowEventRecord`, snapshot JSON). Values are
-/// never modified — only object keys are normalized.
+/// These values are already in their canonical backend shape. Recasing their
+/// nested keys would corrupt caller-defined names and can collapse distinct
+/// keys such as `projectId` and `project_id`.
+const OPAQUE_RESPONSE_KEYS: [&str; 8] = [
+    "metadata",
+    "execution_context",
+    "event_data",
+    "arguments",
+    "details",
+    "input_schema",
+    "schema",
+    "config",
+];
+
+/// Converts camelCase JSON keys to snake_case at the HTTP response boundary.
+///
+/// Structural DTO keys are normalized recursively. Persisted metadata and
+/// caller-defined payloads remain opaque so their nested key names and values
+/// are lossless across the Rust–JavaScript boundary.
 pub fn to_snake_case_keys(value: Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut converted = Map::with_capacity(map.len());
             for (key, val) in map {
-                converted.insert(camel_to_snake(&key), to_snake_case_keys(val));
+                let snake_key = camel_to_snake(&key);
+                let val = if OPAQUE_RESPONSE_KEYS.contains(&snake_key.as_str()) {
+                    val
+                } else {
+                    to_snake_case_keys(val)
+                };
+                converted.insert(snake_key, val);
             }
             Value::Object(converted)
         }
-        Value::Array(items) => Value::Array(
-            items
-                .into_iter()
-                .map(to_snake_case_keys)
-                .collect::<Vec<_>>(),
-        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(to_snake_case_keys).collect()),
         other => other,
     }
 }
@@ -191,6 +208,32 @@ mod tests {
                 "id": 7
             })
         );
+    }
+
+    #[test]
+    fn to_snake_case_keys_preserves_opaque_payload_keys_without_collisions() {
+        let value = json!({
+            "sessionId": "s1",
+            "metadata": {
+                "projectId": 17,
+                "project_id": 18,
+                "nestedValue": { "keepThis": true }
+            },
+            "arguments": { "toolName": "external-key" }
+        });
+
+        let converted = to_snake_case_keys(value);
+
+        assert_eq!(converted["session_id"], json!("s1"));
+        assert_eq!(
+            converted["metadata"],
+            json!({
+                "projectId": 17,
+                "project_id": 18,
+                "nestedValue": { "keepThis": true }
+            })
+        );
+        assert_eq!(converted["arguments"]["toolName"], json!("external-key"));
     }
 
     #[test]

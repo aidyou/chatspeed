@@ -99,7 +99,12 @@ pub trait RuntimeChatPlane: Send + Sync + 'static {
 pub fn chat_router() -> Router<ControlPlaneState> {
     Router::new()
         .route(MODELS_LIST_PATH, post(list_runtime_models))
-        .route(CHAT_START_PATH, post(start_runtime_chat))
+        .route(
+            CHAT_START_PATH,
+            post(start_runtime_chat).layer(axum::extract::DefaultBodyLimit::max(
+                super::server::LARGE_PAYLOAD_BODY_BYTES,
+            )),
+        )
         .route(CHAT_STOP_PATH, post(stop_runtime_chat))
         .route(CHAT_EVENTS_PATH, get(stream_runtime_chat))
 }
