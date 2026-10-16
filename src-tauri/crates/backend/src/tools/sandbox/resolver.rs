@@ -655,6 +655,52 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn developer_host_rules_survive_snapshot_serialization_and_route_commands_to_host() {
+        let mut config = config(ShellExecutionMode::Auto);
+        config.host_rules.push(super::super::types::HostCommandRule {
+            id: "developer-host".to_string(),
+            name: "Developer Host".to_string(),
+            enabled: true,
+            priority: 10,
+            command_patterns: vec![
+                r"^cargo(?:\s|$)".to_string(),
+                r"^(?:pnpm|npm|npx)(?:\s|$)".to_string(),
+                r"^rustfmt(:?\s|$)".to_string(),
+                r"^git\s+status(?:\s|$)".to_string(),
+            ],
+        });
+        let wire = serde_json::to_value(config).expect("sandbox snapshot");
+        assert_eq!(wire["hostRules"][0]["commandPatterns"][0], r"^cargo(?:\s|$)");
+        let config: AgentSandboxConfig = serde_json::from_value(wire).expect("restore snapshot");
+        let status = SandboxRuntimeStatusSummary {
+            msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),
+            docker: ready_status(SandboxRuntime::Docker, vec![]),
+        };
+        for command in [
+            "cargo --version",
+            "pnpm --version",
+            "npm --version",
+            "rustfmt --version",
+            "cd src-tauri && cargo check",
+            "git status --short && cargo --version",
+        ] {
+            let plan = ShellExecutionResolver::resolve(
+                "test",
+                command,
+                Some(&config),
+                &status,
+                Some(Path::new("/project")),
+            );
+            assert_eq!(plan.status, ShellExecutionPlanStatus::Ready, "{command}");
+            assert_eq!(plan.backend, ShellExecutionBackendKind::Host, "{command}");
+            assert_eq!(
+                plan.backend_origin,
+                ShellExecutionBackendOrigin::ExplicitHostRule
+            );
+        }
+    }
+
+    #[test]
     fn builtin_cs_routes_to_host_in_every_execution_mode() {
         let unavailable = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec![]),

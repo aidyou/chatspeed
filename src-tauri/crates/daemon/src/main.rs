@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use chatspeed_runtime::{start_runtime, RuntimeConfig};
+use chatspeed_runtime_backend::environment;
 
 /// Minimal stderr logger so the runtime needs no logging framework dependency.
 struct StderrLogger;
@@ -44,10 +45,28 @@ fn init_logging() {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     init_logging();
 
+    // The runtime owns subprocesses now; desktop PATH updates after a spawn
+    // cannot reach it. Resolve the user environment before starting any worker
+    // threads or publishing a control plane that can accept shell commands.
+    environment::init_environment();
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("chatspeed-runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(run())
+}
+
+async fn run() -> ExitCode {
     let config = match RuntimeConfig::from_env() {
         Ok(config) => config,
         Err(error) => {

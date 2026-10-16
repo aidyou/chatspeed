@@ -520,6 +520,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn merged_login_path_resolves_user_tools_in_non_login_host_shell() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tool directory");
+        for name in ["cargo", "pnpm"] {
+            let tool = directory.path().join(name);
+            std::fs::write(&tool, "#!/bin/sh\nprintf 'user-tool-ok'\n").expect("tool stub");
+            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))
+                .expect("executable stub");
+        }
+        let merged = merge_paths("/usr/bin:/bin", &directory.path().to_string_lossy());
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "cargo --version && pnpm --version"])
+            .env("PATH", merged)
+            .output()
+            .expect("host shell");
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(output.stdout, b"user-tool-okuser-tool-ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn shells_resolving_to_the_same_executable_are_listed_once() {
         use std::os::unix::fs::symlink;
 

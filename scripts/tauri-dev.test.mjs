@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { readFile } from 'node:fs/promises'
 import { PassThrough } from 'node:stream'
 import { createServer as createHttpServer, request as createHttpRequest } from 'node:http'
 import test from 'node:test'
@@ -20,6 +21,18 @@ function fakeServer() {
     printUrls: () => events.push('urls')
   }
 }
+
+test('standalone runtime initializes its environment before Tokio workers and owner startup', async () => {
+  const source = await readFile(new URL('src-tauri/crates/daemon/src/main.rs', root), 'utf8')
+  const main = source.slice(source.indexOf('fn main()'), source.indexOf('async fn run()'))
+  const initialize = main.indexOf('environment::init_environment();')
+  const workers = main.indexOf('tokio::runtime::Builder::new_multi_thread()')
+  assert.ok(initialize >= 0, 'the runtime must initialize its own environment')
+  assert.ok(workers > initialize, 'PATH must be ready before worker threads are created')
+  assert.ok(main.indexOf('runtime.block_on(run())') > workers)
+  assert.ok(!source.includes('#[tokio::main]'), 'the entry point must remain synchronous')
+  assert.ok(source.indexOf('start_runtime(config).await') > source.indexOf('async fn run()'))
+})
 
 test('only a real dev command prebuilds; help, version and other commands remain cheap', () => {
   assert.equal(needsRuntimeBuild(['dev']), true)
