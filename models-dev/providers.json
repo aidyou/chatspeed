@@ -452,7 +452,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 59,
+      "modelCount": 60,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -479,6 +479,16 @@
       "responses": false
     },
     {
+      "api": "https://api.commandcode.ai/provider/v1",
+      "documentationUrl": "https://commandcode.ai/docs/provider",
+      "id": "commandcode",
+      "logo": "https://models.dev/logos/commandcode.svg",
+      "modelCount": 71,
+      "name": "CommandCode",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://inference.coralbricks.ai/v1",
       "documentationUrl": "https://www.coralbricks.ai/docs",
       "id": "coralbricks",
@@ -493,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 107,
+      "modelCount": 106,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -543,7 +553,7 @@
       "documentationUrl": "https://docs.databricks.com/aws/en/machine-learning/foundation-models/",
       "id": "databricks",
       "logo": "https://models.dev/logos/databricks.svg",
-      "modelCount": 30,
+      "modelCount": 31,
       "name": "Databricks",
       "protocol": "openai",
       "responses": false
@@ -981,7 +991,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 392,
+      "modelCount": 396,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1081,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 433,
+      "modelCount": 431,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1345,7 +1355,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 616,
+      "modelCount": 623,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1485,21 +1495,21 @@
       "responses": false
     },
     {
-      "api": "https://opencode.ai/inference/v1",
+      "api": "https://opencode.ai/inference/openai/v1",
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 126,
+      "modelCount": 127,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
     },
     {
-      "api": "https://opencode.ai/inference/go/v1",
+      "api": "https://opencode.ai/inference/go/openai/v1",
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 31,
+      "modelCount": 32,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1520,7 +1530,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 385,
+      "modelCount": 388,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1601,7 +1611,7 @@
       "documentationUrl": "https://agent.pioneer.ai/llms.txt",
       "id": "pioneer",
       "logo": "https://models.dev/logos/pioneer.svg",
-      "modelCount": 116,
+      "modelCount": 117,
       "name": "Pioneer",
       "protocol": "openai",
       "responses": false
@@ -1676,6 +1686,17 @@
       "responses": false
     },
     {
+      "api": "https://api.reflection.ai/openai/v1",
+      "description": "Reflection works to make intelligence open and accessible to all, starting with Beam, a sparse MoE model for coding and agentic workflows.",
+      "documentationUrl": "https://developers.reflection.ai/models",
+      "id": "reflection",
+      "logo": "https://models.dev/logos/reflection.svg",
+      "modelCount": 1,
+      "name": "Reflection",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.regolo.ai/v1",
       "documentationUrl": "https://docs.regolo.ai/",
       "id": "regolo-ai",
@@ -1690,7 +1711,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 176,
+      "modelCount": 177,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -1768,7 +1789,7 @@
       "documentationUrl": "https://www.scaleway.com/en/docs/generative-apis/",
       "id": "scaleway",
       "logo": "https://models.dev/logos/scaleway.svg",
-      "modelCount": 17,
+      "modelCount": 18,
       "name": "Scaleway",
       "protocol": "openai",
       "responses": false
@@ -2121,7 +2142,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 409,
+      "modelCount": 411,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2202,7 +2223,7 @@
       "documentationUrl": "https://docs.wandb.ai/inference",
       "id": "wandb",
       "logo": "https://models.dev/logos/wandb.svg",
-      "modelCount": 21,
+      "modelCount": 23,
       "name": "CoreWeave",
       "protocol": "openai",
       "responses": false
@@ -2350,9 +2371,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "b3b06bc2040ba7017ddf12c5d2950e2d3c9e977afa86daf704b3bfedfeaaa182",
-    "generatedAt": "2026-10-16T08:12:48Z",
+    "catalogSha256": "eb2f24ab7e8a204988d4e4675f538ea21603d3388f40df1ee91f8903b8290d64",
+    "generatedAt": "2026-10-17T07:50:03Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "64b306af26202ba304ac9cf7775e2e8341327228"
+    "revision": "1dfa7fe16479961030f1a8f056d2c0d4afe9bc49"
   }
 }
