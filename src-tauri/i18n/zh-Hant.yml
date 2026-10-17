@@ -239,6 +239,9 @@ proxy:
     store_lock_failed: 存取儲存失敗：%{error}
   group:
     not_found_by_name: 未能透過分組名稱 '%{name}' 找到代理分組
+runtime:
+  owned_process_cancelled: 執行階段正在停止，已終止一個仍在執行的託管工具處理程序
+  work_refused_while_stopping: 執行階段處於 %{phase}，拒絕新的 %{kind} 工作
 sensitive:
   filter:
     bank_account: '[銀行賬號]'

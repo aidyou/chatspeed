@@ -25,6 +25,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::capability::CapabilityApplicationService;
 use crate::ccproxy::launcher::{self, CcproxyServer};
 use crate::db::MainStore;
+use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
 use crate::model_catalog_service::ModelsDevCatalogService;
 use crate::owner::RuntimeOwner;
 use crate::workflow::automation::service::normalize_datetime_for_db;
@@ -58,13 +59,20 @@ pub struct RuntimeBackground {
 impl RuntimeBackground {
     /// Starts capability reconcile, MCP registration, the automation tick and
     /// the chat-completion proxy for `owner`.
-    pub async fn start(owner: &RuntimeOwner, package_version: String) -> Self {
+    ///
+    /// The one runtime [`RuntimeLifecycleGate`] fences the automation tick, so a
+    /// due slot is dispatched only while the runtime is still admitting work.
+    pub async fn start(
+        owner: &RuntimeOwner,
+        package_version: String,
+        gate: Arc<RuntimeLifecycleGate>,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let handles = vec![
             spawn_capability_reconcile(owner.service().capability().clone()),
             spawn_mcp_registration(owner.chat_state().clone(), owner.main_store().clone()),
-            spawn_automation_scheduler(owner.service().clone(), shutdown_rx.clone()),
+            spawn_automation_scheduler(owner.service().clone(), shutdown_rx.clone(), gate),
             spawn_models_dev_catalog_refresh(
                 owner.service().catalog().clone(),
                 owner.main_store().clone(),
@@ -161,6 +169,7 @@ fn spawn_mcp_registration(
 fn spawn_automation_scheduler(
     service: Arc<WorkflowApplicationService>,
     mut shutdown: watch::Receiver<bool>,
+    gate: Arc<RuntimeLifecycleGate>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(AUTOMATION_TICK);
@@ -171,10 +180,25 @@ fn spawn_automation_scheduler(
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
+                    // A due slot is a canonical non-HTTP work start, so it is
+                    // fenced through the one admission gate: a quiescing runtime
+                    // refuses it instead of dispatching work it cannot drain, and
+                    // the ticket keeps the drain observing an in-flight dispatch.
+                    let ticket = match gate.admit(WorkKind::AutomationDispatch) {
+                        Ok(ticket) => ticket,
+                        Err(denied) => {
+                            log::debug!(
+                                "[Runtime][automation][scheduler] dispatch refused: {}",
+                                denied.message
+                            );
+                            continue;
+                        }
+                    };
                     let now = normalize_datetime_for_db(Local::now());
                     if let Err(error) = service.automation_dispatch_due(&now).await {
                         log::error!("[Runtime][automation][scheduler] dispatch_due failed: {error}");
                     }
+                    drop(ticket);
                 }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {

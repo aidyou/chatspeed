@@ -19,7 +19,7 @@ use crate::db::MainStore;
 use crate::libs::tsid::TsidGenerator;
 use crate::libs::window_channels::WindowChannels;
 use crate::terminal::{TerminalError, TerminalManager, TerminalOwner, TerminalSubscription};
-use crate::tools::ToolError;
+use crate::tools::{McpShutdownReport, ToolError};
 use crate::workflow::react::application::WorkflowApplicationService;
 use crate::workflow::react::client::http::server::{RuntimeChatPlane, RuntimeTerminalPlane};
 use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
@@ -150,6 +150,13 @@ impl RuntimeOwner {
             config.app_data_dir.clone(),
         ));
 
+        // One runtime-wide owned-process registry. The pre-workflow automation
+        // shells already register on the automation owner's signal; installing
+        // that same handle on the chat state lets the workflow engine register
+        // every shell-tool child on it too, so the coordinated shutdown cancels
+        // and awaits both through one registry instead of a second, parallel one.
+        chat_state.install_owned_processes(service.automation_owner().owned_process_cancellation());
+
         // The one interactive user terminal owner. It is created here, not
         // lazily, so the runtime always owns exactly one PTY registry and its
         // Drop releases every session on shutdown.
@@ -275,6 +282,99 @@ impl RuntimeOwner {
             manager: self.terminal_manager.clone(),
         })
     }
+
+    /// Installs the one runtime work-admission gate into every owner-held
+    /// canonical work start that has no transport of its own.
+    ///
+    /// The application service is fenced separately by the caller; this reaches
+    /// the terminal manager, whose create/write are canonical non-HTTP work, the
+    /// tool manager's MCP start, and the chat state, whose canonical
+    /// [`start_new_chat_interaction`](crate::ai::interaction::chat_completion::start_new_chat_interaction)
+    /// entry can be reached without the HTTP transport. Installing the same
+    /// `Arc` into every one of them keeps a single admission decision across the
+    /// process.
+    pub fn install_admission(&self, gate: Arc<dyn crate::lifecycle::WorkAdmission>) {
+        self.terminal_manager.install_admission(gate.clone());
+        self.chat_state.tool_manager.install_admission(gate.clone());
+        self.chat_state.install_admission(gate);
+    }
+
+    /// Cancels every unit of runtime-owned work and reports what it reached.
+    ///
+    /// The coordinated shutdown calls this in its cancelling phase, so an
+    /// explicit stop actually cancels owned resources instead of only closing the
+    /// admission gate. It reuses the canonical paths: owned automation
+    /// pre-workflow shells are cancelled through their one runtime-wide signal
+    /// and awaited, chat turns are interrupted through their stop flag, live
+    /// workflow roots (and, through the canonical stop core, their owned
+    /// children) go through
+    /// [`WorkflowApplicationService::stop_all_owned_workflows`], interactive PTYs
+    /// are torn down by the terminal owner, and MCP servers are stopped through a
+    /// bounded explicit teardown that reports what was provable. Each step is a
+    /// best-effort call and the caller enforces the overall deadline.
+    ///
+    /// Tool-child coverage: the workflow engine registers every shell-tool child
+    /// ([`crate::tools::ShellExecute`]) on the same runtime-wide signal the
+    /// pre-workflow automation shells use, so this one
+    /// [`WorkflowApplicationService::cancel_owned_automation_shells`] call cancels
+    /// and *awaits* both. A shell child that cannot be torn down within the
+    /// caller's deadline leaves an admission-in-flight count that the drain
+    /// observes, so the shutdown is recorded as failed rather than clean.
+    pub async fn cancel_owned_work(&self) -> OwnedWorkCancellation {
+        // Cancel owned automation shells first and *await* their teardown: they
+        // are the runtime-owned child processes most likely to outlive a dropped
+        // handle, and the caller's deadline bounds the wait.
+        let owned_processes_cancelled = self.service.cancel_owned_automation_shells().await;
+        let chats_interrupted = self.chat_state.interrupt_all_turns().await;
+        let (workflows_live, workflows_stopped) = self.service.stop_all_owned_workflows().await;
+        self.terminal_manager.cleanup_all();
+        // MCP servers are stopped with a bounded, explicit teardown that reports
+        // the proven/unproven split instead of a blanket count.
+        let mcp = self
+            .chat_state
+            .tool_manager
+            .shutdown_all_mcp_servers()
+            .await;
+        let report = OwnedWorkCancellation {
+            chats_interrupted,
+            workflows_live,
+            workflows_stopped,
+            owned_processes_cancelled,
+            mcp,
+        };
+        log::info!(
+            "[Runtime][cancel] interrupted {} chat turn(s), stopped {}/{} live workflow(s), cancelled {} owned process(es) (pre-workflow shells + shell-tool children), closed interactive PTYs, stopped {} MCP server(s) ({} unproven)",
+            report.chats_interrupted,
+            report.workflows_stopped,
+            report.workflows_live,
+            report.owned_processes_cancelled,
+            report.mcp.stopped,
+            report.mcp.unproven
+        );
+        report
+    }
+}
+
+/// What one [`RuntimeOwner::cancel_owned_work`] pass reached.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnedWorkCancellation {
+    /// Chat turns whose stop flag was flipped.
+    pub chats_interrupted: usize,
+    /// Live workflow sessions the manager held at scan time (active, waiting or
+    /// stopping). `0` means no workflow root needed cancelling.
+    pub workflows_live: usize,
+    /// Live workflow sessions handed to the canonical stop core without error.
+    pub workflows_stopped: usize,
+    /// Owned child processes that were in flight when the cancel started and
+    /// whose whole tree was terminated (and root reaped) before this pass
+    /// returned. It counts the pre-workflow automation shells *and* the
+    /// shell-tool children, because both register on the one runtime-wide signal.
+    /// `0` means no owned process needed cancelling.
+    pub owned_processes_cancelled: usize,
+    /// The MCP teardown result: how many servers were taken and how many of
+    /// those were stopped (`stopped`) versus left unproven (`unproven`). A
+    /// non-zero `unproven` means the shutdown must not be recorded as clean.
+    pub mcp: McpShutdownReport,
 }
 
 /// Exposes the owner's single interactive terminal manager to the control plane.

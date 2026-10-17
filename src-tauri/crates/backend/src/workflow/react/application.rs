@@ -31,7 +31,8 @@ use crate::ai::interaction::chat_completion::ChatState;
 #[cfg(not(feature = "desktop"))]
 use crate::commands::workflow::{
     create_workflow_core, get_workflow_events_core, get_workflow_snapshot_core,
-    list_workflows_core, workflow_signal_core, workflow_start_core, workflow_stop_core,
+    list_workflows_core, workflow_signal_core, workflow_start_core, workflow_stop_all_owned_core,
+    workflow_stop_core,
 };
 #[cfg(not(feature = "desktop"))]
 use crate::db::agent::{is_supported_sub_agent_role, normalize_agent_tool_config, McpToolConfig};
@@ -66,6 +67,14 @@ pub struct WorkflowApplicationService {
     pub(crate) gateway: Arc<WorkflowRuntimeHub>,
     pub(crate) factory: Arc<dyn SubAgentFactory>,
     pub(crate) workflow_manager: Arc<WorkflowManager>,
+    /// The running instance's short-lived automation execution evidence (an
+    /// in-flight run-id guard plus a weak handle to the live sessions). It is
+    /// shared with every transient `AutomationApplicationService` this owner
+    /// hands out so a facade read can verify the current guard and the manager
+    /// before it declares an automation effect unknown. It never copies the
+    /// manager and is never persisted.
+    pub(crate) automation_owner:
+        Arc<crate::workflow::automation::runtime::AutomationRuntimeOwner>,
     pub(crate) app_data_dir: PathBuf,
     /// The unique Agent Skill / MCP capability service shared by the Tauri
     /// commands, the control plane and (through it) the `cs` CLI. Holding it
@@ -86,6 +95,13 @@ pub struct WorkflowApplicationService {
     /// It is retained for compatibility with the bridge protocol tests, but
     /// production web execution uses the loopback MCP provider instead.
     pub(crate) bridge: Arc<ClientBridgeRegistry>,
+    /// The one runtime work-admission gate (U-4).
+    ///
+    /// `None` until the daemon installs the gate it drives; an ungated service
+    /// (the desktop in-process owner, the unit tests) admits everything. The gate
+    /// is a backend type, so the backend never depends on the daemon: the daemon
+    /// injects the trait it implements.
+    pub(crate) admission: std::sync::OnceLock<Arc<dyn crate::lifecycle::WorkAdmission>>,
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -134,6 +150,13 @@ impl WorkflowApplicationService {
         // plugin code.
         #[cfg(feature = "plugin-service")]
         let plugin = Arc::new(crate::plugin::PluginService::detect());
+        // The automation runtime owner observes the live manager weakly: it holds
+        // only short-lived in-flight execution evidence, never a second registry.
+        let automation_owner = Arc::new(
+            crate::workflow::automation::runtime::AutomationRuntimeOwner::new(Arc::downgrade(
+                &workflow_manager,
+            )),
+        );
         Self {
             main_store,
             chat_state,
@@ -141,6 +164,7 @@ impl WorkflowApplicationService {
             gateway,
             factory,
             workflow_manager,
+            automation_owner,
             app_data_dir,
             capability,
             #[cfg(feature = "plugin-service")]
@@ -148,12 +172,59 @@ impl WorkflowApplicationService {
             catalog,
             #[cfg(not(feature = "desktop"))]
             bridge,
+            admission: std::sync::OnceLock::new(),
         }
     }
 
     /// The unique capability service, shared with the Tauri command layer.
     pub fn capability(&self) -> &Arc<crate::capability::CapabilityApplicationService> {
         &self.capability
+    }
+
+    /// Installs the one runtime work-admission gate.
+    ///
+    /// Idempotent and first-wins: the daemon installs the gate it drives before
+    /// discovery is published, so a work item can never be admitted through an
+    /// ungated window once the runtime is visible.
+    pub fn install_admission(&self, gate: Arc<dyn crate::lifecycle::WorkAdmission>) {
+        let _ = self.admission.set(gate);
+    }
+
+    /// The installed admission gate, when this process owns a runtime lifecycle.
+    pub fn admission(&self) -> Option<&Arc<dyn crate::lifecycle::WorkAdmission>> {
+        self.admission.get()
+    }
+
+    /// Fences one canonical work start/resume through the installed gate.
+    ///
+    /// Returns the RAII ticket the caller must hold for the whole work item, or
+    /// the stable `runtime_stopping` refusal. An ungated service admits
+    /// everything with a no-op ticket, so the desktop in-process owner and the
+    /// unit tests need no gate.
+    pub fn admit_work(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, crate::lifecycle::AdmissionDenied> {
+        match self.admission.get() {
+            Some(gate) => gate.admit(kind),
+            None => Ok(crate::lifecycle::AdmissionTicket::permissive()),
+        }
+    }
+
+    /// Admits one canonical work start, mapping a closed gate onto the stable
+    /// `runtime_stopping` application error.
+    ///
+    /// Every canonical lowest layer calls this so a direct, non-HTTP caller is
+    /// refused on the one gate instead of only the transport being fenced. There
+    /// is no task-scoped bypass: a nested canonical layer admits for real a
+    /// second time, so a quiesce that lands between the two admissions refuses
+    /// the nested one (the stop contract) rather than silently admitting it.
+    pub fn admit_work_or_stopping(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, ApplicationError> {
+        self.admit_work(kind)
+            .map_err(|denied| ApplicationError::stopping(denied.message))
     }
 
     /// The runtime-owned `agent-skills` plugin bundle service.
@@ -329,6 +400,16 @@ impl WorkflowApplicationService {
     /// Stops a workflow session (active, waiting or retrying).
     pub async fn workflow_stop(&self, session_id: &str) -> Result<(), ApplicationError> {
         workflow_stop_core(self, session_id.to_string()).await
+    }
+
+    /// Stops every workflow this instance is actively running.
+    ///
+    /// The coordinated runtime shutdown uses this to cancel the live roots (and,
+    /// through the canonical stop core, their owned children) before it drains,
+    /// instead of only closing the admission gate. Returns `(live, stopped)`: how
+    /// many live sessions the scan found and how many were signalled.
+    pub async fn stop_all_owned_workflows(&self) -> (usize, usize) {
+        workflow_stop_all_owned_core(self).await
     }
 
     /// Queries durable workflow events with an explicit bound.

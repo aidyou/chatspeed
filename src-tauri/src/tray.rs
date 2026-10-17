@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use tauri::Manager;
 
-use crate::commands::window::quit_window;
 use crate::runtime_config::{RuntimeConfigCache, RuntimeConfigSnapshot};
 
 /// Resolves the accelerator shown next to a tray entry.
@@ -291,9 +290,10 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
             }
         }
         "quit" => {
-            if let Err(e) = quit_window(app.clone()) {
-                log::error!("Failed to quit application: {}", e);
-            }
+            // The tray quit entry only opens the confirmation; the coordinator
+            // owns the nonce/host binding and the once-only terminal commit, so a
+            // repeated click focuses the same dialog instead of quitting at once.
+            crate::exit_coordinator::request_quit_from_tray(app);
         }
         _ => {}
     }

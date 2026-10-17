@@ -16,5 +16,9 @@ pub use stdio::StdioClient;
 #[cfg(not(feature = "desktop"))]
 pub use streamable_http::StreamableHttpClient;
 #[cfg(not(feature = "desktop"))]
-pub(crate) use types::{McpClient, McpClientResult, StatusChangeCallback};
+pub(crate) use types::{McpClient, McpClientResult, McpStopOutcome, StatusChangeCallback};
+// The internal trait is re-exported only for the runtime tests that build a mock
+// canonical client; production code reaches it through `types` directly.
+#[cfg(all(test, not(feature = "desktop")))]
+pub(crate) use types::McpClientInternal;
 pub use types::{McpProtocolType, McpServerConfig, McpStatus};

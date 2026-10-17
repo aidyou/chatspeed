@@ -186,6 +186,25 @@
     "switchBackendModels": "Switch Target Backend Models",
     "title": "Proxy Switcher"
   },
+  "quitConfirm": {
+    "cancel": "Cancel",
+    "errors": {
+      "request_failed": "The quit request could not be sent. Please try again.",
+      "runtime_endpoint_gone": "The shared runtime closed before it reported stopped, so its state is unknown. Restart it to continue.",
+      "runtime_instance_changed": "The shared runtime restarted, so this request was not sent to the new instance.",
+      "runtime_not_connected": "This desktop is not connected to the shared runtime, so the runtime cannot be stopped.",
+      "runtime_stop_failed": "The shared runtime refused the stop request or failed to stop.",
+      "runtime_stop_timeout": "The shared runtime did not report stopped in time."
+    },
+    "exit": "Quit",
+    "exitDesktopOnly": "Quit Desktop Only",
+    "impact": "Quitting closes this desktop. Running workflows and automations keep running only while the shared runtime keeps running.",
+    "retry": "Retry",
+    "stopRuntime": "Also stop the shared runtime",
+    "stopRuntimeHint": "Force-stops the shared runtime and its running tasks. Task configuration is kept, so tasks can be started again later.",
+    "stopping": "Stopping the shared runtime...",
+    "title": "Quit ChatSpeed"
+  },
   "settings": {
     "agent": {
       "actModel": "Act Model",

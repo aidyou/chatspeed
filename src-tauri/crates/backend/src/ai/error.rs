@@ -36,4 +36,10 @@ pub enum AiError {
 
     #[error("{}", t!("chat.error.failed_to_get_or_create_window_channel", error = .0))]
     FailedToGetOrCreateWindowChannel(String),
+
+    /// The runtime is quiescing and refuses to start new chat work, so a
+    /// canonical chat entry reached without the HTTP transport is still fenced.
+    /// The message is already localized by the admission gate.
+    #[error("{0}")]
+    RuntimeStopping(String),
 }

@@ -103,10 +103,13 @@ Please use the following terminal command to resolve this issue:
 
 **We highly recommend starting with our [Official Documentation Website](https://docs.chatspeed.aidyou.ai/) for the best reading and learning experience.**
 
+The bundled `cscli` command line and local workflow automations are documented for developers in this repository: see [`docs/cscli.md`](./docs/cscli.md).
+
 <details>
 <summary>Or, click here to expand the detailed documentation index</summary>
 
 - [Chatspeed](https://docs.chatspeed.aidyou.ai/)
+- [cscli CLI & Automation (developer reference)](./docs/cscli.md)
 - [Features Overview](https://docs.chatspeed.aidyou.ai/guide/features/overview.html)
 - [Guide](https://docs.chatspeed.aidyou.ai/guide/)
   - [Quick Start](https://docs.chatspeed.aidyou.ai/guide/quickStart.html)

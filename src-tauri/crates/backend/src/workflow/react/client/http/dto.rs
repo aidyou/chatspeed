@@ -31,6 +31,12 @@ pub fn application_error_response(error: &ApplicationError) -> Response {
         ApplicationErrorKind::Conflict => (StatusCode::CONFLICT, "conflict"),
         ApplicationErrorKind::State => (StatusCode::CONFLICT, "invalid_state"),
         ApplicationErrorKind::Gateway => (StatusCode::CONFLICT, "gateway_unavailable"),
+        // The runtime is quiescing: the stable `runtime_stopping` code lets a
+        // client stop retrying this instance and re-read its status instead.
+        ApplicationErrorKind::Stopping => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+        ),
         ApplicationErrorKind::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
     };
     error_response(status, code, error.message.clone())
@@ -49,6 +55,7 @@ pub fn automation_error_response(
     let status = match error.code() {
         code::INVALID_REQUEST => StatusCode::BAD_REQUEST,
         code::NOT_FOUND => StatusCode::NOT_FOUND,
+        code::STOPPING => StatusCode::SERVICE_UNAVAILABLE,
         code::CONFLICT
         | code::REVISION_CONFLICT
         | code::PLAN_EXPIRED

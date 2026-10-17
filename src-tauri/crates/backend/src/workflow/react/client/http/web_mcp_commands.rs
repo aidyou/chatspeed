@@ -147,6 +147,11 @@ fn validate_lease(
             "invalid_input",
             message,
         )),
+        Err(RuntimeLeaseError::Stopping(message)) => Err(dto::error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+            message,
+        )),
     }
 }
 

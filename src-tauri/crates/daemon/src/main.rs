@@ -7,9 +7,9 @@
 //! binary is the production desktop-free runtime rather than a meta-only stub.
 
 use std::process::ExitCode;
-use std::time::Duration;
+use std::sync::Arc;
 
-use chatspeed_runtime::{start_runtime, RuntimeConfig};
+use chatspeed_runtime::{start_runtime, ProcessExitTerminationHook, RuntimeConfig};
 use chatspeed_runtime_backend::environment;
 
 /// Minimal stderr logger so the runtime needs no logging framework dependency.
@@ -68,7 +68,11 @@ fn main() -> ExitCode {
 
 async fn run() -> ExitCode {
     let config = match RuntimeConfig::from_env() {
-        Ok(config) => config,
+        // Only the real binary installs the last-resort self-exit fallback. The
+        // library default never terminates the host, so an embedding caller (or a
+        // test) is never killed; here a forced shutdown that exhausts both budgets
+        // ends with this instance exiting rather than lingering.
+        Ok(config) => config.with_termination_hook(Arc::new(ProcessExitTerminationHook)),
         Err(error) => {
             eprintln!("chatspeed-runtime: {error}");
             return ExitCode::FAILURE;
@@ -87,8 +91,11 @@ async fn run() -> ExitCode {
         _ = handle.wait() => {}
         _ = termination_signal() => {
             log::info!("[Runtime] termination signal received; shutting down");
+            // The signal funnels into the same coordinated exit the idle
+            // supervisor and an explicit request use: close the gate, drain
+            // admitted work, then stop. It is not a fixed-timeout exit.
             handle.shutdown();
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle.wait()).await;
+            handle.wait().await;
         }
     }
 

@@ -17,6 +17,7 @@
 use crate::environment::{
     get_available_shells, get_default_shell, get_terminal_environment, ShellDescriptor,
 };
+use crate::lifecycle::{AdmissionTicket, WorkAdmission, WorkKind};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use chatspeed_contracts::{
@@ -93,6 +94,9 @@ pub enum TerminalError {
     /// Resizing the PTY failed.
     #[error("terminal_resize_failed: {0}")]
     ResizeFailed(String),
+    /// The runtime is quiescing and refuses new terminal work.
+    #[error("terminal_stopping: {1}")]
+    Stopping(&'static str, String),
 }
 
 /// The registering client lease that owns a terminal session.
@@ -236,6 +240,11 @@ struct TerminalSession {
 pub struct TerminalManager {
     sessions: Arc<Mutex<TerminalRegistry>>,
     broker: Arc<TerminalStreamBroker>,
+    /// The one runtime work-admission gate, when the runtime installed one.
+    ///
+    /// Opening a PTY or writing to one is new runtime work, so it is fenced
+    /// here, at the manager both the control plane and any direct caller reach.
+    admission: std::sync::OnceLock<Arc<dyn WorkAdmission>>,
 }
 
 fn owns_session(session: &TerminalSession, client_id: &str, lease_id: &str) -> bool {
@@ -248,6 +257,23 @@ impl TerminalManager {
         Self {
             sessions: Arc::new(Mutex::new(TerminalRegistry::default())),
             broker: Arc::new(TerminalStreamBroker::new()),
+            admission: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Installs the one runtime work-admission gate. First-wins and idempotent.
+    pub fn install_admission(&self, gate: Arc<dyn WorkAdmission>) {
+        let _ = self.admission.set(gate);
+    }
+
+    /// Fences one terminal work start; a closed gate refuses with a stable
+    /// `runtime_stopping` error.
+    fn admit_work(&self, kind: WorkKind) -> Result<AdmissionTicket, TerminalError> {
+        match self.admission.get() {
+            Some(gate) => gate
+                .admit(kind)
+                .map_err(|denied| TerminalError::Stopping(denied.code, denied.message)),
+            None => Ok(AdmissionTicket::permissive()),
         }
     }
 
@@ -296,6 +322,8 @@ impl TerminalManager {
         cols: Option<u16>,
         rows: Option<u16>,
     ) -> Result<TerminalSessionMetadataDto, TerminalError> {
+        // Opening a PTY is new runtime work: fence it at this lowest layer.
+        let _ticket = self.admit_work(WorkKind::TerminalWork)?;
         let shell = select_shell(shell_path)?;
         let cwd = resolve_initial_cwd(cwd_candidate)?;
         let session_id = Uuid::new_v4().to_string();
@@ -327,7 +355,7 @@ impl TerminalManager {
         #[cfg(unix)]
         let process_group = pair.master.process_group_leader();
         #[cfg(not(unix))]
-        let process_group: Option<libc::pid_t> = None;
+        let process_group: Option<i32> = None;
         let mut writer = match pair.master.take_writer() {
             Ok(writer) => writer,
             Err(error) => {
@@ -391,6 +419,9 @@ impl TerminalManager {
         session_id: &str,
         input: &str,
     ) -> Result<(), TerminalError> {
+        // Writing input starts new work in the session: fence it at this lowest
+        // layer. Closing/reading a session stays available while quiescing.
+        let _ticket = self.admit_work(WorkKind::TerminalWork)?;
         let mut registry = self.sessions.lock();
         let session = registry
             .sessions
@@ -667,7 +698,7 @@ fn terminate_child(child: &mut dyn portable_pty::Child, process_group: Option<li
 }
 
 #[cfg(not(unix))]
-fn terminate_child(child: &mut dyn portable_pty::Child, _process_group: Option<libc::pid_t>) {
+fn terminate_child(child: &mut dyn portable_pty::Child, _process_group: Option<i32>) {
     #[cfg(windows)]
     terminate_child_tree(child);
     #[cfg(not(any(unix, windows)))]
@@ -914,6 +945,7 @@ fn windows_prompt_bootstrap(is_cmd: bool, cwd: &Path) -> String {
     }
 }
 
+#[cfg(unix)]
 fn unix_shell_quote(path: &Path) -> String {
     path.to_string_lossy().replace('\'', "'\\''")
 }

@@ -10,3 +10,8 @@ pub mod errors;
 #[cfg(not(feature = "desktop"))]
 pub mod service;
 pub mod types;
+
+// The runtime instance's short-lived execution evidence (in-flight run guard +
+// weak live-manager observation). Runtime-owned, like the facade it informs.
+#[cfg(not(feature = "desktop"))]
+pub mod runtime;

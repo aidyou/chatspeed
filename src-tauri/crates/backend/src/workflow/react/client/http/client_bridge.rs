@@ -790,6 +790,13 @@ async fn register_bridge(State(state): State<ControlPlaneState>, body: String) -
         Err(RuntimeLeaseError::InvalidInput(message)) => {
             return dto::error_response(StatusCode::BAD_REQUEST, "invalid_input", message)
         }
+        Err(RuntimeLeaseError::Stopping(_)) => {
+            return dto::error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+                "the runtime is stopping and cannot resolve this lease".to_string(),
+            )
+        }
     };
     if lease.client_kind != BRIDGE_CLIENT_KIND {
         return dto::error_response(

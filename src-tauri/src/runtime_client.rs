@@ -30,12 +30,12 @@ use std::time::Duration;
 
 use chatspeed_contracts::{
     ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
-    ClientCapabilityInvocation, ClientCapabilityResult, BRIDGE_PROTOCOL_VERSION,
-    BRIDGE_SCHEMA_VERSION,
+    ClientCapabilityInvocation, ClientCapabilityResult, RuntimeShutdownRequest,
+    BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
 };
 use chatspeed_runtime_client::{
     runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard, RuntimeChild,
-    RuntimeClient, RuntimeLaunchConfig,
+    RuntimeClient, RuntimeLaunchConfig, RuntimeShutdownOutcome as ClientShutdownOutcome,
 };
 use serde::Serialize;
 #[cfg(feature = "desktop")]
@@ -237,6 +237,63 @@ pub struct RuntimeStatus {
     pub lease_expires_at: Option<String>,
     /// Redacted message from the last failed connection attempt, if any.
     pub last_error: Option<String>,
+}
+
+/// Runtime instance identity a coordinated shutdown must target.
+///
+/// It is read from the live status route so the request can prove it addresses
+/// the instance the user confirmed rather than a stale discovery document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeIdentity {
+    /// Instance id reported by the live runtime.
+    pub instance_id: String,
+    /// Pid reported by the live runtime.
+    pub pid: u32,
+}
+
+/// Observed end of a forced coordinated runtime shutdown.
+///
+/// Only [`Self::Confirmed`] is a completed stop: a `202 Accepted` is an
+/// acceptance, so a gone endpoint or an elapsed budget stays unconfirmed and is
+/// never reported as a graceful exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeStopOutcome {
+    /// The runtime's own status route reported the `stopped` phase.
+    Confirmed,
+    /// The control-plane endpoint disappeared before reporting `stopped`.
+    EndpointGone,
+    /// The wait budget elapsed while the runtime was still up.
+    TimedOut,
+    /// This desktop holds no connected runtime client.
+    NotConnected,
+    /// The request or the observation failed with a structured error.
+    Failed,
+}
+
+impl RuntimeStopOutcome {
+    /// Stable code the frontend maps to a localized, non-technical message.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Confirmed => "runtime_stop_confirmed",
+            Self::EndpointGone => "runtime_endpoint_gone",
+            Self::TimedOut => "runtime_stop_timeout",
+            Self::NotConnected => "runtime_not_connected",
+            Self::Failed => "runtime_stop_failed",
+        }
+    }
+}
+
+/// Result of one forced coordinated shutdown attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStopReport {
+    /// What the observation concluded.
+    pub outcome: RuntimeStopOutcome,
+    /// Instance the request targeted; `None` when no client was available.
+    pub instance_id: Option<String>,
+    /// Operation id the runtime accepted, when one was reported.
+    pub operation_id: Option<String>,
+    /// Redacted failure detail, for logs only.
+    pub detail: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +699,126 @@ impl RuntimeSupervisor {
         let mut state = self.inner.lock().await;
         if let Err(error) = release_connection(&mut state).await {
             log::warn!("[RuntimeSupervisor] releasing the runtime lease failed: {error}");
+        }
+    }
+
+    /// Returns the connected client plus the exact lease identity a coordinated
+    /// runtime shutdown must present.
+    ///
+    /// The bearer token proves the client and the opaque lease id is the second
+    /// proof the shutdown route requires. Like the terminal proof, neither value
+    /// is ever serialized into a generic request, URL or log line.
+    pub async fn shutdown_connection(
+        &self,
+    ) -> Result<(RuntimeClient, String, String), RuntimeUnavailable> {
+        let state = self.inner.lock().await;
+        let Some(connection) = state.connection.as_ref() else {
+            return Err(RuntimeUnavailable::NotConnected);
+        };
+        if state.state == RuntimeConnectionState::Released {
+            return Err(RuntimeUnavailable::NotConnected);
+        }
+        Ok((
+            connection.client.clone(),
+            connection.client_id.clone(),
+            connection.lease.lease_id().to_string(),
+        ))
+    }
+
+    /// Reads the live runtime instance identity a coordinated shutdown targets.
+    ///
+    /// The status route is the authority, so a stale discovery document can never
+    /// redirect the request to a different instance.
+    pub async fn runtime_identity(&self) -> Result<RuntimeIdentity, RuntimeUnavailable> {
+        let client = self.client().await?;
+        let status = client
+            .runtime_status()
+            .await
+            .map_err(RuntimeUnavailable::from_client_error)?;
+        Ok(RuntimeIdentity {
+            instance_id: status.instance_id,
+            pid: status.pid,
+        })
+    }
+
+    /// Requests a forced, coordinated shutdown of `expected_instance_id` and
+    /// waits, within `budget`, for the observed end.
+    ///
+    /// The request always carries an explicit `confirm`, an explicit `force` and
+    /// a stable `Idempotency-Key`, so a retry for the same prompt is idempotent
+    /// and never starts a second operation. This never starts, loads or spawns a
+    /// runtime: it addresses only the client this desktop already holds, and it
+    /// never kills a successor instance.
+    ///
+    /// A `202 Accepted` is an acceptance, never a completion: only the status
+    /// route reporting `stopped` is [`RuntimeStopOutcome::Confirmed`]. A gone
+    /// endpoint or an elapsed budget stays unconfirmed so a crash is never
+    /// mistaken for a graceful exit.
+    pub async fn request_forced_runtime_shutdown(
+        &self,
+        expected_instance_id: &str,
+        idempotency_key: &str,
+        budget: Duration,
+    ) -> RuntimeStopReport {
+        let (client, client_id, lease_id) = match self.shutdown_connection().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return RuntimeStopReport {
+                    outcome: RuntimeStopOutcome::NotConnected,
+                    instance_id: None,
+                    operation_id: None,
+                    detail: Some(error.to_string()),
+                }
+            }
+        };
+
+        let request = RuntimeShutdownRequest {
+            expected_instance_id: expected_instance_id.to_string(),
+            confirm: true,
+            force: true,
+        };
+        let accepted = match client
+            .request_runtime_shutdown(&request, &client_id, &lease_id, idempotency_key)
+            .await
+        {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                return RuntimeStopReport {
+                    outcome: RuntimeStopOutcome::Failed,
+                    instance_id: Some(expected_instance_id.to_string()),
+                    operation_id: None,
+                    detail: Some(RuntimeUnavailable::from_client_error(error).to_string()),
+                }
+            }
+        };
+
+        let instance_id = Some(accepted.instance_id.clone());
+        let operation_id = Some(accepted.operation_id.clone());
+        match client.wait_runtime_stopped(budget).await {
+            Ok(ClientShutdownOutcome::Stopped) => RuntimeStopReport {
+                outcome: RuntimeStopOutcome::Confirmed,
+                instance_id,
+                operation_id,
+                detail: None,
+            },
+            Ok(ClientShutdownOutcome::EndpointGone) => RuntimeStopReport {
+                outcome: RuntimeStopOutcome::EndpointGone,
+                instance_id,
+                operation_id,
+                detail: None,
+            },
+            Ok(ClientShutdownOutcome::TimedOut) => RuntimeStopReport {
+                outcome: RuntimeStopOutcome::TimedOut,
+                instance_id,
+                operation_id,
+                detail: None,
+            },
+            Err(error) => RuntimeStopReport {
+                outcome: RuntimeStopOutcome::Failed,
+                instance_id,
+                operation_id,
+                detail: Some(RuntimeUnavailable::from_client_error(error).to_string()),
+            },
         }
     }
 }

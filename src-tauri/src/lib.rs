@@ -27,6 +27,9 @@ pub mod dock_window;
 pub mod native_dock;
 pub mod plugin_ui;
 mod commands;
+/// Single-instance quit coordinator: the tray quit entry opens a confirmation and
+/// the coordinator owns the nonce/host binding and the once-only terminal commit.
+mod exit_coordinator;
 use chatspeed_runtime_backend::constants;
 use chatspeed_runtime_backend::db;
 use chatspeed_runtime_backend::environment;
@@ -452,6 +455,9 @@ pub async fn run() -> crate::error::Result<()> {
             toggle_window_always_on_top,
             get_window_always_on_top,
             quit_window,
+            quit_status,
+            quit_confirm,
+            quit_cancel,
             set_mouse_event_state,
             move_window_to_screen_edge,
             center_window,
@@ -840,6 +846,9 @@ pub async fn run() -> crate::error::Result<()> {
             // failing startup.
             let runtime_supervisor = Arc::new(crate::runtime_client::RuntimeSupervisor::new());
             app.manage(runtime_supervisor.clone());
+            // The quit coordinator is registered before any tray entry can ask for
+            // a confirmation, so the tray handler always finds it in managed state.
+            app.manage(Arc::new(crate::exit_coordinator::ExitCoordinator::new()));
             let runtime_config_cache = Arc::new(crate::runtime_config::RuntimeConfigCache::new());
             app.manage(runtime_config_cache.clone());
             {

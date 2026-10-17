@@ -12,6 +12,7 @@ pub mod error;
 pub mod lease;
 pub mod model_catalog;
 pub mod protocol;
+pub mod runtime_lifecycle;
 pub mod sse;
 pub mod terminal;
 pub mod web_mcp;
@@ -37,6 +38,15 @@ pub use model_catalog::{
     ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
 };
 pub use protocol::{MetaResponse, PROTOCOL_MAJOR, PROTOCOL_VERSION, SCHEMA_VERSION};
+pub use runtime_lifecycle::{
+    RuntimeAutomationHealth, RuntimeAutomationSummaryDto, RuntimeLifecyclePhase,
+    RuntimeOperationDto, RuntimeOperationStage, RuntimeShutdownAcceptedDto, RuntimeShutdownOutcome,
+    RuntimeShutdownRequest, RuntimeStatusDto, RUNTIME_CLIENT_HEADER,
+    RUNTIME_CODE_ALREADY_STOPPING,
+    RUNTIME_CODE_INSTANCE_MISMATCH, RUNTIME_CODE_LEASE_INVALID, RUNTIME_CODE_NOT_CONFIRMED,
+    RUNTIME_CODE_RUNTIME_STOPPING, RUNTIME_CODE_UNAVAILABLE, RUNTIME_LIFECYCLE_SCHEMA_VERSION,
+    RUNTIME_LEASE_HEADER, RUNTIME_SHUTDOWN_PATH, RUNTIME_STATUS_PATH,
+};
 pub use sse::{ResetError, ResetRequired, StreamEnvelope, STREAM_SCHEMA_VERSION};
 pub use terminal::{
     TerminalCloseRequest, TerminalCreateRequest, TerminalExitEvent, TerminalListSessionsRequest,

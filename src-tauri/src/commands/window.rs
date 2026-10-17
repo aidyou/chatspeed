@@ -44,8 +44,14 @@ use serde_json::Value;
 use crate::constants::{
     ASSISTANT_ALWAYS_ON_TOP, MAIN_WINDOW_ALWAYS_ON_TOP, WORKFLOW_WINDOW_ALWAYS_ON_TOP,
 };
+use crate::exit_coordinator::{
+    ExitCoordinator, QuitPhase, QuitStatus, QuitTransition, QUIT_ERROR_RUNTIME_INSTANCE_CHANGED,
+    QUIT_ERROR_RUNTIME_NOT_CONNECTED, QUIT_RELEASE_BUDGET, QUIT_STATUS_EVENT, QUIT_STOP_BUDGET,
+};
 use crate::plugin_types::PluginError;
-use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_client::{
+    RuntimeStopOutcome, RuntimeSupervisor, RuntimeUnavailable,
+};
 use tauri::{command, Emitter, Manager, State}; //window::Color, WindowEvent,
 
 use crate::error::{AppError, Result};
@@ -426,14 +432,159 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
 ///
 /// # Arguments
 /// - `app` - The app handle
+///
+/// Retained under its original name and signature for the existing frontend
+/// caller, but it is now the desktop's final exit helper: it no longer closes
+/// every window in a loop and no longer calls `std::process::exit`. The only
+/// terminal exit is the coordinator's once-only `app.exit`, so a direct quit and
+/// the tray-confirmed quit share one commit path.
 #[command]
 pub fn quit_window(app: tauri::AppHandle) -> Result<()> {
-    for (_, window) in app.webview_windows() {
-        window.close().map_err(|e| AppError::General {
-            message: t!("command.window.failed_to_close", error = e.to_string()).to_string(),
-        })?;
+    match app.try_state::<Arc<ExitCoordinator>>() {
+        Some(coordinator) => {
+            coordinator.prepare_direct_exit();
+            crate::exit_coordinator::commit_exit(&app, coordinator.inner().as_ref());
+        }
+        // The coordinator is registered in `setup`; this only keeps a direct
+        // quit working if a command somehow arrives before it exists.
+        None => app.exit(0),
     }
-    std::process::exit(0);
+    Ok(())
+}
+
+/// Returns the pending quit prompt, when the tray opened one.
+///
+/// The dialog host queries this on mount, so a prompt raised while the host was
+/// hidden or being recreated is delivered even though its listener did not exist
+/// when the request event was emitted.
+#[command]
+pub fn quit_status(coordinator: State<'_, Arc<ExitCoordinator>>) -> QuitStatus {
+    coordinator.status()
+}
+
+/// Cancels a matching pending prompt and returns the coordinator to idle.
+#[command]
+pub fn quit_cancel(
+    coordinator: State<'_, Arc<ExitCoordinator>>,
+    nonce: String,
+    host: String,
+) -> QuitStatus {
+    coordinator.cancel(&nonce, &host);
+    coordinator.status()
+}
+
+/// Applies one confirmation submit.
+///
+/// With `stop_runtime` false the desktop releases its lease (bounded) and commits
+/// the exit. With it true the shared runtime is asked to stop, and the exit is
+/// committed only once the runtime's own status reports `stopped`; an
+/// unconfirmed or failed stop leaves a stable error code so the user can retry or
+/// exit the desktop only. A duplicate or stale submit is a no-op.
+#[command]
+pub async fn quit_confirm(
+    app: tauri::AppHandle,
+    coordinator: State<'_, Arc<ExitCoordinator>>,
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    nonce: String,
+    host: String,
+    stop_runtime: bool,
+) -> Result<QuitStatus> {
+    if !stop_runtime {
+        let accepted = match coordinator.phase() {
+            QuitPhase::Confirming => {
+                coordinator.confirm_exit_desktop(&nonce, &host) == QuitTransition::Applied
+            }
+            // Abandon a failed stop and take the desktop-only exit instead.
+            QuitPhase::StoppingRuntime => {
+                coordinator.exit_desktop_after_stop(&nonce, &host) == QuitTransition::Applied
+            }
+            _ => false,
+        };
+        if !accepted {
+            return Ok(coordinator.status());
+        }
+        release_lease_bounded(supervisor.inner().as_ref()).await;
+        crate::exit_coordinator::commit_exit(&app, coordinator.inner().as_ref());
+        return Ok(coordinator.status());
+    }
+
+    let accepted = match coordinator.phase() {
+        QuitPhase::Confirming => {
+            coordinator.confirm_stop_runtime(&nonce, &host) == QuitTransition::Applied
+        }
+        // A retry clears the recorded failure and re-issues the same request.
+        QuitPhase::StoppingRuntime => {
+            coordinator.begin_stop_retry(&nonce, &host) == QuitTransition::Applied
+        }
+        _ => false,
+    };
+    if !accepted {
+        return Ok(coordinator.status());
+    }
+
+    let supervisor = supervisor.inner().as_ref();
+    // Read the live instance first and keep it as the only target, so a runtime
+    // that restarted in between is never addressed as a successor.
+    let identity = match supervisor.runtime_identity().await {
+        Ok(identity) => identity,
+        Err(error) => {
+            coordinator.set_stop_failure(runtime_unavailable_code(&error));
+            emit_quit_status(&app, coordinator.inner().as_ref());
+            return Ok(coordinator.status());
+        }
+    };
+    match coordinator.stop_target() {
+        Some((saved, _)) if saved == identity.instance_id => {}
+        Some(_) => {
+            coordinator.set_stop_failure(QUIT_ERROR_RUNTIME_INSTANCE_CHANGED);
+            emit_quit_status(&app, coordinator.inner().as_ref());
+            return Ok(coordinator.status());
+        }
+        None => coordinator.set_stop_target(&identity.instance_id, identity.pid),
+    }
+
+    // The key is stable for one prompt, so a retry is idempotent at the runtime.
+    let idempotency_key = format!("quit-stop-{nonce}");
+    let report = supervisor
+        .request_forced_runtime_shutdown(&identity.instance_id, &idempotency_key, QUIT_STOP_BUDGET)
+        .await;
+    if let Some(operation_id) = report.operation_id.as_deref() {
+        log::info!("[ExitCoordinator] runtime shutdown accepted as operation {operation_id}");
+    }
+    if report.outcome == RuntimeStopOutcome::Confirmed {
+        crate::exit_coordinator::commit_exit(&app, coordinator.inner().as_ref());
+    } else {
+        coordinator.set_stop_failure(report.outcome.code());
+        emit_quit_status(&app, coordinator.inner().as_ref());
+    }
+    Ok(coordinator.status())
+}
+
+/// Releases the runtime lease within a bounded budget on the desktop-only path.
+///
+/// A release can block on I/O, so a stuck one must not hold the exit open.
+async fn release_lease_bounded(supervisor: &RuntimeSupervisor) {
+    if tokio::time::timeout(QUIT_RELEASE_BUDGET, supervisor.release())
+        .await
+        .is_err()
+    {
+        log::warn!("[ExitCoordinator] releasing the runtime lease timed out");
+    }
+}
+
+/// Publishes the coordinator status to the dialog host, logging a failure.
+fn emit_quit_status(app: &tauri::AppHandle, coordinator: &ExitCoordinator) {
+    if let Err(error) = app.emit(QUIT_STATUS_EVENT, coordinator.status()) {
+        log::warn!("[ExitCoordinator] publishing the quit status failed: {error}");
+    }
+}
+
+/// Maps a supervisor failure to a stable code the frontend localizes.
+fn runtime_unavailable_code(error: &RuntimeUnavailable) -> &'static str {
+    match error {
+        RuntimeUnavailable::NotConnected => QUIT_ERROR_RUNTIME_NOT_CONNECTED,
+        _ => RuntimeStopOutcome::Failed.code(),
+    }
 }
 
 #[command]

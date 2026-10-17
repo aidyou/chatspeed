@@ -307,6 +307,13 @@ async fn start_runtime_chat_inner(
         return invalid_input("The chat start request must carry messages".to_string());
     }
 
+    // A chat turn is runtime work: fence it through the one admission gate so a
+    // quiescing runtime refuses it and the shutdown drain observes it in flight.
+    let _ticket = match state.admit_work(crate::lifecycle::WorkKind::ChatTurn) {
+        Ok(ticket) => ticket,
+        Err(refusal) => return refusal.into_response(),
+    };
+
     let mut metadata = match request.metadata {
         Some(value) => match serde_json::from_value::<ChatMetadata>(value) {
             Ok(metadata) => metadata,
@@ -358,23 +365,30 @@ async fn start_runtime_chat_inner(
         })
         .into_response(),
         Err(error) => {
+            // A quiescing runtime refuses the turn inside the canonical entry
+            // before any provider work: keep the stable `runtime_stopping` code
+            // and 503 so the client re-reads the runtime status instead of
+            // retrying a closed gate as if the request were bad input.
+            let (status, code) = match &error {
+                crate::error::AppError::Ai(crate::ai::error::AiError::RuntimeStopping(_)) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+                ),
+                _ => (StatusCode::BAD_REQUEST, "chat_start_failed"),
+            };
             // The turn never reached the dispatcher: terminate any observer the
             // client already attached with an explicit typed error.
             state.chat_streams.publish(
                 &chat_id,
                 ChatStreamEvent::Error {
                     error: ErrorDetail {
-                        code: "chat_start_failed".to_string(),
+                        code: code.to_string(),
                         message: error.to_string(),
                     },
                 },
             );
             end_chat_stream(&state.chat_streams, &chat_id).await;
-            dto::error_response(
-                StatusCode::BAD_REQUEST,
-                "chat_start_failed",
-                error.to_string(),
-            )
+            dto::error_response(status, code, error.to_string())
         }
     }
 }

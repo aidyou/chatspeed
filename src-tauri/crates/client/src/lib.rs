@@ -17,10 +17,12 @@ use chatspeed_contracts::{
     ClientCapabilityResult, ClientLease, ClientLeaseRequest, ClientLeaseResponse,
     ControlPlaneDiscovery, ErrorEnvelope, ListModelsRequest, MetaResponse, ModelDetailsDto,
     ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
+    RuntimeLifecyclePhase, RuntimeShutdownAcceptedDto, RuntimeShutdownRequest, RuntimeStatusDto,
     StreamEnvelope, TerminalCloseRequest, TerminalCreateRequest, TerminalListSessionsRequest,
     TerminalListShellsRequest, TerminalResizeRequest, TerminalSessionMetadataDto, TerminalShellDto,
     TerminalStreamEnvelope, TerminalWriteRequest, WebMcpProviderRegistration,
     WebMcpProviderRegistrationResponse, WebMcpProviderStatus, DISCOVERY_FILE_NAME, PROTOCOL_MAJOR,
+    RUNTIME_CLIENT_HEADER, RUNTIME_LEASE_HEADER, RUNTIME_SHUTDOWN_PATH, RUNTIME_STATUS_PATH,
     SCHEMA_VERSION, WEB_MCP_CLIENT_HEADER, WEB_MCP_INSTANCE_HEADER, WEB_MCP_LEASE_HEADER,
     WEB_MCP_PROOF_HEADER, WEB_MCP_REGISTER_PATH, WEB_MCP_STATUS_PATH, WEB_MCP_UNREGISTER_PATH,
 };
@@ -893,6 +895,21 @@ pub struct PluginUiAssetResponse {
     pub content_type: String,
 }
 
+/// The observed end of a coordinated runtime shutdown.
+///
+/// A `202 Accepted` from [`RuntimeClient::request_runtime_shutdown`] is never a
+/// completion claim; a caller waits for one of these instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeShutdownOutcome {
+    /// The status route reported the `stopped` phase.
+    Stopped,
+    /// The control-plane endpoint disappeared, the expected end state once the
+    /// runtime process has exited and released its listener.
+    EndpointGone,
+    /// The wait budget elapsed while the runtime was still up.
+    TimedOut,
+}
+
 impl RuntimeClient {
     /// Builds a client for a discovery document, validating it first.
     ///
@@ -1178,6 +1195,89 @@ impl RuntimeClient {
     ) -> Result<Value, ClientError> {
         self.post_json(&data_command_path("resolve_model_profile"), request)
             .await
+    }
+
+    /// Reads the authoritative runtime lifecycle status.
+    ///
+    /// The status is the same authority the shutdown coordinator acts on: the
+    /// phase, the admission gate's epoch/active count, the live lease count and
+    /// the automation keep-alive summary.
+    pub async fn runtime_status(&self) -> Result<RuntimeStatusDto, ClientError> {
+        let value = self.get(RUNTIME_STATUS_PATH).await?;
+        serde_json::from_value(value).map_err(|error| {
+            ClientError::Serialization(format!("unexpected runtime status body: {error}"))
+        })
+    }
+
+    /// Requests a coordinated runtime shutdown.
+    ///
+    /// The lease proof travels in dedicated headers, never in the URL or the
+    /// body, and the request carries a mandatory `Idempotency-Key`. The `202`
+    /// response is an acceptance, not a completion: use
+    /// [`RuntimeClient::wait_runtime_stopped`] (or poll
+    /// [`RuntimeClient::runtime_status`]) to observe the end.
+    pub async fn request_runtime_shutdown(
+        &self,
+        request: &RuntimeShutdownRequest,
+        client_id: &str,
+        lease_id: &str,
+        idempotency_key: &str,
+    ) -> Result<RuntimeShutdownAcceptedDto, ClientError> {
+        if idempotency_key.trim().is_empty() {
+            return Err(ClientError::InvalidRequest(
+                "idempotency key must not be empty".to_string(),
+            ));
+        }
+        if client_id.trim().is_empty() || lease_id.trim().is_empty() {
+            return Err(ClientError::InvalidRequest(
+                "a shutdown request must carry a client id and lease id".to_string(),
+            ));
+        }
+        let response = self
+            .build(Method::POST, RUNTIME_SHUTDOWN_PATH)?
+            .header("Idempotency-Key", idempotency_key)
+            .header(RUNTIME_CLIENT_HEADER, client_id)
+            .header(RUNTIME_LEASE_HEADER, lease_id)
+            .json(request)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let status = response.status();
+        let body = response.text().await.map_err(transport_error)?;
+        if status != StatusCode::ACCEPTED {
+            return Err(error_from_status(status, &body));
+        }
+        serde_json::from_str(&body).map_err(|error| {
+            ClientError::Serialization(format!("unexpected runtime shutdown body: {error}"))
+        })
+    }
+
+    /// Waits until the runtime reports `stopped` or its endpoint disappears.
+    ///
+    /// A `202` acceptance is never treated as completion: the loop re-reads the
+    /// status route, and a gone endpoint (the runtime process exited and released
+    /// its listener) is reported as [`RuntimeShutdownOutcome::EndpointGone`].
+    pub async fn wait_runtime_stopped(
+        &self,
+        budget: Duration,
+    ) -> Result<RuntimeShutdownOutcome, ClientError> {
+        let deadline = tokio::time::Instant::now() + budget;
+        loop {
+            match self.runtime_status().await {
+                Ok(status) if status.phase == RuntimeLifecyclePhase::Stopped => {
+                    return Ok(RuntimeShutdownOutcome::Stopped)
+                }
+                Ok(_) => {}
+                Err(ClientError::Transport(_)) => {
+                    return Ok(RuntimeShutdownOutcome::EndpointGone)
+                }
+                Err(error) => return Err(error),
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(RuntimeShutdownOutcome::TimedOut);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Opens a client WebView capability bridge session.
@@ -2425,6 +2525,9 @@ mod tests {
         web_client: Option<String>,
         web_lease: Option<String>,
         web_instance: Option<String>,
+        runtime_client: Option<String>,
+        runtime_lease: Option<String>,
+        idempotency_key: Option<String>,
         last_event_id: Option<String>,
         body: String,
     }
@@ -2524,6 +2627,9 @@ mod tests {
         let mut web_client = None;
         let mut web_lease = None;
         let mut web_instance = None;
+        let mut runtime_client = None;
+        let mut runtime_lease = None;
+        let mut idempotency_key = None;
         let mut last_event_id = None;
         let mut content_length = 0usize;
         for line in lines {
@@ -2548,6 +2654,12 @@ mod tests {
                     web_lease = Some(value.trim().to_string());
                 } else if name == "x-web-mcp-instance" {
                     web_instance = Some(value.trim().to_string());
+                } else if name == "x-runtime-client" {
+                    runtime_client = Some(value.trim().to_string());
+                } else if name == "x-runtime-lease" {
+                    runtime_lease = Some(value.trim().to_string());
+                } else if name == "idempotency-key" {
+                    idempotency_key = Some(value.trim().to_string());
                 } else if name == "last-event-id" {
                     last_event_id = Some(value.trim().to_string());
                 } else if name == "content-length" {
@@ -2576,6 +2688,9 @@ mod tests {
             web_client,
             web_lease,
             web_instance,
+            runtime_client,
+            runtime_lease,
+            idempotency_key,
             last_event_id,
             body: String::from_utf8_lossy(&body).to_string(),
         })
@@ -4547,5 +4662,156 @@ mod tests {
         let debug = format!("{session:?}");
         assert!(!debug.contains("opaque-token"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
+    }
+
+    // -- runtime lifecycle (U-4) -------------------------------------------
+
+    fn status_json(phase: &str, instance: &str) -> String {
+        json!({
+            "protocol_version": "1",
+            "schema_version": "1",
+            "service": "chatspeed-runtime",
+            "instance_id": instance,
+            "pid": 7,
+            "phase": phase,
+            "epoch": 2,
+            "active_admissions": 1,
+            "active_leases": 1,
+            "quiesced": phase != "running",
+            "automation": {
+                "effective_schedules": 1,
+                "live_automation_runs": 0,
+                "in_flight_admissions": 0,
+                "blocked_reconcile": 0,
+                "health": "healthy",
+                "keep_alive": true
+            },
+            "operation": {
+                "operation_id": "op-1",
+                "stage": "draining",
+                "force": true,
+                "accepted_at": "unix-1"
+            }
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn runtime_status_decodes_the_typed_contract() {
+        let body = status_json("draining", "instance-a");
+        let server = FakeServer::start(move |_| http_response("200 OK", &body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let status = client.runtime_status().await.expect("status");
+        assert_eq!(status.phase, RuntimeLifecyclePhase::Draining);
+        assert_eq!(status.epoch, 2);
+        assert_eq!(status.active_admissions, 1);
+        assert!(status.quiesced);
+        assert!(status.automation.keep_alive);
+        assert_eq!(
+            status.operation.expect("operation").stage,
+            chatspeed_contracts::RuntimeOperationStage::Draining
+        );
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].method, "GET");
+        assert_eq!(recorded[0].path, RUNTIME_STATUS_PATH);
+    }
+
+    #[tokio::test]
+    async fn shutdown_sends_the_lease_proof_and_key_and_decodes_202() {
+        let body = json!({
+            "schema_version": "1",
+            "service": "chatspeed-runtime",
+            "instance_id": "instance-a",
+            "operation_id": "op-1",
+            "stage": "accepted",
+            "accepted": true,
+            "force": true
+        })
+        .to_string();
+        let server = FakeServer::start(move |_| http_response("202 Accepted", &body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+
+        let request = RuntimeShutdownRequest {
+            expected_instance_id: "instance-a".to_string(),
+            confirm: true,
+            force: true,
+        };
+        let accepted = client
+            .request_runtime_shutdown(&request, "tauri-main", "lease-1", "key-1")
+            .await
+            .expect("accepted");
+        assert!(accepted.accepted);
+        assert!(accepted.force);
+        assert_eq!(accepted.instance_id, "instance-a");
+
+        let recorded = server.requests();
+        assert_eq!(recorded[0].method, "POST");
+        assert_eq!(recorded[0].path, RUNTIME_SHUTDOWN_PATH);
+        // The lease proof travels in dedicated headers, never the URL or body.
+        assert_eq!(recorded[0].runtime_client.as_deref(), Some("tauri-main"));
+        assert_eq!(recorded[0].runtime_lease.as_deref(), Some("lease-1"));
+        assert_eq!(recorded[0].idempotency_key.as_deref(), Some("key-1"));
+        assert!(!recorded[0].path.contains("lease-1"));
+        assert!(!recorded[0].body.contains("lease-1"));
+        let sent: Value = serde_json::from_str(&recorded[0].body).expect("request body");
+        assert_eq!(sent["expected_instance_id"], "instance-a");
+        assert_eq!(sent["confirm"], true);
+    }
+
+    #[tokio::test]
+    async fn shutdown_reports_a_non_202_as_a_server_error() {
+        let body = json!({"error": {"code": "instance_mismatch", "message": "stale"}}).to_string();
+        let server = FakeServer::start(move |_| http_response("409 Conflict", &body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+        let request = RuntimeShutdownRequest {
+            expected_instance_id: "instance-b".to_string(),
+            confirm: true,
+            force: true,
+        };
+        let error = client
+            .request_runtime_shutdown(&request, "tauri-main", "lease-1", "key-1")
+            .await
+            .expect_err("conflict");
+        match error {
+            ClientError::Server { status, code, .. } => {
+                assert_eq!(status, 409);
+                assert_eq!(code, "instance_mismatch");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wait_runtime_stopped_reports_stopped_then_a_gone_endpoint() {
+        let body = status_json("stopped", "instance-a");
+        let server = FakeServer::start(move |_| http_response("200 OK", &body)).await;
+        let client =
+            RuntimeClient::new(&discovery_on(server.addr.port(), "instance-a", 1)).expect("client");
+        assert_eq!(
+            client
+                .wait_runtime_stopped(Duration::from_secs(1))
+                .await
+                .expect("stopped"),
+            RuntimeShutdownOutcome::Stopped
+        );
+
+        // A discovery document pointing at a released port models the runtime
+        // that already exited; the client reports the gone endpoint, not a hang.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let released_port = listener.local_addr().expect("addr").port();
+        drop(listener);
+        let gone = RuntimeClient::new(&discovery_on(released_port, "instance-a", 1))
+            .expect("client");
+        assert_eq!(
+            gone.wait_runtime_stopped(Duration::from_millis(200))
+                .await
+                .expect("gone"),
+            RuntimeShutdownOutcome::EndpointGone
+        );
     }
 }

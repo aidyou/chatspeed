@@ -20,7 +20,8 @@ use crate::ai::traits::chat::MCPToolDeclaration;
 use crate::db::MainStore;
 #[cfg(not(feature = "desktop"))]
 use crate::mcp::client::{
-    McpClient, McpProtocolType, McpServerConfig, McpStatus, StdioClient, StreamableHttpClient,
+    McpClient, McpProtocolType, McpServerConfig, McpStatus, McpStopOutcome, StdioClient,
+    StreamableHttpClient,
 };
 #[cfg(not(feature = "desktop"))]
 use crate::mcp::McpError;
@@ -310,6 +311,30 @@ pub struct McpToolSpec {
     pub declaration: MCPToolDeclaration,
 }
 
+/// Per-server budget for one bounded MCP teardown during shutdown.
+///
+/// Kept well below the daemon's shared coordinated-shutdown budget so a stuck
+/// server cannot consume the whole drain window; the whole cancel pass is
+/// additionally bounded by the caller.
+#[cfg(not(feature = "desktop"))]
+const MCP_SHUTDOWN_STOP_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What one [`ToolManager::shutdown_all_mcp_servers`] pass proved.
+#[cfg(not(feature = "desktop"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct McpShutdownReport {
+    /// Live server handles taken for teardown.
+    pub servers: usize,
+    /// Handles whose bounded `stop` completed (transport released, or already
+    /// stopped). This counts only what is provable; descendant reaping is never
+    /// claimed.
+    pub stopped: usize,
+    /// Handles whose teardown could not be proven within the budget, or that
+    /// reported an error. A non-zero count means the caller must not record a
+    /// clean stop.
+    pub unproven: usize,
+}
+
 /// Manages the registration and execution of workflow functions.
 ///
 /// This struct is responsible for maintaining a collection of functions
@@ -329,6 +354,11 @@ pub struct ToolManager {
     mcp_tool_change_event_sender: broadcast::Sender<()>,
     /// Registration generations prevent stale discovery tasks from restoring old state.
     mcp_registration_generations: Mutex<McpRegistrationGenerations>,
+    /// The one runtime work-admission gate, when the runtime installed one.
+    ///
+    /// Starting an MCP server is canonical runtime work, so it is fenced here,
+    /// at the manager the capability orchestrator and any direct caller reach.
+    admission: std::sync::OnceLock<Arc<dyn crate::lifecycle::WorkAdmission>>,
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -345,6 +375,26 @@ impl ToolManager {
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
             mcp_registration_generations: Mutex::new(HashMap::new()),
+            admission: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Installs the one runtime work-admission gate. First-wins and idempotent.
+    pub fn install_admission(&self, gate: Arc<dyn crate::lifecycle::WorkAdmission>) {
+        let _ = self.admission.set(gate);
+    }
+
+    /// Fences one capability work start; a closed gate refuses with the stable
+    /// `runtime_stopping` tool error.
+    fn admit_work(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, ToolError> {
+        match self.admission.get() {
+            Some(gate) => gate
+                .admit(kind)
+                .map_err(|denied| ToolError::RuntimeStopping(denied.message)),
+            None => Ok(crate::lifecycle::AdmissionTicket::permissive()),
         }
     }
 
@@ -365,6 +415,58 @@ impl ToolManager {
             self.mcp_tools.write().await.clear();
             self.mcp_servers.write().await.clear();
             self.notify_mcp_tools_changed();
+        }
+    }
+
+    /// Stops every registered MCP server with a bounded, explicit teardown and
+    /// reports what was proven.
+    ///
+    /// A runtime-owned MCP server is a child process reached through its client.
+    /// The handles and the tool cache are taken under a short lock and that lock
+    /// is released *before* any `stop` is awaited, so a slow server can neither
+    /// hold the registry lock across the await nor block a concurrent
+    /// registration. Only the MCP state is touched: the native tool surface and
+    /// the alias registry are left for the owner teardown.
+    ///
+    /// Each client is stopped through [`McpClient::stop_bounded`]; an unproven
+    /// teardown is counted in [`McpShutdownReport::unproven`] instead of being
+    /// hidden, so the coordinated shutdown can refuse to record a clean stop.
+    /// Re-invoking it is idempotent: the map is already empty, so the report is
+    /// all zeroes. rmcp's `RunningService::cancel` is canonical and drops the
+    /// child transport, but it holds no child *tree* handle, so the report claims
+    /// only what is provable (the transport/direct child), never a tree-wide reap.
+    ///
+    /// The lock order matches [`Self::clear`] (`mcp_tools` before `mcp_servers`),
+    /// so it can never deadlock against a concurrent registration.
+    pub async fn shutdown_all_mcp_servers(&self) -> McpShutdownReport {
+        // Take every handle under the lock, then release it before awaiting any
+        // teardown. The lock order matches `clear`/`rebuild_mcp_wrappers`.
+        let handles: Vec<Arc<dyn McpClient>> = {
+            let _generations = self.mcp_registration_generations.lock().await;
+            self.mcp_tools.write().await.clear();
+            let mut mcp_servers = self.mcp_servers.write().await;
+            mcp_servers.drain().map(|(_, client)| client).collect()
+        };
+        self.notify_mcp_tools_changed();
+
+        let servers = handles.len();
+        let mut stopped = 0usize;
+        let mut unproven = 0usize;
+        for client in handles {
+            match client.stop_bounded(MCP_SHUTDOWN_STOP_BUDGET).await {
+                McpStopOutcome::AlreadyStopped | McpStopOutcome::TransportStopped => stopped += 1,
+                McpStopOutcome::Unproven(error) => {
+                    unproven += 1;
+                    log::warn!(
+                        "[Runtime][cancel] an owned MCP server teardown is unproven: {error}"
+                    );
+                }
+            }
+        }
+        McpShutdownReport {
+            servers,
+            stopped,
+            unproven,
         }
     }
 
@@ -981,6 +1083,9 @@ impl ToolManager {
         self: Arc<Self>, // Changed to take Arc<Self>
         config: McpServerConfig,
     ) -> Result<(), ToolError> {
+        // Starting an MCP server is canonical runtime work: fence it at this
+        // lowest layer so a direct, non-HTTP caller is refused on the one gate.
+        let _ticket = self.admit_work(crate::lifecycle::WorkKind::CapabilityStart)?;
         // Check if the server is already registered and running *without* holding the main lock
         // This avoids holding the main lock while potentially waiting for status()
         // Note: self.get_mcp_server doesn't need Arc<Self> if it only reads.
@@ -2581,6 +2686,225 @@ mod tests {
                 .expect("unregister");
             assert!(manager.resolve_mcp_tool_name("web_fetch").await.is_none());
             task.abort();
+        }
+    }
+
+    /// Focused owned-MCP-teardown tests (U-5 / AC-7). They use either the crate's
+    /// deterministic, network-free stdio fixture or a mock canonical client, so
+    /// no external service is involved.
+    #[cfg(not(feature = "desktop"))]
+    mod owned_mcp_shutdown {
+        use super::*;
+        use crate::mcp::client::{McpClientInternal, McpClientResult, StatusChangeCallback};
+        use rmcp::model::InitializeRequestParams;
+        use rmcp::service::RunningService;
+        use rmcp::RoleClient;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::RwLock;
+
+        fn declaration(name: &str) -> MCPToolDeclaration {
+            MCPToolDeclaration {
+                name: name.to_string(),
+                description: format!("owned-teardown fixture tool {name}"),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+                disabled: false,
+                scope: Some(ToolScope::Both),
+            }
+        }
+
+        async fn register_started_client(
+            manager: &Arc<ToolManager>,
+            server_name: &str,
+            client: Arc<dyn McpClient>,
+        ) {
+            manager
+                .mcp_servers
+                .write()
+                .await
+                .insert(server_name.to_string(), client);
+            manager
+                .mcp_tools
+                .write()
+                .await
+                .insert(server_name.to_string(), vec![declaration("echo")]);
+            manager.rebuild_mcp_wrappers().await;
+        }
+
+        /// A real stdio server started from the crate's deterministic,
+        /// network-free fixture. The canonical bounded stop must report a
+        /// confirmed transport stop and release the running service, and a second
+        /// pass must be a proved no-op (idempotent).
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn runtime_shutdown_owned_mcp_stop_is_bounded_confirmed_and_idempotent() {
+            let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .find(|dir| dir.file_name() == Some(std::ffi::OsStr::new("src-tauri")))
+                .expect("the backend crate lives under src-tauri")
+                .join("fixtures/mcp_stdio.py");
+            let client = crate::mcp::client::StdioClient::new(McpServerConfig {
+                name: "owned-fixture".into(),
+                protocol_type: McpProtocolType::Stdio,
+                command: Some("python3".into()),
+                args: Some(vec!["-u".into(), fixture.to_string_lossy().into_owned()]),
+                timeout: Some(10),
+                ..Default::default()
+            })
+            .expect("fixture config");
+            client
+                .start()
+                .await
+                .expect("start the owned fixture server");
+            let client: Arc<dyn McpClient> = Arc::new(client);
+
+            let manager = Arc::new(ToolManager::new());
+            register_started_client(&manager, "owned-fixture", client.clone()).await;
+            assert!(!manager.mcp_servers.read().await.is_empty());
+
+            let report = manager.shutdown_all_mcp_servers().await;
+            assert_eq!(
+                report,
+                McpShutdownReport {
+                    servers: 1,
+                    stopped: 1,
+                    unproven: 0
+                }
+            );
+            assert!(
+                manager.mcp_servers.read().await.is_empty(),
+                "the taken server handle must not be restored"
+            );
+            assert!(
+                manager.mcp_tools.read().await.is_empty(),
+                "the MCP tool cache must be cleared"
+            );
+            assert_eq!(
+                client.status().await,
+                McpStatus::Stopped,
+                "the canonical bounded stop must mark the client stopped"
+            );
+            assert!(
+                client.client().read().await.is_none(),
+                "the running service handle must be released"
+            );
+
+            // A second pass finds no live server: it is a proved, idempotent no-op.
+            let second = manager.shutdown_all_mcp_servers().await;
+            assert_eq!(second, McpShutdownReport::default());
+        }
+
+        /// An unproven teardown must be reported as unproven, never hidden behind
+        /// a clean count.
+        #[tokio::test]
+        async fn runtime_shutdown_owned_mcp_unproven_stop_is_reported_not_hidden() {
+            let manager = Arc::new(ToolManager::new());
+            let client: Arc<dyn McpClient> = Arc::new(MockStopClient {
+                outcome: McpStopOutcome::Unproven(McpError::ClientStopError(
+                    "mock cancel did not complete".into(),
+                )),
+            });
+            register_started_client(&manager, "mock-unproven", client).await;
+
+            let report = manager.shutdown_all_mcp_servers().await;
+            assert_eq!(report.servers, 1);
+            assert_eq!(report.stopped, 0);
+            assert_eq!(
+                report.unproven, 1,
+                "an unproven teardown must be counted, not silently dropped"
+            );
+
+            // Still idempotent: the registry is empty afterwards.
+            let second = manager.shutdown_all_mcp_servers().await;
+            assert_eq!(second, McpShutdownReport::default());
+        }
+
+        /// A mock canonical client whose bounded stop reports a fixed outcome, so
+        /// the shutdown aggregation is exercised without an external service.
+        struct MockStopClient {
+            outcome: McpStopOutcome,
+        }
+
+        #[async_trait]
+        impl McpClientInternal for MockStopClient {
+            async fn set_status(&self, _status: McpStatus) {}
+            async fn notify_status_change(&self, _name: String, _status: McpStatus) {}
+        }
+
+        #[async_trait]
+        impl McpClient for MockStopClient {
+            async fn name(&self) -> String {
+                "mock-stop-client".to_string()
+            }
+
+            async fn config(&self) -> McpServerConfig {
+                McpServerConfig {
+                    name: "mock-stop-client".to_string(),
+                    ..Default::default()
+                }
+            }
+
+            async fn update_disabled_tools(
+                &self,
+                _tool_name: &str,
+                _is_disabled: bool,
+            ) -> McpClientResult<()> {
+                Ok(())
+            }
+
+            fn client(
+                &self,
+            ) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>> {
+                Arc::new(RwLock::new(None))
+            }
+
+            async fn status(&self) -> McpStatus {
+                McpStatus::Stopped
+            }
+
+            async fn on_status_change(&self, _callback: StatusChangeCallback) {}
+
+            async fn perform_connect(
+                &self,
+            ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>> {
+                Err(McpError::General("mock client cannot connect".to_string()))
+            }
+
+            async fn stop_bounded(&self, _budget: Duration) -> McpStopOutcome {
+                self.outcome.clone()
+            }
+        }
+    }
+
+    /// Pins the boundary of the stop-gap tool surface: [`ToolManager::register_core_tools`]
+    /// registers no subprocess-owning tool on the *global* surface. The runtime's
+    /// owned shell children are created per workflow by the engine's
+    /// [`crate::tools::ShellExecute`] and register on the one runtime-wide
+    /// owned-process signal, so this asserts the global surface stays lean rather
+    /// than claiming a missing tool-child owner.
+    #[cfg(not(feature = "desktop"))]
+    mod owned_tool_surface {
+        use super::*;
+
+        #[tokio::test]
+        async fn runtime_core_tool_surface_registers_no_shell_tool() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let store =
+                Arc::new(MainStore::new(dir.path().join("tool_surface.db")).expect("store"));
+            let manager = Arc::new(ToolManager::new());
+            manager
+                .clone()
+                .register_core_tools(store)
+                .await
+                .expect("register core tools");
+
+            // The file/search surface is present ...
+            assert!(manager.has_tool(crate::tools::TOOL_READ_FILE).await);
+            // ... and the shell tool is created per workflow by the engine, not
+            // registered here on the shared core surface.
+            assert!(!manager.has_tool(crate::tools::TOOL_BASH).await);
         }
     }
 }

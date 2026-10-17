@@ -34,6 +34,11 @@ use chatspeed_contracts::workflow::{
 use chatspeed_contracts::ClientCapabilityStatus;
 #[cfg(not(feature = "desktop"))]
 use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
+#[cfg(not(feature = "desktop"))]
+use chatspeed_contracts::{
+    RuntimeShutdownRequest, RUNTIME_CLIENT_HEADER, RUNTIME_CODE_INSTANCE_MISMATCH,
+    RUNTIME_CODE_LEASE_INVALID, RUNTIME_CODE_NOT_CONFIRMED, RUNTIME_LEASE_HEADER,
+};
 use lru::LruCache;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -294,6 +299,25 @@ mod runtime_extension {
         InvalidInput(String),
         /// No active lease exists for the client.
         NotFound(String),
+        /// The runtime is quiescing and refuses the registration.
+        Stopping(String),
+    }
+
+    /// Coordinated shutdown failure surfaced by a [`RuntimeControlPlane`].
+    ///
+    /// Kept separate from [`RuntimeLeaseError`] because a shutdown has its own
+    /// stable codes: it is refused for a stale instance, an unconfirmed request
+    /// or a missing lease proof.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum RuntimeShutdownError {
+        /// The request named a different instance than the live one.
+        InstanceMismatch { expected: String, actual: String },
+        /// The request did not carry an explicit confirmation.
+        NotConfirmed,
+        /// The caller has no live lease.
+        LeaseInvalid(String),
+        /// A shutdown is already in flight and the caller asked to restart one.
+        AlreadyStopping,
     }
 
     /// Runtime-owned extension injected into the single canonical control
@@ -329,6 +353,46 @@ mod runtime_extension {
 
         /// Releases a lease.
         fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError>;
+
+        /// Reads the authoritative runtime lifecycle status.
+        ///
+        /// The daemon assembles the phase, the admission gate's epoch/active
+        /// count, the live lease count and the automation keep-alive summary, so
+        /// a client observes the same authority the shutdown coordinator acts on.
+        fn runtime_status(&self) -> chatspeed_contracts::RuntimeStatusDto;
+
+        /// Validates the coordinated-shutdown proof without starting the exit.
+        ///
+        /// The handler validates the proof *before* it consults the idempotency
+        /// cache, so a replayed `202` is still backed by a currently valid
+        /// instance, confirmation and lease instead of replaying an acceptance
+        /// whose lease has since expired or been released.
+        fn validate_shutdown_proof(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            request: &chatspeed_contracts::RuntimeShutdownRequest,
+        ) -> Result<(), RuntimeShutdownError>;
+
+        /// Requests a coordinated shutdown.
+        ///
+        /// The gate is closed synchronously and the accepted operation is
+        /// returned with a [`crate::lifecycle::ShutdownHandoff`] the handler
+        /// holds until it has returned the `202`; the shutdown worker is released
+        /// once that hand-off drops. The lease proof is resolved by the runtime
+        /// authority, so a bearer-only client cannot stop the runtime.
+        fn request_shutdown(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+            request: &chatspeed_contracts::RuntimeShutdownRequest,
+        ) -> Result<
+            (
+                chatspeed_contracts::RuntimeShutdownAcceptedDto,
+                crate::lifecycle::ShutdownHandoff,
+            ),
+            RuntimeShutdownError,
+        >;
     }
 
     /// Options for starting the control plane as the standalone runtime.
@@ -364,7 +428,9 @@ mod runtime_extension {
 }
 
 #[cfg(not(feature = "desktop"))]
-pub use runtime_extension::{RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError};
+pub use runtime_extension::{
+    RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError, RuntimeShutdownError,
+};
 
 #[cfg(not(feature = "desktop"))]
 pub use crate::workflow::react::client::http::web_mcp_commands::{
@@ -406,6 +472,73 @@ pub struct ControlPlaneState {
     /// provider can only be registered against a proven `tauri` lease.
     #[cfg(not(feature = "desktop"))]
     pub(crate) web_provider: Option<Arc<dyn super::web_mcp_commands::RuntimeWebMcpPlane>>,
+    /// Broadcast that flips when the control plane is asked to stop.
+    ///
+    /// Every long-lived route that would otherwise outlive the server watches it:
+    /// an open SSE stream must end on request so axum's graceful shutdown can
+    /// complete instead of hanging on a stream that never finishes. It is
+    /// read-only here; the server task owns the sender.
+    pub(crate) shutdown: tokio::sync::watch::Receiver<bool>,
+}
+
+/// Stable refusal for a closed admission gate.
+///
+/// The runtime is quiescing: it refuses new work with a stable
+/// `runtime_stopping` code so a client does not retry against this instance and
+/// instead re-reads `/control/v1/runtime/status`.
+pub(crate) fn runtime_stopping_response(denied: &crate::lifecycle::AdmissionDenied) -> Response {
+    dto::error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        denied.code,
+        denied.message.clone(),
+    )
+}
+
+/// Stable `runtime_stopping` refusal carrying an already-localized diagnostic.
+///
+/// Used by the non-HTTP canonical layers (e.g. the lease registry) that refuse a
+/// closed gate without an [`crate::lifecycle::AdmissionDenied`] value in hand.
+pub(crate) fn runtime_stopping_message_response(message: String) -> Response {
+    dto::error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+        message,
+    )
+}
+
+impl ControlPlaneState {
+    /// Fences one canonical work start/resume through the installed gate.
+    ///
+    /// Handler-level rather than middleware: a read route never takes an
+    /// admission, and a long work item holds the returned ticket for its whole
+    /// lifetime without holding any gate lock.
+    pub(crate) fn admit_work(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, HandlerRefusal> {
+        self.svc
+            .admit_work(kind)
+            .map_err(|denied| HandlerRefusal::new(runtime_stopping_response(&denied)))
+    }
+}
+
+/// A handler refusal carried by value.
+///
+/// The stable refusal is a whole `Response`, which is large; returning it
+/// directly as a `Result` error would inflate every `Result` in the handler path
+/// (`clippy::result_large_err`), so it is boxed and unwrapped only when the
+/// response is actually returned to the client.
+pub(crate) struct HandlerRefusal(Box<Response>);
+
+impl HandlerRefusal {
+    pub(crate) fn new(response: Response) -> Self {
+        Self(Box::new(response))
+    }
+
+    /// Unwraps into the response to send to the client.
+    pub(crate) fn into_response(self) -> Response {
+        *self.0
+    }
 }
 
 /// Handle for a running control-plane server.
@@ -534,6 +667,12 @@ async fn start_inner(
     #[cfg(not(feature = "desktop"))]
     let bridge = svc.bridge_registry();
 
+    // The shutdown broadcast every observer (including open SSE streams) watches.
+    // Created before the router state so a stream can end the instant the server
+    // is asked to stop, which is what lets graceful shutdown complete instead of
+    // hanging on a never-ending event stream.
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
     let state = ControlPlaneState {
         svc,
         token: token.clone(),
@@ -551,6 +690,7 @@ async fn start_inner(
         bridge,
         #[cfg(not(feature = "desktop"))]
         web_provider,
+        shutdown: shutdown_rx.clone(),
     };
 
     // The runtime sweeper owns terminal and provider lease cleanup. The legacy
@@ -588,7 +728,6 @@ async fn start_inner(
         publish_path.display()
     );
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     #[cfg(not(feature = "desktop"))]
     spawn_runtime_sweeper(
         terminal_for_sweeper,
@@ -932,6 +1071,13 @@ fn build_router(state: ControlPlaneState) -> Router {
                 "/control/v1/clients/{client_id}/release",
                 post(release_client),
             )
+            // Increment-only runtime lifecycle surface (U-4). The status read is
+            // bearer-protected; the shutdown route additionally proves a live
+            // lease, the expected instance id, an explicit confirmation and a
+            // mandatory Idempotency-Key, and answers 202 Accepted (never a
+            // completion claim).
+            .route("/control/v1/runtime/status", get(runtime_status))
+            .route("/control/v1/runtime/shutdown", post(runtime_shutdown))
             .merge(add_legacy_bridge_routes(Router::new()))
             // The desktop Web MCP provider lifecycle is mounted under the same
             // bearer middleware: every call must additionally prove a live
@@ -1015,6 +1161,7 @@ fn runtime_lease_error_response(error: &RuntimeLeaseError) -> Response {
             "not_found",
             format!("No active lease for client `{client_id}`"),
         ),
+        RuntimeLeaseError::Stopping(message) => runtime_stopping_message_response(message.clone()),
     }
 }
 
@@ -1023,6 +1170,9 @@ async fn register_client(State(state): State<ControlPlaneState>, body: String) -
     let Some(runtime) = state.runtime.as_ref() else {
         return runtime_missing_response();
     };
+    // Registering a lease is runtime work, but the fence lives at the lowest
+    // canonical layer (the lease registry itself), so a direct, non-HTTP caller
+    // is refused on the same gate. This handler is a pure transport adapter.
     let request: ClientLeaseRequest = match serde_json::from_str(&body) {
         Ok(request) => request,
         Err(_) => {
@@ -1064,6 +1214,220 @@ async fn release_client(
     match runtime.release_lease(&client_id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => runtime_lease_error_response(&error),
+    }
+}
+
+/// `GET /control/v1/runtime/status` — the authoritative lifecycle status.
+#[cfg(not(feature = "desktop"))]
+async fn runtime_status(State(state): State<ControlPlaneState>) -> Response {
+    let Some(runtime) = state.runtime.as_ref() else {
+        return runtime_missing_response();
+    };
+    Json(runtime.runtime_status()).into_response()
+}
+
+/// Reads the shutdown lease proof from dedicated headers.
+///
+/// The proof travels in the [`RUNTIME_CLIENT_HEADER`] / [`RUNTIME_LEASE_HEADER`]
+/// headers, never in the URL, query string or body, so it cannot leak into a log
+/// line or a history entry.
+#[cfg(not(feature = "desktop"))]
+fn runtime_proof(headers: &HeaderMap) -> Result<(String, String), HandlerRefusal> {
+    let field = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                HandlerRefusal::new(dto::error_response(
+                    StatusCode::FORBIDDEN,
+                    RUNTIME_CODE_LEASE_INVALID,
+                    format!("missing required runtime proof header `{name}`"),
+                ))
+            })
+    };
+    Ok((field(RUNTIME_CLIENT_HEADER)?, field(RUNTIME_LEASE_HEADER)?))
+}
+
+/// Maps a coordinated-shutdown refusal to a stable status and code.
+#[cfg(not(feature = "desktop"))]
+fn runtime_shutdown_error_response(error: &RuntimeShutdownError, service: &str) -> Response {
+    match error {
+        RuntimeShutdownError::InstanceMismatch { expected, actual } => dto::error_response(
+            StatusCode::CONFLICT,
+            RUNTIME_CODE_INSTANCE_MISMATCH,
+            format!("expected instance `{expected}` but the live instance is `{actual}`"),
+        ),
+        RuntimeShutdownError::NotConfirmed => dto::error_response(
+            StatusCode::BAD_REQUEST,
+            RUNTIME_CODE_NOT_CONFIRMED,
+            "the runtime shutdown request must set confirm to true".to_string(),
+        ),
+        RuntimeShutdownError::LeaseInvalid(client_id) => dto::error_response(
+            StatusCode::FORBIDDEN,
+            RUNTIME_CODE_LEASE_INVALID,
+            format!("no live lease for client `{client_id}`"),
+        ),
+        RuntimeShutdownError::AlreadyStopping => dto::error_response(
+            StatusCode::CONFLICT,
+            chatspeed_contracts::RUNTIME_CODE_ALREADY_STOPPING,
+            format!("{service} is already shutting down"),
+        ),
+    }
+}
+
+/// `POST /control/v1/runtime/shutdown` — requests a coordinated shutdown.
+///
+/// The gate is closed synchronously and the accepted operation is answered with
+/// `202 Accepted`. The [`crate::lifecycle::ShutdownHandoff`] is attached to the
+/// response *body* stream, so the shutdown worker is released only once the
+/// caller has consumed or dropped that body — never on handler return. The
+/// handler never awaits this runtime's own server shutdown, so there is no
+/// self-deadlock.
+#[cfg(not(feature = "desktop"))]
+async fn runtime_shutdown(
+    State(state): State<ControlPlaneState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let Some(runtime) = state.runtime.clone() else {
+        return runtime_missing_response();
+    };
+    if !has_idempotency_key(&headers) {
+        return missing_idempotency_key_response("runtime:shutdown");
+    }
+    let (client_id, lease_id) = match runtime_proof(&headers) {
+        Ok(proof) => proof,
+        Err(refusal) => return refusal.into_response(),
+    };
+
+    // Validate the proof *before* the idempotency cache: a replayed `202` must
+    // still be backed by a currently valid instance, confirmation and lease, so
+    // a released or expired lease can never replay an old acceptance.
+    let request: RuntimeShutdownRequest = match serde_json::from_str(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return dto::error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                format!("Invalid runtime shutdown request: {error}"),
+            );
+        }
+    };
+    let service = runtime.service_name().to_string();
+    if let Err(error) = runtime.validate_shutdown_proof(&client_id, &lease_id, &request) {
+        return runtime_shutdown_error_response(&error, &service);
+    }
+
+    // The hand-off produced by the accepted request, taken by the final response
+    // wrapper below. A replayed key runs the closure zero times, so the slot
+    // stays empty and the original worker keeps running (released exactly once).
+    let handoff_slot: Arc<std::sync::Mutex<Option<crate::lifecycle::ShutdownHandoff>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let slot = handoff_slot.clone();
+    let response = with_idempotency(&state, &headers, &body, move |_state, body| async move {
+        let request: RuntimeShutdownRequest = match serde_json::from_str(&body) {
+            Ok(request) => request,
+            Err(error) => {
+                return dto::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_input",
+                    format!("Invalid runtime shutdown request: {error}"),
+                );
+            }
+        };
+        match runtime.request_shutdown(&client_id, &lease_id, &request) {
+            Ok((accepted, handoff)) => {
+                *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handoff);
+                (StatusCode::ACCEPTED, Json(accepted)).into_response()
+            }
+            Err(error) => runtime_shutdown_error_response(&error, &service),
+        }
+    })
+    .await;
+
+    // The idempotency layer has already captured the buffered response as bytes;
+    // wrap the final (possibly replayed) outer body so the worker is released on
+    // body completion or drop, never on handler return.
+    let handoff = handoff_slot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    attach_shutdown_handoff(response, handoff).await
+}
+
+/// Bounded read for the buffered shutdown acceptance body.
+#[cfg(not(feature = "desktop"))]
+const SHUTDOWN_BODY_BYTES: usize = 64 * 1024;
+
+/// Wraps an accepted shutdown response so the [`crate::lifecycle::ShutdownHandoff`]
+/// is owned by the response body stream.
+///
+/// The first poll yields the entire JSON body; the end of the body (or a drop of
+/// the stream) releases the worker exactly once. When no hand-off was produced
+/// (a replayed or refused response) the response is returned untouched.
+#[cfg(not(feature = "desktop"))]
+async fn attach_shutdown_handoff(
+    response: Response,
+    handoff: Option<crate::lifecycle::ShutdownHandoff>,
+) -> Response {
+    let Some(handoff) = handoff else {
+        return response;
+    };
+    let (parts, body) = response.into_parts();
+    let bytes = match axum::body::to_bytes(body, SHUTDOWN_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            // The buffered body was unreadable; release the worker immediately
+            // rather than stranding it behind a body nobody can consume.
+            drop(handoff);
+            return Response::from_parts(parts, axum::body::Body::empty());
+        }
+    };
+    let stream = ShutdownBodyStream {
+        bytes: Some(bytes),
+        handoff: Some(handoff),
+    };
+    Response::builder()
+        .status(parts.status)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from_stream(stream))
+        .unwrap_or_else(|_| {
+            dto::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Failed to build the shutdown response".to_string(),
+            )
+        })
+}
+
+/// Response body stream that owns the shutdown hand-off.
+///
+/// The first poll returns the whole body; the following poll (EOF) drops the
+/// hand-off and releases the worker. Dropping the stream early also releases it,
+/// so a client that disconnects still lets the exit proceed.
+#[cfg(not(feature = "desktop"))]
+struct ShutdownBodyStream {
+    bytes: Option<axum::body::Bytes>,
+    handoff: Option<crate::lifecycle::ShutdownHandoff>,
+}
+
+#[cfg(not(feature = "desktop"))]
+impl futures_util::Stream for ShutdownBodyStream {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if let Some(bytes) = self.bytes.take() {
+            return std::task::Poll::Ready(Some(Ok(bytes)));
+        }
+        // EOF: release the worker exactly once, then end the body.
+        self.handoff.take();
+        std::task::Poll::Ready(None)
     }
 }
 
@@ -1242,6 +1606,12 @@ async fn start_workflow(
     body: String,
 ) -> Response {
     with_idempotency(&state, &headers, &body, |state, body| async move {
+        // The admission ticket is held across the whole start, so the shutdown
+        // drain observes an in-flight start and a quiescing runtime refuses it.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowStart) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         let mut request: WorkflowStartRequest = match serde_json::from_str(&body) {
             Ok(request) => request,
             Err(error) => {
@@ -1273,6 +1643,11 @@ async fn signal_workflow(
     body: String,
 ) -> Response {
     with_idempotency(&state, &headers, &body, |state, body| async move {
+        // A signal can resume a waiting session, so it is fenced like a start.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowResume) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         // The signal body is forwarded verbatim; typed signal validation stays
         // in the application service (INV-3).
         match state.svc.workflow_signal(&session_id, body).await {
@@ -1974,6 +2349,12 @@ async fn install_capability_mcp(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, |state, body| async move {
+        // Installing and starting an MCP server is runtime work: fence it so a
+        // quiescing runtime refuses to start a server it could not drain.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::CapabilityStart) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         let descriptor: serde_json::Value = match serde_json::from_str(&body) {
             Ok(value) => value,
             Err(error) => {
@@ -2036,6 +2417,11 @@ async fn enable_capability_mcp(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, |state, body| async move {
+        // Starting an MCP server is runtime work: fence it.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::CapabilityStart) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         let id = match parse_mcp_id(&body) {
             Ok(id) => id,
             Err(response) => return response,
@@ -2092,6 +2478,11 @@ async fn restart_capability_mcp(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, |state, body| async move {
+        // Restarting is a stop-then-start, so it starts a server: fence it.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::CapabilityStart) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         let id = match parse_mcp_id(&body) {
             Ok(id) => id,
             Err(response) => return response,
@@ -2474,6 +2865,21 @@ fn snake_json_response(value: Result<serde_json::Value, serde_json::Error>) -> R
     }
 }
 
+/// Canonical hash of a mutation body for the idempotency comparison.
+///
+/// A JSON body is hashed by its normalized serialization (sorted keys, no
+/// insignificant whitespace), so an equivalent re-send replays instead of being
+/// refused as "a different body"; a non-JSON body falls back to the raw bytes.
+fn canonical_body_hash(body: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => value.to_string().hash(&mut hasher),
+        Err(_) => body.hash(&mut hasher),
+    }
+    hasher.finish()
+}
+
 /// Executes a mutation with instance-local idempotency semantics:
 /// - no `Idempotency-Key` header: execute directly;
 /// - same key + same body: replay the stored response (no double effect);
@@ -2481,6 +2887,9 @@ fn snake_json_response(value: Result<serde_json::Value, serde_json::Error>) -> R
 /// - a response larger than the replay-cache bound is recorded as an explicit
 ///   `500` so a retry replays that failure instead of re-executing the effect.
 ///
+/// The body comparison is a *canonical* hash: a JSON body is hashed by its
+/// normalized serialization, so a re-sent equivalent body replays instead of
+/// being refused as a different one.
 /// Read commands must not call this at all: they bypass the replay cache, so a
 /// large read response is never truncated and never conflicts on a reused key.
 pub(crate) async fn with_idempotency<F, Fut, T>(
@@ -2503,12 +2912,7 @@ where
         }
     };
 
-    let body_hash = {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        body.hash(&mut hasher);
-        hasher.finish()
-    };
+    let body_hash = canonical_body_hash(body);
 
     // Reserve the key atomically: concurrent identical requests either replay
     // a finished result, wait for the single in-flight execution, or conflict
@@ -2793,6 +3197,17 @@ async fn set_automation_enabled(
     key: String,
     enabled: bool,
 ) -> Response {
+    // Enabling an automation can introduce new activity at any moment, so it is
+    // admitted like a work claim: a quiescing runtime refuses it rather than
+    // enabling work it could never run during this lifecycle.
+    let _ticket = if enabled {
+        match state.admit_work(crate::lifecycle::WorkKind::ManualClaim) {
+            Ok(ticket) => Some(ticket),
+            Err(refusal) => return refusal.into_response(),
+        }
+    } else {
+        None
+    };
     match state.svc.automation().set_enabled(
         &automation_id,
         enabled,
@@ -2853,6 +3268,12 @@ async fn run_automation(
     }
     let key = idempotency_key(&headers);
     with_idempotency(&state, &headers, &body, move |state, _body| async move {
+        // A manual run is a work claim: fence it so a quiescing runtime refuses
+        // it and the drain observes an accepted run in flight.
+        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::ManualClaim) {
+            Ok(ticket) => ticket,
+            Err(refusal) => return refusal.into_response(),
+        };
         match state
             .svc
             .automation_run_with_receipt(
@@ -5342,6 +5763,157 @@ mod tests {
         .await
     }
 
+    /// Builds the three proof/idempotency headers the shutdown route requires.
+    #[cfg(not(feature = "desktop"))]
+    fn shutdown_headers(client_id: &str, lease_id: &str, key: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HeaderName::from_static("idempotency-key"),
+            axum::http::HeaderValue::from_str(key).expect("key"),
+        );
+        headers.insert(
+            axum::http::header::HeaderName::from_bytes(RUNTIME_CLIENT_HEADER.as_bytes())
+                .expect("client header"),
+            axum::http::HeaderValue::from_str(client_id).expect("client id"),
+        );
+        headers.insert(
+            axum::http::header::HeaderName::from_bytes(RUNTIME_LEASE_HEADER.as_bytes())
+                .expect("lease header"),
+            axum::http::HeaderValue::from_str(lease_id).expect("lease id"),
+        );
+        headers
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    fn valid_shutdown_body() -> String {
+        r#"{"expected_instance_id":"test-instance","confirm":true,"force":false}"#.to_string()
+    }
+
+    /// Controllable runtime authority for the shutdown-route tests.
+    ///
+    /// It records how many times the shutdown *effect* started and hands the
+    /// worker receiver back to the test, so a test can prove the effect is bound
+    /// to the response body (not the handler return) and that the proof is
+    /// validated before the idempotency cache.
+    #[cfg(not(feature = "desktop"))]
+    struct ShutdownStub {
+        proof_invalid: std::sync::atomic::AtomicBool,
+        starts: std::sync::atomic::AtomicUsize,
+        released: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    impl ShutdownStub {
+        fn new() -> Self {
+            Self {
+                proof_invalid: std::sync::atomic::AtomicBool::new(false),
+                starts: std::sync::atomic::AtomicUsize::new(0),
+                released: Mutex::new(None),
+            }
+        }
+
+        fn take_receiver(&self) -> Option<tokio::sync::oneshot::Receiver<()>> {
+            self.released.lock().unwrap().take()
+        }
+
+        fn starts(&self) -> usize {
+            self.starts.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    impl RuntimeControlPlane for ShutdownStub {
+        fn service_name(&self) -> &str {
+            "chatspeed-runtime"
+        }
+
+        fn register_lease(
+            &self,
+            _request: &ClientLeaseRequest,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+            Err(RuntimeLeaseError::InvalidInput("unused".to_string()))
+        }
+
+        fn renew_lease(&self, _client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+            Err(RuntimeLeaseError::NotFound("unused".to_string()))
+        }
+
+        fn validate_lease(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+        ) -> Result<ClientLease, RuntimeLeaseError> {
+            Err(RuntimeLeaseError::NotFound("unused".to_string()))
+        }
+
+        fn release_lease(&self, _client_id: &str) -> Result<(), RuntimeLeaseError> {
+            Ok(())
+        }
+
+        fn runtime_status(&self) -> chatspeed_contracts::RuntimeStatusDto {
+            chatspeed_contracts::RuntimeStatusDto {
+                protocol_version: chatspeed_contracts::PROTOCOL_VERSION.to_string(),
+                schema_version: chatspeed_contracts::RUNTIME_LIFECYCLE_SCHEMA_VERSION.to_string(),
+                service: self.service_name().to_string(),
+                instance_id: "test-instance".to_string(),
+                pid: std::process::id(),
+                phase: chatspeed_contracts::RuntimeLifecyclePhase::Running,
+                epoch: 0,
+                active_admissions: 0,
+                active_leases: 0,
+                quiesced: false,
+                automation: chatspeed_contracts::RuntimeAutomationSummaryDto {
+                    effective_schedules: 0,
+                    live_automation_runs: 0,
+                    in_flight_admissions: 0,
+                    blocked_reconcile: 0,
+                    health: chatspeed_contracts::RuntimeAutomationHealth::Healthy,
+                    keep_alive: false,
+                },
+                operation: None,
+            }
+        }
+
+        fn validate_shutdown_proof(
+            &self,
+            client_id: &str,
+            _lease_id: &str,
+            _request: &RuntimeShutdownRequest,
+        ) -> Result<(), RuntimeShutdownError> {
+            if self.proof_invalid.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(RuntimeShutdownError::LeaseInvalid(client_id.to_string()));
+            }
+            Ok(())
+        }
+
+        fn request_shutdown(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+            request: &RuntimeShutdownRequest,
+        ) -> Result<
+            (chatspeed_contracts::RuntimeShutdownAcceptedDto, crate::lifecycle::ShutdownHandoff),
+            RuntimeShutdownError,
+        > {
+            self.starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (handoff, receiver) = crate::lifecycle::ShutdownHandoff::channel();
+            *self.released.lock().unwrap() = Some(receiver);
+            Ok((
+                chatspeed_contracts::RuntimeShutdownAcceptedDto {
+                    schema_version: chatspeed_contracts::RUNTIME_LIFECYCLE_SCHEMA_VERSION
+                        .to_string(),
+                    service: self.service_name().to_string(),
+                    instance_id: "test-instance".to_string(),
+                    operation_id: "test-op".to_string(),
+                    stage: chatspeed_contracts::RuntimeOperationStage::Accepted,
+                    accepted: true,
+                    force: request.force,
+                },
+                handoff,
+            ))
+        }
+    }
+
     /// Builds a minimal control-plane state around an isolated service so a test
     /// can mount one extra probe route without touching the real listener.
     #[cfg(not(feature = "desktop"))]
@@ -5360,7 +5932,229 @@ mod tests {
             ),
             bridge,
             web_provider: None,
+            shutdown: tokio::sync::watch::channel(false).1,
         }
+    }
+
+    /// An open SSE stream must end when the control plane is asked to stop, so
+    /// axum's graceful shutdown (and therefore `ControlPlaneHandle::wait`) can
+    /// complete instead of hanging on a stream that never finishes.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn an_open_sse_stream_ends_when_the_control_plane_is_asked_to_stop() {
+        let (app, _env) = spawn_test_app().await;
+
+        // A probe state over the same service, but with a shutdown channel the
+        // test owns so it can flip the broadcast.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut state = probe_control_plane_state(app.svc.clone());
+        state.shutdown = shutdown_rx;
+
+        // Create a live session channel so the subscription is a stream that would
+        // otherwise only ever emit keepalives.
+        let session_id = "sse-abort-session".to_string();
+        app.svc
+            .gateway
+            .broker()
+            .publish(
+                &session_id,
+                crate::workflow::react::types::GatewayPayload::Chunk {
+                    content: "hello".to_string(),
+                },
+            )
+            .await;
+
+        let response = super::sse::stream_workflow_events(
+            axum::extract::State(state),
+            axum::extract::Path(session_id),
+            axum::extract::Query(super::sse::StreamQuery::default()),
+            HeaderMap::new(),
+        )
+        .await
+        .into_response();
+
+        let body_task = tokio::spawn(async move {
+            axum::body::to_bytes(response.into_body(), usize::MAX).await
+        });
+
+        // The stream is live: with a live session it keeps streaming and would not
+        // finish on its own.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(
+            !body_task.is_finished(),
+            "an SSE stream over a live session keeps streaming"
+        );
+
+        // Asking the control plane to stop ends the stream within the bound; the
+        // timeout above would have fired on a stream that never finishes.
+        let _ = shutdown_tx.send(true);
+        let body = tokio::time::timeout(std::time::Duration::from_secs(2), body_task)
+            .await
+            .expect("the open stream ends when the shutdown broadcast fires")
+            .expect("join")
+            .expect("body");
+        // Any bytes the stream produced are SSE frames (a comment/keepalive or a
+        // `data:` event); the point is that it ended.
+        if !body.is_empty() {
+            let text = String::from_utf8_lossy(&body);
+            assert!(
+                text.contains("data:") || text.starts_with(':'),
+                "unexpected SSE body: {text}"
+            );
+        }
+    }
+
+    /// The shutdown acknowledgement is bound to the response *body*, not the
+    /// handler return: the worker stays unstarted until the body is consumed or
+    /// the response is dropped, and then it starts exactly once.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn runtime_shutdown_ack_binds_to_the_response_body_not_the_handler_return() {
+        let (app, _env) = spawn_test_app().await;
+        let stub = Arc::new(ShutdownStub::new());
+        let mut state = probe_control_plane_state(app.svc.clone());
+        state.runtime = Some(stub.clone() as Arc<dyn RuntimeControlPlane>);
+
+        // Consume path.
+        let response = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "ack-consume"),
+            valid_shutdown_body(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(stub.starts(), 1, "the effect started once");
+        let mut released = stub.take_receiver().expect("worker receiver");
+        assert!(
+            released.try_recv().is_err(),
+            "the worker must not start before the body is consumed"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("operation_id"),
+            "the accepted body is delivered intact"
+        );
+        assert_eq!(
+            released.try_recv(),
+            Ok(()),
+            "consuming the body releases the worker"
+        );
+        assert!(
+            released.try_recv().is_err(),
+            "the release fires exactly once"
+        );
+
+        // Drop path.
+        let response = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "ack-drop"),
+            valid_shutdown_body(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(stub.starts(), 2);
+        let mut released = stub.take_receiver().expect("worker receiver");
+        assert!(released.try_recv().is_err());
+        drop(response);
+        assert_eq!(
+            released.try_recv(),
+            Ok(()),
+            "dropping the response releases the worker"
+        );
+    }
+
+    /// The proof is validated *before* the idempotency cache, so a cached
+    /// acceptance can no longer be replayed once its proof is invalid, while a
+    /// same-key/same-body retry still replays and a changed body still conflicts.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn runtime_shutdown_validates_the_proof_before_the_idempotency_cache() {
+        let (app, _env) = spawn_test_app().await;
+        let stub = Arc::new(ShutdownStub::new());
+        let mut state = probe_control_plane_state(app.svc.clone());
+        state.runtime = Some(stub.clone() as Arc<dyn RuntimeControlPlane>);
+
+        let body = valid_shutdown_body();
+
+        let first = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "proof-1"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let _ = axum::body::to_bytes(first.into_body(), usize::MAX).await;
+
+        // Same key + same canonical body replays without a second start.
+        let replay = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "proof-1"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::ACCEPTED);
+        let _ = axum::body::to_bytes(replay.into_body(), usize::MAX).await;
+        assert_eq!(stub.starts(), 1, "a replay must not start a second effect");
+
+        // Same key + a different body is a canonical-hash conflict.
+        let conflict = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "proof-1"),
+            r#"{"expected_instance_id":"test-instance","confirm":true,"force":true}"#.to_string(),
+        )
+        .await;
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+
+        // Once the proof is no longer valid the cached acceptance cannot replay.
+        stub.proof_invalid
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let refused = runtime_shutdown(
+            State(state.clone()),
+            shutdown_headers("client-a", "lease-a", "proof-1"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let envelope: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(envelope["error"]["code"], "lease_invalid");
+        assert_eq!(stub.starts(), 1);
+    }
+
+    /// A canonical core refuses a direct, non-HTTP call on the one gate with the
+    /// stable `runtime_stopping` application error.
+    #[cfg(not(feature = "desktop"))]
+    #[tokio::test]
+    async fn a_canonical_core_refuses_a_direct_non_http_call_once_quiesced() {
+        let (app, _env) = spawn_test_app().await;
+        let gate = Arc::new(crate::lifecycle::RuntimeLifecycleGate::new());
+        app.svc
+            .install_admission(gate.clone() as Arc<dyn crate::lifecycle::WorkAdmission>);
+
+        // Running: a direct admission succeeds and counts as in-flight work.
+        let ticket = app
+            .svc
+            .admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowStart)
+            .expect("admitted while running");
+        assert_eq!(gate.active_admissions(), 1);
+        drop(ticket);
+
+        // Quiesced: the same canonical core refuses for a non-HTTP caller.
+        assert!(gate.begin_quiesce());
+        let denied = app
+            .svc
+            .admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowStart)
+            .expect_err("refused once quiesced");
+        assert_eq!(
+            denied.kind,
+            crate::workflow::react::application::ApplicationErrorKind::Stopping
+        );
+        let response = dto::application_error_response(&denied);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     /// A mutation whose response exceeds the bounded replay cache must fail
@@ -6184,6 +6978,67 @@ mod chat_route_tests {
         fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError> {
             self.leases.lock().unwrap().remove(client_id);
             Ok(())
+        }
+
+        fn runtime_status(&self) -> chatspeed_contracts::RuntimeStatusDto {
+            chatspeed_contracts::RuntimeStatusDto {
+                protocol_version: chatspeed_contracts::PROTOCOL_VERSION.to_string(),
+                schema_version: chatspeed_contracts::RUNTIME_LIFECYCLE_SCHEMA_VERSION.to_string(),
+                service: self.service_name().to_string(),
+                instance_id: "test-instance".to_string(),
+                pid: std::process::id(),
+                phase: chatspeed_contracts::RuntimeLifecyclePhase::Running,
+                epoch: 0,
+                active_admissions: 0,
+                active_leases: self.leases.lock().unwrap().len(),
+                quiesced: false,
+                automation: chatspeed_contracts::RuntimeAutomationSummaryDto {
+                    effective_schedules: 0,
+                    live_automation_runs: 0,
+                    in_flight_admissions: 0,
+                    blocked_reconcile: 0,
+                    health: chatspeed_contracts::RuntimeAutomationHealth::Healthy,
+                    keep_alive: false,
+                },
+                operation: None,
+            }
+        }
+
+        fn validate_shutdown_proof(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+            _request: &chatspeed_contracts::RuntimeShutdownRequest,
+        ) -> Result<(), RuntimeShutdownError> {
+            Ok(())
+        }
+
+        fn request_shutdown(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+            request: &chatspeed_contracts::RuntimeShutdownRequest,
+        ) -> Result<
+            (
+                chatspeed_contracts::RuntimeShutdownAcceptedDto,
+                crate::lifecycle::ShutdownHandoff,
+            ),
+            RuntimeShutdownError,
+        > {
+            let (handoff, _rx) = crate::lifecycle::ShutdownHandoff::channel();
+            Ok((
+                chatspeed_contracts::RuntimeShutdownAcceptedDto {
+                    schema_version: chatspeed_contracts::RUNTIME_LIFECYCLE_SCHEMA_VERSION
+                        .to_string(),
+                    service: self.service_name().to_string(),
+                    instance_id: "test-instance".to_string(),
+                    operation_id: "test-op".to_string(),
+                    stage: chatspeed_contracts::RuntimeOperationStage::Accepted,
+                    accepted: true,
+                    force: request.force,
+                },
+                handoff,
+            ))
         }
     }
 

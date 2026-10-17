@@ -2713,7 +2713,12 @@ impl WorkflowExecutor {
                 )
                 .with_sandbox_config(sandbox_config)
                 .with_approved_execution_plans(self.approved_shell_execution_plans.clone())
-                .with_gateway(self.gateway.clone(), self.session_id.clone()),
+                .with_gateway(self.gateway.clone(), self.session_id.clone())
+                // Register this workflow's shell children on the one
+                // runtime-wide owned-process signal the runtime owner installed,
+                // so a coordinated shutdown reaches them. Unset on a
+                // desktop-free state, which then behaves exactly as before.
+                .with_owned_process_cancellation(self.chat_state.owned_process_cancellation()),
             ))
             .await?;
         }
@@ -5836,6 +5841,7 @@ impl WorkflowExecutor {
             crate::tools::ToolError::StateChangeFailed(_) => "StateChangeFailed",
             crate::tools::ToolError::Store(_) => "Store",
             crate::tools::ToolError::Security(_) => "Security",
+            crate::tools::ToolError::RuntimeStopping(_) => "RuntimeStopping",
         }
     }
 

@@ -100,3 +100,17 @@ whatlang         = "0.18.0"
 wildmatch        = "2.6.1"
 xxhash-rust      = { version = "0.8.15", features = ["xxh32"] }
 zip              = "8.6.0"
+
+# Windows-only: the owned-process supervisor terminates a shell's whole tree
+# through a Job Object (`Win32_System_JobObjects`), and the idle-sleep inhibitor
+# toggles `SetThreadExecutionState` (`Win32_System_Power`). `windows-sys` is
+# already in the workspace lock (0.61); this crate pins only the features it
+# uses, and the desktop never links this Windows path.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+] }

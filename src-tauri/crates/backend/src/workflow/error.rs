@@ -112,6 +112,7 @@ impl From<crate::tools::ToolError> for WorkflowError {
             crate::tools::ToolError::Security(msg) => {
                 WorkflowError::Execution(format!("[Security] {}", msg))
             }
+            crate::tools::ToolError::RuntimeStopping(msg) => WorkflowError::Execution(msg),
         }
     }
 }

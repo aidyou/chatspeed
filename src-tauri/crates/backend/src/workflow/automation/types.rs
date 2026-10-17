@@ -302,3 +302,69 @@ pub enum AutomationDispatchOutcome {
     /// The scheduled slot was already claimed or is no longer due (stale claim).
     Skipped,
 }
+
+/// One-time startup schedule normalization report.
+///
+/// The daemon runs exactly one normalization pass at boot: any enabled
+/// automation whose stored slot was at or before the startup cutoff (missed
+/// while offline) is advanced to its next future slot, and a `once` schedule
+/// that has already elapsed is cleared. A stored future slot is left untouched,
+/// a stored `NULL` slot stays `NULL` (it currently defines no next slot, so
+/// filling it would reactivate a schedule the user no longer has), and every
+/// write is a revision CAS so a concurrent edit is never overwritten.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AutomationStartupNormalizeReport {
+    /// Enabled automations examined by the pass.
+    pub examined: i64,
+    /// Slots advanced to a strictly future occurrence.
+    pub advanced: i64,
+    /// Non-recurring/out-of-range slots cleared to `None`.
+    pub expired: i64,
+    /// Rows skipped because a concurrent write moved the revision.
+    pub conflicts: i64,
+    /// Rows already correct: a future slot, an untouched `NULL`/unreadable
+    /// cursor, or an already-normalized row.
+    pub unchanged: i64,
+    /// Rows whose schedule configuration could not be recomputed.
+    pub failed: i64,
+}
+
+/// Runtime keep-alive and health summary for the scheduler daemon.
+///
+/// Only a legal future schedule, a due slot this instance was continuously
+/// online for, a live manager-owned run, or an in-flight admission keeps the
+/// runtime alive. A disabled or slot-less automation, an expired configuration,
+/// a historical terminal run, or an orphaned run this instance does not own
+/// never keeps it alive on its own. An unreadable store degrades the report to
+/// `unknown` health rather than a fabricated zero count, so a transient store
+/// failure can never look like "nothing to do".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AutomationRuntimeSummary {
+    /// Enabled automations with a legal future slot (or a continuously-online due
+    /// slot) that is not blocked by an active/unknown run.
+    pub effective_schedules: i64,
+    /// Non-terminal runs whose session is live in the workflow manager.
+    pub live_automation_runs: i64,
+    /// Run ids this instance has admitted but not yet linked to a session.
+    pub in_flight_admissions: i64,
+    /// Non-terminal runs that are not live (needs-reconcile or an orphaned run
+    /// this instance does not own); they block their schedule from dispatching.
+    pub blocked_reconcile: i64,
+    /// Whether the runtime must stay alive for at least one reason above.
+    pub keep_alive: bool,
+    pub health: AutomationRuntimeHealth,
+}
+
+/// Observation health of the runtime summary. `degraded` means blocked work or
+/// an unusable schedule configuration exists (a diagnostic downgrade, not a
+/// keep-alive reason); `unknown` means this process cannot observe live state at
+/// all — no runtime owner, or the store could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationRuntimeHealth {
+    Healthy,
+    Degraded,
+    Unknown,
+}

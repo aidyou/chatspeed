@@ -10,6 +10,7 @@ rust_i18n::i18n!("i18n", fallback = "en");
 
 pub mod args;
 mod automation;
+mod automation_input;
 mod capability;
 mod client;
 mod discovery;

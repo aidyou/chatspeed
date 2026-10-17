@@ -1842,6 +1842,9 @@ pub(crate) async fn create_workflow_core(
     svc: &WorkflowApplicationService,
     request: WorkflowCreateRequest,
 ) -> Result<String, ApplicationError> {
+    // Creating the workflow DB shell (and the resources it reserves) is the
+    // start of a session, so it is fenced at this lowest layer.
+    let _ticket = svc.admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowStart)?;
     let (agent, runtime) = {
         let store = &*svc.main_store;
         let agent = store
@@ -3603,6 +3606,12 @@ pub(crate) async fn workflow_start_core(
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, ApplicationError> {
+    // Starting or resuming a session is canonical runtime work: fence it at this
+    // lowest layer so a direct, non-HTTP caller is refused on the one gate. A
+    // nested call inside an already-admitted task (e.g. automation dispatch)
+    // joins the existing scope instead of admitting twice.
+    let _ticket = svc.admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowStart)?;
+
     log::info!(
         "[Workflow][session={}][phase=start] Starting workflow, agent_id={}, planning_mode={}",
         session_id,
@@ -4148,6 +4157,20 @@ pub(crate) async fn workflow_signal_core(
         session_id,
         signal_type
     );
+
+    // A signal that resumes a session is canonical runtime work and is fenced at
+    // this lowest layer, so a direct, non-HTTP caller is refused on the one gate.
+    // A Stop signal is deliberately exempt: stopping and cleanup must always be
+    // available, even while the runtime is quiescing.
+    let fence_signal_enum = serde_json::from_str::<serde_json::Value>(&signal)
+        .ok()
+        .and_then(|value| value["type"].as_str().map(SignalType::from_str))
+        .flatten();
+    let _ticket = if matches!(fence_signal_enum, Some(SignalType::Stop)) {
+        None
+    } else {
+        Some(svc.admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowResume)?)
+    };
 
     let workflow_manager_arc = svc.workflow_manager.clone();
     let gateway_arc = svc.gateway.clone();
@@ -4768,6 +4791,61 @@ pub(crate) async fn workflow_signal_core(
 #[cfg(not(feature = "desktop"))]
 fn is_terminal_workflow_status(status: &str) -> bool {
     matches!(status, "completed" | "error" | "cancelled")
+}
+
+/// Stops every workflow this instance is actively running.
+///
+/// The coordinated shutdown cancels the live roots here (and, through
+/// [`workflow_stop_core`], their owned children) instead of only closing the
+/// admission gate. It enumerates the live [`WorkflowManager`] registry directly:
+/// the manager is the authority on what this process is running right now, so a
+/// live session whose durable row is missing or already terminal is still
+/// stopped, and a durable live row with no manager session is not this
+/// instance's work and is left alone. Returns how many sessions were live and
+/// how many were signalled; a successful signal is only a *request*, so the live
+/// list is re-checked before returning and a session that is still live is
+/// reported rather than counted as terminal (`see CONSTITUTION.md §5.3`).
+#[cfg(not(feature = "desktop"))]
+pub(crate) async fn workflow_stop_all_owned_core(
+    svc: &WorkflowApplicationService,
+) -> (usize, usize) {
+    let target_ids = svc.workflow_manager.live_session_ids();
+    let live = target_ids.len();
+
+    let mut stopped = 0;
+    for session_id in target_ids {
+        match workflow_stop_core(svc, session_id.clone()).await {
+            Ok(()) => stopped += 1,
+            Err(error) => log::warn!(
+                "[Workflow][session={}][phase=stop_all] stop failed: {error}",
+                session_id
+            ),
+        }
+    }
+
+    // A stop call only *requests* the stop; the executor leaves its live state
+    // asynchronously. Confirm the live list is empty within a short bounded
+    // budget so the caller never reads `stopped` as a terminal count while a
+    // session is still live. The caller's shared shutdown deadline bounds the
+    // whole cancelling phase on top of this.
+    let confirm_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let remaining = svc.workflow_manager.live_session_ids();
+        if remaining.is_empty() {
+            break;
+        }
+        if tokio::time::Instant::now() >= confirm_deadline {
+            log::warn!(
+                "[Workflow][phase=stop_all] {} live session(s) still listed after stop: {:?}",
+                remaining.len(),
+                remaining
+            );
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    (live, stopped)
 }
 
 #[cfg(not(feature = "desktop"))]

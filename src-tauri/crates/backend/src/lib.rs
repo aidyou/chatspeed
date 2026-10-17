@@ -67,6 +67,14 @@ pub mod tools;
 
 pub mod capability;
 
+/// The single runtime work-admission gate and lifecycle seam (U-4).
+///
+/// One gate instance fences every canonical work entry point; the daemon drives
+/// its forward-only phase machine, and the application service and control plane
+/// fence the work they start through it. Transport-neutral, so it compiles in
+/// every backend build.
+pub mod lifecycle;
+
 /// The shared, filesystem-free error codes, manifest descriptor and wire DTOs
 /// for the runtime-owned `agent-skills` plugin service.
 ///
@@ -111,6 +119,15 @@ pub mod environment;
 /// while this module publishes typed events into a bounded per-session
 /// broadcast the control plane relays over SSE.
 pub mod terminal;
+
+/// The runtime-owned cancellable child-process supervisor for work that must not
+/// outlive the runtime (the automation pre-workflow shell).
+///
+/// A shell started here runs in its own process session/group, so a coordinated
+/// shutdown can terminate the whole owned tree through one runtime-wide
+/// cancellation signal and await the teardown, instead of relying on a dropped
+/// handle. See [`owned_process`].
+pub mod owned_process;
 
 /// The single canonical runtime owner assembly.
 pub mod owner;

@@ -111,10 +111,13 @@ Chatspeed 从 v2.0 起引入了**工具驱动的工作流引擎**，专为编程
 
 **我们强烈建议您从 [官方文档网站](https://docs.chatspeed.aidyou.ai/zh/) 开始，以获得最佳的阅读和学习体验。**
 
+内置的 `cscli` 命令行与本地工作流自动化面向开发者的说明位于本仓库：参见 [`docs/cscli.md`](./docs/cscli.md)。
+
 <details>
 <summary>或者，点击此处展开详细的文档索引</summary>
 
 - [Chatspeed](https://docs.chatspeed.aidyou.ai/zh/)
+- [cscli 命令行与自动化（开发者参考）](./docs/cscli.md)
 - [功能概览](https://docs.chatspeed.aidyou.ai/zh/guide/features/overview.html)
 - [指南](https://docs.chatspeed.aidyou.ai/zh/guide/)
   - [快速开始](https://docs.chatspeed.aidyou.ai/zh/guide/quickStart.html)

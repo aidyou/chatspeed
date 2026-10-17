@@ -1,6 +1,6 @@
 //! Clap command tree for the `cscli` CLI.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Long help for `--agent-config`: the full camelCase inheritedAgentConfig
@@ -29,6 +29,31 @@ contextSize?, maxTokens?, functionCall?}}
 Notes: maxContexts is not inherited; unknown keys are ignored; --model is a \
 shortcut for models.act.";
 
+/// Every friendly automation field flag, so the raw document inputs
+/// (`--spec-json`/`--spec-file`/`--intent`) can declare themselves mutually
+/// exclusive with the friendly path from one place.
+const FRIENDLY_ARG_IDS: [&str; 19] = [
+    "title",
+    "agent",
+    "prompt",
+    "prompt_file",
+    "every",
+    "daily",
+    "once",
+    "weekdays",
+    "start_date",
+    "end_date",
+    "anchor_time",
+    "allowed_paths",
+    "clear_allowed_paths",
+    "enabled",
+    "disabled",
+    "continuous_context",
+    "no_continuous_context",
+    "self_review",
+    "no_self_review",
+];
+
 /// Machine-stable output formats. `human` is localized and may change;
 /// `json`/`jsonl` are versioned machine contracts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -45,7 +70,7 @@ pub enum OutputFormat {
     version,
     about = "ChatSpeed workflow CLI",
     long_about = "ChatSpeed workflow CLI.\n\n\
-        `cscli` talks to a running ChatSpeed desktop app over its local loopback\n\
+        `cscli` talks to the running ChatSpeed app over its local loopback\n\
         control plane. It never opens the database or runs agents itself.\n\n\
         Exit codes:\n  \
         0  success\n  \
@@ -120,7 +145,7 @@ pub enum Command {
     /// can never grant a new shell/path/network/MCP/Skill permission.
     Automation {
         #[command(subcommand)]
-        command: AutomationCommand,
+        command: Box<AutomationCommand>,
     },
 }
 
@@ -259,6 +284,75 @@ pub enum McpCommand {
     },
 }
 
+/// Friendly automation fields shared by `create`, `update` and `draft`.
+///
+/// These flags are the validated alternative to a raw `--spec-json`/`--spec-file`
+/// document: they are translated into the canonical `snake_case`
+/// `AutomationSpec` the control plane deserializes. The two inputs are mutually
+/// exclusive, and a combination that the schedule cannot express (for example a
+/// weekday window on a one-shot schedule) is rejected rather than silently
+/// dropped.
+#[derive(Debug, Clone, Args)]
+pub struct AutomationFriendlyArgs {
+    /// Automation title.
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Existing agent id the automation runs with.
+    #[arg(long)]
+    pub agent: Option<String>,
+    /// Inline prompt text; `-` reads it from stdin.
+    #[arg(long, conflicts_with = "prompt_file")]
+    pub prompt: Option<String>,
+    /// Read the prompt text from a file (`-` for stdin).
+    #[arg(long)]
+    pub prompt_file: Option<PathBuf>,
+    /// Run every interval, e.g. `5m` or `1h` (minimum 5 minutes).
+    #[arg(long)]
+    pub every: Option<String>,
+    /// Run at a local `HH:MM` time; repeat the flag for several times a day.
+    #[arg(long = "daily")]
+    pub daily: Vec<String>,
+    /// Run once at an RFC3339 timestamp or a local `YYYY-MM-DD HH:MM[:SS]`.
+    #[arg(long)]
+    pub once: Option<String>,
+    /// Allowed weekdays as `1,2,3,4,5` (1 = Monday .. 7 = Sunday).
+    #[arg(long)]
+    pub weekdays: Option<String>,
+    /// First effective date as `YYYY-MM-DD`.
+    #[arg(long)]
+    pub start_date: Option<String>,
+    /// Last effective date as `YYYY-MM-DD`.
+    #[arg(long)]
+    pub end_date: Option<String>,
+    /// Interval anchor time as `HH:MM[:SS]` (interval schedules only).
+    #[arg(long)]
+    pub anchor_time: Option<String>,
+    /// Authorized directory path; repeat for several. Replaces the stored set.
+    #[arg(long = "allowed-path")]
+    pub allowed_paths: Vec<String>,
+    /// Clear the stored allowed paths (existing automations only).
+    #[arg(long)]
+    pub clear_allowed_paths: bool,
+    /// Enable the automation.
+    #[arg(long, conflicts_with = "disabled")]
+    pub enabled: bool,
+    /// Disable the automation.
+    #[arg(long)]
+    pub disabled: bool,
+    /// Keep one workflow context across scheduled runs.
+    #[arg(long, conflicts_with = "no_continuous_context")]
+    pub continuous_context: bool,
+    /// Start a fresh workflow context for every scheduled run.
+    #[arg(long)]
+    pub no_continuous_context: bool,
+    /// Ask the final review sub-agent to audit every run.
+    #[arg(long, conflicts_with = "no_self_review")]
+    pub self_review: bool,
+    /// Skip the final review sub-agent.
+    #[arg(long)]
+    pub no_self_review: bool,
+}
+
 /// Local workflow-automation commands (Phase 3D).
 #[derive(Debug, Subcommand)]
 pub enum AutomationCommand {
@@ -274,14 +368,21 @@ pub enum AutomationCommand {
         /// Automation id.
         automation_id: String,
     },
-    /// Produce a side-effect-free plan from a structured spec or a constrained
-    /// intent. It never mutates and never grants new permissions.
+    /// Produce a side-effect-free plan from a raw spec, a constrained intent or
+    /// friendly field flags. It never mutates and never grants new permissions.
     Draft {
+        /// Friendly field flags (alternative to `--spec-json`/`--spec-file`).
+        #[command(flatten)]
+        friendly: AutomationFriendlyArgs,
         /// The structured spec document, inline.
-        #[arg(long, conflicts_with = "spec_file")]
+        #[arg(
+            long,
+            conflicts_with = "spec_file",
+            conflicts_with_all = FRIENDLY_ARG_IDS
+        )]
         spec_json: Option<String>,
         /// The structured spec document, read from a file ("-" for stdin).
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = FRIENDLY_ARG_IDS)]
         spec_file: Option<PathBuf>,
         /// A constrained natural-language intent (alternative to a spec).
         #[arg(long, conflicts_with_all = ["spec_json", "spec_file"])]
@@ -308,31 +409,53 @@ pub enum AutomationCommand {
         #[arg(long)]
         idempotency_key: Option<String>,
     },
-    /// Create a new automation from a structured spec. The id is backend-minted.
+    /// Create a new automation from a raw spec or friendly field flags. The id is
+    /// backend-minted.
     Create {
+        /// Friendly field flags (alternative to `--spec-json`/`--spec-file`).
+        #[command(flatten)]
+        friendly: AutomationFriendlyArgs,
         /// The structured spec document, inline.
-        #[arg(long, conflicts_with = "spec_file")]
+        #[arg(
+            long,
+            conflicts_with = "spec_file",
+            conflicts_with_all = FRIENDLY_ARG_IDS
+        )]
         spec_json: Option<String>,
         /// The structured spec document, read from a file ("-" for stdin).
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = FRIENDLY_ARG_IDS)]
         spec_file: Option<PathBuf>,
         /// Idempotency key. Generated when omitted.
         #[arg(long)]
         idempotency_key: Option<String>,
     },
     /// Update an existing automation by compare-and-set on its revision.
+    ///
+    /// With friendly fields the current revision is read first and used unless
+    /// `--expected-revision` pins the same value; with a raw spec the revision
+    /// stays required. A same-kind update may restate only schedule parameters
+    /// (`--weekdays`/`--start-date`/`--end-date`/`--anchor-time`), which keeps the
+    /// stored kind and its other parameters.
     Update {
         /// Automation id.
         automation_id: String,
+        /// Friendly field flags (alternative to `--spec-json`/`--spec-file`).
+        #[command(flatten)]
+        friendly: AutomationFriendlyArgs,
         /// The structured spec document, inline.
-        #[arg(long, conflicts_with = "spec_file")]
+        #[arg(
+            long,
+            conflicts_with = "spec_file",
+            conflicts_with_all = FRIENDLY_ARG_IDS
+        )]
         spec_json: Option<String>,
         /// The structured spec document, read from a file ("-" for stdin).
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = FRIENDLY_ARG_IDS)]
         spec_file: Option<PathBuf>,
-        /// The revision the caller read; a moved revision fails as a conflict.
+        /// The revision the caller read; required with a raw spec and must match
+        /// the current revision when friendly flags are used.
         #[arg(long)]
-        expected_revision: i64,
+        expected_revision: Option<i64>,
         /// Idempotency key. Generated when omitted.
         #[arg(long)]
         idempotency_key: Option<String>,
@@ -514,14 +637,26 @@ pub fn resolve_prompt(
     prompt: &Option<String>,
     prompt_file: &Option<PathBuf>,
 ) -> Result<String, String> {
+    resolve_prompt_with(prompt, prompt_file, &mut std::io::stdin().lock())
+}
+
+/// Resolves the initial prompt, reading the `-` convention from the given stdin
+/// reader.
+///
+/// Split out from [`resolve_prompt`] so the stdin branch is verifiable without a
+/// real terminal or runtime.
+fn resolve_prompt_with(
+    prompt: &Option<String>,
+    prompt_file: &Option<PathBuf>,
+    stdin: &mut impl std::io::Read,
+) -> Result<String, String> {
     if let Some(text) = prompt {
         return Ok(text.clone());
     }
     if let Some(path) = prompt_file {
         if path == &PathBuf::from("-") {
-            use std::io::Read;
             let mut buffer = String::new();
-            std::io::stdin()
+            stdin
                 .read_to_string(&mut buffer)
                 .map_err(|e| format!("Failed to read prompt from stdin: {}", e))?;
             return Ok(buffer);
@@ -559,6 +694,10 @@ pub fn validate_signal_source(
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// The raw `--spec-json` fixture documented in `docs/cscli.md`, kept in one
+    /// place so the parser example and the spec-completeness check cannot drift.
+    const DOCUMENTED_SPEC_FIXTURE: &str = "{\"title\":\"Raw\",\"prompt\":\"p\",\"prompt_file_path\":null,\"agent_id\":\"agent-1\",\"agent_config\":null,\"allowed_paths\":[],\"shell_config\":null,\"schedule_kind\":\"daily\",\"schedule_config\":{\"times\":[\"09:00\"]},\"continuous_context\":false,\"self_review\":false,\"enabled\":true}";
 
     fn parse(argv: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(argv)
@@ -719,5 +858,334 @@ mod tests {
             }
             _ => panic!("expected skill uninstall"),
         }
+    }
+
+    /// Friendly automation flags parse into every subcommand that accepts them,
+    /// and the raw document path stays available beside them.
+    #[test]
+    fn automation_friendly_flags_parse_for_create_update_and_draft() {
+        let create = parse(&[
+            "cscli",
+            "automation",
+            "create",
+            "--title",
+            "Nightly",
+            "--agent",
+            "agent-1",
+            "--prompt",
+            "hello",
+            "--every",
+            "1h",
+            "--allowed-path",
+            "/tmp/a",
+            "--allowed-path",
+            "/tmp/b",
+            "--enabled",
+        ])
+        .expect("friendly create");
+        match create.command {
+            Command::Automation { command } => match *command {
+                AutomationCommand::Create {
+                    friendly,
+                    spec_json,
+                    ..
+                } => {
+                    assert_eq!(friendly.title.as_deref(), Some("Nightly"));
+                    assert_eq!(friendly.agent.as_deref(), Some("agent-1"));
+                    assert_eq!(friendly.every.as_deref(), Some("1h"));
+                    assert_eq!(friendly.allowed_paths, vec!["/tmp/a", "/tmp/b"]);
+                    assert!(friendly.enabled);
+                    assert!(spec_json.is_none());
+                }
+                _ => panic!("expected automation create"),
+            },
+            _ => panic!("expected an automation command"),
+        }
+
+        // A raw spec and friendly flags are mutually exclusive at the CLI edge.
+        assert!(parse(&[
+            "cscli",
+            "automation",
+            "create",
+            "--title",
+            "T",
+            "--spec-json",
+            "{}",
+        ])
+        .is_err());
+
+        let draft = parse(&[
+            "cscli",
+            "automation",
+            "draft",
+            "--daily",
+            "09:00",
+            "--daily",
+            "18:00",
+            "--weekdays",
+            "1,2,3,4,5",
+        ])
+        .expect("friendly draft");
+        match draft.command {
+            Command::Automation { command } => match *command {
+                AutomationCommand::Draft { friendly, .. } => {
+                    assert_eq!(friendly.daily, vec!["09:00", "18:00"]);
+                }
+                _ => panic!("expected automation draft"),
+            },
+            _ => panic!("expected an automation command"),
+        }
+
+        let update = parse(&["cscli", "automation", "update", "auto-1", "--self-review"])
+            .expect("friendly update");
+        match update.command {
+            Command::Automation { command } => match *command {
+                AutomationCommand::Update {
+                    automation_id,
+                    friendly,
+                    expected_revision,
+                    ..
+                } => {
+                    assert_eq!(automation_id, "auto-1");
+                    assert!(friendly.self_review);
+                    // The revision is optional for the friendly path and validated later.
+                    assert!(expected_revision.is_none());
+                }
+                _ => panic!("expected automation update"),
+            },
+            _ => panic!("expected an automation command"),
+        }
+        let pinned = parse(&[
+            "cscli",
+            "automation",
+            "update",
+            "auto-1",
+            "--disabled",
+            "--expected-revision",
+            "7",
+        ])
+        .expect("friendly update with revision");
+        match pinned.command {
+            Command::Automation { command } => match *command {
+                AutomationCommand::Update {
+                    friendly,
+                    expected_revision,
+                    ..
+                } => {
+                    assert!(friendly.disabled);
+                    assert_eq!(expected_revision, Some(7));
+                }
+                _ => panic!("expected automation update"),
+            },
+            _ => panic!("expected an automation command"),
+        }
+    }
+
+    /// Every three-state pair and the prompt source are rejected by clap when
+    /// both halves are supplied, so an intent can never be ambiguous.
+    #[test]
+    fn automation_friendly_flag_pairs_are_mutually_exclusive() {
+        for flags in [
+            vec!["--enabled", "--disabled"],
+            vec!["--continuous-context", "--no-continuous-context"],
+            vec!["--self-review", "--no-self-review"],
+            vec!["--prompt", "x", "--prompt-file", "p.txt"],
+            vec!["--spec-json", "{}", "--spec-file", "p.json"],
+        ] {
+            let mut argv = vec!["cscli", "automation", "create"];
+            argv.extend(flags.iter().copied());
+            assert!(
+                parse(&argv).is_err(),
+                "expected a conflict for {flags:?}"
+            );
+        }
+    }
+
+    /// A draft accepts exactly one of a raw spec, an intent or friendly flags for
+    /// its structured inputs. Clap rejects a spec next to an intent; the friendly
+    /// flags are rejected next to an intent when the request is shaped (see the
+    /// automation command tests), so an ambiguous draft can never be sent.
+    #[test]
+    fn automation_draft_inputs_are_mutually_exclusive() {
+        assert!(parse(&[
+            "cscli",
+            "automation",
+            "draft",
+            "--intent",
+            "run daily",
+            "--spec-json",
+            "{}",
+        ])
+        .is_err());
+        assert!(parse(&["cscli", "automation", "draft", "--intent", "run daily"]).is_ok());
+        assert!(parse(&["cscli", "automation", "draft", "--title", "T"]).is_ok());
+    }
+
+    /// The `-` prompt-file convention reads the prompt text from stdin, and the
+    /// named-file and inline forms keep working beside it.
+    #[test]
+    fn resolve_prompt_reads_stdin_for_the_dash_convention() {
+        let mut stdin: &[u8] = b"from stdin\n";
+        assert_eq!(
+            resolve_prompt_with(&None, &Some(PathBuf::from("-")), &mut stdin).expect("stdin"),
+            "from stdin\n"
+        );
+
+        let inline = Some("inline text".to_string());
+        assert_eq!(
+            resolve_prompt_with(&inline, &None, &mut std::io::empty()).expect("inline"),
+            "inline text"
+        );
+        assert_eq!(
+            resolve_prompt_with(&None, &None, &mut std::io::empty()).expect("none"),
+            ""
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("prompt.txt");
+        std::fs::write(&path, "from file").expect("write");
+        assert_eq!(
+            resolve_prompt_with(&None, &Some(path), &mut std::io::empty()).expect("file"),
+            "from file"
+        );
+    }
+
+    /// Every automation command shape documented in `docs/cscli.md` must parse,
+    /// so the developer reference cannot drift from the CLI contract.
+    #[test]
+    fn documented_automation_examples_parse() {
+        let cases: &[&[&str]] = &[
+            &["cscli", "automation", "list"],
+            &["cscli", "automation", "get", "auto-1"],
+            &["cscli", "automation", "runs", "auto-1"],
+            &[
+                "cscli",
+                "automation",
+                "create",
+                "--title",
+                "Nightly",
+                "--agent",
+                "agent-1",
+                "--prompt",
+                "Summarize new issues",
+                "--every",
+                "1h",
+                "--allowed-path",
+                "/home/me/project",
+            ],
+            &[
+                "cscli",
+                "automation",
+                "create",
+                "--title",
+                "Morning",
+                "--agent",
+                "agent-1",
+                "--prompt-file",
+                "./prompt.txt",
+                "--daily",
+                "09:00",
+                "--daily",
+                "18:00",
+                "--weekdays",
+                "1,2,3,4,5",
+                "--enabled",
+            ],
+            &[
+                "cscli",
+                "automation",
+                "create",
+                "--spec-json",
+                DOCUMENTED_SPEC_FIXTURE,
+            ],
+            &[
+                "cscli",
+                "automation",
+                "draft",
+                "--title",
+                "Nightly",
+                "--agent",
+                "agent-1",
+                "--prompt",
+                "hi",
+                "--every",
+                "1h",
+            ],
+            &[
+                "cscli",
+                "automation",
+                "draft",
+                "--intent",
+                "run every day at 09:00",
+            ],
+            &[
+                "cscli",
+                "automation",
+                "draft",
+                "--automation-id",
+                "auto-1",
+                "--title",
+                "Renamed",
+            ],
+            &[
+                "cscli",
+                "automation",
+                "apply",
+                "--plan-file",
+                "plan.json",
+                "--acknowledge-permission-changes",
+            ],
+            &["cscli", "automation", "update", "auto-1", "--title", "Renamed"],
+            &[
+                "cscli",
+                "automation",
+                "update",
+                "auto-1",
+                "--spec-file",
+                "spec.json",
+                "--expected-revision",
+                "7",
+            ],
+            &["cscli", "automation", "enable", "auto-1"],
+            &["cscli", "automation", "disable", "auto-1"],
+            &["cscli", "automation", "run", "auto-1"],
+            &["cscli", "automation", "delete", "auto-1", "--confirm"],
+        ];
+        for argv in cases {
+            parse(argv).unwrap_or_else(|error| {
+                panic!("documented example {argv:?} failed to parse: {error}")
+            });
+        }
+    }
+
+    /// The raw `--spec-json` fixture in `docs/cscli.md` must be a complete
+    /// `AutomationSpec` document: every canonical field is present and no key the
+    /// backend would reject as unknown is carried.
+    #[test]
+    fn documented_raw_spec_fixture_is_a_complete_automation_spec() {
+        let spec: serde_json::Value =
+            serde_json::from_str(DOCUMENTED_SPEC_FIXTURE).expect("valid JSON");
+        let object = spec.as_object().expect("a JSON object");
+        for field in [
+            "title",
+            "prompt",
+            "prompt_file_path",
+            "agent_id",
+            "agent_config",
+            "allowed_paths",
+            "shell_config",
+            "schedule_kind",
+            "schedule_config",
+            "continuous_context",
+            "self_review",
+            "enabled",
+        ] {
+            assert!(
+                object.contains_key(field),
+                "missing AutomationSpec field {field}"
+            );
+        }
+        assert_eq!(object.len(), 12, "the fixture must not carry unknown fields");
+        assert_eq!(object["schedule_kind"], "daily");
     }
 }

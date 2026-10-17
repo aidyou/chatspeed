@@ -3,10 +3,11 @@
 //! Every automation mutation and observation — Tauri, the control-plane HTTP
 //! surface, the `cs` CLI (through HTTP), the desktop store and the scheduler —
 //! resolves to these methods, so there is exactly one automation state machine
-//! and one DTO/error contract (AC-1/INV-2). The service is stateless over the
-//! durable store: it holds the shared `MainStore` and TSID generator and reads
-//! the same workflow snapshot the runtime writes, so it never becomes a second
-//! runtime or journal authority (INV-1/INV-10).
+//! and one DTO/error contract (AC-1/INV-2). The service holds no automation
+//! state of its own: it reads the shared `MainStore` and the same workflow
+//! snapshot the runtime writes, plus this instance's short-lived execution
+//! evidence, so it never becomes a second runtime or journal authority
+//! (INV-1/INV-10).
 //!
 //! The execution kernel (`execute_automation_run`) and manual-run helper
 //! (`create_manual_run`) live in `service.rs` and are reached from
@@ -18,15 +19,22 @@ use crate::db::automation::{CasOutcome, ClaimOutcome, DeleteAutomationOutcome, R
 use crate::db::{MainStore, WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
 use crate::libs::tsid::TsidGenerator;
 use crate::workflow::automation::errors::{self, AutomationError};
+use crate::workflow::automation::runtime::{
+    manager_terminal_status, session_status_is_live, AutomationRuntimeOwner,
+};
 use crate::workflow::automation::service::request_to_upsert;
 use crate::workflow::automation::types::{
     AutomationApplyRequest, AutomationDispatchOutcome, AutomationDispatchResult,
     AutomationDraftInput, AutomationMutationOutcome, AutomationMutationResult,
-    AutomationPlanStatus, AutomationPlanV1, AutomationRunView, AutomationSpec, AutomationView,
+    AutomationPlanStatus, AutomationPlanV1, AutomationRunView, AutomationRuntimeHealth,
+    AutomationRuntimeSummary, AutomationSpec, AutomationStartupNormalizeReport, AutomationView,
     AutomationWarning, PermissionSummary, WorkflowAutomationRequest,
     WorkflowAutomationRunNowResult, AUTOMATION_PLAN_VERSION,
 };
+use crate::workflow::react::manager::ManagedSessionStatus;
+use chrono::{DateTime, Local};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// A draft plan stays applyable for this long. A stale plan must be re-drafted
@@ -37,11 +45,22 @@ const PLAN_TTL_MS: i64 = 15 * 60 * 1000;
 /// is a user-authored configuration value, not runtime output (INV-8).
 const SHELL_PREVIEW_LIMIT: usize = 200;
 
-/// The automation facade. Stateless over the shared store; safe to construct per
-/// call and cheap (two `Arc` clones).
+/// The automation facade. Cheap to construct per call (it clones a few `Arc`
+/// handles) and stateless over the shared store; the only non-durable state it
+/// touches is this instance's short-lived execution evidence, so two concurrent
+/// reads can never disagree about the durable projection.
 pub struct AutomationApplicationService {
     main_store: Arc<MainStore>,
     tsid_generator: Arc<TsidGenerator>,
+    /// The runtime instance's short-lived execution evidence. `None` for a
+    /// standalone facade (a one-off read, a test): it can neither confirm a live
+    /// session nor an in-flight admission, so an untrusted run then converges to
+    /// `needs_reconcile` instead of being read as live.
+    owner: Option<Arc<AutomationRuntimeOwner>>,
+    /// The one runtime work-admission gate, when this facade is bound to a
+    /// running instance. `None` for a standalone facade (a one-off read/test),
+    /// which then admits nothing and mutates as before.
+    admission: Option<Arc<dyn crate::lifecycle::WorkAdmission>>,
 }
 
 impl AutomationApplicationService {
@@ -49,11 +68,74 @@ impl AutomationApplicationService {
         Self {
             main_store,
             tsid_generator,
+            owner: None,
+            admission: None,
+        }
+    }
+
+    /// A facade bound to the running instance's execution evidence, so reads can
+    /// verify the current in-flight guard and the live workflow manager.
+    pub(crate) fn with_owner(
+        main_store: Arc<MainStore>,
+        tsid_generator: Arc<TsidGenerator>,
+        owner: Arc<AutomationRuntimeOwner>,
+    ) -> Self {
+        Self {
+            main_store,
+            tsid_generator,
+            owner: Some(owner),
+            admission: None,
+        }
+    }
+
+    /// Binds the one runtime admission gate so automation mutations are fenced
+    /// at this lowest layer, not only by their transport.
+    pub(crate) fn with_admission(
+        mut self,
+        admission: Option<Arc<dyn crate::lifecycle::WorkAdmission>>,
+    ) -> Self {
+        self.admission = admission;
+        self
+    }
+
+    /// Fences one automation work start/mutation, mapping a closed gate onto the
+    /// stable `runtime_stopping` automation error.
+    fn admit(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, AutomationError> {
+        match &self.admission {
+            Some(gate) => gate
+                .admit(kind)
+                .map_err(|denied| AutomationError::stopping(denied.message)),
+            None => Ok(crate::lifecycle::AdmissionTicket::permissive()),
         }
     }
 
     fn store(&self) -> &MainStore {
         &self.main_store
+    }
+
+    /// Whether this instance is executing `run_id` in its pre-session window.
+    fn is_in_flight(&self, run_id: &str) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| owner.is_in_flight(run_id))
+    }
+
+    /// The live manager status for a session, or `None` when no owner is wired.
+    /// A missing/unavailable manager propagates as an error so a caller never
+    /// mistakes "cannot observe" for "not live".
+    fn owner_session_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ManagedSessionStatus>, AutomationError> {
+        match self.owner.as_ref() {
+            Some(owner) => owner
+                .manager_status(session_id)
+                .map_err(AutomationError::internal),
+            None => Ok(None),
+        }
     }
 
     // --- observations -----------------------------------------------------
@@ -127,6 +209,313 @@ impl AutomationApplicationService {
             let _ = self.project_run(run)?;
         }
         Ok(())
+    }
+
+    // --- startup normalization / runtime health ---------------------------
+
+    /// The one-time startup normalization pass. It advances an enabled
+    /// automation only when its stored slot was missed while this instance was
+    /// offline (i.e. the stored slot is present and at or before `cutoff`) and
+    /// clears a non-recurring slot that has already elapsed. A stored future slot
+    /// and a stored `NULL` slot are both left untouched: `NULL` means the
+    /// configuration currently defines no next slot, so filling it here would
+    /// reactivate a schedule the user no longer has (AC-3). `enabled` is never
+    /// changed, and every write is a revision CAS, so a concurrent edit is
+    /// reported rather than overwritten (AC-4).
+    ///
+    /// The runtime daemon calls this before its first dispatch tick. A repeated
+    /// call after a *successful* pass is a no-op; a pass that failed before
+    /// completing is retried with the same cutoff instead of being treated as
+    /// done, so the daemon never continues into the scheduler on the strength of
+    /// a normalization that never ran.
+    pub fn normalize_schedules_at_startup(
+        &self,
+        cutoff: &str,
+    ) -> Result<AutomationStartupNormalizeReport, AutomationError> {
+        let cutoff_dt = parse_local_datetime(cutoff)?;
+        if let Some(owner) = self.owner.as_ref() {
+            if owner.startup_pass_completed() {
+                // Startup normalization is a one-time pass; a duplicate startup
+                // signal must not re-advance an already-normalized schedule.
+                return Ok(AutomationStartupNormalizeReport::default());
+            }
+            // Record the boundary before the pass reads the store, so a due slot
+            // cannot be consumed later as if it became due while online. A failed
+            // pass leaves the boundary in place, so a retry reuses this cutoff
+            // rather than advancing to a later one.
+            owner.mark_startup(cutoff_dt);
+        }
+
+        let automations = self
+            .store()
+            .list_workflow_automations()
+            .map_err(|e| AutomationError::internal(e.to_string()))?;
+        let mut report = AutomationStartupNormalizeReport::default();
+        for automation in &automations {
+            if !automation.enabled {
+                continue;
+            }
+            report.examined += 1;
+            // Only an existing cursor is advanced. A `NULL` cursor is a
+            // legitimate "no next slot" state (an expired or one-shot
+            // configuration), so it is neither filled nor kept alive (AC-3).
+            let Some(stored) = automation.next_run_at.clone() else {
+                report.unchanged += 1;
+                continue;
+            };
+            // A cursor that cannot be read back is never rewritten: the cursor
+            // classifier reports it as non-schedulable, which is the safe
+            // direction for a value this pass cannot interpret.
+            let Ok(stored_dt) = parse_local_datetime(&stored) else {
+                report.unchanged += 1;
+                continue;
+            };
+            // A stored slot strictly after the cutoff is a legitimate pending
+            // schedule and stays untouched.
+            if stored_dt > cutoff_dt {
+                report.unchanged += 1;
+                continue;
+            }
+            let recomputed = match self.successor_for(automation, cutoff_dt) {
+                Ok(next) => next,
+                Err(_) => {
+                    // A row whose schedule cannot be recomputed is left for a
+                    // later edit rather than failing the whole startup pass.
+                    report.failed += 1;
+                    continue;
+                }
+            };
+            if recomputed.as_deref() == Some(stored.as_str()) {
+                report.unchanged += 1;
+                continue;
+            }
+            match self
+                .store()
+                .normalize_workflow_automation_next_run_at_cas(
+                    &automation.id,
+                    recomputed.clone(),
+                    automation.revision,
+                )
+                .map_err(|e| AutomationError::internal(e.to_string()))?
+            {
+                CasOutcome::Updated(_) => {
+                    if recomputed.is_some() {
+                        report.advanced += 1;
+                    } else {
+                        report.expired += 1;
+                    }
+                }
+                CasOutcome::RevisionConflict => report.conflicts += 1,
+                CasOutcome::NotFound => {}
+            }
+        }
+        if let Some(owner) = self.owner.as_ref() {
+            // Only a pass that reached the end without a store error is done; a
+            // failed pass stays retryable so the daemon cannot treat it as
+            // normalized and continue into the scheduler.
+            owner.complete_startup_pass();
+        }
+        Ok(report)
+    }
+
+    /// Runtime keep-alive and health summary. Only a legal future schedule, a
+    /// continuously-online due slot, a live manager-owned run, or an in-flight
+    /// admission keeps the runtime alive; a disabled or slot-less automation, an
+    /// expired configuration, a historical terminal run, and an orphaned run
+    /// this instance does not own never do (AC-3/AC-4/INV-1).
+    ///
+    /// An unobservable live manager is a hard observation failure and is
+    /// returned as an error. Every other failure — an unreadable store or a
+    /// structurally invalid user schedule — is reported as `unknown` health
+    /// instead of an error, so a broken configuration can never make the
+    /// daemon's decision sticky.
+    pub fn runtime_summary(
+        &self,
+        now: &str,
+    ) -> Result<AutomationRuntimeSummary, AutomationError> {
+        let now_dt = parse_local_datetime(now)?;
+        // Observe the live manager first: this is the one failure the summary
+        // must surface rather than classify away.
+        self.probe_active_run_managers()?;
+        Ok(self
+            .classify_runtime_summary(now_dt)
+            .unwrap_or_else(|_| unknown_runtime_summary()))
+    }
+
+    /// Probes the live manager for every non-terminal run that has a session, so
+    /// an unobservable manager fails the summary instead of being silently
+    /// classified as "no live runs".
+    fn probe_active_run_managers(&self) -> Result<(), AutomationError> {
+        if self.owner.is_none() {
+            return Ok(());
+        }
+        let Ok(runs) = self.store().list_active_automation_runs() else {
+            // The store is unreadable; the classification step below reports
+            // `unknown` health rather than pretending the manager was observed.
+            return Ok(());
+        };
+        for run in &runs {
+            if let Some(session_id) = run.workflow_session_id.as_deref() {
+                let _ = self.owner_session_status(session_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Classifies the durable state into a keep-alive/health report. Runs on
+    /// structured evidence only; see [`Self::runtime_summary`] for how failures
+    /// are surfaced.
+    fn classify_runtime_summary(
+        &self,
+        now: DateTime<Local>,
+    ) -> Result<AutomationRuntimeSummary, AutomationError> {
+        // Converge not-yet-terminal runs on structured evidence first, so a run
+        // whose manager/snapshot already reached a terminal state stops blocking
+        // its automation's next enabled slot. Without this, a just-completed run
+        // would keep the future schedule suppressed and the daemon would idle out
+        // with work still pending.
+        self.reconcile_all()?;
+
+        // Only enabled candidates are read, and the not-yet-terminal runs are
+        // read once: the blocking set is derived from that single result instead
+        // of a per-automation blocking query (which reintroduced an N+1).
+        let automations = self
+            .store()
+            .list_enabled_workflow_automations()
+            .map_err(|e| AutomationError::internal(e.to_string()))?;
+        let active_runs = self
+            .store()
+            .list_active_automation_runs()
+            .map_err(|e| AutomationError::internal(e.to_string()))?;
+
+        let mut blocking_automations: HashSet<&str> = HashSet::new();
+        let mut live_automation_runs = 0i64;
+        let mut blocked_reconcile = 0i64;
+        for run in &active_runs {
+            let live = match run.workflow_session_id.as_deref() {
+                Some(session_id) => self
+                    .owner_session_status(session_id)?
+                    .is_some_and(|status| session_status_is_live(&status)),
+                None => false,
+            };
+            if live {
+                live_automation_runs += 1;
+                continue;
+            }
+            // Not live: it blocks its schedule from dispatching, and unless this
+            // instance admitted it in flight it is unknown work that never keeps
+            // the runtime alive on its own.
+            blocking_automations.insert(run.automation_id.as_str());
+            if !self.is_in_flight(&run.id) {
+                blocked_reconcile += 1;
+            }
+        }
+
+        let mut effective_schedules = 0i64;
+        let mut unusable_schedule = false;
+        for automation in &automations {
+            if blocking_automations.contains(automation.id.as_str()) {
+                continue;
+            }
+            match self.schedule_cursor_state(automation, now) {
+                Ok(ScheduleCursor::Future | ScheduleCursor::DueOnline) => {
+                    effective_schedules += 1
+                }
+                Ok(ScheduleCursor::NotEffective) => {}
+                Err(_) => {
+                    // A structurally invalid *schedule configuration* is not a
+                    // query error: it counts as non-schedulable and downgrades
+                    // the health diagnostic, but must never fail the whole
+                    // summary (or the daemon could never leave `unknown`).
+                    unusable_schedule = true;
+                }
+            }
+        }
+
+        let in_flight_admissions = self
+            .owner
+            .as_ref()
+            .map(|owner| owner.in_flight_count() as i64)
+            .unwrap_or(0);
+        let health = if self.owner.is_none() {
+            // Without a runtime owner there is no live state to observe at all.
+            AutomationRuntimeHealth::Unknown
+        } else if blocked_reconcile > 0 || unusable_schedule {
+            AutomationRuntimeHealth::Degraded
+        } else {
+            AutomationRuntimeHealth::Healthy
+        };
+        // An unobservable state is never reported as "nothing to do": a runtime
+        // that cannot see its automation state must not shut down as if idle.
+        let keep_alive = matches!(health, AutomationRuntimeHealth::Unknown)
+            || effective_schedules > 0
+            || live_automation_runs > 0
+            || in_flight_admissions > 0;
+        Ok(AutomationRuntimeSummary {
+            effective_schedules,
+            live_automation_runs,
+            in_flight_admissions,
+            blocked_reconcile,
+            keep_alive,
+            health,
+        })
+    }
+
+    /// Classifies the stored schedule cursor against the configuration and this
+    /// instance's start boundary. Shared by the dispatch eligibility check and
+    /// the runtime summary so the two can never disagree on what "effective"
+    /// means.
+    fn schedule_cursor_state(
+        &self,
+        automation: &WorkflowAutomation,
+        now: DateTime<Local>,
+    ) -> Result<ScheduleCursor, AutomationError> {
+        let Some(cursor) = automation.next_run_at.as_deref() else {
+            return Ok(ScheduleCursor::NotEffective);
+        };
+        let Ok(cursor_dt) = parse_local_datetime(cursor) else {
+            return Ok(ScheduleCursor::NotEffective);
+        };
+        let valid = crate::workflow::automation::service::is_valid_schedule_slot(
+            &automation.schedule_kind,
+            &self.schedule_config_value(automation)?,
+            cursor_dt,
+        )
+        .map_err(AutomationError::invalid_request)?;
+        if !valid {
+            return Ok(ScheduleCursor::NotEffective);
+        }
+        if cursor_dt > now {
+            return Ok(ScheduleCursor::Future);
+        }
+        match self.owner.as_ref().and_then(|owner| owner.startup_cutoff()) {
+            // A slot before the instance start boundary was missed while offline
+            // and must neither be consumed nor keep the runtime alive.
+            Some(cutoff) if cursor_dt < cutoff => Ok(ScheduleCursor::NotEffective),
+            _ => Ok(ScheduleCursor::DueOnline),
+        }
+    }
+
+    /// The next occurrence strictly after `now` for an automation's schedule.
+    fn successor_for(
+        &self,
+        automation: &WorkflowAutomation,
+        now: DateTime<Local>,
+    ) -> Result<Option<String>, AutomationError> {
+        crate::workflow::automation::service::compute_next_run_at_from(
+            &automation.schedule_kind,
+            &self.schedule_config_value(automation)?,
+            now,
+        )
+        .map_err(AutomationError::invalid_request)
+    }
+
+    fn schedule_config_value(
+        &self,
+        automation: &WorkflowAutomation,
+    ) -> Result<Value, AutomationError> {
+        serde_json::from_str(&automation.schedule_config)
+            .map_err(|e| AutomationError::internal(e.to_string()))
     }
 
     // --- draft / apply ----------------------------------------------------
@@ -219,6 +608,9 @@ impl AutomationApplicationService {
         actor_scope: &str,
         idempotency_key: Option<&str>,
     ) -> Result<AutomationMutationResult, AutomationError> {
+        // Applying a plan creates/updates an automation that may start scheduled
+        // work, so it is fenced at this lowest layer.
+        let _ticket = self.admit(crate::lifecycle::WorkKind::AutomationConfigure)?;
         let plan = &request.plan;
         if plan.plan_version != AUTOMATION_PLAN_VERSION {
             return Err(AutomationError::invalid_request(format!(
@@ -299,6 +691,9 @@ impl AutomationApplicationService {
         idempotency_key: Option<&str>,
     ) -> Result<AutomationMutationResult, AutomationError> {
         self.validate_spec(spec)?;
+        // Creating an automation may start scheduled work, so it is fenced at
+        // this lowest layer; a direct, non-HTTP caller is refused on the gate.
+        let _ticket = self.admit(crate::lifecycle::WorkKind::AutomationConfigure)?;
         let request_hash = canonical_request_hash(&json!({
             "operation": "create",
             "spec": serde_json::to_value(spec).map_err(|e| AutomationError::internal(e.to_string()))?,
@@ -321,6 +716,7 @@ impl AutomationApplicationService {
         idempotency_key: Option<&str>,
     ) -> Result<AutomationMutationResult, AutomationError> {
         self.validate_spec(spec)?;
+        let _ticket = self.admit(crate::lifecycle::WorkKind::AutomationConfigure)?;
         let request_hash = canonical_request_hash(&json!({
             "operation": "update",
             "automation_id": automation_id,
@@ -345,6 +741,7 @@ impl AutomationApplicationService {
         actor_scope: &str,
         idempotency_key: Option<&str>,
     ) -> Result<AutomationMutationResult, AutomationError> {
+        let _ticket = self.admit(crate::lifecycle::WorkKind::AutomationConfigure)?;
         let request_hash = canonical_request_hash(&json!({
             "operation": if enabled { "enable" } else { "disable" },
             "automation_id": automation_id,
@@ -706,8 +1103,17 @@ impl AutomationApplicationService {
         })
     }
 
-    /// Projects one run against the durable snapshot state and persists a newly
-    /// provable terminal transition. Returns the (possibly updated) run row.
+    /// Projects one run against the live manager and the durable snapshot state
+    /// and persists a newly provable terminal transition. Returns the (possibly
+    /// updated) run row.
+    ///
+    /// Evidence order: a live manager session outranks any historical snapshot,
+    /// because a hot-recovered session can still be active while the snapshot
+    /// still holds a terminal state from the previous run of that session. Only
+    /// when the manager does not prove the session live is the canonical snapshot
+    /// terminal used, and anything that is neither live nor provably terminal is
+    /// left as `needs_reconcile` (never inferred from a workflow row or the run's
+    /// own status) so the unknown effect never dispatches.
     fn project_run(
         &self,
         run: &WorkflowAutomationRun,
@@ -715,44 +1121,57 @@ impl AutomationApplicationService {
         if matches!(run.status.as_str(), "completed" | "failed" | "cancelled") {
             return Ok(run.clone());
         }
-        let target = match run.workflow_session_id.as_deref() {
-            Some(session_id) => {
-                match self
-                    .store()
-                    .workflow_snapshot_state(session_id)
-                    .map_err(|e| AutomationError::internal(e.to_string()))?
-                {
-                    Some(state) => terminal_from_snapshot_state(&state),
-                    // No snapshot yet: if the workflow row also vanished the
-                    // effect is unknown; otherwise it is still starting.
-                    None => {
-                        let exists = self
-                            .store()
-                            .workflow_session_exists(session_id)
-                            .map_err(|e| AutomationError::internal(e.to_string()))?;
-                        if exists {
-                            None
-                        } else {
-                            Some("needs_reconcile")
-                        }
-                    }
-                }
-            }
-            // A run with no session linked can never be proven to have started.
-            None => Some("needs_reconcile"),
-        };
-
-        match target {
-            Some(status) if status != run.status => {
-                self.store()
-                    .update_workflow_automation_run_status(run_id_str(run), status, None)
-                    .map_err(|e| AutomationError::internal(e.to_string()))?;
-                let mut updated = run.clone();
-                updated.status = status.to_string();
-                Ok(updated)
-            }
-            _ => Ok(run.clone()),
+        // This instance is executing the run right now (durable admission through
+        // the pre-workflow shell to the session link), so the effect is ours and
+        // not yet judgeable: a concurrent read/reconcile must not converge it.
+        if self.is_in_flight(&run.id) {
+            return Ok(run.clone());
         }
+        let Some(session_id) = run.workflow_session_id.as_deref() else {
+            // A run with no session linked can never be proven to have started.
+            return self.persist_run_status(run, "needs_reconcile");
+        };
+        // An unavailable manager is an observation failure, not "not live".
+        let manager_status = self.owner_session_status(session_id)?;
+        if manager_status
+            .as_ref()
+            .is_some_and(session_status_is_live)
+        {
+            // Live manager evidence wins over a stale terminal snapshot.
+            return Ok(run.clone());
+        }
+        // Not live: a canonical snapshot terminal proves the effect finished.
+        // Otherwise the manager's own terminal projection is the best structured
+        // evidence, and anything else is unknown.
+        let snapshot_terminal = self
+            .store()
+            .workflow_snapshot_state(session_id)
+            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .as_deref()
+            .and_then(terminal_from_snapshot_state);
+        let target = snapshot_terminal
+            .or_else(|| manager_status.as_ref().and_then(manager_terminal_status))
+            .unwrap_or("needs_reconcile");
+
+        self.persist_run_status(run, target)
+    }
+
+    /// Persists a terminal/unknown status transition (no-op when unchanged) and
+    /// returns the updated row.
+    fn persist_run_status(
+        &self,
+        run: &WorkflowAutomationRun,
+        status: &str,
+    ) -> Result<WorkflowAutomationRun, AutomationError> {
+        if status == run.status {
+            return Ok(run.clone());
+        }
+        self.store()
+            .update_workflow_automation_run_status(run_id_str(run), status, None)
+            .map_err(|e| AutomationError::internal(e.to_string()))?;
+        let mut updated = run.clone();
+        updated.status = status.to_string();
+        Ok(updated)
     }
 
     /// Builds the public run view, joining the structured workflow status and
@@ -809,9 +1228,15 @@ impl AutomationApplicationService {
 use crate::workflow::react::application::WorkflowApplicationService;
 
 impl WorkflowApplicationService {
-    /// A transient facade bound to this runtime owner's shared store.
+    /// A transient facade bound to this runtime owner's shared store and its
+    /// short-lived execution evidence.
     pub fn automation(&self) -> AutomationApplicationService {
-        AutomationApplicationService::new(self.main_store.clone(), self.tsid_generator.clone())
+        AutomationApplicationService::with_owner(
+            self.main_store.clone(),
+            self.tsid_generator.clone(),
+            self.automation_owner.clone(),
+        )
+        .with_admission(self.admission.get().cloned())
     }
 
     /// Manual run through the canonical kernel. Busy-guarded; a successful start
@@ -820,6 +1245,10 @@ impl WorkflowApplicationService {
         &self,
         automation_id: &str,
     ) -> Result<AutomationDispatchResult, AutomationError> {
+        // A manual run is canonical runtime work: fence it at this lowest layer.
+        let _ticket = self
+            .admit_work(crate::lifecycle::WorkKind::ManualClaim)
+            .map_err(|denied| AutomationError::stopping(denied.message))?;
         // A created run — even one whose start failed synchronously — reports
         // `Accepted`: the effect was dispatched, and its lifecycle is observable
         // through the run view. A busy overlap is returned as an error instead.
@@ -916,7 +1345,15 @@ impl WorkflowApplicationService {
         &self,
         now: &str,
     ) -> Result<Vec<AutomationDispatchResult>, AutomationError> {
+        // A due slot is canonical runtime work: fence it at this lowest layer, so
+        // a direct, non-HTTP scheduler caller is refused on the one gate. The
+        // background scheduler's own admission joins this scope instead of
+        // admitting twice.
+        let _ticket = self
+            .admit_work(crate::lifecycle::WorkKind::AutomationDispatch)
+            .map_err(|denied| AutomationError::stopping(denied.message))?;
         let facade = self.automation();
+        let now_dt = parse_local_datetime(now)?;
         // Converge any stale runs first so a dispatch never overlaps an unknown
         // effect from a previous process (AC-8).
         facade.reconcile_all()?;
@@ -926,26 +1363,41 @@ impl WorkflowApplicationService {
             .map_err(|e| AutomationError::internal(e.to_string()))?;
         let mut results = Vec::new();
         for automation in due {
-            let Some(next_run_at) = self.compute_next_for(&automation)? else {
-                // Non-recurring schedule with nothing left: disable-safe no-op.
+            // The due slot is the stored cursor; its successor is computed
+            // separately so a final slot with no successor is still executed
+            // exactly once. A corrupt cursor, or one this instance did not see
+            // become due while online, is never consumed (AC-4/AC-6).
+            let Some(current_slot) = automation.next_run_at.clone() else {
                 continue;
             };
-            let dispatch_key = automation
-                .next_run_at
-                .clone()
-                .unwrap_or_else(|| now.to_string());
+            if facade.schedule_cursor_state(&automation, now_dt)? != ScheduleCursor::DueOnline {
+                results.push(AutomationDispatchResult {
+                    outcome: AutomationDispatchOutcome::Skipped,
+                    run: None,
+                });
+                continue;
+            }
+            let successor = facade.successor_for(&automation, now_dt)?;
+            let dispatch_key = current_slot.clone();
             let run_id = self
                 .tsid_generator
                 .generate()
                 .map_err(|e| AutomationError::internal(e.to_string()))?;
-            let scheduled_for = dispatch_key.clone();
+            let scheduled_for = current_slot.clone();
+            // Admit the run in this instance's short-lived evidence *before* the
+            // claim. The claim commits the pending run and another worker thread
+            // could observe it on a facade read/reconcile before the guard
+            // existed, so admitting only afterwards would leave that window
+            // unprotected. The RAII guard releases on drop, including every
+            // skipped-claim path, and the durable claim stays the authority.
+            let _in_flight = self.automation_owner.begin_run(&run_id);
             let claim = self
                 .main_store
                 .claim_due_automation_slot(
                     &automation.id,
                     automation.revision,
-                    &dispatch_key,
-                    Some(next_run_at),
+                    &current_slot,
+                    successor,
                     &dispatch_key,
                     &run_id,
                     &scheduled_for,
@@ -987,17 +1439,42 @@ impl WorkflowApplicationService {
         Ok(results)
     }
 
-    fn compute_next_for(
+    /// The one-time startup schedule normalization the daemon runs before its
+    /// first tick. See [`AutomationApplicationService::normalize_schedules_at_startup`].
+    pub fn automation_normalize_at_startup(
         &self,
-        automation: &WorkflowAutomation,
-    ) -> Result<Option<String>, AutomationError> {
-        let schedule_config: Value = serde_json::from_str(&automation.schedule_config)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
-        crate::workflow::automation::service::compute_next_run_at(
-            &automation.schedule_kind,
-            &schedule_config,
-        )
-        .map_err(AutomationError::invalid_request)
+        cutoff: &str,
+    ) -> Result<AutomationStartupNormalizeReport, AutomationError> {
+        self.automation().normalize_schedules_at_startup(cutoff)
+    }
+
+    /// The runtime keep-alive/health summary the daemon reads to decide whether
+    /// to stay alive. See [`AutomationApplicationService::runtime_summary`].
+    pub fn automation_runtime_summary(
+        &self,
+        now: &str,
+    ) -> Result<AutomationRuntimeSummary, AutomationError> {
+        self.automation().runtime_summary(now)
+    }
+
+    /// The running instance's short-lived automation execution evidence. It is
+    /// exposed so the execution kernels admit a run before its durable claim is
+    /// committed, which keeps the claim -> start window from being misread as an
+    /// unknown effect by a concurrent read.
+    pub(crate) fn automation_owner(&self) -> &Arc<AutomationRuntimeOwner> {
+        &self.automation_owner
+    }
+
+    /// Cancels every owned automation pre-workflow shell this instance is running
+    /// and awaits each tree's teardown, reporting how many were in flight.
+    ///
+    /// The coordinated shutdown calls this so a cancelled runtime really
+    /// terminates the shells it started — including descendants that ignore
+    /// `SIGTERM` or hold the inherited pipe open — instead of only closing the
+    /// admission gate. The caller's deadline bounds the await, so a shell that
+    /// cannot finish never blocks the shutdown past the shared budget.
+    pub async fn cancel_owned_automation_shells(&self) -> usize {
+        self.automation_owner.cancel_owned_processes().await
     }
 }
 
@@ -1095,6 +1572,57 @@ fn terminal_from_snapshot_state(state: &str) -> Option<&'static str> {
 
 fn run_id_str(run: &WorkflowAutomationRun) -> &str {
     &run.id
+}
+
+/// The conservative report for a state this process cannot classify (an
+/// unreadable store). It carries no fabricated counts and keeps the runtime
+/// alive, because an unobservable state must not be mistaken for "nothing to do".
+fn unknown_runtime_summary() -> AutomationRuntimeSummary {
+    AutomationRuntimeSummary {
+        effective_schedules: 0,
+        live_automation_runs: 0,
+        in_flight_admissions: 0,
+        blocked_reconcile: 0,
+        keep_alive: true,
+        health: AutomationRuntimeHealth::Unknown,
+    }
+}
+
+/// The runtime classification of an automation's stored schedule cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleCursor {
+    /// Strictly future: a legitimate pending schedule.
+    Future,
+    /// Due at or before `now` and at or after the instance start boundary: it
+    /// became due while this instance was online, so it may be consumed.
+    DueOnline,
+    /// No cursor, a corrupt slot, or a slot missed while the instance was
+    /// offline. It is never consumed and never keeps the runtime alive.
+    NotEffective,
+}
+
+/// Parses a stored `next_run_at`/dispatch instant. Accepts the canonical DB form
+/// and RFC3339; anything else is an invalid request rather than a silent zero.
+fn parse_local_datetime(value: &str) -> Result<DateTime<Local>, AutomationError> {
+    use chrono::{NaiveDateTime, TimeZone};
+    let trimmed = value.trim();
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(parsed.with_timezone(&Local));
+    }
+    for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, format) {
+            if let Some(datetime) = Local
+                .from_local_datetime(&naive)
+                .single()
+                .or_else(|| Local.from_local_datetime(&naive).earliest())
+            {
+                return Ok(datetime);
+            }
+        }
+    }
+    Err(AutomationError::invalid_request(format!(
+        "invalid datetime: {value}"
+    )))
 }
 
 fn parse_shell_preview(shell_config: Option<&Value>) -> Option<String> {
@@ -1620,6 +2148,1164 @@ mod tests {
         assert!(
             run_body.contains("create_manual_run"),
             "automation_run is the sole owner of the manual-run kernel"
+        );
+    }
+
+    // --- runtime owner / normalisation / summary --------------------------
+
+    fn runtime_owner(
+        manager: Option<&Arc<crate::workflow::react::manager::WorkflowManager>>,
+    ) -> Arc<AutomationRuntimeOwner> {
+        match manager {
+            Some(manager) => Arc::new(AutomationRuntimeOwner::new(Arc::downgrade(manager))),
+            // A dangling weak handle stands in for an owner whose manager is
+            // gone: live observation must then report an error, never a zero.
+            None => Arc::new(AutomationRuntimeOwner::new(std::sync::Weak::new())),
+        }
+    }
+
+    fn facade_with_owner(
+        store: &Arc<MainStore>,
+        owner: Arc<AutomationRuntimeOwner>,
+    ) -> AutomationApplicationService {
+        let tsid = Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("tsid"));
+        AutomationApplicationService::with_owner(store.clone(), tsid, owner)
+    }
+
+    fn upsert(
+        id: &str,
+        kind: &str,
+        config: Value,
+        enabled: bool,
+        next_run_at: Option<&str>,
+    ) -> WorkflowAutomationUpsert {
+        WorkflowAutomationUpsert {
+            id: id.to_string(),
+            title: id.to_string(),
+            // No prompt: the run kernel then fails fast resolving it, which lets
+            // a dispatch test observe the durable claim without starting a real
+            // workflow.
+            prompt: None,
+            prompt_file_path: None,
+            agent_id: "agent-main".to_string(),
+            agent_config: Some("{}".to_string()),
+            allowed_paths: "[]".to_string(),
+            shell_config: None,
+            schedule_kind: kind.to_string(),
+            schedule_config: config.to_string(),
+            continuous_context: false,
+            current_workflow_session_id: None,
+            self_review: false,
+            enabled,
+            next_run_at: next_run_at.map(ToString::to_string),
+        }
+    }
+
+    fn scheduled_run(automation_id: &str, run_id: &str, status: &str) -> WorkflowAutomationRunInsert {
+        WorkflowAutomationRunInsert {
+            id: run_id.to_string(),
+            automation_id: automation_id.to_string(),
+            workflow_session_id: None,
+            status: status.to_string(),
+            scheduled_for: "2026-06-25 09:00:00".to_string(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            trigger: "scheduled".to_string(),
+            dispatch_key: Some("2026-06-25 09:00:00".to_string()),
+        }
+    }
+
+    fn daily_config() -> Value {
+        json!({"time": "09:00", "weekdays": [], "start_date": null, "end_date": null})
+    }
+
+    /// A durable workflow row, required by the run's `workflow_session_id` FK.
+    fn seed_session(store: &Arc<MainStore>, session_id: &str) {
+        store
+            .create_workflow(session_id, "session", "agent-main", None, None)
+            .expect("seed workflow session");
+    }
+
+    /// A durable workflow snapshot row in the given lifecycle state, the
+    /// structured terminal/looping evidence the run projection reads.
+    fn seed_snapshot(store: &Arc<MainStore>, session_id: &str, state: &str) {
+        let session_id = session_id.to_string();
+        let state = state.to_string();
+        store
+            .db_runtime()
+            .expect("runtime")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_snapshots (session_id, context_json, version, state)
+                     VALUES (?1, '{}', '1', ?2)",
+                    params![session_id, state],
+                )?;
+                Ok(())
+            })
+            .expect("seed snapshot");
+    }
+
+    /// Builds the real runtime owner (chat state, hub, workflow manager and
+    /// factory) so a dispatch test exercises the canonical path end to end.
+    fn full_service(
+        dir: &std::path::Path,
+        store: Arc<MainStore>,
+    ) -> Arc<WorkflowApplicationService> {
+        use crate::ai::interaction::chat_completion::ChatState;
+        use crate::libs::window_channels::WindowChannels;
+        use crate::workflow::react::client::hub::{NoWindowTransport, WorkflowRuntimeHub};
+        use crate::workflow::react::manager::WorkflowManager;
+        use crate::workflow::react::orchestrator::{DefaultSubAgentFactory, SubAgentFactory};
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let tsid = Arc::new(TsidGenerator::new(1).expect("tsid"));
+        let hub = Arc::new(WorkflowRuntimeHub::with_transport(
+            Arc::new(NoWindowTransport),
+            "automation-test".to_string(),
+        ));
+        let manager = Arc::new(WorkflowManager::new());
+        let factory: Arc<dyn SubAgentFactory> = Arc::new(DefaultSubAgentFactory {
+            main_store: store.clone(),
+            chat_state: chat_state.clone(),
+            gateway: hub.clone(),
+            workflow_manager: manager.clone(),
+            app_data_dir: dir.to_path_buf(),
+            tsid_generator: tsid.clone(),
+        });
+        Arc::new(WorkflowApplicationService::new(
+            store,
+            chat_state,
+            tsid,
+            hub,
+            factory,
+            manager,
+            dir.to_path_buf(),
+        ))
+    }
+
+    #[test]
+    fn startup_normalize_advances_a_missed_slot_and_keeps_a_future_one() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-missed",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-24 09:00:00"),
+            ))
+            .expect("create missed automation");
+        store
+            .create_workflow_automation(&upsert(
+                "a-future",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create future automation");
+
+        let owner = runtime_owner(None);
+        let facade = facade_with_owner(&store, owner.clone());
+        let report = facade
+            .normalize_schedules_at_startup("2026-06-25 10:00:00")
+            .expect("normalize");
+
+        assert_eq!(report.examined, 2);
+        assert_eq!(report.advanced, 1);
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(
+            store
+                .get_workflow_automation("a-missed")
+                .expect("read")
+                .expect("row")
+                .next_run_at
+                .as_deref(),
+            Some("2026-06-26 09:00:00")
+        );
+        // A stored future slot is a legitimate pending schedule: untouched.
+        assert_eq!(
+            store
+                .get_workflow_automation("a-future")
+                .expect("read")
+                .expect("row")
+                .next_run_at
+                .as_deref(),
+            Some("2026-06-26 09:00:00")
+        );
+        assert!(owner.startup_cutoff().is_some());
+
+        // The pass is one-time: a duplicate startup signal changes nothing.
+        let second = facade
+            .normalize_schedules_at_startup("2026-06-25 11:00:00")
+            .expect("renormalize");
+        assert_eq!(second.examined, 0);
+    }
+
+    #[test]
+    fn startup_normalize_clears_an_elapsed_once_and_keeps_a_null_slot() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-once",
+                "once",
+                json!({"run_at": "2026-06-24 09:00:00"}),
+                true,
+                Some("2026-06-24 09:00:00"),
+            ))
+            .expect("create once");
+        store
+            .create_workflow_automation(&upsert(
+                "a-null",
+                "daily",
+                daily_config(),
+                true,
+                None,
+            ))
+            .expect("create null");
+        store
+            .create_workflow_automation(&upsert(
+                "a-disabled",
+                "daily",
+                daily_config(),
+                false,
+                Some("2026-06-24 09:00:00"),
+            ))
+            .expect("create disabled");
+
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let report = facade
+            .normalize_schedules_at_startup("2026-06-25 10:00:00")
+            .expect("normalize");
+
+        // Only the enabled rows are examined; the disabled row is left alone.
+        assert_eq!(report.examined, 2);
+        assert_eq!(report.expired, 1);
+        // A NULL cursor defines no next slot, so the pass neither fills it nor
+        // counts it as advanced (AC-3).
+        assert_eq!(report.advanced, 0);
+        assert_eq!(report.unchanged, 1);
+        assert_eq!(
+            store
+                .get_workflow_automation("a-once")
+                .expect("read")
+                .expect("row")
+                .next_run_at,
+            None
+        );
+        assert_eq!(
+            store
+                .get_workflow_automation("a-null")
+                .expect("read")
+                .expect("row")
+                .next_run_at,
+            None
+        );
+        let disabled = store
+            .get_workflow_automation("a-disabled")
+            .expect("read")
+            .expect("row");
+        assert!(!disabled.enabled);
+        assert_eq!(disabled.next_run_at.as_deref(), Some("2026-06-24 09:00:00"));
+    }
+
+    #[test]
+    fn normalize_cas_rejects_a_moved_revision_and_preserves_enabled() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        let created = store
+            .create_workflow_automation(&upsert(
+                "a-cas2",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-24 09:00:00"),
+            ))
+            .expect("create");
+        assert_eq!(created.revision, 1);
+
+        match store
+            .normalize_workflow_automation_next_run_at_cas(
+                "a-cas2",
+                Some("2026-06-26 09:00:00".to_string()),
+                99,
+            )
+            .expect("cas")
+        {
+            CasOutcome::RevisionConflict => {}
+            other => panic!("expected revision conflict, got {other:?}"),
+        }
+        let row = store
+            .get_workflow_automation("a-cas2")
+            .expect("read")
+            .expect("row");
+        assert!(row.enabled);
+        assert_eq!(row.next_run_at.as_deref(), Some("2026-06-24 09:00:00"));
+        assert_eq!(row.revision, 1);
+
+        match store
+            .normalize_workflow_automation_next_run_at_cas(
+                "a-cas2",
+                Some("2026-06-26 09:00:00".to_string()),
+                1,
+            )
+            .expect("cas")
+        {
+            CasOutcome::Updated(row) => {
+                assert!(row.enabled, "normalization must not change enabled");
+                assert_eq!(row.revision, 2);
+                assert_eq!(row.next_run_at.as_deref(), Some("2026-06-26 09:00:00"));
+            }
+            other => panic!("expected update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_flight_guard_keeps_a_session_less_run_from_needs_reconcile() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert("a-guard", "daily", daily_config(), true, None))
+            .expect("create");
+        store
+            .add_workflow_automation_run(&scheduled_run("a-guard", "run-guard", "pending"))
+            .expect("add run");
+
+        let owner = runtime_owner(None);
+        let facade = facade_with_owner(&store, owner.clone());
+
+        // While this instance holds the in-flight guard, reads/reconcile leave
+        // the session-less run untouched instead of converging it.
+        let guard = owner.begin_run("run-guard");
+        assert!(owner.is_in_flight("run-guard"));
+        let views = facade.runs("a-guard").expect("runs");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].status, "pending");
+        facade.reconcile_all().expect("reconcile");
+        assert_eq!(
+            store
+                .get_workflow_automation_run("run-guard")
+                .expect("read")
+                .expect("row")
+                .status,
+            "pending"
+        );
+
+        // Dropping the guard releases the evidence; with no session and no live
+        // owner the run then converges to `needs_reconcile`.
+        drop(guard);
+        assert!(!owner.is_in_flight("run-guard"));
+        facade.reconcile_all().expect("reconcile");
+        assert_eq!(
+            store
+                .get_workflow_automation_run("run-guard")
+                .expect("read")
+                .expect("row")
+                .status,
+            "needs_reconcile"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_claims_a_due_final_slot_with_no_successor_and_runs_once() {
+        let (dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-once-due",
+                "once",
+                json!({"run_at": "2026-06-25 09:00:00"}),
+                true,
+                Some("2026-06-25 09:00:00"),
+            ))
+            .expect("create");
+        let svc = full_service(dir.path(), store.clone());
+        svc.automation_owner()
+            .mark_startup(parse_local_datetime("2026-06-25 08:00:00").expect("cutoff"));
+
+        let results = svc
+            .automation_dispatch_due("2026-06-25 09:00:30")
+            .await
+            .expect("dispatch");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, AutomationDispatchOutcome::Accepted);
+
+        let runs = store
+            .list_workflow_automation_runs("a-once-due")
+            .expect("runs");
+        assert_eq!(runs.len(), 1, "the final once slot executes exactly once");
+        assert_eq!(runs[0].trigger, "scheduled");
+        assert_eq!(
+            runs[0].dispatch_key.as_deref(),
+            Some("2026-06-25 09:00:00"),
+            "the due slot is the dispatch key, not the (absent) successor"
+        );
+        // The once cursor is consumed to `None` rather than left due.
+        assert_eq!(
+            store
+                .get_workflow_automation("a-once-due")
+                .expect("read")
+                .expect("row")
+                .next_run_at,
+            None
+        );
+
+        // A later tick must not replay the consumed slot.
+        let again = svc
+            .automation_dispatch_due("2026-06-25 09:01:00")
+            .await
+            .expect("dispatch again");
+        assert!(again.is_empty());
+        assert_eq!(
+            store
+                .list_workflow_automation_runs("a-once-due")
+                .expect("runs")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_runs_the_last_in_range_daily_slot_once() {
+        let (dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-last",
+                "daily",
+                json!({
+                    "time": "09:00",
+                    "weekdays": [],
+                    "start_date": "2026-06-25",
+                    "end_date": "2026-06-25"
+                }),
+                true,
+                Some("2026-06-25 09:00:00"),
+            ))
+            .expect("create");
+        let svc = full_service(dir.path(), store.clone());
+        svc.automation_owner()
+            .mark_startup(parse_local_datetime("2026-06-25 08:00:00").expect("cutoff"));
+
+        let results = svc
+            .automation_dispatch_due("2026-06-25 09:01:00")
+            .await
+            .expect("dispatch");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, AutomationDispatchOutcome::Accepted);
+        assert_eq!(
+            store
+                .list_workflow_automation_runs("a-last")
+                .expect("runs")
+                .len(),
+            1,
+            "the last in-range slot runs once even with no successor"
+        );
+        assert_eq!(
+            store
+                .get_workflow_automation("a-last")
+                .expect("read")
+                .expect("row")
+                .next_run_at,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_refuses_a_slot_missed_while_the_instance_was_offline() {
+        let (dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-stale",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-25 09:00:00"),
+            ))
+            .expect("create");
+        let svc = full_service(dir.path(), store.clone());
+        // The instance only came online at 10:00, after the 09:00 slot was due.
+        svc.automation_owner()
+            .mark_startup(parse_local_datetime("2026-06-25 10:00:00").expect("cutoff"));
+
+        let results = svc
+            .automation_dispatch_due("2026-06-25 10:01:00")
+            .await
+            .expect("dispatch");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, AutomationDispatchOutcome::Skipped);
+        assert!(
+            store
+                .list_workflow_automation_runs("a-stale")
+                .expect("runs")
+                .is_empty(),
+            "a slot missed while offline is never replayed"
+        );
+    }
+
+    #[test]
+    fn cursor_validation_rejects_a_weekday_mismatch_and_accepts_the_right_day() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        // Monday-only schedule with a Thursday cursor: corrupt, never consumed.
+        store
+            .create_workflow_automation(&upsert(
+                "a-wd",
+                "daily",
+                json!({"time": "09:00", "weekdays": [1], "start_date": null, "end_date": null}),
+                true,
+                Some("2026-06-25 09:00:00"),
+            ))
+            .expect("create");
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let now = parse_local_datetime("2026-06-25 10:00:00").expect("now");
+        let automation = store
+            .get_workflow_automation("a-wd")
+            .expect("read")
+            .expect("row");
+        assert_eq!(
+            facade.schedule_cursor_state(&automation, now).expect("state"),
+            ScheduleCursor::NotEffective
+        );
+
+        // A valid Monday slot on the same schedule is a legal future cursor.
+        store
+            .normalize_workflow_automation_next_run_at_cas(
+                "a-wd",
+                Some("2026-06-29 09:00:00".to_string()),
+                1,
+            )
+            .expect("cas");
+        let automation = store
+            .get_workflow_automation("a-wd")
+            .expect("read")
+            .expect("row");
+        assert_eq!(
+            facade.schedule_cursor_state(&automation, now).expect("state"),
+            ScheduleCursor::Future
+        );
+    }
+
+    #[test]
+    fn runtime_summary_counts_only_effective_keepalive_reasons() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-fut",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create future");
+        store
+            .create_workflow_automation(&upsert("a-off", "daily", daily_config(), false, None))
+            .expect("create disabled");
+
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.effective_schedules, 1);
+        assert_eq!(summary.live_automation_runs, 0);
+        assert_eq!(summary.blocked_reconcile, 0);
+        assert!(summary.keep_alive);
+        assert_eq!(summary.health, AutomationRuntimeHealth::Healthy);
+    }
+
+    #[test]
+    fn runtime_summary_does_not_keep_alive_for_blocked_or_slotless_work() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        // Enabled with a legal future slot, but blocked by an unknown run: the
+        // schedule cannot dispatch, so it is not effective.
+        store
+            .create_workflow_automation(&upsert(
+                "a-blocked",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create blocked");
+        store
+            .add_workflow_automation_run(&scheduled_run("a-blocked", "run-nr", "needs_reconcile"))
+            .expect("add run");
+        // Enabled but slot-less (expired configuration): not effective.
+        store
+            .create_workflow_automation(&upsert("a-none", "daily", daily_config(), true, None))
+            .expect("create none");
+        // A historical terminal run contributes nothing.
+        seed_session(&store, "session-old");
+        let mut terminal = scheduled_run("a-none", "run-term", "completed");
+        terminal.workflow_session_id = Some("session-old".to_string());
+        terminal.dispatch_key = None;
+        store
+            .add_workflow_automation_run(&terminal)
+            .expect("add terminal");
+
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.effective_schedules, 0);
+        assert_eq!(summary.live_automation_runs, 0);
+        assert_eq!(summary.blocked_reconcile, 1);
+        assert!(
+            !summary.keep_alive,
+            "blocked/unknown work must not keep the runtime alive alone"
+        );
+        assert_eq!(summary.health, AutomationRuntimeHealth::Degraded);
+    }
+
+    #[test]
+    fn runtime_summary_is_unknown_without_a_runtime_owner() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-fut2",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create future");
+
+        // A standalone facade has no live owner to observe, so its health is
+        // `unknown` rather than a fabricated healthy/degraded.
+        let facade = facade(&store);
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.health, AutomationRuntimeHealth::Unknown);
+        assert_eq!(summary.effective_schedules, 1);
+    }
+
+    #[test]
+    fn runtime_summary_reports_an_error_when_the_manager_cannot_be_observed() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert("a-orphan", "daily", daily_config(), true, None))
+            .expect("create");
+        let mut run = scheduled_run("a-orphan", "run-orphan", "running");
+        run.workflow_session_id = Some("session-orphan".to_string());
+        seed_session(&store, "session-orphan");
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        // The owner exists but its weak manager is gone: observation fails, and
+        // that failure must surface as an error, never as a zero live count.
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        assert!(facade.runtime_summary("2026-06-25 10:00:00").is_err());
+    }
+
+    /// A minimal executor so the workflow manager can register a live session.
+    struct StubExecutor {
+        session_id: String,
+        state: crate::workflow::react::types::WorkflowState,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::workflow::react::engine::ReActExecutor for StubExecutor {
+        async fn init(&mut self) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+            Ok(())
+        }
+        async fn run_loop(
+            &mut self,
+        ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+            Ok(())
+        }
+        async fn begin_new_context_segment(
+            &mut self,
+        ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+            Ok(())
+        }
+        async fn begin_manual_clear_context_segment(
+            &mut self,
+        ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+            Ok(())
+        }
+        async fn prepare_completed_resume(
+            &mut self,
+        ) -> Result<(), crate::workflow::react::error::WorkflowEngineError> {
+            Ok(())
+        }
+        async fn add_message_and_notify(
+            &mut self,
+            _role: String,
+            _content: String,
+            _attached_context: Option<String>,
+            _reasoning: Option<String>,
+            _step_type: Option<crate::workflow::react::types::StepType>,
+            _is_error: bool,
+            _error_type: Option<String>,
+            _metadata: Option<Value>,
+        ) -> Result<bool, crate::workflow::react::error::WorkflowEngineError> {
+            Ok(true)
+        }
+        fn session_id(&self) -> String {
+            self.session_id.clone()
+        }
+        fn state(&self) -> crate::workflow::react::types::WorkflowState {
+            self.state.clone()
+        }
+        fn set_state(&mut self, state: crate::workflow::react::types::WorkflowState) {
+            self.state = state;
+        }
+        fn attach_signal_rx(&mut self, _signal_rx: tokio::sync::mpsc::Receiver<String>) {}
+        fn messages(&self) -> Vec<crate::db::WorkflowMessage> {
+            vec![]
+        }
+    }
+
+    fn register_session(
+        manager: &Arc<crate::workflow::react::manager::WorkflowManager>,
+        session_id: &str,
+        state: crate::workflow::react::types::WorkflowState,
+        status: ManagedSessionStatus,
+    ) {
+        let executor: Arc<tokio::sync::Mutex<dyn crate::workflow::react::engine::ReActExecutor>> =
+            Arc::new(tokio::sync::Mutex::new(StubExecutor {
+                session_id: session_id.to_string(),
+                state,
+            }));
+        manager
+            .register_session(session_id.to_string(), executor, status)
+            .expect("register session");
+    }
+
+    #[test]
+    fn a_live_waiting_owner_keeps_a_disabled_automations_run_live() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-dis",
+                "interval",
+                json!({"interval_minutes": 60}),
+                true,
+                None,
+            ))
+            .expect("create");
+        let mut run = scheduled_run("a-dis", "run-dis", "running");
+        run.workflow_session_id = Some("sess-wait".to_string());
+        run.dispatch_key = None;
+        seed_session(&store, "sess-wait");
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
+        register_session(
+            &manager,
+            "sess-wait",
+            crate::workflow::react::types::WorkflowState::AwaitingUser,
+            ManagedSessionStatus::Waiting,
+        );
+        let facade = facade_with_owner(&store, runtime_owner(Some(&manager)));
+
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(
+            summary.live_automation_runs, 1,
+            "a waiting session is a real live owner"
+        );
+        assert_eq!(summary.blocked_reconcile, 0);
+        assert!(summary.keep_alive);
+
+        // The live run is not converged by a read.
+        let views = facade.runs("a-dis").expect("runs");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].status, "running");
+    }
+
+    #[test]
+    fn a_terminal_manager_session_converges_a_run_instead_of_zero_live() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert("a-done", "interval", json!({"interval_minutes": 60}), true, None))
+            .expect("create");
+        let mut run = scheduled_run("a-done", "run-done", "running");
+        run.workflow_session_id = Some("sess-done".to_string());
+        run.dispatch_key = None;
+        seed_session(&store, "sess-done");
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
+        // A completed session the manager still hot-caches is terminal, not live.
+        register_session(
+            &manager,
+            "sess-done",
+            crate::workflow::react::types::WorkflowState::Completed,
+            ManagedSessionStatus::Completed,
+        );
+        let facade = facade_with_owner(&store, runtime_owner(Some(&manager)));
+
+        let views = facade.runs("a-done").expect("runs");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].status, "completed");
+
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.live_automation_runs, 0);
+        assert_eq!(summary.blocked_reconcile, 0);
+    }
+
+    #[test]
+    fn startup_normalize_retry_after_a_failure_is_not_treated_as_success() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-retry",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-24 09:00:00"),
+            ))
+            .expect("create");
+        let owner = runtime_owner(None);
+        let facade = facade_with_owner(&store, owner.clone());
+
+        // A pass that errors before finishing must not be recorded as done.
+        assert!(facade.normalize_schedules_at_startup("not-a-datetime").is_err());
+        assert!(!owner.startup_pass_completed());
+        assert!(owner.startup_cutoff().is_none());
+
+        // The retried pass runs and only then marks itself complete.
+        let report = facade
+            .normalize_schedules_at_startup("2026-06-25 10:00:00")
+            .expect("retry");
+        assert_eq!(report.examined, 1);
+        assert_eq!(report.advanced, 1);
+        assert!(owner.startup_pass_completed());
+        assert_eq!(
+            owner.startup_cutoff(),
+            Some(parse_local_datetime("2026-06-25 10:00:00").expect("cutoff"))
+        );
+
+        // A duplicate signal after a successful pass is a no-op.
+        let again = facade
+            .normalize_schedules_at_startup("2026-06-25 11:00:00")
+            .expect("duplicate");
+        assert_eq!(again.examined, 0);
+
+        // A retried pass reuses the first recorded boundary instead of
+        // advancing to a later cutoff.
+        let other = runtime_owner(None);
+        let first = parse_local_datetime("2026-06-25 10:00:00").expect("first");
+        let second = parse_local_datetime("2026-06-25 12:00:00").expect("second");
+        assert!(other.mark_startup(first));
+        assert!(!other.mark_startup(second));
+        assert_eq!(other.startup_cutoff(), Some(first));
+    }
+
+    #[test]
+    fn project_run_prefers_a_live_manager_over_a_stale_terminal_snapshot() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-live",
+                "interval",
+                json!({"interval_minutes": 60}),
+                true,
+                None,
+            ))
+            .expect("create");
+        seed_session(&store, "sess-live");
+        // The snapshot still holds the previous run's terminal state.
+        seed_snapshot(&store, "sess-live", "completed");
+        let mut run = scheduled_run("a-live", "run-live", "running");
+        run.workflow_session_id = Some("sess-live".to_string());
+        run.dispatch_key = None;
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
+        register_session(
+            &manager,
+            "sess-live",
+            crate::workflow::react::types::WorkflowState::Executing,
+            ManagedSessionStatus::Active,
+        );
+        let facade = facade_with_owner(&store, runtime_owner(Some(&manager)));
+
+        // A hot-recovered live session must not be projected terminal by the
+        // stale snapshot of the same (continuous-context) session.
+        let views = facade.runs("a-live").expect("runs");
+        assert_eq!(views[0].status, "running");
+
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.live_automation_runs, 1);
+        assert_eq!(summary.blocked_reconcile, 0);
+        assert!(summary.keep_alive);
+    }
+
+    #[test]
+    fn project_run_marks_an_unowned_running_snapshot_needs_reconcile() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-unowned",
+                "interval",
+                json!({"interval_minutes": 60}),
+                true,
+                None,
+            ))
+            .expect("create");
+        seed_session(&store, "sess-unowned");
+        seed_snapshot(&store, "sess-unowned", "running");
+        let mut run = scheduled_run("a-unowned", "run-unowned", "running");
+        run.workflow_session_id = Some("sess-unowned".to_string());
+        run.dispatch_key = None;
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        // With no live owner and a non-terminal snapshot, neither the workflow
+        // row nor the run's own `running` status may be read as a live run.
+        let facade = facade(&store);
+        let views = facade.runs("a-unowned").expect("runs");
+        assert_eq!(views[0].status, "needs_reconcile");
+
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.live_automation_runs, 0);
+        assert_eq!(summary.blocked_reconcile, 1);
+        assert_eq!(summary.health, AutomationRuntimeHealth::Unknown);
+        assert!(
+            summary.keep_alive,
+            "an unobservable state must not be reported as nothing to do"
+        );
+    }
+
+    #[test]
+    fn runtime_summary_recovers_a_future_slot_after_a_run_reaches_terminal() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-recover",
+                "daily",
+                daily_config(),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create");
+        seed_session(&store, "sess-recover");
+        seed_snapshot(&store, "sess-recover", "completed");
+        let mut run = scheduled_run("a-recover", "run-recover", "running");
+        run.workflow_session_id = Some("sess-recover".to_string());
+        run.dispatch_key = None;
+        store
+            .add_workflow_automation_run(&run)
+            .expect("add run");
+
+        // The bounded reconcile converges the run on its terminal snapshot, so
+        // the future enabled slot becomes effective again instead of staying
+        // suppressed by a stale blocking run.
+        let facade = facade(&store);
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.effective_schedules, 1);
+        assert_eq!(summary.blocked_reconcile, 0);
+        assert_eq!(
+            store
+                .get_workflow_automation_run("run-recover")
+                .expect("read")
+                .expect("row")
+                .status,
+            "completed"
+        );
+    }
+
+    #[test]
+    fn runtime_summary_downgrades_an_invalid_schedule_instead_of_failing() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        store
+            .create_workflow_automation(&upsert(
+                "a-bad",
+                "interval",
+                json!({"interval_minutes": 60}),
+                true,
+                Some("2026-06-26 09:00:00"),
+            ))
+            .expect("create");
+        // A user configuration that cannot be parsed is a diagnostic problem,
+        // not a query failure.
+        store
+            .db_runtime()
+            .expect("runtime")
+            .write_blocking(|conn| {
+                conn.execute(
+                    "UPDATE workflow_automations SET schedule_config = 'not json' WHERE id = 'a-bad'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("corrupt config");
+
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("an invalid schedule must not fail the summary");
+        assert_eq!(summary.effective_schedules, 0);
+        assert!(!summary.keep_alive);
+        assert_eq!(summary.health, AutomationRuntimeHealth::Degraded);
+    }
+
+    #[test]
+    fn runtime_summary_builds_the_blocking_set_from_the_active_runs_once() {
+        let (_dir, store) = seeded_store(&["agent-main"]);
+        for id in ["a-one", "a-two", "a-three"] {
+            store
+                .create_workflow_automation(&upsert(
+                    id,
+                    "daily",
+                    daily_config(),
+                    true,
+                    Some("2026-06-26 09:00:00"),
+                ))
+                .expect("create");
+        }
+        // One unknown run blocks only its own automation.
+        store
+            .add_workflow_automation_run(&scheduled_run("a-two", "run-two", "needs_reconcile"))
+            .expect("add run");
+
+        let facade = facade_with_owner(&store, runtime_owner(None));
+        let summary = facade
+            .runtime_summary("2026-06-25 10:00:00")
+            .expect("summary");
+        assert_eq!(summary.effective_schedules, 2);
+        assert_eq!(summary.blocked_reconcile, 1);
+        assert!(summary.keep_alive);
+        assert_eq!(summary.health, AutomationRuntimeHealth::Degraded);
+    }
+
+    #[test]
+    fn admission_precedes_the_durable_claim_for_dispatched_and_manual_runs() {
+        // The claim commits a run that another worker thread can observe before
+        // the guard exists, so the admission must be recorded first. This locks
+        // the ordering so it cannot silently regress.
+        let app_src = include_str!("./application.rs");
+        let dispatch_body = app_src
+            .split("pub async fn automation_dispatch_due(")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("/// The one-time startup schedule normalization")
+                    .next()
+            })
+            .expect("automation_dispatch_due body");
+        let admit = dispatch_body
+            .find("begin_run(")
+            .expect("dispatch must admit the run");
+        let claim = dispatch_body
+            .find("claim_due_automation_slot(")
+            .expect("dispatch claims the slot");
+        assert!(
+            admit < claim,
+            "dispatch must admit the run before claiming its slot"
+        );
+
+        let service_src = include_str!("./service.rs");
+        let manual_body = service_src
+            .split("pub(crate) async fn create_manual_run(")
+            .nth(1)
+            .and_then(|rest| rest.split("#[cfg(test)]").next())
+            .expect("create_manual_run body");
+        let admit = manual_body
+            .find("begin_run(")
+            .expect("manual must admit the run");
+        let claim = manual_body
+            .find("claim_manual_run(")
+            .expect("manual claims the run");
+        assert!(
+            admit < claim,
+            "manual must admit the run before claiming it"
+        );
+    }
+
+    /// Polls a pid fixture written by an owned pre-workflow shell.
+    #[cfg(unix)]
+    async fn wait_for_owned_pid(path: &std::path::Path) -> i32 {
+        for _ in 0..500 {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(pid) = text.trim().parse::<i32>() {
+                    return pid;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("owned pid fixture {} was never written", path.display());
+    }
+
+    #[cfg(unix)]
+    fn owned_process_alive(pid: i32) -> bool {
+        pid > 0 && unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// A run whose pre-workflow shell is cancelled by the coordinated shutdown
+    /// must project terminal `cancelled` — never a deterministic-effect `failed`
+    /// — and its whole owned tree must be gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_shutdown_owned_cancel_marks_run_cancelled() {
+        let (dir, store) = seeded_store(&["agent-main"]);
+        let svc = full_service(dir.path(), store.clone());
+
+        let fixture = dir.path().join("owned-grandchild.pid");
+        let command = format!("sleep 30 & echo $! > {}; sleep 30", fixture.display());
+        store
+            .create_workflow_automation(&WorkflowAutomationUpsert {
+                id: "a-cancel".to_string(),
+                title: "Cancel".to_string(),
+                prompt: Some("do work".to_string()),
+                prompt_file_path: None,
+                agent_id: "agent-main".to_string(),
+                agent_config: Some("{}".to_string()),
+                allowed_paths: "[]".to_string(),
+                shell_config: Some(json!({ "command": command }).to_string()),
+                schedule_kind: "once".to_string(),
+                schedule_config: json!({ "run_at": "2999-01-01 00:00" }).to_string(),
+                continuous_context: false,
+                current_workflow_session_id: None,
+                self_review: false,
+                enabled: false,
+                next_run_at: None,
+            })
+            .expect("create automation");
+
+        let task = tokio::spawn({
+            let svc = svc.clone();
+            async move {
+                crate::workflow::automation::service::create_manual_run(&svc, "a-cancel").await
+            }
+        });
+
+        let grandchild = wait_for_owned_pid(&fixture).await;
+        assert!(owned_process_alive(grandchild));
+
+        let cancelled = svc.cancel_owned_automation_shells().await;
+        assert_eq!(cancelled, 1, "the in-flight pre-shell must be cancelled");
+
+        let (_automation, run) = task.await.expect("task").expect("manual run");
+        assert_eq!(
+            run.status, "cancelled",
+            "a cancelled shell must not report a deterministic `failed`"
+        );
+
+        let runs = svc.automation().runs("a-cancel").expect("runs");
+        let projected = runs
+            .iter()
+            .find(|view| view.run_id == run.id)
+            .expect("projected run");
+        assert_eq!(projected.status, "cancelled");
+
+        assert!(
+            !owned_process_alive(grandchild),
+            "the owned tree must be terminated"
         );
     }
 }

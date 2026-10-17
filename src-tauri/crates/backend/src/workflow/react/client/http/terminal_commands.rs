@@ -207,6 +207,12 @@ async fn create_terminal_session(
         Ok(request) => request,
         Err(response) => return response,
     };
+    // Opening a user PTY is runtime work: fence it through the one admission
+    // gate so a quiescing runtime refuses it.
+    let _ticket = match state.admit_work(crate::lifecycle::WorkKind::TerminalWork) {
+        Ok(ticket) => ticket,
+        Err(refusal) => return refusal.into_response(),
+    };
     match plane.create(&client_id, &lease_id, &request) {
         Ok(metadata) => Json(metadata).into_response(),
         Err(error) => terminal_error_response(&error),
@@ -435,6 +441,11 @@ fn require_live_lease_with_id(
             "forbidden",
             "the terminal lease proof is no longer valid".to_string(),
         )),
+        Err(RuntimeLeaseError::Stopping(message)) => Err(dto::error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+            message,
+        )),
     }
 }
 
@@ -466,6 +477,14 @@ fn parse_body<T: DeserializeOwned>(body: &str, what: &str) -> Result<T, Response
 
 /// Maps a terminal failure onto a stable control-plane error envelope.
 fn terminal_error_response(error: &TerminalError) -> Response {
+    // A closed gate refuses new terminal work with the canonical stopping code.
+    if let TerminalError::Stopping(_code, message) = error {
+        return dto::error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+            message.clone(),
+        );
+    }
     let (status, code) = match error {
         TerminalError::SessionNotFound => (StatusCode::NOT_FOUND, "not_found"),
         TerminalError::SessionExited => (StatusCode::CONFLICT, "conflict"),
@@ -479,6 +498,10 @@ fn terminal_error_response(error: &TerminalError) -> Response {
         | TerminalError::ReaderFailed(_)
         | TerminalError::WriteFailed(_)
         | TerminalError::ResizeFailed(_) => (StatusCode::INTERNAL_SERVER_ERROR, "terminal_failure"),
+        TerminalError::Stopping(_, _) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+        ),
     };
     dto::error_response(status, code, error.to_string())
 }

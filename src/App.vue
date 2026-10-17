@@ -12,6 +12,7 @@
     <api-key-unlock-dialog
       :active="requiresApiKeyUnlock"
       :window-label="windowStore.windowLabel" />
+    <quit-confirm-dialog v-if="isQuitHost" />
   </div>
 </template>
 
@@ -45,6 +46,7 @@ import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from './stores/mcp'
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import ApiKeyUnlockDialog from '@/components/common/ApiKeyUnlockDialog.vue'
+import QuitConfirmDialog from '@/components/common/QuitConfirmDialog.vue'
 
 const router = useRouter()
 const settingStore = useSettingStore()
@@ -72,6 +74,11 @@ const windowType = ref('main')
 // an ordinary page that happens to render the same route is never mistaken for the trusted child.
 const AGENT_SKILLS_CHILD_LABEL = 'agent_skills'
 const isAgentSkillsChild = getCurrentWebview().label === AGENT_SKILLS_CHILD_LABEL
+
+// The quit confirmation is owned by the Workflow window alone: it is the host the tray focuses,
+// and no other window or the docked Agent Skills child webview renders it.
+const QUIT_HOST_WINDOW_LABEL = 'workflow'
+const isQuitHost = windowStore.windowLabel === QUIT_HOST_WINDOW_LABEL && !isAgentSkillsChild
 
 const isSystemDark = usePreferredDark()
 const isDark = useDark({

@@ -57,6 +57,11 @@ pub enum ToolError {
     #[error("{}", t!("tools.error.mcp_server_not_found", name = .0))]
     McpServerNotFound(String),
 
+    /// The runtime is quiescing and refuses to start new MCP work. The message
+    /// is already localized by the admission gate.
+    #[error("{0}")]
+    RuntimeStopping(String),
+
     /// Error during serialization or deserialization.
     #[error("{}", t!("tools.error.serialization", details = .0))]
     Serialization(String),

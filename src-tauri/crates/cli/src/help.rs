@@ -46,10 +46,26 @@ mod tests {
         assert!(HELP_SKILL.contains("## Capability Operations"));
         assert!(HELP_SKILL.contains("cscli skill install"));
         assert!(HELP_SKILL.contains("cscli mcp install"));
+        assert!(HELP_SKILL.contains("## Automation Operations"));
+        assert!(HELP_SKILL.contains("cscli automation draft"));
+        assert!(HELP_SKILL.contains("cscli automation apply"));
+        assert!(HELP_SKILL.contains("cscli automation delete"));
+        assert!(HELP_SKILL.contains("Background execution is implemented"));
         assert!(HELP_SKILL.contains("## Built-in CLI Invocation"));
         assert!(HELP_SKILL.contains("which cscli"));
         assert!(HELP_SKILL.contains("2>&1"));
         assert!(HELP_SKILL.contains("## Maintenance"));
         assert!(HELP_SKILL.contains("manually maintained"));
+    }
+
+    /// The activation description must cover the automation family, so the Skill
+    /// triggers for automation requests and not only Skill/MCP ones.
+    #[test]
+    fn bundled_help_description_covers_automation() {
+        let frontmatter = HELP_SKILL
+            .split("---")
+            .nth(1)
+            .expect("the YAML frontmatter block");
+        assert!(frontmatter.contains("a local workflow Automation"));
     }
 }

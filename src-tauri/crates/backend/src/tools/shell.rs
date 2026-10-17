@@ -1,6 +1,7 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 #[cfg(test)]
 use crate::libs::ai_temp::ToolOutputWriter;
+use crate::owned_process::{OwnedProcessCancellation, OwnedProcessTicket};
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
     classify_shell_stage, leading_command_index, shell_tokens, split_shell_command_segments,
@@ -1566,6 +1567,13 @@ pub struct ShellExecute {
     session_id: Option<String>,
     approved_execution_plans: Arc<dashmap::DashMap<String, crate::tools::ShellExecutionPlan>>,
     sandbox_runtime_status_cache: Arc<SandboxRuntimeStatusCache>,
+    /// The one runtime-wide owned-process cancellation, when the runtime
+    /// installed it. Every spawned shell is registered on it, so the coordinated
+    /// shutdown cancels and awaits this tool's child tree as well as the
+    /// pre-workflow automation shells through the same single registry. `None`
+    /// for the desktop-free unit tests and any caller with no coordinated
+    /// shutdown.
+    owned_processes: Option<OwnedProcessCancellation>,
 }
 
 impl ShellExecute {
@@ -1584,6 +1592,7 @@ impl ShellExecute {
             session_id: None,
             approved_execution_plans: Arc::new(dashmap::DashMap::new()),
             sandbox_runtime_status_cache: Arc::new(StdMutex::new(None)),
+            owned_processes: None,
         }
     }
 
@@ -1607,6 +1616,18 @@ impl ShellExecute {
     pub fn with_gateway(mut self, gateway: Arc<dyn Gateway>, session_id: String) -> Self {
         self.gateway = Some(gateway);
         self.session_id = Some(session_id);
+        self
+    }
+
+    /// Registers this tool's child trees on the one runtime-wide owned-process
+    /// cancellation, so a coordinated shutdown reaches them. The runtime installs
+    /// the signal on the canonical chat state; a caller without one leaves this
+    /// unset and the tool behaves exactly as before.
+    pub fn with_owned_process_cancellation(
+        mut self,
+        cancel: Option<OwnedProcessCancellation>,
+    ) -> Self {
+        self.owned_processes = cancel;
         self
     }
 }
@@ -1702,8 +1723,13 @@ impl ToolDefinition for ShellExecute {
         if let Some(sandbox_command) =
             crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?
         {
-            let output =
-                run_sandbox_output_with_timeout(sandbox_command, &execution_plan, timeout_ms).await;
+            let output = run_sandbox_output_with_timeout(
+                sandbox_command,
+                &execution_plan,
+                timeout_ms,
+                self.owned_processes.as_ref(),
+            )
+            .await;
             return match output {
                 Ok(output) => {
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1731,7 +1757,8 @@ impl ToolDefinition for ShellExecute {
             command.current_dir(dir);
         }
 
-        match run_host_output_with_timeout(command, timeout_ms).await {
+        match run_host_output_with_timeout(command, timeout_ms, self.owned_processes.as_ref()).await
+        {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1765,33 +1792,28 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
-struct StageProcessGuard {
+/// The kill target of one stage process: the process group (unix) and the root
+/// pid (windows). Kept as a plain value so both the guard and its detached
+/// cancellation watcher can tear the same tree down.
+#[derive(Clone, Copy)]
+struct StageKillTarget {
     #[cfg(unix)]
     process_group_id: i32,
     #[cfg(windows)]
     process_id: u32,
-    active: bool,
 }
 
-impl StageProcessGuard {
-    fn new(_child: &Child) -> Self {
+impl StageKillTarget {
+    fn new(child: &Child) -> Self {
         Self {
             #[cfg(unix)]
-            process_group_id: _child.id().map_or(0, |id| id as i32),
+            process_group_id: child.id().map_or(0, |id| id as i32),
             #[cfg(windows)]
-            process_id: _child.id().unwrap_or(0),
-            active: true,
+            process_id: child.id().unwrap_or(0),
         }
     }
 
-    fn disarm(&mut self) {
-        self.active = false;
-    }
-
-    fn kill_group(&mut self) {
-        if !self.active {
-            return;
-        }
+    fn terminate(&self) {
         #[cfg(unix)]
         if self.process_group_id > 0 {
             unsafe extern "C" {
@@ -1811,7 +1833,93 @@ impl StageProcessGuard {
                 .stderr(std::process::Stdio::null())
                 .status();
         }
+        #[cfg(not(any(unix, windows)))]
+        let _ = self;
+    }
+}
+
+/// Tears a stage's tree down when the runtime-wide signal flips. The RAII hold
+/// lives in the guard, so this watcher only acts on cancellation.
+fn spawn_stage_watcher(
+    target: StageKillTarget,
+    cancel: OwnedProcessCancellation,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        cancel.cancelled().await;
+        target.terminate();
+    })
+}
+
+struct StageProcessGuard {
+    target: StageKillTarget,
+    active: bool,
+    /// The RAII hold on the one runtime-wide cancellation, present only when the
+    /// owning `ShellExecute` was given the signal. Dropped on disarm/teardown so
+    /// the coordinated shutdown drain stops awaiting this stage.
+    ticket: Option<OwnedProcessTicket>,
+    /// The detached watcher that tears the tree down on cancellation. Aborted on
+    /// normal completion so it never outlives the stage.
+    watcher: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl StageProcessGuard {
+    /// A stage with no runtime-wide cancellation: the unit tests and any caller
+    /// that did not install one.
+    #[cfg(test)]
+    fn new(child: &Child) -> Self {
+        Self::new_owned(child, None)
+    }
+
+    /// A stage registered on the runtime-wide signal, so a coordinated shutdown
+    /// reaches its whole tree and awaits the teardown through the RAII ticket.
+    fn new_owned(child: &Child, cancel: Option<&OwnedProcessCancellation>) -> Self {
+        let target = StageKillTarget::new(child);
+        let (ticket, watcher) = match cancel {
+            Some(cancel) => {
+                let ticket = cancel.begin();
+                let watcher = spawn_stage_watcher(target, cancel.clone());
+                (Some(ticket), Some(watcher))
+            }
+            None => (None, None),
+        };
+        Self {
+            target,
+            active: true,
+            ticket,
+            watcher,
+        }
+    }
+
+    /// Whether the runtime cancelled this stage while it was in flight. A caller
+    /// that reaches a success path with this set must report a failure instead,
+    /// so a cancelled owned tool child is never returned as a clean result.
+    fn was_cancelled(&self) -> bool {
+        self.ticket
+            .as_ref()
+            .is_some_and(OwnedProcessTicket::is_cancelled)
+    }
+
+    /// Releases the runtime-wide hold after a normal completion.
+    fn disarm(&mut self) {
         self.active = false;
+        self.stop_watcher();
+        self.ticket = None;
+    }
+
+    fn stop_watcher(&mut self) {
+        if let Some(watcher) = self.watcher.take() {
+            watcher.abort();
+        }
+    }
+
+    fn kill_group(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.target.terminate();
+        self.active = false;
+        self.stop_watcher();
+        self.ticket = None;
     }
 }
 
@@ -1819,6 +1927,13 @@ impl Drop for StageProcessGuard {
     fn drop(&mut self) {
         self.kill_group();
     }
+}
+
+/// The stable failure returned when the runtime cancelled an owned tool child.
+/// Reporting a failure (never a clean result) is the point: the tree was torn
+/// down deliberately, not completed.
+fn runtime_cancelled_owned_process_error() -> ToolError {
+    ToolError::RuntimeStopping(rust_i18n::t!("runtime.owned_process_cancelled").to_string())
 }
 
 async fn terminate_stage_process(child: &mut Child, process_guard: &mut StageProcessGuard) {
@@ -1833,6 +1948,7 @@ async fn terminate_stage_process(child: &mut Child, process_guard: &mut StagePro
 async fn run_host_output_with_timeout(
     mut command: Command,
     timeout_ms: u64,
+    cancel: Option<&OwnedProcessCancellation>,
 ) -> Result<std::process::Output, ToolError> {
     use std::process::Stdio;
 
@@ -1844,10 +1960,16 @@ async fn run_host_output_with_timeout(
     let child = command
         .spawn()
         .map_err(|error| ToolError::ExecutionFailed(format!("Spawn failed: {error}")))?;
-    let mut process_guard = StageProcessGuard::new(&child);
+    let mut process_guard = StageProcessGuard::new_owned(&child, cancel);
 
     match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
         Ok(Ok(output)) => {
+            // A cancellation that raced the child's natural exit is a failure,
+            // never a clean result.
+            if process_guard.was_cancelled() {
+                process_guard.kill_group();
+                return Err(runtime_cancelled_owned_process_error());
+            }
             process_guard.disarm();
             Ok(output)
         }
@@ -1932,6 +2054,7 @@ async fn run_sandbox_output_with_timeout(
     mut command: Command,
     plan: &crate::tools::ShellExecutionPlan,
     timeout_ms: u64,
+    cancel: Option<&OwnedProcessCancellation>,
 ) -> Result<std::process::Output, ToolError> {
     configure_process_group(&mut command);
     let child = command.spawn().map_err(|error| {
@@ -1941,10 +2064,17 @@ async fn run_sandbox_output_with_timeout(
             format!("Sandbox spawn failed: {error}"),
         )
     })?;
+    let mut process_guard = StageProcessGuard::new_owned(&child, cancel);
     let mut cleanup_guard = SandboxCleanupGuard::new(Some(plan.clone()));
     match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
         Ok(result) => match result {
             Ok(output) => {
+                if process_guard.was_cancelled() {
+                    process_guard.kill_group();
+                    cleanup_guard.cleanup_now().await;
+                    return Err(runtime_cancelled_owned_process_error());
+                }
+                process_guard.disarm();
                 cleanup_guard.cleanup_after_success().await;
                 Ok(output)
             }
@@ -2838,7 +2968,7 @@ impl ShellExecute {
                 ToolError::ExecutionFailed(format!("Failed to spawn command: {}", e))
             }
         })?;
-        let mut process_guard = StageProcessGuard::new(&child);
+        let mut process_guard = StageProcessGuard::new_owned(&child, self.owned_processes.as_ref());
         let mut sandbox_cleanup_guard = SandboxCleanupGuard::new(execution_plan.clone());
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
@@ -2898,6 +3028,11 @@ impl ShellExecute {
                             },
                         )
                         .await;
+                    if process_guard.was_cancelled() {
+                        process_guard.kill_group();
+                        sandbox_cleanup_guard.cleanup_now().await;
+                        return Err(runtime_cancelled_owned_process_error());
+                    }
                     sandbox_cleanup_guard.cleanup_after_success().await;
                     process_guard.disarm();
                     return Ok(build_shell_tool_result_with_metadata(
@@ -2972,6 +3107,11 @@ impl ShellExecute {
                             output: if last_stream_name.is_some() { format!("\nExit code: {}", exit_code) } else { format!("Exit code: {}", exit_code) },
                             timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                         }).await;
+                        if process_guard.was_cancelled() {
+                            process_guard.kill_group();
+                            sandbox_cleanup_guard.cleanup_now().await;
+                            return Err(runtime_cancelled_owned_process_error());
+                        }
                         sandbox_cleanup_guard.cleanup_after_success().await;
                         process_guard.disarm();
                         return Ok(build_shell_tool_result_with_metadata(
@@ -3066,7 +3206,7 @@ impl ShellExecute {
         let mut child = command
             .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?;
-        let mut process_guard = StageProcessGuard::new(&child);
+        let mut process_guard = StageProcessGuard::new_owned(&child, self.owned_processes.as_ref());
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
             "Failed to capture stdout".to_string(),
@@ -3149,6 +3289,10 @@ impl ShellExecute {
                                 },
                             )
                             .await;
+                        if process_guard.was_cancelled() {
+                            process_guard.kill_group();
+                            return Err(runtime_cancelled_owned_process_error());
+                        }
                         process_guard.disarm();
                         return Ok(build_shell_tool_result_with_metadata(
                             command_str,
@@ -3325,6 +3469,10 @@ impl ShellExecute {
                                     },
                                 )
                                 .await;
+                            if process_guard.was_cancelled() {
+                                process_guard.kill_group();
+                                return Err(runtime_cancelled_owned_process_error());
+                            }
                             process_guard.disarm();
                             return Ok(build_shell_tool_result_with_metadata(
                                 command_str,
@@ -4820,7 +4968,7 @@ mod tests {
         let command = crate::tools::sandbox_command_for_plan(&plan, "sleep 5")
             .unwrap()
             .unwrap();
-        let result = run_sandbox_output_with_timeout(command, &plan, 50).await;
+        let result = run_sandbox_output_with_timeout(command, &plan, 50, None).await;
 
         if let Some(path) = original_path {
             std::env::set_var("PATH", path);
@@ -4993,7 +5141,7 @@ mod tests {
         let command = crate::tools::sandbox_command_for_plan(&plan, "echo ok")
             .unwrap()
             .unwrap();
-        let result = run_sandbox_output_with_timeout(command, &plan, 5_000).await;
+        let result = run_sandbox_output_with_timeout(command, &plan, 5_000, None).await;
 
         if let Some(path) = original_path {
             std::env::set_var("PATH", path);
@@ -5097,6 +5245,131 @@ mod tests {
         task.abort();
         let _ = task.await;
         assert_recorded_child_stopped(&project_root).await;
+    }
+
+    /// The runtime-wide cancellation must reach an owned shell tool's whole tree
+    /// (root plus the backgrounded grandchild) and report a *failure*, never a
+    /// clean result, while an unrelated process — never a descendant of the
+    /// owned shell — survives. This is the tool-side counterpart of the
+    /// `owned_process` tree tests and proves the tool child registers on the same
+    /// single signal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_cancel_terminates_owned_shell_tool_tree_and_spares_a_sentinel() {
+        let temp_root = stable_temp_dir();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        write_long_running_child_script(&project_root);
+
+        let cancel = OwnedProcessCancellation::new();
+        let shell = test_shell_execute(project_root.clone())
+            .with_owned_process_cancellation(Some(cancel.clone()));
+
+        let task = tokio::spawn(async move {
+            shell
+                .call(json!({
+                    "command": "sh spawn-child.sh",
+                    "timeout": 30_000,
+                }))
+                .await
+        });
+
+        let pid_path = project_root.join("child.pid");
+        for _ in 0..200 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            pid_path.exists(),
+            "the owned shell's descendant must have started"
+        );
+        assert!(
+            cancel.in_flight() >= 1,
+            "the owned shell tool must register on the runtime-wide signal"
+        );
+
+        // The sentinel is in the test's own process group and is never a
+        // descendant of the owned shell; a bug that signalled the shared group
+        // would kill it, so its survival is the proof.
+        let mut sentinel = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sentinel");
+        let sentinel_pid = sentinel.id();
+
+        cancel.cancel_all_and_wait().await;
+
+        let result = task.await.expect("owned shell task");
+        assert!(
+            matches!(result, Err(ToolError::RuntimeStopping(_))),
+            "a cancelled owned shell must be reported as a failure, got {result:?}"
+        );
+        assert_recorded_child_stopped(&project_root).await;
+        assert_eq!(
+            cancel.in_flight(),
+            0,
+            "the RAII ticket must be released once the tree is down"
+        );
+
+        let sentinel_alive = std::process::Command::new("kill")
+            .args(["-0", &sentinel_pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(
+            sentinel_alive,
+            "an unrelated process must survive an owned tool cancel"
+        );
+
+        let _ = sentinel.kill();
+        let _ = sentinel.wait();
+    }
+
+    /// The streaming execution path registers on the same signal and must report
+    /// the cancellation instead of the child's killed exit status.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runtime_cancel_terminates_owned_streaming_shell_tool_tree() {
+        let temp_root = stable_temp_dir();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        write_long_running_child_script(&project_root);
+
+        let cancel = OwnedProcessCancellation::new();
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root.clone())
+            .with_gateway(gateway, "test-session".to_string())
+            .with_owned_process_cancellation(Some(cancel.clone()));
+
+        let task = tokio::spawn(async move {
+            shell
+                .call(json!({
+                    "command": "sh spawn-child.sh",
+                    "timeout": 30_000,
+                }))
+                .await
+        });
+
+        let pid_path = project_root.join("child.pid");
+        for _ in 0..200 {
+            if pid_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            pid_path.exists(),
+            "the streaming owned shell's descendant must have started"
+        );
+
+        cancel.cancel_all_and_wait().await;
+
+        let result = task.await.expect("streaming owned shell task");
+        assert!(
+            matches!(result, Err(ToolError::RuntimeStopping(_))),
+            "a cancelled streaming owned shell must be reported as a failure, got {result:?}"
+        );
+        assert_recorded_child_stopped(&project_root).await;
+        assert_eq!(cancel.in_flight(), 0);
     }
 
     #[cfg(unix)]

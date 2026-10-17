@@ -186,6 +186,25 @@
     "switchBackendModels": "切換目標後端模型",
     "title": "代理切換"
   },
+  "quitConfirm": {
+    "cancel": "取消",
+    "errors": {
+      "request_failed": "退出請求傳送失敗，請重試。",
+      "runtime_endpoint_gone": "共享執行期在回報已停止前就已關閉，其狀態未知。請重新啟動後再繼續。",
+      "runtime_instance_changed": "共享執行期已重新啟動，本次請求未傳送給新執行個體。",
+      "runtime_not_connected": "本桌面端未連線到共享執行期，無法停止執行期。",
+      "runtime_stop_failed": "共享執行期拒絕了停止請求或停止失敗。",
+      "runtime_stop_timeout": "共享執行期未在限定時間內回報已停止。"
+    },
+    "exit": "退出",
+    "exitDesktopOnly": "僅退出桌面端",
+    "impact": "退出會關閉本桌面端。唯有共享執行期仍在執行時，正在執行的工作流程與自動化任務才會繼續。",
+    "retry": "重試",
+    "stopRuntime": "同時停止共享執行期",
+    "stopRuntimeHint": "強制停止共享執行期及其正在執行的任務。任務設定會保留，之後可以重新啟動。",
+    "stopping": "正在停止共享執行期…",
+    "title": "退出 ChatSpeed"
+  },
   "settings": {
     "agent": {
       "actModel": "行動模型",

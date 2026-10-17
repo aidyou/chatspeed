@@ -268,6 +268,23 @@ impl MainStore {
         })
     }
 
+    /// The enabled automations only. Read paths that classify schedules (the
+    /// runtime keep-alive summary) need nothing else, so this avoids listing and
+    /// filtering disabled rows on every tick.
+    pub fn list_enabled_workflow_automations(
+        &self,
+    ) -> Result<Vec<WorkflowAutomation>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_automations
+                 WHERE enabled = 1
+                 ORDER BY updated_at DESC, created_at DESC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(WorkflowAutomation::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn get_workflow_automation(
         &self,
         id: &str,
@@ -586,6 +603,61 @@ impl MainStore {
         })
     }
 
+    /// Compare-and-set the schedule cursor alone, leaving `enabled` and every
+    /// other field untouched. The one-time startup normalization uses this to
+    /// advance a slot that was missed while the instance was offline; a moved
+    /// revision is reported rather than overwritten (AC-4).
+    pub fn normalize_workflow_automation_next_run_at_cas(
+        &self,
+        id: &str,
+        next_run_at: Option<String>,
+        expected_revision: i64,
+    ) -> Result<CasOutcome, StoreError> {
+        let id = id.to_string();
+        self.db_runtime()?.write_blocking(move |conn| {
+            let current: Option<i64> = conn
+                .query_row(
+                    "SELECT revision FROM workflow_automations WHERE id = ?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            match current {
+                None => Ok(CasOutcome::NotFound),
+                Some(revision) if revision != expected_revision => Ok(CasOutcome::RevisionConflict),
+                Some(_) => {
+                    conn.execute(
+                        "UPDATE workflow_automations
+                         SET next_run_at = ?2, revision = ?3, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ?1",
+                        params![id, next_run_at, expected_revision + 1],
+                    )?;
+                    conn.query_row(
+                        "SELECT * FROM workflow_automations WHERE id = ?1",
+                        params![id],
+                        |row| Ok(WorkflowAutomation::from(row)),
+                    )
+                    .map(CasOutcome::Updated)
+                    .map_err(StoreError::from)
+                }
+            }
+        })
+    }
+
+    /// Every non-terminal run across all automations, used by the runtime
+    /// summary to classify live manager-owned runs against blocked/unknown work.
+    pub fn list_active_automation_runs(&self) -> Result<Vec<WorkflowAutomationRun>, StoreError> {
+        self.db_runtime()?.read_blocking(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT * FROM workflow_automation_runs
+                 WHERE status IN ('pending','starting','running','needs_reconcile')
+                 ORDER BY created_at ASC",
+            )?;
+            let rows = statement.query_map([], |row| Ok(WorkflowAutomationRun::from(row)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
     /// Advances an enabled automation's schedule and records the scheduled run
     /// in one transaction, so no half-advanced slot can be observed. The claim
     /// is conditional on `enabled`, the previously read `next_run_at` and
@@ -854,20 +926,6 @@ impl MainStore {
             .optional()
             .map(|value| value.flatten())
             .map_err(StoreError::from)
-        })
-    }
-
-    /// Whether a workflow row exists for the session. Used to tell a run whose
-    /// session was deleted (unknown effect) from one merely awaiting start.
-    pub fn workflow_session_exists(&self, session_id: &str) -> Result<bool, StoreError> {
-        let session_id = session_id.to_string();
-        self.db_runtime()?.read_blocking(move |conn| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(1) FROM workflows WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )?;
-            Ok(count > 0)
         })
     }
 
@@ -1320,6 +1378,44 @@ mod tests {
             Some("2026-06-25 09:00:00")
         );
         assert_eq!(automation.revision, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn enabled_candidate_query_lists_only_enabled_rows() -> Result<(), StoreError> {
+        let (_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+
+        let mk = |id: &str, enabled: bool| WorkflowAutomationUpsert {
+            id: id.to_string(),
+            title: id.to_string(),
+            prompt: Some("p".to_string()),
+            prompt_file_path: None,
+            agent_id: "agent-main".to_string(),
+            agent_config: Some("{}".to_string()),
+            allowed_paths: "[]".to_string(),
+            shell_config: None,
+            schedule_kind: "interval".to_string(),
+            schedule_config: "{\"interval_minutes\":60}".to_string(),
+            continuous_context: false,
+            current_workflow_session_id: None,
+            self_review: false,
+            enabled,
+            next_run_at: Some("2026-06-26 09:00:00".to_string()),
+        };
+        store.create_workflow_automation(&mk("a-on", true))?;
+        store.create_workflow_automation(&mk("a-off", false))?;
+
+        // The summary reads only enabled candidates, so the disabled row is
+        // never listed (and never re-checked per tick).
+        let enabled: Vec<String> = store
+            .list_enabled_workflow_automations()?
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(enabled, vec!["a-on".to_string()]);
+        // The full list still contains both rows.
+        assert_eq!(store.list_workflow_automations()?.len(), 2);
         Ok(())
     }
 }

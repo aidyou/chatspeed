@@ -28,6 +28,10 @@ pub mod code {
     pub const CONFIRMATION_REQUIRED: &str = "confirmation_required";
     #[cfg(not(feature = "desktop"))]
     pub const NEEDS_RECONCILE: &str = "needs_reconcile";
+    /// The runtime is quiescing and refuses new automation work. Reuses the one
+    /// canonical wire code so every transport branches on the same token.
+    #[cfg(not(feature = "desktop"))]
+    pub const STOPPING: &str = chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING;
     #[cfg(not(feature = "desktop"))]
     pub const INTERNAL: &str = "internal";
 }
@@ -87,6 +91,10 @@ impl AutomationError {
 
     pub fn confirmation_required(message: impl Into<String>) -> Self {
         Self::new(code::CONFIRMATION_REQUIRED, message)
+    }
+
+    pub fn stopping(message: impl Into<String>) -> Self {
+        Self::new(code::STOPPING, message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

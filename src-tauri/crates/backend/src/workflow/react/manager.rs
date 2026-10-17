@@ -167,6 +167,28 @@ impl WorkflowManager {
         self.sessions.get(session_id).map(|s| s.status.clone())
     }
 
+    /// The ids of the sessions this manager currently holds in a live state
+    /// (active, waiting or stopping), read from the live registry.
+    ///
+    /// The registry — not a stored durable list — is the authority on the work
+    /// this process is running right now, so a coordinated shutdown can
+    /// enumerate exactly the roots it owns, and re-read the same list to confirm
+    /// none are left before it claims they stopped.
+    pub fn live_session_ids(&self) -> Vec<String> {
+        self.sessions
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.value().status,
+                    ManagedSessionStatus::Active
+                        | ManagedSessionStatus::Waiting
+                        | ManagedSessionStatus::Stopping
+                )
+            })
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
     pub fn get_executor(&self, session_id: &str) -> Option<Arc<Mutex<dyn ReActExecutor>>> {
         self.sessions.get(session_id).map(|s| s.executor.clone())
     }
@@ -728,6 +750,48 @@ mod tests {
         assert_eq!(
             manager.get_session_status("test-session-1"),
             Some(ManagedSessionStatus::Active)
+        );
+    }
+
+    #[test]
+    fn live_session_ids_reads_the_registry_and_excludes_terminal_sessions() {
+        let manager = WorkflowManager::new();
+        for (id, status) in [
+            ("live-active", ManagedSessionStatus::Active),
+            ("live-waiting", ManagedSessionStatus::Waiting),
+            ("live-stopping", ManagedSessionStatus::Stopping),
+            ("done-completed", ManagedSessionStatus::Completed),
+            ("done-failed", ManagedSessionStatus::Failed),
+            ("done-cancelled", ManagedSessionStatus::Cancelled),
+        ] {
+            manager
+                .register_session(
+                    id.to_string(),
+                    Arc::new(Mutex::new(MockExecutor::new())),
+                    status,
+                )
+                .unwrap();
+        }
+
+        let mut live = manager.live_session_ids();
+        live.sort();
+        assert_eq!(
+            live,
+            vec![
+                "live-active".to_string(),
+                "live-stopping".to_string(),
+                "live-waiting".to_string(),
+            ]
+        );
+
+        // A status change is reflected immediately: the registry is the
+        // authority, not a stored list.
+        manager.update_session_status("live-active", ManagedSessionStatus::Completed);
+        let mut live = manager.live_session_ids();
+        live.sort();
+        assert_eq!(
+            live,
+            vec!["live-stopping".to_string(), "live-waiting".to_string()]
         );
     }
 

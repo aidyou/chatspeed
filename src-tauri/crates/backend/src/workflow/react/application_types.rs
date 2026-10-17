@@ -25,6 +25,8 @@ pub enum ApplicationErrorKind {
     State,
     /// The runtime gateway rejected the operation (e.g. no live input route).
     Gateway,
+    /// The runtime is quiescing and refuses new work (`runtime_stopping`).
+    Stopping,
     /// Any other failure (storage, tooling, unexpected errors).
     Internal,
 }
@@ -66,6 +68,10 @@ impl ApplicationError {
 
     pub fn gateway(message: impl Into<String>) -> Self {
         Self::new(ApplicationErrorKind::Gateway, message)
+    }
+
+    pub fn stopping(message: impl Into<String>) -> Self {
+        Self::new(ApplicationErrorKind::Stopping, message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

@@ -176,6 +176,37 @@ impl Display for McpStatus {
 #[cfg(not(feature = "desktop"))]
 pub type StatusChangeCallback = Box<dyn Fn(String, McpStatus) -> () + Send + Sync>;
 
+/// Default budget for an explicit [`McpClient::stop`].
+///
+/// Generous enough that a healthy server's `cancel` completes long before it
+/// elapses, while still bounding a stuck transport so a stop can never hang the
+/// caller forever.
+#[cfg(not(feature = "desktop"))]
+pub const MCP_STOP_DEFAULT_BUDGET: Duration = Duration::from_secs(30);
+
+/// The bounded result of stopping one MCP client.
+///
+/// rmcp's `RunningService::cancel` is the canonical teardown of an MCP server:
+/// it stops the service task and drops the child-process transport, but it
+/// exposes no child *tree* handle. A server that spawned its own descendants is
+/// not tracked, so a completed cancel proves the transport and the direct child
+/// were released — never that every descendant was reaped. These outcomes are
+/// therefore deliberately conservative: they never claim a tree-wide reap.
+#[cfg(not(feature = "desktop"))]
+#[derive(Debug, Clone)]
+pub enum McpStopOutcome {
+    /// No live service was held (already stopped, or never started). Nothing was
+    /// leaked, so this is a satisfied, idempotent stop.
+    AlreadyStopped,
+    /// The transport was cancelled within the budget and the direct child was
+    /// released. Descendant reaping is not provable, so it is not claimed.
+    TransportStopped,
+    /// The transport could not be confirmed released within the budget, or the
+    /// cancel reported an error. The caller must treat the teardown as unproven
+    /// instead of recording a clean stop.
+    Unproven(McpError),
+}
+
 #[cfg(not(feature = "desktop"))]
 #[async_trait::async_trait]
 pub trait McpClientInternal: Send + Sync {
@@ -239,27 +270,51 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
     }
 
     /// Stops the running MCP client.
-    /// This is a default implementation.
+    ///
+    /// Delegates to [`Self::stop_bounded`] with a generous default budget so an
+    /// explicit stop still waits for the transport teardown, mapping an unproven
+    /// outcome back to the same `ClientStopError` a raw cancel failure used to
+    /// produce.
     async fn stop(&self) -> McpClientResult<()> {
+        match self.stop_bounded(MCP_STOP_DEFAULT_BUDGET).await {
+            McpStopOutcome::AlreadyStopped | McpStopOutcome::TransportStopped => Ok(()),
+            McpStopOutcome::Unproven(error) => Err(error),
+        }
+    }
+
+    /// Stops the running client with a bounded wait and reports whether the
+    /// teardown was confirmed.
+    ///
+    /// This is the canonical bounded stop the coordinated shutdown uses. It
+    /// takes the live service under a short write lock, then awaits the cancel
+    /// *without* holding it, so a slow `cancel` can neither block a concurrent
+    /// registration nor exceed `budget`. An elapsed budget or a reported cancel
+    /// error is surfaced as [`McpStopOutcome::Unproven`] instead of being
+    /// hidden, and a stop with no live service is the idempotent
+    /// [`McpStopOutcome::AlreadyStopped`].
+    async fn stop_bounded(&self, budget: Duration) -> McpStopOutcome {
         let service_instance = self.client().write().await.take();
-        if let Some(service_instance) = service_instance {
-            let result = service_instance.cancel().await;
-            match result {
-                Ok(_) => {
-                    self.set_status(McpStatus::Stopped).await;
-                    Ok(())
-                }
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    self.set_status(McpStatus::Error(format!("Failed to stop: {}", err_msg)))
-                        .await;
-                    Err(McpError::ClientStopError(err_msg))
-                }
-            }
-        } else {
-            // If client was already None (e.g., already stopped or never started)
+        let Some(service_instance) = service_instance else {
+            // Already stopped or never started: nothing to leak.
             self.set_status(McpStatus::Stopped).await;
-            Ok(())
+            return McpStopOutcome::AlreadyStopped;
+        };
+        match timeout(budget, service_instance.cancel()).await {
+            Ok(Ok(_)) => {
+                self.set_status(McpStatus::Stopped).await;
+                McpStopOutcome::TransportStopped
+            }
+            Ok(Err(e)) => {
+                let err_msg = e.to_string();
+                self.set_status(McpStatus::Error(format!("Failed to stop: {}", err_msg)))
+                    .await;
+                McpStopOutcome::Unproven(McpError::ClientStopError(err_msg))
+            }
+            Err(_) => {
+                let err_msg = format!("MCP stop exceeded its {:?} budget", budget);
+                self.set_status(McpStatus::Error(err_msg.clone())).await;
+                McpStopOutcome::Unproven(McpError::ClientStopError(err_msg))
+            }
         }
     }
 

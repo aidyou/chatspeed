@@ -540,6 +540,9 @@ impl ContextCompressor {
             AiError::ResponseParseFailed { .. }
             | AiError::StreamProcessingFailed { .. }
             | AiError::FailedToGetOrCreateWindowChannel(_) => true,
+            // A quiescing runtime is a deliberate refusal, not a transient
+            // failure: retrying it would only be refused again.
+            AiError::RuntimeStopping(_) => false,
         }
     }
 

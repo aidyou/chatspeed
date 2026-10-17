@@ -89,6 +89,22 @@ pub struct ChatState {
     pub workflow_keys: Arc<DashMap<String, String>>,
     /// Session-level guard preventing duplicate workflow title generation tasks.
     pub workflow_title_generation_in_flight: Arc<DashMap<String, ()>>,
+    /// The one runtime work-admission gate, when the runtime installed one.
+    ///
+    /// The canonical chat entry [`start_new_chat_interaction`] fences itself
+    /// through this gate, so a direct, non-HTTP caller is refused on the same
+    /// gate the HTTP transport uses instead of only the transport being fenced.
+    /// `None` until [`crate::owner::RuntimeOwner::install_admission`] installs the
+    /// gate the daemon drives; an ungated state admits everything.
+    admission: std::sync::OnceLock<Arc<dyn crate::lifecycle::WorkAdmission>>,
+    /// The one runtime-wide owned-process cancellation signal, when the runtime
+    /// installed one.
+    ///
+    /// The workflow engine reads it to register every shell-tool child, so the
+    /// coordinated shutdown reaches owned tool trees through the same single
+    /// registry as the pre-workflow automation shells. `None` for the
+    /// desktop-free tests and any state without a coordinated shutdown owner.
+    owned_processes: std::sync::OnceLock<crate::owned_process::OwnedProcessCancellation>,
 }
 
 impl ChatState {
@@ -110,6 +126,8 @@ impl ChatState {
             main_store,
             workflow_keys: Arc::new(DashMap::new()),
             workflow_title_generation_in_flight: Arc::new(DashMap::new()),
+            admission: std::sync::OnceLock::new(),
+            owned_processes: std::sync::OnceLock::new(),
         });
 
         let processor_state_clone = Arc::clone(&state);
@@ -136,6 +154,61 @@ impl ChatState {
     /// state through whatever client protocol the runtime exposes.
     pub fn runtime_new(channels: Arc<WindowChannels>, main_store: Arc<MainStore>) -> Arc<Self> {
         Self::build(channels, main_store)
+    }
+
+    /// Installs the one runtime work-admission gate. First-wins and idempotent.
+    pub fn install_admission(&self, gate: Arc<dyn crate::lifecycle::WorkAdmission>) {
+        let _ = self.admission.set(gate);
+    }
+
+    /// Installs the one runtime-wide owned-process cancellation signal.
+    /// First-wins and idempotent: the runtime owner installs the same signal the
+    /// automation shells register on, so tool children and pre-workflow shells
+    /// share one registry.
+    pub fn install_owned_processes(&self, cancel: crate::owned_process::OwnedProcessCancellation) {
+        let _ = self.owned_processes.set(cancel);
+    }
+
+    /// The installed runtime-wide owned-process signal, when the runtime owner
+    /// installed one. A caller without it (the desktop-free tests) gets `None`
+    /// and its shell tools register no cancellation, exactly as before.
+    pub fn owned_process_cancellation(
+        &self,
+    ) -> Option<crate::owned_process::OwnedProcessCancellation> {
+        self.owned_processes.get().cloned()
+    }
+
+    /// Fences one canonical chat work start through the installed gate.
+    ///
+    /// Returns the RAII ticket the caller holds for the whole turn, or the
+    /// stable `runtime_stopping` refusal. An ungated state (the desktop-free
+    /// build without an owner, the unit tests) admits everything with a no-op
+    /// ticket, so no chat caller needs an `Option` in the hot path.
+    pub fn admit_work(
+        &self,
+        kind: crate::lifecycle::WorkKind,
+    ) -> Result<crate::lifecycle::AdmissionTicket, crate::lifecycle::AdmissionDenied> {
+        match self.admission.get() {
+            Some(gate) => gate.admit(kind),
+            None => Ok(crate::lifecycle::AdmissionTicket::permissive()),
+        }
+    }
+
+    /// Interrupts every open chat turn by flipping its stop flag.
+    ///
+    /// Used on runtime shutdown: a chat turn is runtime-owned work, so the
+    /// coordinated exit cancels it instead of leaving a provider stream running
+    /// after the admission gate closed. Returns how many chats were signalled.
+    pub async fn interrupt_all_turns(&self) -> usize {
+        let chats = self.chats.lock().await;
+        let mut interrupted = 0;
+        for protocol_chats in chats.values() {
+            for chat in protocol_chats.values() {
+                chat.set_stop_flag(true).await;
+                interrupted += 1;
+            }
+        }
+        interrupted
     }
 }
 
@@ -380,6 +453,15 @@ pub async fn start_new_chat_interaction(
     metadata: Option<ChatMetadata>,
     callback: Option<Box<dyn Fn(Arc<ChatResponse>) + Send + 'static>>,
 ) -> crate::error::Result<()> {
+    // A chat turn is runtime work: fence it through the one admission gate before
+    // any provider work starts, so a quiescing runtime refuses the turn instead
+    // of starting one it could never drain. The ticket is held inside the spawned
+    // turn below, so the shutdown drain observes the in-flight turn itself rather
+    // than only the enqueue.
+    let turn_ticket = chat_state_arc
+        .admit_work(crate::lifecycle::WorkKind::ChatTurn)
+        .map_err(|denied| AppError::Ai(AiError::RuntimeStopping(denied.message)))?;
+
     validate_chat_provider(chat_state_arc.main_store.as_ref(), provider_id)?;
 
     // Update the shared message history with the complete list of messages for this turn.
@@ -430,6 +512,9 @@ pub async fn start_new_chat_interaction(
     };
 
     let _ = tokio::spawn(async move {
+        // Hold the admission for the whole turn; dropping it on completion lets
+        // the shutdown drain observe the runtime becoming idle.
+        let _turn_ticket = turn_ticket;
         chat_interface.set_stop_flag(false).await;
         let result = chat_interface
             .chat(
@@ -1203,3 +1288,58 @@ async fn global_message_processor_loop(
 //         finish_reason,
 //     })
 // }
+
+#[cfg(test)]
+mod admission_tests {
+    use super::{start_new_chat_interaction, ChatState};
+    use crate::db::MainStore;
+    use crate::error::AppError;
+    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
+    use crate::libs::window_channels::WindowChannels;
+    use std::sync::Arc;
+
+    fn state_with_gate() -> (Arc<ChatState>, Arc<RuntimeLifecycleGate>) {
+        let store = Arc::new(MainStore::new(":memory:").expect("in-memory store"));
+        let state = ChatState::runtime_new(Arc::new(WindowChannels::new()), store);
+        let gate = Arc::new(RuntimeLifecycleGate::new());
+        state.install_admission(gate.clone() as Arc<dyn WorkAdmission>);
+        (state, gate)
+    }
+
+    #[tokio::test]
+    async fn a_running_chat_state_counts_a_held_turn() {
+        let (state, gate) = state_with_gate();
+        let ticket = state.admit_work(WorkKind::ChatTurn).expect("running admits");
+        assert_eq!(gate.active_admissions(), 1);
+        drop(ticket);
+        assert_eq!(gate.active_admissions(), 0);
+    }
+
+    /// A direct, non-HTTP caller of the canonical chat entry is refused on the
+    /// one gate with the stable `runtime_stopping` code before any provider work
+    /// or even the provider validation runs.
+    #[tokio::test]
+    async fn a_direct_non_http_start_is_refused_once_quiesced() {
+        let (state, gate) = state_with_gate();
+        assert!(gate.begin_quiesce());
+
+        let error = start_new_chat_interaction(
+            state,
+            1,
+            "gpt-4o-mini".to_string(),
+            "chat-1".to_string(),
+            vec![serde_json::json!({ "role": "user", "content": "hi" })],
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("refused once quiesced");
+
+        match error {
+            AppError::Ai(crate::ai::error::AiError::RuntimeStopping(_)) => {}
+            other => panic!("expected a runtime_stopping refusal, got {other:?}"),
+        }
+        assert_eq!(gate.active_admissions(), 0, "the refusal held no admission");
+    }
+}

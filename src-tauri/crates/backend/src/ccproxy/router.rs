@@ -104,6 +104,7 @@ use crate::constants::CFG_ACTIVE_PROXY_GROUP;
 use crate::db::MainStore;
 
 use axum::{
+    body::HttpBody as _,
     extract::{ConnectInfo, Path, Query, State},
     http::{self, HeaderMap, StatusCode},
     middleware::{self, Next},
@@ -112,6 +113,7 @@ use axum::{
     Json, Router,
 };
 use bytes::Bytes;
+use futures_util::StreamExt as _;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -154,6 +156,68 @@ fn resolve_group_name(state: &Arc<SharedState>, group_name: Option<String>) -> O
     }
 }
 
+/// Stable `runtime_stopping` refusal in the ccproxy error envelope.
+///
+/// It carries the same `runtime_stopping` code the control plane returns, so a
+/// proxy client can tell a deliberately closed admission gate apart from a
+/// provider failure and re-read `/control/v1/runtime/status` instead of
+/// retrying against an instance that is shutting down.
+fn runtime_stopping_response(denied: &crate::lifecycle::AdmissionDenied) -> Response {
+    let body = json!({
+        "error": {
+            "code": chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+            "message": denied.message,
+            "type": "Runtime Stopping",
+        }
+    });
+    (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response()
+}
+
+/// Keeps one admission held until the response body has been fully delivered.
+///
+/// A buffered body carries an exact length hint that the framework uses to frame
+/// the response, so it is left byte-for-byte untouched and the admission ends
+/// with the handler: a buffered response has already finished its provider work.
+/// A streaming body keeps producing bytes after the handler returned, so the
+/// admission is moved into the byte stream and released only once the stream
+/// ends or the client disconnects, which is what lets the shutdown drain observe
+/// an in-flight stream.
+fn hold_admission(response: Response, ticket: crate::lifecycle::AdmissionTicket) -> Response {
+    let (parts, body) = response.into_parts();
+    if body.size_hint().exact().is_some() {
+        drop(ticket);
+        return Response::from_parts(parts, body);
+    }
+    let stream = body.into_data_stream().map(move |chunk| {
+        let _ = &ticket;
+        chunk
+    });
+    Response::from_parts(parts, axum::body::Body::from_stream(stream))
+}
+
+/// Admits one unit of proxy provider work on the owner's gate, then returns the
+/// handler's response with the admission held until its body ends.
+///
+/// This is the same gate the control plane and the canonical chat entry use, so
+/// a quiescing runtime refuses proxy chat and embedding work with the stable
+/// `runtime_stopping` code. Read-only routes (model listing, version) never call
+/// it, so they stay readable.
+async fn gated<F>(
+    state: &SharedState,
+    kind: crate::lifecycle::WorkKind,
+    work: F,
+) -> Response
+where
+    F: std::future::Future<Output = Result<Response, CCProxyError>>,
+{
+    let ticket = match state.chat_state.admit_work(kind) {
+        Ok(ticket) => ticket,
+        Err(denied) => return runtime_stopping_response(&denied),
+    };
+    let response = work.await.into_response();
+    hold_admission(response, ticket)
+}
+
 async fn openai_chat_logic(
     state: Arc<SharedState>,
     query: CcproxyQuery,
@@ -164,19 +228,22 @@ async fn openai_chat_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_chat_completion(
-        ChatProtocol::OpenAI,
-        headers,
-        query,
-        body,
-        final_group,
-        compat_mode,
-        "".to_string(), // model_id
-        "".to_string(), // action
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_chat_completion(
+            ChatProtocol::OpenAI,
+            headers,
+            query,
+            body,
+            final_group,
+            compat_mode,
+            "".to_string(), // model_id
+            "".to_string(), // action
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn openai_responses_logic(
@@ -189,16 +256,19 @@ async fn openai_responses_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_responses(
-        headers,
-        query,
-        body,
-        final_group,
-        compat_mode,
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_responses(
+            headers,
+            query,
+            body,
+            final_group,
+            compat_mode,
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn claude_chat_logic(
@@ -211,19 +281,22 @@ async fn claude_chat_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_chat_completion(
-        ChatProtocol::Claude,
-        headers,
-        query,
-        body,
-        final_group,
-        compat_mode,
-        "".to_string(), // model_id
-        "".to_string(), // action
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_chat_completion(
+            ChatProtocol::Claude,
+            headers,
+            query,
+            body,
+            final_group,
+            compat_mode,
+            "".to_string(), // model_id
+            "".to_string(), // action
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn gemini_chat_logic(
@@ -238,19 +311,22 @@ async fn gemini_chat_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_chat_completion(
-        ChatProtocol::Gemini,
-        headers,
-        query,
-        body,
-        final_group,
-        compat_mode,
-        model_id,
-        action,
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_chat_completion(
+            ChatProtocol::Gemini,
+            headers,
+            query,
+            body,
+            final_group,
+            compat_mode,
+            model_id,
+            action,
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn ollama_chat_logic(
@@ -263,19 +339,22 @@ async fn ollama_chat_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_chat_completion(
-        ChatProtocol::Ollama,
-        headers,
-        query,
-        body,
-        final_group,
-        compat_mode,
-        "".to_string(), // model_id
-        "".to_string(), // action
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_chat_completion(
+            ChatProtocol::Ollama,
+            headers,
+            query,
+            body,
+            final_group,
+            compat_mode,
+            "".to_string(), // model_id
+            "".to_string(), // action
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn openai_embedding_logic(
@@ -287,17 +366,20 @@ async fn openai_embedding_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_embedding(
-        ChatProtocol::OpenAI,
-        headers,
-        query,
-        body,
-        final_group,
-        "".to_string(),
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_embedding(
+            ChatProtocol::OpenAI,
+            headers,
+            query,
+            body,
+            final_group,
+            "".to_string(),
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn gemini_embedding_logic(
@@ -310,17 +392,20 @@ async fn gemini_embedding_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_embedding(
-        ChatProtocol::Gemini,
-        headers,
-        query,
-        body,
-        final_group,
-        model_id,
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_embedding(
+            ChatProtocol::Gemini,
+            headers,
+            query,
+            body,
+            final_group,
+            model_id,
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn ollama_embedding_logic(
@@ -332,17 +417,20 @@ async fn ollama_embedding_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_embedding(
-        ChatProtocol::Ollama,
-        headers,
-        query,
-        body,
-        final_group,
-        "".to_string(),
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_embedding(
+            ChatProtocol::Ollama,
+            headers,
+            query,
+            body,
+            final_group,
+            "".to_string(),
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn claude_embedding_logic(
@@ -354,17 +442,20 @@ async fn claude_embedding_logic(
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
 
-    Ok(handle_embedding(
-        ChatProtocol::Claude,
-        headers,
-        query,
-        body,
-        final_group,
-        "".to_string(),
-        state.main_store.clone(),
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        handle_embedding(
+            ChatProtocol::Claude,
+            headers,
+            query,
+            body,
+            final_group,
+            "".to_string(),
+            state.main_store.clone(),
+        ),
     )
-    .await
-    .into_response())
+    .await)
 }
 
 async fn openai_list_models_logic(
@@ -404,10 +495,23 @@ async fn decision_logic(
     group_name: Option<String>,
 ) -> Result<Response, CCProxyError> {
     let final_group = resolve_group_name(&state, group_name);
+    let main_store = state.main_store.clone();
 
-    handle_decision(headers, body, final_group, state.main_store.clone())
-        .await
-        .map(|res| res.into_response())
+    // A System One decision evaluation is a real decision-model provider call, so
+    // it is admission-gated exactly like the chat and embedding routes. Without
+    // this the single provider entry `/v1/systemone` would keep starting provider
+    // work after the gate closed, breaking the one admission decision that fences
+    // every other canonical provider route.
+    Ok(gated(
+        &state,
+        crate::lifecycle::WorkKind::ChatTurn,
+        async move {
+            handle_decision(headers, body, final_group, main_store)
+                .await
+                .map(|res| res.into_response())
+        },
+    )
+    .await)
 }
 
 // ----------------------------------------------------------------------------
@@ -1158,5 +1262,372 @@ mod usage_attribution_tests {
 
         assert!(!headers.contains_key("x-cs-workflow-session-id"));
         assert!(!headers.contains_key("x-cs-root-task-run-id"));
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::ai::interaction::chat_completion::ChatState;
+    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
+    use crate::libs::window_channels::WindowChannels;
+    use axum::body::Body;
+
+    fn shared_state(gate: Option<Arc<RuntimeLifecycleGate>>) -> Arc<SharedState> {
+        let store = Arc::new(MainStore::new(":memory:").expect("in-memory store"));
+        let chat_state = ChatState::runtime_new(Arc::new(WindowChannels::new()), store.clone());
+        if let Some(gate) = gate {
+            chat_state.install_admission(gate as Arc<dyn WorkAdmission>);
+        }
+        Arc::new(SharedState {
+            package_version: "test".to_string(),
+            main_store: store,
+            chat_state,
+        })
+    }
+
+    fn running_gate() -> (Arc<SharedState>, Arc<RuntimeLifecycleGate>) {
+        let gate = Arc::new(RuntimeLifecycleGate::new());
+        (shared_state(Some(gate.clone())), gate)
+    }
+
+    fn query() -> CcproxyQuery {
+        CcproxyQuery {
+            key: None,
+            _debug: None,
+        }
+    }
+
+    fn chat_body(stream: bool) -> Bytes {
+        Bytes::from(
+            String::from(r#"{"model":"alias","stream":"#)
+                + if stream { "true" } else { "false" }
+                + r#","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+    }
+
+    async fn status_and_error_code(response: Response) -> (StatusCode, String, String) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        (
+            status,
+            value["error"]["code"].as_str().unwrap_or_default().to_string(),
+            String::from_utf8_lossy(&body).to_string(),
+        )
+    }
+
+    /// Direct, adapted and streaming chat work, plus embeddings and the
+    /// responses API, all funnel through the one gated logic entry, so a closed
+    /// gate refuses each of them with the stable `runtime_stopping` code before
+    /// any alias resolution or provider call.
+    #[tokio::test]
+    async fn a_quiesced_gate_refuses_every_proxy_provider_route() {
+        let (state, gate) = running_gate();
+        assert!(gate.begin_quiesce());
+
+        let responses = vec![
+            // Direct: same-protocol, non-streaming.
+            openai_chat_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                chat_body(false),
+                None,
+                false,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            // Adapted: cross-protocol client (Claude) onto the unified path.
+            claude_chat_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                chat_body(false),
+                None,
+                false,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            // Streaming: the request asks for a stream.
+            openai_chat_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                chat_body(true),
+                None,
+                false,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            gemini_chat_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                chat_body(false),
+                None,
+                false,
+                "gemini-model".to_string(),
+                "streamGenerateContent".to_string(),
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            openai_responses_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                chat_body(false),
+                None,
+                false,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            openai_embedding_logic(
+                state.clone(),
+                query(),
+                HeaderMap::new(),
+                Bytes::from_static(br#"{"model":"alias","input":"hi"}"#),
+                None,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+            // The single System One decision provider entry.
+            decision_logic(
+                state.clone(),
+                HeaderMap::new(),
+                Bytes::from_static(
+                    br#"{"model":"alias","state":{},"questions":[]}"#,
+                ),
+                None,
+            )
+            .await
+            .expect("logic returns a refusal response"),
+        ];
+
+        for response in responses {
+            let (status, code, body) = status_and_error_code(response).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(
+                code,
+                chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+                "{body}"
+            );
+        }
+    }
+
+    /// The single provider entry `/v1/systemone` does real decision-model work,
+    /// so a closed gate refuses it with the stable `runtime_stopping` code before
+    /// any alias resolution or provider call, exactly like the chat routes.
+    #[tokio::test]
+    async fn a_quiesced_gate_refuses_the_systemone_decision_entry() {
+        let (state, gate) = running_gate();
+        assert!(gate.begin_quiesce());
+
+        let response = decision_logic(
+            state.clone(),
+            HeaderMap::new(),
+            Bytes::from_static(br#"{"model":"alias","state":{},"questions":[]}"#),
+            None,
+        )
+        .await
+        .expect("logic returns a refusal response");
+
+        let (status, code, body) = status_and_error_code(response).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(
+            code,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
+            "{body}"
+        );
+    }
+
+    /// Read-only model listing is never gated, so it stays readable while the
+    /// runtime is quiescing.
+    #[tokio::test]
+    async fn a_quiesced_gate_leaves_read_only_model_listing_readable() {
+        let (state, gate) = running_gate();
+        assert!(gate.begin_quiesce());
+
+        let response = match openai_list_models_logic(state.clone(), None).await {
+            Ok(response) => response,
+            Err(error) => error.into_response(),
+        };
+        let (status, code, _body) = status_and_error_code(response).await;
+        assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_ne!(code, chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING);
+    }
+
+    /// While the runtime is running, the gate is transparent: the same request
+    /// produces byte-identical status, headers and body with and without a gate,
+    /// and the running admission is released with the buffered response.
+    #[tokio::test]
+    async fn a_running_gate_does_not_change_a_buffered_proxy_response() {
+        let (gated_state, gate) = running_gate();
+        let plain_state = shared_state(None);
+
+        let gated = openai_chat_logic(
+            gated_state.clone(),
+            query(),
+            HeaderMap::new(),
+            chat_body(false),
+            None,
+            false,
+        )
+        .await
+        .expect("gated response");
+        let plain = openai_chat_logic(
+            plain_state.clone(),
+            query(),
+            HeaderMap::new(),
+            chat_body(false),
+            None,
+            false,
+        )
+        .await
+        .expect("plain response");
+
+        assert_eq!(gated.status(), plain.status());
+        assert_eq!(gated.headers(), plain.headers());
+        let gated_body = axum::body::to_bytes(gated.into_body(), usize::MAX)
+            .await
+            .expect("gated body");
+        let plain_body = axum::body::to_bytes(plain.into_body(), usize::MAX)
+            .await
+            .expect("plain body");
+        assert_eq!(gated_body, plain_body);
+
+        assert_eq!(
+            gate.active_admissions(),
+            0,
+            "the buffered response released its running admission"
+        );
+    }
+
+    /// Through the `gated` seam itself, a running gate passes a handler's status,
+    /// headers and body through unchanged and releases a buffered admission.
+    #[tokio::test]
+    async fn gated_preserves_a_running_handlers_status_headers_and_body() {
+        let (state, gate) = running_gate();
+
+        let response = gated(&state, WorkKind::ChatTurn, async {
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("x-upstream", "kept")
+                .header("content-type", "application/json")
+                .body(Body::from(Bytes::from_static(b"{\"ok\":true}")))
+                .expect("build response"))
+        })
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        // The exact length hint survives, so the framework keeps the framing.
+        assert_eq!(response.body().size_hint().exact(), Some(11));
+        assert_eq!(gate.active_admissions(), 0);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("consume the body");
+        assert_eq!(body, Bytes::from_static(b"{\"ok\":true}"));
+    }
+
+    /// Through the `gated` seam itself, a running gate preserves a streaming
+    /// handler's headers and holds the admission until the stream ends.
+    #[tokio::test]
+    async fn gated_preserves_a_running_streaming_handlers_headers_and_holds_its_admission() {
+        let (state, gate) = running_gate();
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(b"data: a\n\n")),
+            Ok(Bytes::from_static(b"data: b\n\n")),
+        ];
+
+        let response = gated(&state, WorkKind::ChatTurn, async move {
+            Ok(Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("x-upstream", "kept")
+                .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                .expect("build response"))
+        })
+        .await;
+
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        assert_eq!(
+            gate.active_admissions(),
+            1,
+            "a streaming response is still in flight"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("consume the body");
+        assert_eq!(body, Bytes::from_static(b"data: a\n\ndata: b\n\n"));
+        assert_eq!(
+            gate.active_admissions(),
+            0,
+            "the admission is released once the stream ended"
+        );
+    }
+
+    /// A streaming body keeps producing bytes after the handler returned, so the
+    /// admission must stay held until those bytes stop.
+    #[tokio::test]
+    async fn hold_admission_keeps_a_streaming_body_counted_until_the_body_ends() {
+        let gate = Arc::new(RuntimeLifecycleGate::new());
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(b"a")),
+            Ok(Bytes::from_static(b"b")),
+        ];
+        let response = Response::new(Body::from_stream(futures_util::stream::iter(chunks)));
+        let ticket = gate.admit(WorkKind::ChatTurn).expect("admit");
+        assert_eq!(gate.active_admissions(), 1);
+
+        let response = hold_admission(response, ticket);
+        assert_eq!(
+            gate.active_admissions(),
+            1,
+            "the admission is held while the stream lives"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("consume the body");
+        assert_eq!(body, Bytes::from_static(b"ab"));
+        assert_eq!(
+            gate.active_admissions(),
+            0,
+            "the admission is released once the body ended"
+        );
+    }
+
+    /// A buffered body carries an exact length hint, so it is released with the
+    /// handler and its framing is left untouched (no switch to chunked).
+    #[tokio::test]
+    async fn hold_admission_leaves_a_buffered_body_and_its_framing_untouched() {
+        let gate = Arc::new(RuntimeLifecycleGate::new());
+        let response = Response::builder()
+            .header("x-kept", "1")
+            .body(Body::from(Bytes::from_static(b"{\"ok\":true}")))
+            .expect("build response");
+        let ticket = gate.admit(WorkKind::ChatTurn).expect("admit");
+
+        let response = hold_admission(response, ticket);
+        assert_eq!(response.body().size_hint().exact(), Some(11));
+        assert_eq!(response.headers().get("x-kept").unwrap(), "1");
+        assert_eq!(
+            gate.active_admissions(),
+            0,
+            "a buffered body has no provider work left"
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("consume the body");
+        assert_eq!(body, Bytes::from_static(b"{\"ok\":true}"));
     }
 }

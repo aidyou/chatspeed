@@ -245,6 +245,9 @@ proxy:
     store_lock_failed: 'Failed to access store: %{error}'
   group:
     not_found_by_name: Failed to find proxy group by group name '%{name}'
+runtime:
+  owned_process_cancelled: The runtime was stopping and terminated an in-flight owned tool process
+  work_refused_while_stopping: 'The runtime is %{phase} and refuses new %{kind} work'
 sensitive:
   filter:
     bank_account: '[Bank Account]'

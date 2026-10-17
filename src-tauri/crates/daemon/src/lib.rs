@@ -28,12 +28,26 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chatspeed_contracts::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
+use chatspeed_contracts::{
+    ClientLease, ClientLeaseRequest, ClientLeaseResponse, RuntimeAutomationHealth,
+    RuntimeAutomationSummaryDto, RuntimeLifecyclePhase, RuntimeOperationDto, RuntimeOperationStage,
+    RuntimeShutdownAcceptedDto, RuntimeShutdownOutcome, RuntimeShutdownRequest, RuntimeStatusDto,
+    RUNTIME_LIFECYCLE_SCHEMA_VERSION, PROTOCOL_VERSION,
+};
 use chatspeed_runtime_backend::background::RuntimeBackground;
+use chatspeed_runtime_backend::lifecycle::{
+    AdmissionTicket, RuntimeLifecycleGate, ShutdownHandoff, WorkAdmission, WorkKind,
+};
 use chatspeed_runtime_backend::owner::{RuntimeOwner, RuntimeOwnerConfig};
 use chatspeed_runtime_backend::web_provider::{ToolManagerProviderInstaller, WebProviderRegistry};
+use chatspeed_runtime_backend::workflow::automation::service::normalize_datetime_for_db;
+use chatspeed_runtime_backend::workflow::automation::types::{
+    AutomationRuntimeHealth, AutomationRuntimeSummary,
+};
+use chatspeed_runtime_backend::workflow::react::application::WorkflowApplicationService;
 use chatspeed_runtime_backend::workflow::react::client::http::server::{
-    self, RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError, RuntimeWebMcpPlane,
+    self, RuntimeControlPlane, RuntimeControlPlaneOptions, RuntimeLeaseError, RuntimeShutdownError,
+    RuntimeWebMcpPlane,
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -110,6 +124,14 @@ pub struct RuntimeConfig {
     app_data_dir: PathBuf,
     grace: Duration,
     lease_ttl: Duration,
+    /// Total budget shared by the cancelling, draining and stop phases.
+    shutdown_budget: Duration,
+    /// Extra budget granted only to an explicitly forced shutdown.
+    force_budget: Duration,
+    /// The injectable last-resort termination fallback. Defaults to the log-only
+    /// library hook so embedding the daemon never kills the host; the real binary
+    /// installs [`ProcessExitTerminationHook`].
+    termination: Arc<dyn TerminationHook>,
 }
 
 impl RuntimeConfig {
@@ -165,6 +187,9 @@ impl RuntimeConfig {
             app_data_dir: launch.app_data_dir().to_path_buf(),
             grace: DEFAULT_GRACE,
             lease_ttl: DEFAULT_LEASE_TTL,
+            shutdown_budget: DEFAULT_SHUTDOWN_BUDGET,
+            force_budget: DEFAULT_FORCE_BUDGET,
+            termination: Arc::new(LogOnlyTerminationHook),
         }
     }
 
@@ -193,6 +218,21 @@ impl RuntimeConfig {
         self.lease_ttl
     }
 
+    /// Total budget shared by the cancelling, draining and stop phases.
+    pub fn shutdown_budget(&self) -> Duration {
+        self.shutdown_budget
+    }
+
+    /// Extra budget granted only to an explicitly forced shutdown.
+    pub fn force_budget(&self) -> Duration {
+        self.force_budget
+    }
+
+    /// The last-resort termination fallback for an exhausted forced shutdown.
+    pub fn termination_hook(&self) -> Arc<dyn TerminationHook> {
+        self.termination.clone()
+    }
+
     /// Overrides the persistent database file path.
     pub fn with_db_path(mut self, db_path: impl Into<PathBuf>) -> Self {
         self.db_path = db_path.into();
@@ -214,6 +254,25 @@ impl RuntimeConfig {
     /// Overrides the lease TTL.
     pub fn with_lease_ttl(mut self, lease_ttl: Duration) -> Self {
         self.lease_ttl = lease_ttl;
+        self
+    }
+
+    /// Overrides the total graceful-shutdown budget.
+    pub fn with_shutdown_budget(mut self, budget: Duration) -> Self {
+        self.shutdown_budget = budget;
+        self
+    }
+
+    /// Overrides the extra budget granted only to a forced shutdown.
+    pub fn with_force_budget(mut self, budget: Duration) -> Self {
+        self.force_budget = budget;
+        self
+    }
+
+    /// Installs a last-resort termination fallback. The default is log-only so
+    /// embedding the daemon never terminates the host process.
+    pub fn with_termination_hook(mut self, hook: Arc<dyn TerminationHook>) -> Self {
+        self.termination = hook;
         self
     }
 
@@ -573,6 +632,9 @@ pub enum LeaseError {
     InvalidInput(String),
     #[error("no active lease for client `{0}`")]
     NotFound(String),
+    /// The runtime is quiescing and refuses the registration.
+    #[error("runtime is stopping and refuses the registration: {0}")]
+    Stopping(String),
 }
 
 impl From<LeaseError> for RuntimeLeaseError {
@@ -580,6 +642,7 @@ impl From<LeaseError> for RuntimeLeaseError {
         match error {
             LeaseError::InvalidInput(message) => RuntimeLeaseError::InvalidInput(message),
             LeaseError::NotFound(client_id) => RuntimeLeaseError::NotFound(client_id),
+            LeaseError::Stopping(message) => RuntimeLeaseError::Stopping(message),
         }
     }
 }
@@ -601,6 +664,12 @@ pub struct LeaseRegistry {
     ttl: Duration,
     inner: std::sync::Mutex<HashMap<String, LeaseRecord>>,
     count_tx: watch::Sender<usize>,
+    /// The one runtime admission gate, installed before discovery is published.
+    ///
+    /// Fencing the registration here, at the lowest canonical layer, means a
+    /// direct (non-HTTP) caller cannot bypass the quiesce the way a handler-only
+    /// check would allow.
+    admission: std::sync::OnceLock<Arc<dyn WorkAdmission>>,
 }
 
 impl LeaseRegistry {
@@ -611,6 +680,21 @@ impl LeaseRegistry {
             ttl,
             inner: std::sync::Mutex::new(HashMap::new()),
             count_tx,
+            admission: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Installs the one runtime work-admission gate. First-wins and idempotent.
+    pub fn install_admission(&self, gate: Arc<dyn WorkAdmission>) {
+        let _ = self.admission.set(gate);
+    }
+
+    fn admit_registration(&self) -> Result<AdmissionTicket, LeaseError> {
+        match self.admission.get() {
+            Some(gate) => gate
+                .admit(WorkKind::LeaseRegister)
+                .map_err(|denied| LeaseError::Stopping(denied.message)),
+            None => Ok(AdmissionTicket::permissive()),
         }
     }
 
@@ -631,6 +715,12 @@ impl LeaseRegistry {
                 "client_kind must be 1..={MAX_CLIENT_KIND_LEN} characters"
             )));
         }
+
+        // Fence the registration through the one gate so a quiescing runtime
+        // never resurrects a lease, and the idle supervisor observes the
+        // registration as activity even without a request-level ticket. The
+        // ticket is held for the (short) registration and released on return.
+        let _ticket = self.admit_registration()?;
 
         let now = Instant::now();
         let record = LeaseRecord {
@@ -768,10 +858,472 @@ impl LeaseRegistry {
     }
 }
 
-/// Exposes the runtime lease lifecycle to the canonical control plane, so the
-/// lease routes and `/meta` service identity live on the same server as the
-/// workflow/capability/automation routes (AC-6/AC-7).
-impl RuntimeControlPlane for LeaseRegistry {
+// ---------------------------------------------------------------------------
+// Coordinated shutdown and the runtime control plane
+// ---------------------------------------------------------------------------
+
+/// Total budget for a graceful coordinated shutdown (U-5).
+///
+/// The cancelling phase, the drain and the server/background stop all share this
+/// one deadline: owned work is cancelled, admitted work runs to its drain and the
+/// control plane stops within it. A budget that elapses never becomes a false
+/// `stopped` claim.
+pub const DEFAULT_SHUTDOWN_BUDGET: Duration = Duration::from_secs(15);
+
+/// Extra budget granted only to an explicitly forced shutdown (U-5).
+///
+/// After the graceful budget is exhausted, a *forced* request may spend this much
+/// more waiting for the instance to finish before the last-resort termination
+/// fallback fires. An idle, non-forced shutdown never gets it.
+pub const DEFAULT_FORCE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Last-resort termination for a forced shutdown that could not clean up.
+///
+/// The runtime library must never terminate the process on its own: a caller
+/// that embeds the daemon (or a test) would be killed too. The default hook only
+/// logs, and the real `chatspeed-runtime` binary installs
+/// [`ProcessExitTerminationHook`], which performs the final self-exit fallback
+/// once a forced shutdown has exhausted both budgets. Tests inject their own hook
+/// to observe the fallback without exiting.
+pub trait TerminationHook: Send + Sync + std::fmt::Debug {
+    /// Invoked once, after a forced shutdown exhausted the graceful and forced
+    /// budgets without the instance reaching `stopped`.
+    fn force_exit(&self, instance_id: &str, pid: u32);
+}
+
+/// The library default: record the fallback and never exit the process.
+#[derive(Debug, Default)]
+pub struct LogOnlyTerminationHook;
+
+impl TerminationHook for LogOnlyTerminationHook {
+    fn force_exit(&self, instance_id: &str, pid: u32) {
+        log::error!(
+            "[Runtime] forced shutdown of instance {instance_id} (pid {pid}) could not complete within budget; the caller must terminate it (the library default never self-exits)"
+        );
+    }
+}
+
+/// The real binary hook: the last-resort self-exit fallback.
+#[derive(Debug, Default)]
+pub struct ProcessExitTerminationHook;
+
+impl TerminationHook for ProcessExitTerminationHook {
+    fn force_exit(&self, instance_id: &str, pid: u32) {
+        log::error!(
+            "[Runtime] forced shutdown of instance {instance_id} (pid {pid}) exhausted its budget; performing the last-resort self-exit"
+        );
+        // Only the real binary reaches here: a caller that embedded the library
+        // installs its own hook instead, so this never kills a host process.
+        std::process::exit(0);
+    }
+}
+
+/// Cadence of the authoritative automation keep-alive re-read.
+///
+/// The idle supervisor re-reads the automation summary on this interval as well
+/// as at grace expiry, so a newly enabled schedule or a live run keeps the
+/// runtime alive even without a client lease.
+const SUMMARY_POLL: Duration = Duration::from_secs(2);
+
+/// An in-flight shutdown operation.
+struct OperationRecord {
+    id: String,
+    stage: RuntimeOperationStage,
+    force: bool,
+    accepted_at: String,
+    /// Terminal outcome once known: graceful, forced or failed. Absent while the
+    /// operation is still in flight.
+    outcome: Option<RuntimeShutdownOutcome>,
+}
+
+impl OperationRecord {
+    fn dto(&self) -> RuntimeOperationDto {
+        RuntimeOperationDto {
+            operation_id: self.id.clone(),
+            stage: self.stage,
+            force: self.force,
+            accepted_at: self.accepted_at.clone(),
+            outcome: self.outcome,
+        }
+    }
+}
+
+/// The one coordinated-shutdown authority.
+///
+/// Every shutdown source — a termination signal, the idle supervisor and an
+/// explicit `/control/v1/runtime/shutdown` — funnels through [`Self::request`],
+/// so the gate is closed exactly once and the same operation is reported to
+/// every observer. The worker drains admitted work before it signals the server
+/// to stop, so the runtime never cuts in-flight work off and never drifts from
+/// the gate observation.
+struct RuntimeShutdown {
+    instance_id: String,
+    gate: Arc<RuntimeLifecycleGate>,
+    operation: std::sync::Mutex<Option<OperationRecord>>,
+    /// Flips the control plane's graceful-shutdown signal.
+    trigger: watch::Sender<bool>,
+    /// Weak handle to the owner so the cancelling phase can reach its live work
+    /// without keeping the database owner alive past the drain.
+    owner: std::sync::Weak<RuntimeOwner>,
+    /// Flips to `true` once the serve task has fully stopped and released its
+    /// resources. A forced shutdown waits on this before its last-resort fallback.
+    finished: watch::Receiver<bool>,
+    /// Total budget shared by the cancelling, draining and stop phases.
+    shutdown_budget: Duration,
+    /// Extra budget granted only to an explicitly forced shutdown.
+    force_budget: Duration,
+    /// Last-resort termination fallback for an exhausted forced shutdown.
+    termination: Arc<dyn TerminationHook>,
+}
+
+/// The outcome to record when the instance reaches `stopped`.
+///
+/// A cancellation that could not prove its owned teardown (an MCP client left
+/// unproven, or a cancel pass that exceeded its budget) already recorded
+/// `Failed`; reaching `stopped` must not re-label that as a clean graceful exit.
+/// `stopped` records the lifecycle phase, while the outcome records whether the
+/// shutdown was actually clean.
+fn stopped_outcome(
+    force: bool,
+    current: Option<RuntimeShutdownOutcome>,
+) -> Option<RuntimeShutdownOutcome> {
+    match current {
+        Some(RuntimeShutdownOutcome::Failed) => Some(RuntimeShutdownOutcome::Failed),
+        _ => Some(if force {
+            RuntimeShutdownOutcome::Forced
+        } else {
+            RuntimeShutdownOutcome::Graceful
+        }),
+    }
+}
+
+impl RuntimeShutdown {
+    /// Requests a coordinated shutdown, starting the worker on the first call.
+    ///
+    /// Returns the accepted operation and the [`ShutdownHandoff`] that releases
+    /// the worker. Idempotent: a later call returns the same operation with an
+    /// inert hand-off, so a signal, an idle expiry and an explicit request cannot
+    /// start three competing shutdowns.
+    fn request(self: &Arc<Self>, force: bool) -> (RuntimeOperationDto, ShutdownHandoff) {
+        let (handoff, handoff_rx) = ShutdownHandoff::channel();
+        let (record, is_new, upgraded) = {
+            let mut slot = self
+                .operation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match slot.as_mut() {
+                Some(record) => {
+                    // An explicit force request takes priority over an
+                    // already-running graceful (idle) shutdown: it upgrades the
+                    // recorded operation so the worker escalates to the forced
+                    // cleanup/fallback path instead of only draining.
+                    let upgraded = force && !record.force;
+                    if upgraded {
+                        record.force = true;
+                    }
+                    (record.dto(), false, upgraded)
+                }
+                None => {
+                    // Close the gate under the same authority that records the
+                    // operation, so no admission can slip in after the close.
+                    self.gate.begin_quiesce();
+                    let record = OperationRecord {
+                        id: random_hex::<12>(),
+                        stage: RuntimeOperationStage::Accepted,
+                        force,
+                        accepted_at: now_rfc3339(),
+                        outcome: None,
+                    };
+                    let dto = record.dto();
+                    *slot = Some(record);
+                    (dto, true, false)
+                }
+            }
+        };
+        if is_new {
+            self.spawn_worker(handoff_rx, force);
+        } else if upgraded {
+            // The worker re-reads the recorded operation at its force decision, so
+            // an upgrade that lands before that point is observed; the harness
+            // hand-off of this later call stays inert.
+            log::info!(
+                "[Runtime] forced shutdown upgraded the in-flight operation (instance {})",
+                self.instance_id
+            );
+        }
+        (record, handoff)
+    }
+
+    /// Whether the recorded operation is a forced shutdown.
+    ///
+    /// Re-read rather than captured so a later explicit force request can upgrade
+    /// an in-flight graceful shutdown before the worker takes its force decision.
+    fn operation_force(&self) -> bool {
+        self.operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|record| record.force)
+    }
+
+    /// The in-flight operation, for the status route.
+    fn operation_dto(&self) -> Option<RuntimeOperationDto> {
+        self.operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(OperationRecord::dto)
+    }
+
+    fn set_stage(&self, stage: RuntimeOperationStage) {
+        let mut slot = self
+            .operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(record) = slot.as_mut() {
+            record.stage = stage;
+        }
+    }
+
+    /// Drives the shutdown worker: quiesce -> cancel owned work -> drain -> signal
+    /// the server -> (forced only) wait for `stopped` or fire the termination
+    /// fallback. The worker waits for the response hand-off first, so an explicit
+    /// request has answered its `202` before anything is torn down, and it never
+    /// awaits the runtime's own server shutdown.
+    fn spawn_worker(self: &Arc<Self>, handoff_rx: tokio::sync::oneshot::Receiver<()>, force: bool) {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            // Released when the `202` response has been handed back.
+            let _ = handoff_rx.await;
+
+            // The one deadline the cancelling and draining phases share.
+            let deadline = tokio::time::Instant::now() + this.shutdown_budget;
+
+            this.set_stage(RuntimeOperationStage::Quiescing);
+
+            // Cancelling (U-5): cancel every owned unit of work so the drain
+            // observes live work stopping instead of only a closed gate.
+            this.gate.advance(RuntimeLifecyclePhase::Cancelling);
+            this.set_stage(RuntimeOperationStage::Cancelling);
+            match this.owner.upgrade() {
+                Some(owner) => {
+                    match tokio::time::timeout_at(deadline, owner.cancel_owned_work()).await {
+                        Ok(report) => {
+                            log::info!(
+                                "[Runtime] cancelling phase interrupted {} chat turn(s), stopped {}/{} live workflow(s), cancelled {} owned process(es) (pre-workflow shells + shell-tool children), closed interactive PTYs, stopped {}/{} MCP server(s)",
+                                report.chats_interrupted,
+                                report.workflows_stopped,
+                                report.workflows_live,
+                                report.owned_processes_cancelled,
+                                report.mcp.stopped,
+                                report.mcp.servers
+                            );
+                            if report.mcp.unproven > 0 {
+                                // The cancel pass could not prove every owned MCP
+                                // teardown; record the outcome as failed so the
+                                // status route never reports a clean stop. The
+                                // forced-termination escalation stays gated on an
+                                // explicit force request (U-5), so an unproven MCP
+                                // stop does not, by itself, kill a healthy process.
+                                log::error!(
+                                    "[Runtime] cancelling phase could not prove teardown of {} of {} owned MCP server(s); recording the shutdown as failed",
+                                    report.mcp.unproven,
+                                    report.mcp.servers
+                                );
+                                this.set_outcome(Some(RuntimeShutdownOutcome::Failed));
+                            }
+                        }
+                        Err(_) => {
+                            // The cancel pass itself did not finish inside the
+                            // shared budget, so owned teardown is also unproven.
+                            log::warn!(
+                                "[Runtime] cancelling phase exceeded the shutdown budget; draining with owned work possibly still running"
+                            );
+                            this.set_outcome(Some(RuntimeShutdownOutcome::Failed));
+                        }
+                    }
+                }
+                None => log::warn!(
+                    "[Runtime] cancelling phase found no live owner; owned work is already gone"
+                ),
+            }
+
+            // Draining: wait for admitted work to release its tickets within the
+            // same deadline.
+            this.gate.advance(RuntimeLifecyclePhase::Draining);
+            this.set_stage(RuntimeOperationStage::Draining);
+            let drained = tokio::time::timeout_at(deadline, this.gate.wait_drained())
+                .await
+                .is_ok();
+            if !drained {
+                // A budget that elapses is never turned into a `stopped` claim:
+                // the serve task still owns the mark-stopped transition and the
+                // lock, and it further withholds the claim while admissions are
+                // held, so the instance is not falsely declared gone.
+                log::warn!(
+                    "[Runtime] shutdown budget elapsed with {} admission(s) still held; the serve task will withhold the `stopped` claim until they drain",
+                    this.gate.active_admissions()
+                );
+            }
+
+            // Signal the server to stop. Its shutdown broadcast ends open SSE
+            // streams so graceful shutdown completes instead of hanging.
+            let _ = this.trigger.send_replace(true);
+
+            // Forced escalation (U-5). Only an explicitly forced request spends
+            // the extra budget, and only after the graceful budget elapsed without
+            // the instance reaching `stopped`. Idle/non-forced shutdowns never
+            // force.
+            if force || this.operation_force() {
+                let stopped = tokio::time::timeout(this.force_budget, async {
+                    if *this.finished.borrow() {
+                        return;
+                    }
+                    let mut finished = this.finished.clone();
+                    while !*finished.borrow() {
+                        if finished.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                })
+                .await
+                .is_ok();
+                if stopped {
+                    log::info!(
+                        "[Runtime] forced shutdown completed within budget (instance {})",
+                        this.instance_id
+                    );
+                } else {
+                    log::error!(
+                        "[Runtime] forced shutdown of instance {} exhausted both budgets without reaching `stopped`; invoking the termination fallback",
+                        this.instance_id
+                    );
+                    this.set_outcome(Some(RuntimeShutdownOutcome::Failed));
+                    this.termination
+                        .force_exit(&this.instance_id, std::process::id());
+                }
+            }
+
+            log::info!(
+                "[Runtime] coordinated shutdown dispatched (instance {})",
+                this.instance_id
+            );
+        });
+    }
+
+    /// Marks the operation stopped once the control plane has fully stopped.
+    ///
+    /// Records whether the exit was graceful or forced, so a client can tell the
+    /// two apart on the status route. A cancellation that could not prove its
+    /// owned teardown already recorded `Failed`; that is preserved here so a
+    /// client never mistakes it for a clean graceful exit.
+    fn mark_stopped(&self) {
+        self.set_stage(RuntimeOperationStage::Stopped);
+        self.set_outcome(stopped_outcome(
+            self.operation_force(),
+            self.recorded_outcome(),
+        ));
+        self.gate.advance(RuntimeLifecyclePhase::Stopped);
+    }
+
+    /// The terminal outcome already recorded on the in-flight operation, if any.
+    fn recorded_outcome(&self) -> Option<RuntimeShutdownOutcome> {
+        self.operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .and_then(|record| record.outcome)
+    }
+
+    /// Records the terminal outcome on the in-flight operation, if any.
+    fn set_outcome(&self, outcome: Option<RuntimeShutdownOutcome>) {
+        let mut slot = self
+            .operation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(record) = slot.as_mut() {
+            record.outcome = outcome;
+        }
+    }
+}
+
+/// The runtime's control-plane extension: the lease lifecycle, the lifecycle
+/// status and the coordinated shutdown on the one canonical server.
+struct RuntimeControl {
+    instance_id: String,
+    leases: Arc<LeaseRegistry>,
+    gate: Arc<RuntimeLifecycleGate>,
+    service: Arc<WorkflowApplicationService>,
+    shutdown: Arc<RuntimeShutdown>,
+}
+
+impl RuntimeControl {
+    /// The authoritative automation keep-alive summary.
+    ///
+    /// A read failure is never reported as "nothing to do": it degrades to the
+    /// unknown summary, whose `keep_alive` is true, so an unobservable runtime
+    /// stays alive.
+    fn automation_summary(&self) -> RuntimeAutomationSummaryDto {
+        let now = normalize_datetime_for_db(chrono::Local::now());
+        match self.service.automation_runtime_summary(&now) {
+            Ok(summary) => automation_summary_dto(&summary),
+            Err(error) => {
+                log::warn!(
+                    "[Runtime] automation summary unreadable; treating the runtime as busy: {error}"
+                );
+                unknown_automation_summary()
+            }
+        }
+    }
+
+    fn build_status(&self) -> RuntimeStatusDto {
+        let snapshot = self.gate.snapshot();
+        RuntimeStatusDto {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            schema_version: RUNTIME_LIFECYCLE_SCHEMA_VERSION.to_string(),
+            service: SERVICE_NAME.to_string(),
+            instance_id: self.instance_id.clone(),
+            pid: std::process::id(),
+            phase: snapshot.phase,
+            epoch: snapshot.epoch,
+            active_admissions: snapshot.active,
+            active_leases: self.leases.active_count(),
+            quiesced: snapshot.phase != RuntimeLifecyclePhase::Running,
+            automation: self.automation_summary(),
+            operation: self.shutdown.operation_dto(),
+        }
+    }
+}
+
+/// Projects the runtime's automation summary onto the shared wire DTO.
+fn automation_summary_dto(summary: &AutomationRuntimeSummary) -> RuntimeAutomationSummaryDto {
+    RuntimeAutomationSummaryDto {
+        effective_schedules: summary.effective_schedules,
+        live_automation_runs: summary.live_automation_runs,
+        in_flight_admissions: summary.in_flight_admissions,
+        blocked_reconcile: summary.blocked_reconcile,
+        health: match summary.health {
+            AutomationRuntimeHealth::Healthy => RuntimeAutomationHealth::Healthy,
+            AutomationRuntimeHealth::Degraded => RuntimeAutomationHealth::Degraded,
+            AutomationRuntimeHealth::Unknown => RuntimeAutomationHealth::Unknown,
+        },
+        keep_alive: summary.keep_alive,
+    }
+}
+
+/// The unobservable summary: keep alive, retry next tick, never claim idle.
+fn unknown_automation_summary() -> RuntimeAutomationSummaryDto {
+    RuntimeAutomationSummaryDto {
+        effective_schedules: 0,
+        live_automation_runs: 0,
+        in_flight_admissions: 0,
+        blocked_reconcile: 0,
+        health: RuntimeAutomationHealth::Unknown,
+        keep_alive: true,
+    }
+}
+
+impl RuntimeControlPlane for RuntimeControl {
     fn service_name(&self) -> &str {
         SERVICE_NAME
     }
@@ -780,11 +1332,14 @@ impl RuntimeControlPlane for LeaseRegistry {
         &self,
         request: &ClientLeaseRequest,
     ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
-        self.register(request).map_err(RuntimeLeaseError::from)
+        // The fence lives in the lease registry itself, the lowest canonical
+        // layer, so both this authority and a direct registry caller are refused
+        // on the one gate while the runtime is quiescing.
+        self.leases.register(request).map_err(RuntimeLeaseError::from)
     }
 
     fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
-        self.renew(client_id).map_err(RuntimeLeaseError::from)
+        self.leases.renew(client_id).map_err(RuntimeLeaseError::from)
     }
 
     fn validate_lease(
@@ -792,12 +1347,65 @@ impl RuntimeControlPlane for LeaseRegistry {
         client_id: &str,
         lease_id: &str,
     ) -> Result<ClientLease, RuntimeLeaseError> {
-        self.validate(client_id, lease_id)
+        self.leases
+            .validate(client_id, lease_id)
             .map_err(RuntimeLeaseError::from)
     }
 
     fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError> {
-        self.release(client_id).map_err(RuntimeLeaseError::from)
+        self.leases
+            .release(client_id)
+            .map_err(RuntimeLeaseError::from)
+    }
+
+    fn runtime_status(&self) -> RuntimeStatusDto {
+        self.build_status()
+    }
+
+    fn validate_shutdown_proof(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        request: &RuntimeShutdownRequest,
+    ) -> Result<(), RuntimeShutdownError> {
+        if request.expected_instance_id != self.instance_id {
+            return Err(RuntimeShutdownError::InstanceMismatch {
+                expected: request.expected_instance_id.clone(),
+                actual: self.instance_id.clone(),
+            });
+        }
+        if !request.confirm {
+            return Err(RuntimeShutdownError::NotConfirmed);
+        }
+        // The lease proof is resolved by the runtime's own authority, so a
+        // bearer-only client cannot stop the runtime.
+        self.leases
+            .validate(client_id, lease_id)
+            .map_err(|_| RuntimeShutdownError::LeaseInvalid(client_id.to_string()))?;
+        Ok(())
+    }
+
+    fn request_shutdown(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+        request: &RuntimeShutdownRequest,
+    ) -> Result<(RuntimeShutdownAcceptedDto, ShutdownHandoff), RuntimeShutdownError> {
+        // Re-validate authoritatively: the handler already validated before the
+        // idempotency cache, but the effect must never start on a proof that has
+        // since become invalid.
+        self.validate_shutdown_proof(client_id, lease_id, request)?;
+        let (operation, handoff) = self.shutdown.request(request.force);
+        let accepted = RuntimeShutdownAcceptedDto {
+            schema_version: RUNTIME_LIFECYCLE_SCHEMA_VERSION.to_string(),
+            service: SERVICE_NAME.to_string(),
+            instance_id: self.instance_id.clone(),
+            operation_id: operation.operation_id,
+            stage: operation.stage,
+            accepted: true,
+            force: operation.force,
+        };
+        Ok((accepted, handoff))
     }
 }
 
@@ -812,7 +1420,8 @@ pub struct RuntimeHandle {
     runtime_dir: PathBuf,
     db_path: PathBuf,
     leases: Arc<LeaseRegistry>,
-    shutdown_tx: watch::Sender<bool>,
+    gate: Arc<RuntimeLifecycleGate>,
+    shutdown: Arc<RuntimeShutdown>,
     finished_rx: watch::Receiver<bool>,
 }
 
@@ -842,14 +1451,23 @@ impl RuntimeHandle {
         &self.leases
     }
 
+    /// The runtime work-admission gate, exposed for lifecycle tests.
+    pub fn gate(&self) -> &Arc<RuntimeLifecycleGate> {
+        &self.gate
+    }
+
     /// Whether the instance has finished shutting down.
     pub fn is_finished(&self) -> bool {
         *self.finished_rx.borrow()
     }
 
-    /// Requests graceful shutdown.
+    /// Requests a coordinated graceful shutdown.
+    ///
+    /// Idempotent, and the single exit every source funnels through: the gate is
+    /// closed synchronously, the worker drains admitted work and only then is the
+    /// server told to stop, so in-flight work is never cut off.
     pub fn shutdown(&self) {
-        let _ = self.shutdown_tx.send_replace(true);
+        let _ = self.shutdown.request(false);
     }
 
     /// Waits until the instance has fully stopped and cleaned up.
@@ -916,12 +1534,14 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
 
     // Assemble the one owner before anything is discoverable. A migration or
     // database failure exits here with the lock released on return.
-    let owner = RuntimeOwner::assemble(RuntimeOwnerConfig {
-        instance_id: instance_id.clone(),
-        db_path: config.db_path().to_path_buf(),
-        app_data_dir: config.app_data_dir().to_path_buf(),
-    })
-    .map_err(|error| RuntimeError::Assembly(error.to_string()))?;
+    let owner = Arc::new(
+        RuntimeOwner::assemble(RuntimeOwnerConfig {
+            instance_id: instance_id.clone(),
+            db_path: config.db_path().to_path_buf(),
+            app_data_dir: config.app_data_dir().to_path_buf(),
+        })
+        .map_err(|error| RuntimeError::Assembly(error.to_string()))?,
+    );
 
     // Fail-closed ordering: classify crash-interrupted capability operations and
     // load the desktop-free core tool surface *before* discovery is published or
@@ -933,19 +1553,82 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         log::error!("[Runtime] failed to register core tools: {error}");
     }
 
+    // The one-time startup normalization runs once, before the control plane is
+    // published and before the first scheduler tick, with a cutoff captured here
+    // and never re-read. A failure is fatal: the daemon must not continue into
+    // the scheduler on the strength of a normalization that never ran.
+    let startup_cutoff = normalize_datetime_for_db(chrono::Local::now());
+    if let Err(error) = owner.service().automation_normalize_at_startup(&startup_cutoff) {
+        return Err(RuntimeError::Assembly(format!(
+            "automation startup normalization failed: {error}"
+        )));
+    }
+
     let leases = Arc::new(LeaseRegistry::new(config.lease_ttl()));
+
+    // The one work-admission gate. It is installed into the owner's service
+    // before the control plane is published, so every canonical work start is
+    // fenced from the first accepted request, and the daemon drives its phase.
+    // The same gate fences the lease registry's own registration, so a direct
+    // (non-HTTP) caller cannot bypass the quiesce either.
+    let gate = Arc::new(RuntimeLifecycleGate::new());
+    owner
+        .service()
+        .install_admission(gate.clone() as Arc<dyn WorkAdmission>);
+    leases.install_admission(gate.clone() as Arc<dyn WorkAdmission>);
+    // The owner-held canonical work starts with no transport of their own (the
+    // terminal manager's create/write) are fenced on the same gate.
+    owner.install_admission(gate.clone() as Arc<dyn WorkAdmission>);
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (finished_tx, finished_rx) = watch::channel(false);
+
+    // The one coordinated-shutdown authority every source funnels through: a
+    // termination signal, the idle supervisor and an explicit request all close
+    // the same gate and report the same operation. It reaches owned work through
+    // a weak owner handle, so the cancelling phase can cancel it without keeping
+    // the database owner alive past the drain.
+    let shutdown = Arc::new(RuntimeShutdown {
+        instance_id: instance_id.clone(),
+        gate: gate.clone(),
+        operation: std::sync::Mutex::new(None),
+        trigger: shutdown_tx,
+        owner: Arc::downgrade(&owner),
+        finished: finished_rx.clone(),
+        shutdown_budget: config.shutdown_budget(),
+        force_budget: config.force_budget(),
+        termination: config.termination_hook(),
+    });
 
     // The runtime owns its own background work: capability reconcile, the
     // configured MCP servers, the automation tick and the chat-completion proxy.
     // It starts before the control plane so a connecting client can rely on the
-    // same paths the desktop wires in `tauri::setup`.
-    let background = RuntimeBackground::start(&owner, env!("CARGO_PKG_VERSION").to_string()).await;
+    // same paths the desktop wires in `tauri::setup`. The gate fences the
+    // automation tick's dispatch, which is a canonical non-HTTP work start.
+    let background = RuntimeBackground::start(
+        &owner,
+        env!("CARGO_PKG_VERSION").to_string(),
+        gate.clone(),
+    )
+    .await;
+
+    let runtime_control: Arc<dyn RuntimeControlPlane> = Arc::new(RuntimeControl {
+        instance_id: instance_id.clone(),
+        leases: leases.clone(),
+        gate: gate.clone(),
+        service: owner.service().clone(),
+        shutdown: shutdown.clone(),
+    });
+
+    // The idle supervisor reads the automation summary through the same service
+    // owner the serve task takes, so its handle is cloned before the owner moves.
+    let idle_service = owner.service().clone();
 
     let control = match server::start_runtime_control_plane(
         owner.service().clone(),
         RuntimeControlPlaneOptions {
             discovery_dir: config.runtime_dir().to_path_buf(),
-            leases: leases.clone(),
+            leases: runtime_control,
             chat: Some(owner.chat_plane()),
             terminal: Some(owner.terminal_plane()),
             // The desktop registers its loopback Web MCP provider onto this
@@ -971,28 +1654,58 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     let runtime_dir = config.runtime_dir().to_path_buf();
     let db_path = config.db_path().to_path_buf();
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (finished_tx, finished_rx) = watch::channel(false);
-
     // The serve task owns the owner, the background tasks, the lock and the
     // discovery cleanup: the lock is only released after the canonical HTTP
-    // server has fully stopped and no runtime-owned task is left running.
+    // server has fully stopped and no runtime-owned task is left running. It
+    // marks the operation fully stopped only once that drain is complete.
     let mut serve_shutdown = shutdown_rx.clone();
     let serve_instance = instance_id.clone();
+    let serve_authority = shutdown.clone();
+    let serve_budget = config.shutdown_budget();
     tokio::spawn(async move {
         let _ = serve_shutdown.changed().await;
         control.shutdown();
-        control.wait().await;
+        // Bound the control-plane wait: the SSE broadcast ends open streams, so
+        // this completes promptly, and the timeout keeps a stuck connection from
+        // holding the lock forever.
+        if tokio::time::timeout(serve_budget, control.wait()).await.is_err() {
+            log::error!(
+                "[Runtime] control plane did not stop within {:?}; withholding the `stopped` claim and holding the lock until a forced shutdown terminates this instance",
+                serve_budget
+            );
+            std::future::pending::<()>().await;
+        }
         // Stop the automation tick, the reconcile/MCP tasks and the ccproxy
         // listener only after the control plane has drained, so an in-flight
         // request is never cut off by background shutdown.
-        background.shutdown().await;
+        if tokio::time::timeout(serve_budget, background.shutdown())
+            .await
+            .is_err()
+        {
+            log::error!(
+                "[Runtime] background tasks did not stop within {:?}; withholding the `stopped` claim and holding the lock",
+                serve_budget
+            );
+            std::future::pending::<()>().await;
+        }
+        // Never claim `stopped` while admitted work is still held: a false claim
+        // would release the lock and let a successor open the database while this
+        // instance still runs work. Park instead, holding the lock, until the work
+        // drains or a forced request terminates the instance.
+        if serve_authority.gate.active_admissions() > 0 {
+            log::error!(
+                "[Runtime] {} admission(s) still held after the control plane stopped; withholding the `stopped` claim and holding the lock",
+                serve_authority.gate.active_admissions()
+            );
+            std::future::pending::<()>().await;
+        }
         drop(owner);
         // Release the database authority only after the owner (and the control
         // plane that serves it) has fully drained, so a successor never opens
         // the database while this instance is still using it.
         drop(db_lock);
         drop(lock);
+        serve_authority.mark_stopped();
         let _ = finished_tx.send_replace(true);
         log::info!(
             "[Runtime] control plane stopped (instance {})",
@@ -1016,12 +1729,15 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         }
     });
 
-    // Idle supervisor: grace-based shutdown after the last lease is gone.
+    // Idle supervisor: grace-based shutdown only when leases and automation both
+    // agree the runtime is idle.
     tokio::spawn(supervise_idle(
         leases.subscribe(),
         shutdown_rx.clone(),
+        idle_service,
         config.grace(),
-        shutdown_tx.clone(),
+        shutdown.clone(),
+        gate.clone(),
     ));
 
     log::info!(
@@ -1039,32 +1755,61 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         runtime_dir,
         db_path,
         leases,
-        shutdown_tx,
+        gate,
+        shutdown,
         finished_rx,
     })
 }
 
-/// Shuts the instance down once the lease count has been zero for `grace`.
+/// Shuts the instance down only when it is genuinely idle.
 ///
-/// A registration during the grace window wins: the count change aborts the
-/// pending shutdown and the loop starts over.
+/// Three authorities decide: the live lease count (a registration during the
+/// grace window wins and restarts a full grace), the count of in-flight
+/// admissions on the one work gate, and the authoritative automation
+/// keep-alive summary. The summary is re-read on a bounded cadence and once more
+/// at grace expiry, so a newly enabled schedule or a live run keeps the runtime
+/// alive without a lease and a last-moment work arrival is observed instead of
+/// lost. A summary it cannot read is unknown and keeps the runtime alive: an
+/// unobservable state is never mistaken for "nothing to do".
+///
+/// The close itself is atomic: the supervisor captures the gate's activity epoch
+/// before it waits the grace and re-checks that epoch (and that no admission is
+/// held) inside [`RuntimeLifecycleGate::try_begin_idle`], so a registration, a
+/// claim or any other admission that lands between the summary read and the
+/// close refuses the close instead of racing it.
+///
+/// The idle path never forces and funnels into the same coordinated exit the
+/// signal and an explicit request use.
 async fn supervise_idle(
     mut count_rx: watch::Receiver<usize>,
     mut shutdown_rx: watch::Receiver<bool>,
+    service: Arc<WorkflowApplicationService>,
     grace: Duration,
-    shutdown_tx: watch::Sender<bool>,
+    shutdown: Arc<RuntimeShutdown>,
+    gate: Arc<RuntimeLifecycleGate>,
 ) {
+    // Throttles the unknown-health warning so a persistently unreadable store
+    // does not flood the log at the poll cadence.
+    let mut last_unknown_log = Instant::now()
+        .checked_sub(Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+
     loop {
         if *shutdown_rx.borrow() {
             return;
         }
-        if *count_rx.borrow() > 0 {
+
+        // A live lease, in-flight admitted work, a live automation run or an
+        // effective schedule keeps the runtime alive; so does an unreadable
+        // summary.
+        if keep_alive(&count_rx, &service, &gate, &mut last_unknown_log) {
             tokio::select! {
                 changed = count_rx.changed() => {
                     if changed.is_err() {
                         return;
                     }
                 }
+                _ = tokio::time::sleep(SUMMARY_POLL) => {}
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         return;
@@ -1074,36 +1819,110 @@ async fn supervise_idle(
             continue;
         }
 
-        let sleep = tokio::time::sleep(grace);
-        tokio::pin!(sleep);
-        loop {
-            tokio::select! {
-                _ = &mut sleep => {
-                    if *count_rx.borrow() == 0 {
-                        log::info!(
-                            "[Runtime] idle grace of {:?} elapsed with no active leases; shutting down",
-                            grace
-                        );
-                        let _ = shutdown_tx.send_replace(true);
-                        return;
-                    }
-                    break;
-                }
-                changed = count_rx.changed() => {
-                    if changed.is_err() {
-                        return;
-                    }
-                    if *count_rx.borrow() > 0 {
-                        log::debug!("[Runtime] active lease cancelled pending idle shutdown");
+        // Candidate idle: capture the activity epoch, then wait a full grace,
+        // cancelling the pending grace on any activity so a short register /
+        // release pair cannot drift the supervisor into an early exit.
+        let expected_activity_epoch = gate.activity_epoch();
+        let mut activity_during_grace = false;
+        {
+            let sleep = tokio::time::sleep(grace);
+            tokio::pin!(sleep);
+            loop {
+                tokio::select! {
+                    _ = &mut sleep => break,
+                    changed = count_rx.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        // A lease registration or release is activity: cancel the
+                        // pending grace and re-evaluate from the top with a fresh
+                        // epoch and a full grace.
+                        activity_during_grace = true;
+                        log::debug!("[Runtime] lease activity cancelled pending idle shutdown");
                         break;
                     }
-                }
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        return;
+                    _ = tokio::time::sleep(SUMMARY_POLL) => {
+                        if keep_alive(&count_rx, &service, &gate, &mut last_unknown_log) {
+                            activity_during_grace = true;
+                            break;
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            return;
+                        }
                     }
                 }
             }
+        }
+        if activity_during_grace {
+            continue;
+        }
+
+        // Final authoritative re-check at grace expiry, then an atomic close: the
+        // activity epoch and the held-work count are compared under the gate
+        // lock, so an admission or release that landed after the capture refuses
+        // the close instead of being lost to a race.
+        if keep_alive(&count_rx, &service, &gate, &mut last_unknown_log) {
+            continue;
+        }
+        if !gate.try_begin_idle(expected_activity_epoch, 0) {
+            log::debug!(
+                "[Runtime] idle shutdown deferred: activity arrived after the idle epoch capture"
+            );
+            continue;
+        }
+        log::info!(
+            "[Runtime] idle grace of {:?} elapsed with no leases, no admitted work and no automation keep-alive; shutting down",
+            grace
+        );
+        let _ = shutdown.request(false);
+        return;
+    }
+}
+
+/// Whether the runtime must stay alive right now.
+///
+/// A live lease or any in-flight admitted work keeps it alive; otherwise the
+/// authoritative automation summary decides. A summary the runtime cannot read
+/// is unknown and keeps it alive, so it is never shut down on an unobserved
+/// state.
+fn keep_alive(
+    count_rx: &watch::Receiver<usize>,
+    service: &Arc<WorkflowApplicationService>,
+    gate: &RuntimeLifecycleGate,
+    last_unknown_log: &mut Instant,
+) -> bool {
+    if *count_rx.borrow() > 0 {
+        return true;
+    }
+    // A held admission is work in flight (a chat turn, a workflow start, a
+    // capability start, ...). The gate counts them even without a lease, so the
+    // supervisor never shuts the runtime down mid-work.
+    if gate.active_admissions() > 0 {
+        return true;
+    }
+    let now = normalize_datetime_for_db(chrono::Local::now());
+    match service.automation_runtime_summary(&now) {
+        Ok(summary) => {
+            if summary.health == AutomationRuntimeHealth::Unknown
+                && last_unknown_log.elapsed() >= Duration::from_secs(30)
+            {
+                log::warn!(
+                    "[Runtime] automation summary health is unknown; keeping the runtime alive and retrying"
+                );
+                *last_unknown_log = Instant::now();
+            }
+            summary.keep_alive
+        }
+        Err(error) => {
+            if last_unknown_log.elapsed() >= Duration::from_secs(30) {
+                log::warn!(
+                    "[Runtime] automation summary unreadable; keeping the runtime alive: {error}"
+                );
+                *last_unknown_log = Instant::now();
+            }
+            true
         }
     }
 }
@@ -1112,14 +1931,39 @@ async fn supervise_idle(
 mod tests {
     use super::*;
     use chatspeed_contracts::{
-        WEB_MCP_CLIENT_HEADER, WEB_MCP_INSTANCE_HEADER, WEB_MCP_LEASE_HEADER, WEB_MCP_PROOF_HEADER,
-        WEB_MCP_REGISTER_PATH, WEB_MCP_SERVER_NAME, WEB_MCP_UNREGISTER_PATH,
+        RUNTIME_CLIENT_HEADER, RUNTIME_LEASE_HEADER, RUNTIME_SHUTDOWN_PATH, WEB_MCP_CLIENT_HEADER,
+        WEB_MCP_INSTANCE_HEADER, WEB_MCP_LEASE_HEADER, WEB_MCP_PROOF_HEADER, WEB_MCP_REGISTER_PATH,
+        WEB_MCP_SERVER_NAME, WEB_MCP_UNREGISTER_PATH,
     };
     use chatspeed_runtime_backend::workflow::react::client::http::discovery;
     use serde_json::Value;
 
     /// Serializes tests that mutate the process environment.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A cancellation that could not prove its owned teardown records `Failed`,
+    /// so reaching `stopped` must not re-label it as a clean graceful exit.
+    #[test]
+    fn stopped_outcome_preserves_a_recorded_failure() {
+        assert_eq!(
+            stopped_outcome(false, None),
+            Some(RuntimeShutdownOutcome::Graceful)
+        );
+        assert_eq!(
+            stopped_outcome(true, None),
+            Some(RuntimeShutdownOutcome::Forced)
+        );
+        assert_eq!(
+            stopped_outcome(false, Some(RuntimeShutdownOutcome::Failed)),
+            Some(RuntimeShutdownOutcome::Failed),
+            "an unproven cancellation must stay failed, never graceful"
+        );
+        assert_eq!(
+            stopped_outcome(true, Some(RuntimeShutdownOutcome::Failed)),
+            Some(RuntimeShutdownOutcome::Failed),
+            "a forced shutdown must not erase an unproven cancellation"
+        );
+    }
 
     fn lease_request(client_id: &str) -> ClientLeaseRequest {
         ClientLeaseRequest {
@@ -1561,6 +2405,36 @@ mod tests {
                 .await;
             assert_eq!(response.status(), reqwest::StatusCode::OK);
             response.json().await.expect("available tools json")
+        }
+
+        /// Sends a coordinated-shutdown request with the optional proof headers
+        /// and idempotency key, so a test can drive every refusal path.
+        async fn shutdown(
+            &self,
+            body: &str,
+            client_id: Option<&str>,
+            lease_id: Option<&str>,
+            key: Option<&str>,
+        ) -> reqwest::Response {
+            let mut request = self
+                .client
+                .post(self.url(RUNTIME_SHUTDOWN_PATH))
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("Content-Type", "application/json");
+            if let Some(client_id) = client_id {
+                request = request.header(RUNTIME_CLIENT_HEADER, client_id);
+            }
+            if let Some(lease_id) = lease_id {
+                request = request.header(RUNTIME_LEASE_HEADER, lease_id);
+            }
+            if let Some(key) = key {
+                request = request.header("Idempotency-Key", key);
+            }
+            request
+                .body(body.to_string())
+                .send()
+                .await
+                .expect("shutdown request")
         }
     }
 
@@ -2042,6 +2916,103 @@ mod tests {
         assert!(!discovery::discovery_path_in(dir.path()).exists());
     }
 
+    /// A held admission is in-flight work even with no client lease, so the idle
+    /// supervisor must keep the runtime alive until it drains.
+    #[tokio::test]
+    async fn an_active_admission_keeps_the_runtime_alive_without_a_lease() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_millis(300),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+
+        // Simulate a canonical work item in flight: a chat turn holds a ticket.
+        let ticket = handle
+            .gate()
+            .admit(WorkKind::ChatTurn)
+            .expect("admit while running");
+
+        // Past the grace with no lease, the in-flight work still holds it open.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(
+            !handle.is_finished(),
+            "an in-flight admission keeps the runtime alive"
+        );
+        assert!(discovery::discovery_path_in(dir.path()).exists());
+
+        drop(ticket);
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("the runtime stops after the work drains");
+    }
+
+    /// A short register/release inside the grace window is activity: it must
+    /// re-arm the whole grace instead of letting the supervisor exit early.
+    #[tokio::test]
+    async fn a_short_register_release_rearms_the_full_grace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_millis(500),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+
+        // The initial grace started at t0. At t300 a client registers and releases
+        // immediately: the pending grace must be cancelled and re-armed in full,
+        // so the runtime is still up at t600 (the old break-then-final-check path
+        // would have stopped it near t300).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        handle
+            .leases()
+            .register(&lease_request("client-a"))
+            .expect("register");
+        handle.leases().release("client-a").expect("release");
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !handle.is_finished(),
+            "a short register/release must re-arm the full grace"
+        );
+
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("the runtime stops after the re-armed grace");
+    }
+
+    /// A lease registration is fenced at the lease registry itself, so a direct,
+    /// non-HTTP caller is refused on the gate while the runtime is quiescing.
+    #[tokio::test]
+    async fn a_direct_lease_registration_is_refused_once_quiesced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ))
+        .await
+        .expect("start runtime");
+
+        assert!(handle.gate().begin_quiesce());
+        let error = handle
+            .leases()
+            .register(&lease_request("client-late"))
+            .expect_err("a quiescing runtime refuses a direct registration");
+        assert!(
+            matches!(error, LeaseError::Stopping(_)),
+            "refused with the stable stopping error"
+        );
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("runtime stops");
+    }
+
     #[tokio::test]
     async fn lease_ttl_expiry_is_swept_and_triggers_grace() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2144,6 +3115,43 @@ mod tests {
         assert!(!tool_manager.has_tool("web_fetch").await);
     }
 
+    /// The tool surface and the pre-workflow automation shells must share exactly
+    /// one owned-process registry. A hold begun through the chat-state handle
+    /// (the one the engine's shell tool registers every child on) must be awaited
+    /// by the canonical automation cancel, which proves they are the same signal
+    /// rather than two parallel registries.
+    #[tokio::test]
+    async fn runtime_owner_shares_one_owned_process_registry_with_the_tool_surface() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let owner = assemble_owner(dir.path());
+
+        let tool_signal = owner
+            .chat_state()
+            .owned_process_cancellation()
+            .expect("the owner installs the owned-process signal on the chat state");
+        assert_eq!(tool_signal.in_flight(), 0);
+
+        // A hold taken through the tool-side handle ...
+        let ticket = tool_signal.begin();
+        assert_eq!(tool_signal.in_flight(), 1);
+
+        // ... must block the canonical automation cancel: the same registry.
+        let cancelling = owner.service().cancel_owned_automation_shells();
+        tokio::pin!(cancelling);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut cancelling)
+                .await
+                .is_err(),
+            "the automation cancel must await a tool-side hold"
+        );
+        drop(ticket);
+        let in_flight = tokio::time::timeout(Duration::from_secs(5), cancelling)
+            .await
+            .expect("the cancel resolves once the hold is released");
+        assert_eq!(in_flight, 1);
+        assert_eq!(tool_signal.in_flight(), 0);
+    }
+
     #[tokio::test]
     async fn runtime_background_tasks_start_and_stop_with_their_owner() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2153,7 +3161,12 @@ mod tests {
             .await
             .expect("register core tools");
 
-        let background = RuntimeBackground::start(&owner, "test".to_string()).await;
+        let background = RuntimeBackground::start(
+            &owner,
+            "test".to_string(),
+            Arc::new(RuntimeLifecycleGate::new()),
+        )
+        .await;
 
         // The automation tick, the reconcile/MCP tasks and the ccproxy listener
         // must all stop promptly once the runtime asks them to, rather than
@@ -2161,5 +3174,434 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(15), background.shutdown())
             .await
             .expect("background shuts down");
+    }
+
+    // -- runtime lifecycle: status and gate (AC-3/AC-7) ---------------------
+
+    /// The status route reports the authoritative phase and lease count, and a
+    /// closed gate refuses new work with `runtime_stopping` while the runtime
+    /// keeps serving. This proves the gate also fences the canonical work start
+    /// (not just the lease lifecycle) and that a quiescing runtime stays
+    /// observable.
+    #[tokio::test]
+    async fn runtime_status_and_gate_refuse_work_while_quiescing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery published");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token.clone(),
+        };
+
+        let response = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"client-a","client_kind":"tauri"}"#,
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        // Running: the status route reports the live instance and the lease.
+        let response = http.get("/control/v1/runtime/status").await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let status: Value = response.json().await.expect("status json");
+        assert_eq!(status["phase"], "running");
+        assert_eq!(status["instance_id"], handle.instance_id());
+        assert_eq!(status["quiesced"], false);
+        assert_eq!(status["active_leases"], 1);
+        assert_eq!(status["automation"]["keep_alive"], false);
+
+        // Close the gate without starting the coordinated exit, so the runtime
+        // keeps serving and every refusal the gate produces is observable.
+        assert!(handle.gate().begin_quiesce());
+
+        let response = http.get("/control/v1/runtime/status").await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let status: Value = response.json().await.expect("status json");
+        assert_eq!(status["phase"], "quiescing");
+        assert_eq!(status["quiesced"], true);
+        assert_eq!(status["epoch"], 1);
+
+        // A new lease is refused with the stable quiescing code.
+        let response = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"client-b","client_kind":"tauri"}"#,
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let envelope: Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "runtime_stopping");
+
+        // A canonical workflow start is refused on the same gate.
+        let response = http
+            .client
+            .post(http.url("/control/v1/workflows/session-x/start"))
+            .header("Authorization", format!("Bearer {}", http.token))
+            .header("Content-Type", "application/json")
+            .header("Idempotency-Key", "gate-1")
+            .body("{}".to_string())
+            .send()
+            .await
+            .expect("workflow start request");
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        let envelope: Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "runtime_stopping");
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("runtime stops");
+        assert!(!discovery::discovery_path_in(dir.path()).exists());
+        let _next = RuntimeDirLock::acquire(dir.path()).expect("owner lock was released");
+    }
+
+    // -- runtime lifecycle: coordinated shutdown ----------------------------
+
+    /// The shutdown route enforces the bearer middleware, the lease proof, the
+    /// expected instance id, an explicit confirmation and a mandatory
+    /// Idempotency-Key; it answers `202 Accepted` (never a completion). The
+    /// proof is validated before the idempotency cache, so every call — including
+    /// a retry — is re-checked against the currently valid instance and lease.
+    #[tokio::test]
+    async fn runtime_shutdown_enforces_proof_instance_confirm_and_idempotency() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery published");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token.clone(),
+        };
+        let instance = handle.instance_id().to_string();
+
+        let response = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"client-a","client_kind":"tauri"}"#,
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let lease_id = response.json::<Value>().await.expect("lease json")["lease_id"]
+            .as_str()
+            .expect("lease id")
+            .to_string();
+
+        let wrong_instance =
+            r#"{"expected_instance_id":"other-instance","confirm":true,"force":true}"#;
+        let valid = format!(
+            r#"{{"expected_instance_id":"{instance}","confirm":true,"force":true}}"#
+        );
+
+        // A missing Idempotency-Key is refused before anything else.
+        let response = http
+            .shutdown(&valid, Some("client-a"), Some(&lease_id), None)
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let envelope: Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "missing_idempotency_key");
+
+        // A missing lease proof is refused.
+        let response = http.shutdown(&valid, None, None, Some("k-proof")).await;
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        let envelope: Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "lease_invalid");
+
+        // A stale expected instance id is refused. The proof is validated before
+        // the idempotency cache, so the refusal is re-derived on every call and
+        // the same key/body yields the same refusal instead of a cached conflict.
+        let response = http
+            .shutdown(&wrong_instance, Some("client-a"), Some(&lease_id), Some("k-inst"))
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+        let stale_body = response.text().await.expect("stale body");
+        assert!(stale_body.contains("instance_mismatch"), "{stale_body}");
+
+        let response = http
+            .shutdown(&wrong_instance, Some("client-a"), Some(&lease_id), Some("k-inst"))
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+        assert_eq!(response.text().await.expect("replayed body"), stale_body);
+
+        // An unconfirmed request against the live instance is refused.
+        let unconfirmed = format!(r#"{{"expected_instance_id":"{instance}","confirm":false}}"#);
+        let response = http
+            .shutdown(&unconfirmed, Some("client-a"), Some(&lease_id), Some("k-conf"))
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let envelope: Value = response.json().await.expect("error envelope");
+        assert_eq!(envelope["error"]["code"], "not_confirmed");
+
+        // The confirmed request is accepted, not completed.
+        let response = http
+            .shutdown(&valid, Some("client-a"), Some(&lease_id), Some("k-run"))
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+        let accepted: Value = response.json().await.expect("accepted json");
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["force"], true);
+        assert_eq!(accepted["instance_id"], instance);
+        assert!(!accepted["operation_id"].as_str().expect("operation").is_empty());
+
+        // The coordinated exit drains and stops without waiting on its own
+        // server; the lock is released for a successor.
+        tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("runtime stops");
+        assert!(!discovery::discovery_path_in(dir.path()).exists());
+        let _next = RuntimeDirLock::acquire(dir.path()).expect("owner lock was released");
+    }
+
+    // -- runtime lifecycle: automation keep-alive ---------------------------
+
+    /// Seeds one enabled, far-future `once` automation so the runtime reports an
+    /// effective schedule and a keep-alive reason that is not a lease.
+    fn seed_enabled_once_automation(db_path: &Path) {
+        use chatspeed_runtime_backend::db::automation::WorkflowAutomationUpsert;
+        use chatspeed_runtime_backend::db::Agent;
+        let store =
+            chatspeed_runtime_backend::db::MainStore::new(db_path).expect("seed store");
+        // The automation's `agent_id` is a foreign key, so the owning agent row
+        // must exist first.
+        let agent = Agent::new(
+            "agent-1".to_string(),
+            "Seeder".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            String::new(),
+            None,
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(false),
+            Some("[]".to_string()),
+            Some("plan".to_string()),
+            Some(false),
+            Some(false),
+            None,
+        );
+        store.add_agent(&agent).expect("seed agent");
+        store
+            .create_workflow_automation(&WorkflowAutomationUpsert {
+                id: "automation-1".to_string(),
+                title: "Keep alive".to_string(),
+                prompt: Some("noop".to_string()),
+                prompt_file_path: None,
+                agent_id: "agent-1".to_string(),
+                agent_config: None,
+                allowed_paths: "[]".to_string(),
+                shell_config: None,
+                schedule_kind: "once".to_string(),
+                schedule_config: r#"{"run_at":"2099-01-01 00:00:00"}"#.to_string(),
+                continuous_context: false,
+                current_workflow_session_id: None,
+                self_review: false,
+                enabled: true,
+                next_run_at: Some("2099-01-01 00:00:00".to_string()),
+            })
+            .expect("seed automation");
+    }
+
+    /// An effective automation schedule keeps the runtime alive with no client
+    /// lease, so the idle supervisor never mistakes a scheduled owner for an idle
+    /// process. The status route surfaces the same reason.
+    #[tokio::test]
+    async fn automation_lifecycle_schedule_keeps_the_runtime_alive_without_leases() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        seed_enabled_once_automation(&dir.path().join(DB_FILE_NAME));
+
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_millis(300),
+            Duration::from_secs(30),
+        ))
+        .await
+        .expect("start runtime");
+
+        // No lease is ever registered; the effective schedule must hold the
+        // runtime open well past the grace window.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        assert!(
+            !handle.is_finished(),
+            "an effective automation schedule keeps the runtime alive without a lease"
+        );
+        assert!(discovery::discovery_path_in(dir.path()).exists());
+
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery published");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token.clone(),
+        };
+        let status: Value = http
+            .get("/control/v1/runtime/status")
+            .await
+            .json()
+            .await
+            .expect("status json");
+        assert_eq!(status["automation"]["effective_schedules"], 1);
+        assert_eq!(status["automation"]["keep_alive"], true);
+        assert_eq!(status["active_leases"], 0);
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("runtime stops on request");
+    }
+
+    // -- runtime lifecycle: U-5 budgets, forced fallback and termination hook --
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Records the last-resort termination fallback without exiting the test
+    /// process.
+    #[derive(Debug)]
+    struct RecordingHook {
+        fired: Arc<AtomicUsize>,
+    }
+
+    impl TerminationHook for RecordingHook {
+        fn force_exit(&self, _instance_id: &str, _pid: u32) {
+            self.fired.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The graceful and forced budgets, plus the termination hook, are injectable
+    /// so a test (or the desktop supervisor) can drive a short shutdown without a
+    /// production configuration knob.
+    #[test]
+    fn shutdown_budgets_and_the_termination_hook_are_injectable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = RuntimeConfig::with_runtime_dir(dir.path())
+            .with_shutdown_budget(Duration::from_millis(1234))
+            .with_force_budget(Duration::from_millis(567));
+        assert_eq!(config.shutdown_budget(), Duration::from_millis(1234));
+        assert_eq!(config.force_budget(), Duration::from_millis(567));
+        // The default hook exists and is the safe library hook.
+        let _ = config.termination_hook();
+
+        let defaults = RuntimeConfig::with_runtime_dir(dir.path());
+        assert_eq!(defaults.shutdown_budget(), DEFAULT_SHUTDOWN_BUDGET);
+        assert_eq!(defaults.force_budget(), DEFAULT_FORCE_BUDGET);
+    }
+
+    /// An idle-grace shutdown is never forced, so it never spends the forced
+    /// budget nor invokes the termination fallback.
+    #[tokio::test]
+    async fn an_idle_shutdown_never_forces_and_never_fires_the_termination_hook() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let hook = Arc::new(RecordingHook { fired: fired.clone() });
+        let handle = start_runtime(
+            short_config(dir.path(), Duration::from_millis(300), Duration::from_secs(5))
+                .with_force_budget(Duration::from_millis(200))
+                .with_termination_hook(hook),
+        )
+        .await
+        .expect("start runtime");
+
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("the idle grace stops the runtime");
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "an idle shutdown is never forced"
+        );
+    }
+
+    /// A clean shutdown must still record `Graceful`: the outcome-preservation
+    /// path added for an unproven owned teardown must never turn a healthy stop
+    /// into a failure.
+    #[tokio::test]
+    async fn a_clean_shutdown_records_a_graceful_outcome() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_millis(50),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+
+        let (operation, handoff) = handle.shutdown.request(false);
+        drop(handoff);
+        assert!(!operation.force, "the graceful request is not forced");
+
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("the idle grace stops the runtime");
+
+        let outcome = handle.shutdown.operation_dto().and_then(|dto| dto.outcome);
+        assert_eq!(
+            outcome,
+            Some(RuntimeShutdownOutcome::Graceful),
+            "a clean shutdown with no unproven owned work records a graceful outcome"
+        );
+    }
+
+    /// A forced shutdown that cannot drain (a held admission) must never falsely
+    /// report `stopped`; it spends the forced budget and then fires the
+    /// last-resort termination fallback, which the test records instead of exiting.
+    #[tokio::test]
+    async fn a_forced_shutdown_that_cannot_drain_fires_the_termination_hook_without_claiming_stopped()
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let hook = Arc::new(RecordingHook { fired: fired.clone() });
+        let handle = start_runtime(
+            short_config(dir.path(), Duration::from_secs(30), Duration::from_secs(30))
+                .with_shutdown_budget(Duration::from_millis(300))
+                .with_force_budget(Duration::from_millis(200))
+                .with_termination_hook(hook),
+        )
+        .await
+        .expect("start runtime");
+
+        // Hold one admission so the drain can never complete.
+        let ticket = handle
+            .gate()
+            .admit(WorkKind::ChatTurn)
+            .expect("admit while running");
+
+        // An explicit forced request (the private authority the route and the
+        // supervisor funnel into); dropping the hand-off starts the worker at once.
+        let (_operation, handoff) = handle.shutdown.request(true);
+        drop(handoff);
+
+        let mut waited = Duration::ZERO;
+        while fired.load(Ordering::SeqCst) == 0 && waited < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            waited += Duration::from_millis(25);
+        }
+        assert!(
+            fired.load(Ordering::SeqCst) >= 1,
+            "the forced fallback fires once the graceful and forced budgets elapse"
+        );
+        assert!(
+            !handle.is_finished(),
+            "a held admission forbids the `stopped` claim"
+        );
+
+        drop(ticket);
     }
 }

@@ -1,6 +1,6 @@
 ---
 name: help
-description: Explains ChatSpeed and manages its local capabilities. Activate when a user asks how ChatSpeed works, needs official documentation, wants to install, check, list, or uninstall an Agent Skill, wants to install, inspect, enable, disable, refresh, restart, or remove an MCP server, or asks about the ChatSpeed CLI.
+description: Explains ChatSpeed and manages its local capabilities. Activate when a user asks how ChatSpeed works, needs official documentation, wants to install, check, list, or uninstall an Agent Skill, wants to install, inspect, enable, disable, refresh, restart, or remove an MCP server, wants to create, inspect, draft, apply, schedule, enable, disable, run, or delete a local workflow Automation, or asks about the ChatSpeed CLI.
 ---
 
 # ChatSpeed Help and Capability Skill
@@ -43,6 +43,39 @@ The capability control plane is the single authority for local Skill and MCP sta
 - `cscli doctor reconcile` — converge only effects proven safe to recover.
 
 Mutating operations must preserve the capability service's fail-closed behavior and idempotency handling. The CLI is an HTTP adapter; it does not open the database, capability directories, or MCP processes itself.
+
+## Automation Operations
+
+`cscli automation` manages the local workflow Automations the running ChatSpeed runtime owns. Every mutation goes through the runtime's single automation facade over the authenticated control plane; the CLI never opens the database, starts a workflow, or runs a shell command itself. The backend `AutomationSpec` and its schedules remain the only authority, so the CLI cannot grow a laxer notion of a valid automation.
+
+Friendly field flags are the validated alternative to a raw `--spec-json`/`--spec-file` `AutomationSpec` document, and the two are mutually exclusive. A create needs `--title`, `--agent`, `--prompt`/`--prompt-file` and exactly one schedule selector:
+
+- `--every <5m|1h>` — an interval schedule (minimum 5 minutes).
+- `--daily <HH:MM>` — a daily schedule; repeat the flag for several times a day.
+- `--once <RFC3339|YYYY-MM-DD HH:MM[:SS]>` — a one-shot schedule.
+
+`--weekdays 1,2,3,4,5` (1 = Monday), `--start-date`/`--end-date` (`YYYY-MM-DD`) and `--anchor-time` (`HH:MM[:SS]`, interval only) shape the schedule; a one-shot schedule cannot express the weekday/date window. The tri-state pairs `--enabled`/`--disabled`, `--continuous-context`/`--no-continuous-context` and `--self-review`/`--no-self-review` default to disabled, no continuous context and no self review when neither half is given, and `--allowed-path` (repeatable) replaces the stored allowed paths, which are empty by default.
+
+- `cscli automation list` — list automations with schedule, enabled state and revision.
+- `cscli automation get <id>` — show one automation.
+- `cscli automation runs <id>` — list an automation's projected run lifecycle.
+- `cscli automation draft ...` — produce a side-effect-free plan from a raw spec, a constrained `--intent` or friendly flags.
+- `cscli automation apply ...` — apply a reviewed plan after verifying its hash, base revision and expiry.
+- `cscli automation create ...` — create an automation from a raw spec or friendly flags; the id is backend-minted.
+- `cscli automation update <id> ...` — a compare-and-set update on the caller's revision.
+- `cscli automation enable <id>` / `cscli automation disable <id>` — flip the desired enabled state.
+- `cscli automation run <id>` — trigger a manual run now.
+- `cscli automation delete <id> --confirm` — permanently delete an automation and its associated workflow tree.
+
+State and safety rules:
+
+- `update` reads the current revision first and compare-and-sets on it. With `--spec-json`/`--spec-file` the revision stays required via `--expected-revision`, and the raw document is posted unchanged as a full replacement. A conflict is surfaced as-is: the revision is never re-read and the mutation is never retried behind the caller.
+- Every mutation carries an idempotency key, minted when `--idempotency-key` is omitted, so a retry cannot double an effect.
+- `draft` never mutates and never grants a new shell/path/network/MCP/Skill permission; a plan whose intent requested such a permission is returned `blocked` and cannot be applied. `apply` re-derives the hash, re-checks the base revision and the plan expiry, and requires `--acknowledge-permission-changes` only when the plan really expands permissions.
+- `run` reports an accepted start, which is not a completion; observe `cscli automation runs` for the durable terminal state.
+- `delete` is destructive and requires `--confirm`; it also refuses while a run is active.
+
+Background execution is implemented and available for configured automations. The runtime keeps itself alive for an enabled automation that has an effective or continuously-online schedule, for a live run, and for a run admitted but not yet linked to a workflow session, even with no client connected, and it keeps scheduling across its own ticks. A manual `cscli automation run` and the app's own control-plane calls still need the running runtime process; only the scheduling of already-configured automations survives with no client connected. A slot missed while the runtime was stopped is never replayed: at startup a stored slot at or before the instance start boundary is advanced to its next future occurrence (or cleared when it was non-recurring and already elapsed), and a due slot this instance stayed online for is consumed at most once while the runtime runs. Stopping is a single coordinated shutdown shared by the idle supervisor, the process signal and an explicit request, and it never deletes the configuration or the run history. See `docs/cscli.md` in the repository for the full developer reference.
 
 ## Skill Installation and Vetting
 

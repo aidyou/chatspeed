@@ -63,15 +63,34 @@ pub async fn stream_workflow_events(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
 
-    tokio::spawn(pump_events(subscription, tx, KEEPALIVE_INTERVAL));
+    tokio::spawn(pump_events(
+        subscription,
+        tx,
+        KEEPALIVE_INTERVAL,
+        state.shutdown.clone(),
+    ));
 
-    Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
+    // Bound the stream by the server's shutdown broadcast: an open SSE stream must
+    // end the moment the control plane is asked to stop, otherwise axum's graceful
+    // shutdown would wait forever on a stream that never finishes and
+    // `ControlPlaneHandle::wait` could never complete. `take_until` ends the stream
+    // (closing the connection) as soon as the broadcast fires.
+    let stream = ReceiverStream::new(rx);
+    let stream = futures_util::StreamExt::take_until(stream, await_shutdown(state.shutdown.clone()));
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Resolves once the control plane's shutdown broadcast fires, or its sender is
+/// dropped — both mean the server is stopping and the stream must end.
+async fn await_shutdown(mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    let _ = shutdown.changed().await;
 }
 
 async fn pump_events(
     subscription: Result<SessionSubscription, SubscribeError>,
     tx: tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
     keepalive: Duration,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let subscription = match subscription {
         Ok(subscription) => subscription,
@@ -119,6 +138,11 @@ async fn pump_events(
                 if tx.send(Ok(Event::default().comment("keepalive"))).await.is_err() {
                     return;
                 }
+            }
+            _ = shutdown.changed() => {
+                // The server is stopping: end the pump so it does not linger
+                // holding a subscription while the connection is torn down.
+                return;
             }
         }
     }

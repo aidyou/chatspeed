@@ -239,6 +239,9 @@ proxy:
     store_lock_failed: '访问存储失败: %{error}'
   group:
     not_found_by_name: 未能通过分组名称 '%{name}' 找到代理分组
+runtime:
+  owned_process_cancelled: 运行时正在停止，已终止一个仍在执行的托管工具进程
+  work_refused_while_stopping: 运行时处于 %{phase}，拒绝新的 %{kind} 工作
 sensitive:
   filter:
     bank_account: '[银行账号]'

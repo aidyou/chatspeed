@@ -1,6 +1,7 @@
 use crate::commands::workflow::workflow_start_core;
 use crate::db::automation::ManualClaimOutcome;
 use crate::db::{WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
+use crate::owned_process::{run_owned_shell, OwnedProcessCancellation, OwnedShellOutcome};
 use crate::workflow::automation::errors::AutomationError;
 use crate::workflow::automation::types::{
     DailyScheduleConfig, IntervalScheduleConfig, OnceScheduleConfig, WorkflowAutomationRequest,
@@ -10,15 +11,6 @@ use crate::workflow::react::application::WorkflowApplicationService;
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tokio::process::Command;
-
-#[cfg(target_os = "windows")]
-fn configure_no_window(command: &mut Command) {
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-}
-
-#[cfg(not(target_os = "windows"))]
-fn configure_no_window(_command: &mut Command) {}
 
 pub fn normalize_datetime_for_db(datetime: DateTime<Local>) -> String {
     datetime.format("%Y-%m-%d %H:%M:%S").to_string()
@@ -176,27 +168,25 @@ fn next_interval_run_from(
     Ok(None)
 }
 
+fn parse_once_run_at(run_at: &str) -> Result<DateTime<Local>, String> {
+    if let Ok(value) = DateTime::parse_from_rfc3339(run_at) {
+        return Ok(value.with_timezone(&Local));
+    }
+    let naive = chrono::NaiveDateTime::parse_from_str(run_at, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(run_at, "%Y-%m-%d %H:%M"))
+        .map_err(|e| e.to_string())?;
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .or_else(|| Local.from_local_datetime(&naive).earliest())
+        .ok_or_else(|| format!("Invalid local datetime: {}", naive))
+}
+
 fn next_once_run_from(
     config: OnceScheduleConfig,
     now: DateTime<Local>,
 ) -> Result<Option<String>, String> {
-    let run_at = match DateTime::parse_from_rfc3339(&config.run_at)
-        .map(|dt| dt.with_timezone(&Local))
-    {
-        Ok(value) => value,
-        Err(_) => {
-            let naive = chrono::NaiveDateTime::parse_from_str(&config.run_at, "%Y-%m-%d %H:%M:%S")
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(&config.run_at, "%Y-%m-%d %H:%M")
-                })
-                .map_err(|e| e.to_string())?;
-            Local
-                .from_local_datetime(&naive)
-                .single()
-                .or_else(|| Local.from_local_datetime(&naive).earliest())
-                .ok_or_else(|| format!("Invalid local datetime: {}", naive))?
-        }
-    };
+    let run_at = parse_once_run_at(&config.run_at)?;
 
     if run_at > now {
         Ok(Some(normalize_datetime_for_db(run_at)))
@@ -212,7 +202,10 @@ pub fn compute_next_run_at(
     compute_next_run_at_from(schedule_kind, schedule_config, Local::now())
 }
 
-fn compute_next_run_at_from(
+/// Computes the next occurrence strictly after `now` for the given schedule. The
+/// explicit `now` keeps startup normalization and the runtime `dispatch` tick on
+/// the same deterministic clock instead of each reading `Local::now()`.
+pub(crate) fn compute_next_run_at_from(
     schedule_kind: &str,
     schedule_config: &Value,
     now: DateTime<Local>,
@@ -231,6 +224,113 @@ fn compute_next_run_at_from(
         ),
         other => Err(format!("Unsupported schedule kind: {}", other)),
     }
+}
+
+/// Whether `slot` is a slot the schedule configuration actually defines, i.e.
+/// its own date is inside the effective range, its weekday is allowed, and its
+/// time matches a configured time (daily), lies on the interval grid (interval),
+/// or equals the `once` instant. The runtime uses this to reject a corrupted or
+/// stale cursor instead of consuming it, without any arbitrary lateness
+/// threshold: the slot is validated, not how late `now` is relative to it.
+pub(crate) fn is_valid_schedule_slot(
+    schedule_kind: &str,
+    schedule_config: &Value,
+    slot: DateTime<Local>,
+) -> Result<bool, String> {
+    match schedule_kind {
+        "daily" => {
+            let config: DailyScheduleConfig =
+                serde_json::from_value(schedule_config.clone()).map_err(|e| e.to_string())?;
+            let times = normalize_daily_schedule_times(&config)?;
+            let start_date = parse_date(&config.start_date)?;
+            let end_date = parse_date(&config.end_date)?;
+            let date = slot.date_naive();
+            if !within_effective_range(date, start_date, end_date) {
+                return Ok(false);
+            }
+            if !matches_weekday(date, &config.weekdays) {
+                return Ok(false);
+            }
+            Ok(times.contains(&slot.time()))
+        }
+        "interval" => {
+            let config = normalize_interval_schedule_config(schedule_config)?;
+            let start_date = parse_date(&config.start_date)?;
+            let end_date = parse_date(&config.end_date)?;
+            let date = slot.date_naive();
+            if !within_effective_range(date, start_date, end_date) {
+                return Ok(false);
+            }
+            if !matches_weekday(date, &config.weekdays) {
+                return Ok(false);
+            }
+            let Some(anchor_time) = config.anchor_time.as_deref().map(parse_time).transpose()?
+            else {
+                // Without a configured anchor time the interval origin floats
+                // with the wall clock at computation time, so no grid is
+                // reproducible: only the date range and weekday are checked.
+                return Ok(true);
+            };
+            // The grid is compared in exact *seconds*: rounding to whole minutes
+            // would accept a slot such as 09:00:59 on a 09:00 whole-minute grid.
+            let step_seconds = i64::from(config.interval_minutes.max(5)) * 60;
+            match start_date {
+                Some(start) => {
+                    let anchor = local_datetime(start, anchor_time)?;
+                    let delta_seconds = slot.signed_duration_since(anchor).num_seconds();
+                    Ok(interval_slot_is_on_grid(delta_seconds, step_seconds, false))
+                }
+                None => {
+                    // No persistent anchor date: the origin floats to the day a
+                    // cursor was computed on, so only the day-reduced grid is
+                    // reproducible (see `interval_slot_is_on_grid`).
+                    let delta_seconds = i64::from(slot.time().num_seconds_from_midnight())
+                        - i64::from(anchor_time.num_seconds_from_midnight());
+                    Ok(interval_slot_is_on_grid(delta_seconds, step_seconds, true))
+                }
+            }
+        }
+        "once" => {
+            let config: OnceScheduleConfig =
+                serde_json::from_value(schedule_config.clone()).map_err(|e| e.to_string())?;
+            // Compare at second granularity: the stored cursor is written in the
+            // DB second format, so sub-second digits in the configured instant
+            // must not make a legitimate slot look corrupt.
+            Ok(parse_once_run_at(&config.run_at)?.timestamp() == slot.timestamp())
+        }
+        other => Err(format!("Unsupported schedule kind: {}", other)),
+    }
+}
+
+/// Whether a slot lies on an interval grid, compared in exact seconds.
+///
+/// With a persistent anchor (`start_date` plus `anchor_time`) the origin is
+/// fixed, so the offset from it must be a non-negative multiple of the step.
+/// Without a persistent anchor date the origin is `now.date_naive()` and drifts
+/// by whole days between computations, so a whole day (86_400s) may be added to
+/// any reachable slot; the reachable offsets are then exactly the multiples of
+/// `gcd(step, 86_400)`. That is the tightest restriction the floating origin
+/// permits, and it still guarantees every slot the generator itself produces
+/// validates.
+fn interval_slot_is_on_grid(delta_seconds: i64, step_seconds: i64, floating_origin: bool) -> bool {
+    if step_seconds <= 0 {
+        return false;
+    }
+    if floating_origin {
+        delta_seconds.rem_euclid(gcd_i64(step_seconds, 86_400)) == 0
+    } else {
+        delta_seconds >= 0 && delta_seconds.rem_euclid(step_seconds) == 0
+    }
+}
+
+fn gcd_i64(a: i64, b: i64) -> i64 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    a.max(1)
 }
 
 fn normalize_interval_schedule_config(
@@ -516,41 +616,41 @@ fn combine_context_sections(sections: impl IntoIterator<Item = Option<String>>) 
     }
 }
 
-async fn execute_shell_command(command_text: &str) -> Result<std::process::Output, String> {
-    #[cfg(windows)]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", command_text]);
-        command
-    };
-
-    #[cfg(not(windows))]
-    let mut command = {
-        let mut command = Command::new("sh");
-        command.args(["-c", command_text]);
-        command
-    };
-
-    configure_no_window(&mut command);
-
-    command
-        .output()
-        .await
-        .map_err(|e| format!("Failed to execute shell command: {}", e))
+/// The outcome of the optional pre-workflow shell.
+enum PreWorkflowShell {
+    /// The automation has no shell configured.
+    NotConfigured,
+    /// The shell completed successfully with its captured output.
+    Ran(PreWorkflowShellResult),
+    /// The runtime cancelled the shell while it was in flight. The whole owned
+    /// tree was terminated and the root reaped; the run must project `cancelled`
+    /// rather than a deterministic-effect `failed`.
+    Cancelled,
 }
 
+/// Runs the optional pre-workflow shell as an owned, cancellable child process.
+///
+/// The shell is started in its own process session/group by
+/// [`run_owned_shell`], so a coordinated shutdown reaches its whole tree and
+/// awaits the teardown. A deterministic non-zero exit is an ordinary failure; a
+/// cancellation is reported separately so the caller never records a cancelled
+/// run as `failed`.
 async fn execute_pre_workflow_shell(
     automation: &WorkflowAutomation,
-) -> Result<Option<PreWorkflowShellResult>, String> {
+    cancel: &OwnedProcessCancellation,
+) -> Result<PreWorkflowShell, String> {
     let Some(shell_config) = parse_shell_config(automation.shell_config.as_deref())? else {
-        return Ok(None);
+        return Ok(PreWorkflowShell::NotConfigured);
     };
 
     let command_text = shell_config
         .command
         .clone()
         .ok_or_else(|| "Shell command is required".to_string())?;
-    let output = execute_shell_command(&command_text).await?;
+    let output = match run_owned_shell(&command_text, cancel).await? {
+        OwnedShellOutcome::Cancelled => return Ok(PreWorkflowShell::Cancelled),
+        OwnedShellOutcome::Completed(output) => output,
+    };
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
@@ -564,7 +664,7 @@ async fn execute_pre_workflow_shell(
         ));
     }
 
-    Ok(Some(PreWorkflowShellResult {
+    Ok(PreWorkflowShell::Ran(PreWorkflowShellResult {
         command: command_text,
         stdout,
         stderr,
@@ -593,8 +693,11 @@ pub(crate) async fn execute_automation_run(
     let _ = store.update_workflow_automation_run_status(run_id, "starting", None);
 
     let prompt = automation_prompt(automation).map_err(AutomationError::invalid_request)?;
-    let shell_result = match execute_pre_workflow_shell(automation).await {
-        Ok(result) => result,
+    // The pre-workflow shell is owned by this runtime instance, so a coordinated
+    // shutdown can cancel its whole tree and await the teardown.
+    let cancel = svc.automation_owner().owned_process_cancellation();
+    let shell_outcome = match execute_pre_workflow_shell(automation, &cancel).await {
+        Ok(outcome) => outcome,
         Err(error) => {
             // A deterministic pre-workflow shell failure has no external effect
             // to reconcile, so it is a clean terminal `failed`.
@@ -609,6 +712,28 @@ pub(crate) async fn execute_automation_run(
                 );
             }
             return Err(AutomationError::internal(error));
+        }
+    };
+    let shell_result = match shell_outcome {
+        PreWorkflowShell::NotConfigured => None,
+        PreWorkflowShell::Ran(result) => Some(result),
+        PreWorkflowShell::Cancelled => {
+            // The shell was cancelled by a coordinated shutdown, not a
+            // deterministic failure: the run is terminal `cancelled` and the
+            // typed error is the one canonical `runtime_stopping` code, so no
+            // transport mistakes it for a retryable/internal failure.
+            let reason = "runtime cancelled during pre-workflow shell";
+            if let Err(update_error) =
+                store.update_workflow_automation_run_status(run_id, "cancelled", Some(reason))
+            {
+                log::error!(
+                    "[WorkflowAutomation][automation={}][run={}] Failed to mark cancelled run: {}",
+                    automation.id,
+                    run_id,
+                    update_error
+                );
+            }
+            return Err(AutomationError::stopping(reason));
         }
     };
     let initial_prompt = build_workflow_prompt(&prompt, shell_result.as_ref());
@@ -741,8 +866,13 @@ pub(crate) async fn create_manual_run(
         .generate()
         .map_err(|e| AutomationError::internal(e.to_string()))?;
     let scheduled_for = normalize_datetime_for_db(Local::now());
-    // The guard and the pending insert share one write transaction, so two
-    // concurrent manual requests can never both start an active run.
+    // Admit the run in this instance's short-lived evidence *before* the durable
+    // claim. The claim commits the pending row, and another worker thread running
+    // a facade read/reconcile could observe it before the guard existed, so
+    // admitting only afterwards would leave exactly that window unprotected. The
+    // RAII guard releases on drop, including the `Busy` path below, and the DB
+    // claim stays the authority (no session is reserved here).
+    let _in_flight = svc.automation_owner().begin_run(&run_id);
     let claimed_run = match store
         .claim_manual_run(&automation.id, &run_id, &scheduled_for)
         .map_err(|e| AutomationError::internal(e.to_string()))?
@@ -1048,5 +1178,228 @@ mod tests {
         assert_eq!(config["approvalLevel"], "full");
         assert_eq!(config["allowedPaths"], json!(["/tmp/project"]));
         assert_eq!(config["finalAudit"], false);
+    }
+
+    #[test]
+    fn schedule_slot_validation_matches_the_configuration() {
+        let daily = json!({
+            "times": ["09:00", "18:00"],
+            "weekdays": [],
+            "start_date": null,
+            "end_date": null
+        });
+        assert!(
+            is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 09:00:00")).expect("valid")
+        );
+        // A time the configuration does not define is not a slot.
+        assert!(
+            !is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 12:00:00")).expect("valid")
+        );
+
+        let interval = json!({
+            "interval_minutes": 120,
+            "weekdays": [],
+            "start_date": "2026-06-25",
+            "end_date": null,
+            "anchor_time": "08:00"
+        });
+        // 10:00 is 08:00 + 120m: on the grid.
+        assert!(is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 10:00:00"))
+            .expect("valid"));
+        // 09:00 is off the anchor grid and is not a slot.
+        assert!(!is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 09:00:00"))
+            .expect("valid"));
+
+        // A configured instant carrying sub-second digits must still match the
+        // DB-second cursor, so an RFC3339 `run_at` never looks corrupt.
+        let once = json!({"run_at": "2026-06-25T09:00:00.500+00:00"});
+        let cursor = parse_once_run_at("2026-06-25T09:00:00+00:00").expect("parse once");
+        assert!(is_valid_schedule_slot("once", &once, cursor).expect("valid"));
+        assert!(!is_valid_schedule_slot("once", &once, test_now("2026-06-25 10:00:00"))
+            .expect("valid"));
+    }
+
+    #[test]
+    fn interval_slot_validation_uses_an_exact_second_grid() {
+        // A 09:00 one-hour grid with a persistent anchor. The grid is compared in
+        // seconds, so a sub-minute offset such as 09:00:59 is not a slot (minute
+        // rounding used to accept it).
+        let persistent = json!({
+            "interval_minutes": 60,
+            "weekdays": [],
+            "start_date": "2026-06-25",
+            "end_date": null,
+            "anchor_time": "09:00"
+        });
+        assert!(
+            is_valid_schedule_slot("interval", &persistent, test_now("2026-06-25 09:00:00"))
+                .expect("valid")
+        );
+        assert!(
+            !is_valid_schedule_slot("interval", &persistent, test_now("2026-06-25 09:00:59"))
+                .expect("valid")
+        );
+        // A slot before the anchor is not on the forward grid.
+        assert!(
+            !is_valid_schedule_slot("interval", &persistent, test_now("2026-06-25 08:59:00"))
+                .expect("valid")
+        );
+
+        // The 5-minute floor is kept: 3 minutes canonicalises to 5, so 09:05 is
+        // on the grid and 09:03 is not.
+        let floor = json!({
+            "interval_minutes": 3,
+            "weekdays": [],
+            "start_date": "2026-06-25",
+            "end_date": null,
+            "anchor_time": "09:00"
+        });
+        assert!(
+            is_valid_schedule_slot("interval", &floor, test_now("2026-06-25 09:05:00"))
+                .expect("valid")
+        );
+        assert!(
+            !is_valid_schedule_slot("interval", &floor, test_now("2026-06-25 09:03:00"))
+                .expect("valid")
+        );
+
+        // An unparseable configuration must never be reported as a legal slot.
+        let malformed = json!({ "interval_minutes": "not-a-number" });
+        assert!(
+            is_valid_schedule_slot("interval", &malformed, test_now("2026-06-25 09:00:00"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn interval_slot_without_a_persistent_anchor_uses_the_day_reduced_grid() {
+        // No `start_date`: the generator anchors on the day it computes on, so a
+        // whole day may be added to any reachable slot. The day-reduced grid must
+        // still reject an off-grid slot, including one that crosses midnight.
+        let config = json!({
+            "interval_minutes": 240,
+            "weekdays": [],
+            "start_date": null,
+            "end_date": null,
+            "anchor_time": "22:00"
+        });
+        assert!(
+            is_valid_schedule_slot("interval", &config, test_now("2026-06-25 22:00:00"))
+                .expect("valid")
+        );
+        // 02:00 the next day is 22:00 + 4h across midnight.
+        assert!(
+            is_valid_schedule_slot("interval", &config, test_now("2026-06-26 02:00:00"))
+                .expect("valid")
+        );
+        assert!(
+            !is_valid_schedule_slot("interval", &config, test_now("2026-06-26 02:01:00"))
+                .expect("valid")
+        );
+
+        // With no anchor time at all no grid is reproducible, so only the date
+        // range and weekday are enforced.
+        let no_anchor = json!({
+            "interval_minutes": 240,
+            "weekdays": [],
+            "start_date": null,
+            "end_date": null,
+            "anchor_time": null
+        });
+        assert!(
+            is_valid_schedule_slot("interval", &no_anchor, test_now("2026-06-26 03:17:00"))
+                .expect("valid")
+        );
+    }
+
+    #[test]
+    fn interval_grid_is_independent_of_a_fixed_utc_offset() {
+        // The grid is expressed in absolute seconds, so the same local wall clock
+        // must validate identically under any fixed offset. A fixed-offset fixture
+        // pins that without mutating the process timezone, which the parallel test
+        // harness must never do.
+        let offsets = [
+            chrono::FixedOffset::east_opt(5 * 3600 + 45 * 60).expect("+05:45"),
+            chrono::FixedOffset::west_opt(4 * 3600).expect("-04:00"),
+        ];
+        let mut verdicts = Vec::new();
+        for offset in offsets {
+            let anchor = offset
+                .with_ymd_and_hms(2026, 6, 25, 9, 0, 0)
+                .single()
+                .expect("anchor");
+            let on_grid = offset
+                .with_ymd_and_hms(2026, 6, 25, 11, 0, 0)
+                .single()
+                .expect("on grid");
+            let off_grid = offset
+                .with_ymd_and_hms(2026, 6, 25, 11, 1, 0)
+                .single()
+                .expect("off grid");
+            let step_seconds = 120 * 60;
+            verdicts.push((
+                interval_slot_is_on_grid(
+                    on_grid.signed_duration_since(anchor).num_seconds(),
+                    step_seconds,
+                    false,
+                ),
+                interval_slot_is_on_grid(
+                    off_grid.signed_duration_since(anchor).num_seconds(),
+                    step_seconds,
+                    false,
+                ),
+            ));
+        }
+        assert_eq!(verdicts, vec![(true, false), (true, false)]);
+    }
+
+    /// The interval grid across a real DST transition is checked in an isolated
+    /// re-exec of this test binary with `TZ` set. `Local` reads `TZ` at process
+    /// start, so mutating it inside the parallel test harness would be unsound.
+    #[test]
+    fn interval_grid_is_stable_across_a_dst_transition() {
+        const PROBE_ENV: &str = "CS_AUTOMATION_DST_PROBE";
+        const TEST_NAME: &str =
+            "workflow::automation::service::tests::interval_grid_is_stable_across_a_dst_transition";
+
+        if std::env::var(PROBE_ENV).is_err() {
+            let binary = std::env::current_exe().expect("current test binary");
+            let status = std::process::Command::new(binary)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(PROBE_ENV, "1")
+                .env("TZ", "America/New_York")
+                .status()
+                .expect("spawn the isolated timezone probe");
+            assert!(status.success(), "the isolated timezone probe failed");
+            return;
+        }
+
+        // Child process, now running in the requested zone.
+        let winter = test_now("2026-01-15 12:00:00");
+        let summer = test_now("2026-07-15 12:00:00");
+        if winter.offset() == summer.offset() {
+            // No zone database is available, so there is no transition to
+            // observe here; the grid arithmetic itself is still covered by the
+            // fixed-offset test.
+            eprintln!("skipping the DST probe: the zone database is unavailable");
+            return;
+        }
+
+        // 2026-03-08 is a 23-hour day in this zone. With a persistent anchor the
+        // grid is absolute, so 09:00 stays on the one-hour grid every day.
+        let config = json!({
+            "interval_minutes": 60,
+            "weekdays": [],
+            "start_date": "2026-03-07",
+            "end_date": null,
+            "anchor_time": "09:00"
+        });
+        for day in ["2026-03-07", "2026-03-08", "2026-03-09"] {
+            let slot = test_now(&format!("{day} 09:00:00"));
+            assert!(
+                is_valid_schedule_slot("interval", &config, slot).expect("valid"),
+                "{day} 09:00 must stay on the absolute grid across the DST transition"
+            );
+        }
     }
 }
