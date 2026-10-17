@@ -90,15 +90,7 @@ fn get_shell_path() -> Option<String> {
     None
 }
 
-/// Attempts to retrieve the full system PATH environment variable on Unix-like systems.
-///
-/// This function tries various available shells (e.g., zsh, bash, sh) by launching them
-/// as login shells to ensure a complete environment, then echoes the `$PATH`.
-/// It prioritizes interactive login shells for a more complete PATH.
-///
-/// # Returns
-/// - `Some(String)`: The full PATH string if successfully retrieved.
-/// - `None`: If the PATH could not be retrieved using the attempted methods.
+/// Shell candidates used by the non-interactive PATH probe.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
     let mut shell_paths = terminal_shells;
@@ -151,23 +143,24 @@ fn get_shell_path() -> Option<String> {
                 }
             };
 
-        // 1. Try interactive login shell first (most likely to have full user PATH)
+        // A PATH probe must remain non-interactive; user startup files can read from the
+        // terminal or invoke job-control commands and suspend the application process.
         log::debug!(
-            "Attempting to get PATH using interactive login shell: {} -l -i -c \"echo $PATH\"",
+            "Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"",
             shell_path
         );
-        match try_command(&shell_path, vec!["-l", "-i", "-c", "echo $PATH"]) {
+        match try_command(&shell_path, vec!["-l", "-c", "echo $PATH"]) {
             Ok(Some(path)) => {
-                log::debug!("Using {} -l -i -c to get PATH", shell_path);
+                log::debug!("Using {} -l -c to get PATH", shell_path);
                 return Some(path);
             }
             Err(std::io::ErrorKind::NotFound) => continue,
             _ => {}
         }
 
-        match try_command(&shell_path, vec!["-l", "-c", "echo $PATH"]) {
+        match try_command(&shell_path, vec!["-c", "echo $PATH"]) {
             Ok(Some(path)) => {
-                log::debug!("Using {} -l -c to get PATH", shell_path);
+                log::debug!("Using {} -c to get PATH", shell_path);
                 return Some(path);
             }
             Err(std::io::ErrorKind::NotFound) => continue,

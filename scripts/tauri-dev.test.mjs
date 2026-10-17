@@ -34,6 +34,13 @@ test('standalone runtime initializes its environment before Tokio workers and ow
   assert.ok(source.indexOf('start_runtime(config).await') > source.indexOf('async fn run()'))
 })
 
+test('runtime PATH probing never starts an interactive login shell', async () => {
+  const source = await readFile(new URL('src-tauri/crates/backend/src/environment.rs', root), 'utf8')
+  assert.match(source, /non-interactive login shell/)
+  assert.match(source, /\["-l", "-c", "echo \$PATH"\]/)
+  assert.doesNotMatch(source, /\["-l", "-i", "-c", "echo \$PATH"\]/)
+})
+
 test('only a real dev command prebuilds; help, version and other commands remain cheap', () => {
   assert.equal(needsRuntimeBuild(['dev']), true)
   assert.equal(needsRuntimeBuild(['-v', 'dev', '--target', 'x']), true)
