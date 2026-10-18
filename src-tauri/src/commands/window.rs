@@ -428,27 +428,10 @@ pub fn get_window_always_on_top(window_label: &str) -> bool {
     crate::window::get_user_always_on_top_preference(window_label)
 }
 
-/// Quit the application
-///
-/// # Arguments
-/// - `app` - The app handle
-///
-/// Retained under its original name and signature for the existing frontend
-/// caller, but it is now the desktop's final exit helper: it no longer closes
-/// every window in a loop and no longer calls `std::process::exit`. The only
-/// terminal exit is the coordinator's once-only `app.exit`, so a direct quit and
-/// the tray-confirmed quit share one commit path.
+/// Opens the shared quit confirmation dialog for the window menu.
 #[command]
 pub fn quit_window(app: tauri::AppHandle) -> Result<()> {
-    match app.try_state::<Arc<ExitCoordinator>>() {
-        Some(coordinator) => {
-            coordinator.prepare_direct_exit();
-            crate::exit_coordinator::commit_exit(&app, coordinator.inner().as_ref());
-        }
-        // The coordinator is registered in `setup`; this only keeps a direct
-        // quit working if a command somehow arrives before it exists.
-        None => app.exit(0),
-    }
+    crate::exit_coordinator::request_quit(&app);
     Ok(())
 }
 
@@ -546,7 +529,12 @@ pub async fn quit_confirm(
     // The key is stable for one prompt, so a retry is idempotent at the runtime.
     let idempotency_key = format!("quit-stop-{nonce}");
     let report = supervisor
-        .request_forced_runtime_shutdown(&identity.instance_id, &idempotency_key, QUIT_STOP_BUDGET)
+        .request_forced_runtime_shutdown(
+            &identity.instance_id,
+            identity.pid,
+            &idempotency_key,
+            QUIT_STOP_BUDGET,
+        )
         .await;
     if let Some(operation_id) = report.operation_id.as_deref() {
         log::info!("[ExitCoordinator] runtime shutdown accepted as operation {operation_id}");

@@ -293,7 +293,7 @@ async fn handle_tray_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent
             // The tray quit entry only opens the confirmation; the coordinator
             // owns the nonce/host binding and the once-only terminal commit, so a
             // repeated click focuses the same dialog instead of quitting at once.
-            crate::exit_coordinator::request_quit_from_tray(app);
+            crate::exit_coordinator::request_quit(app);
         }
         _ => {}
     }

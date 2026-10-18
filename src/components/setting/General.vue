@@ -849,7 +849,10 @@
       <div class="item">
         <div class="label">{{ $t('settings.general.autoStart') }}</div>
         <div class="value">
-          <el-switch v-model="settings.autoStart" @change="onAutoStartChange" />
+          <el-switch
+            :model-value="isAutostartSupported && settings.autoStart"
+            :disabled="!isAutostartSupported"
+            @change="onAutoStartChange" />
         </div>
       </div>
       <div class="item">
@@ -1602,11 +1605,21 @@ const onManualUpdateClick = async () => {
   }
 }
 
+const isAutostartSupported = import.meta.env.PROD
+
 /**
- * Handles the change of auto start
+ * Handles the change of auto start.
+ *
+ * Development builds never touch the OS autostart registration: the setting is
+ * production-only so `pnpm tauri dev` cannot register a debug executable.
  * @param {boolean} value - The value of auto start
  */
 const onAutoStartChange = async value => {
+  if (!isAutostartSupported) {
+    settings.value.autoStart = false
+    return
+  }
+
   try {
     if (value) {
       await enable()

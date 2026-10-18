@@ -34,8 +34,8 @@ use chatspeed_contracts::{
     BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
 };
 use chatspeed_runtime_client::{
-    runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard, RuntimeChild,
-    RuntimeClient, RuntimeLaunchConfig, RuntimeShutdownOutcome as ClientShutdownOutcome,
+    process_alive, runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard,
+    RuntimeChild, RuntimeClient, RuntimeLaunchConfig, RuntimeShutdownOutcome as ClientShutdownOutcome,
 };
 use serde::Serialize;
 #[cfg(feature = "desktop")]
@@ -268,6 +268,14 @@ pub enum RuntimeStopOutcome {
     NotConnected,
     /// The request or the observation failed with a structured error.
     Failed,
+}
+
+fn endpoint_gone_stop_outcome(process_exited: bool) -> RuntimeStopOutcome {
+    if process_exited {
+        RuntimeStopOutcome::Confirmed
+    } else {
+        RuntimeStopOutcome::EndpointGone
+    }
 }
 
 impl RuntimeStopOutcome {
@@ -514,11 +522,29 @@ impl RuntimeSupervisor {
         self.inner.lock().await.snapshot()
     }
 
+    /// Returns whether the exact runtime process has exited.
+    ///
+    /// A runtime this desktop spawned is checked with `try_wait`, which also
+    /// reaps a just-exited child. An attached runtime uses the conservative
+    /// platform liveness probe because this process does not own its child
+    /// handle.
+    pub async fn runtime_process_exited(&self, expected_pid: u32) -> bool {
+        let mut state = self.inner.lock().await;
+        if let Some(connection) = state.connection.as_mut() {
+            if let Some(child) = connection.child.as_mut() {
+                if child.id() == expected_pid {
+                    return matches!(child.try_wait(), Ok(Some(_)));
+                }
+            }
+        }
+        !process_alive(expected_pid)
+    }
+
     /// Opens the client WebView capability bridge and starts its reader.
     ///
     /// The session is registered with the supervisor's own client id and the
-    /// opaque lease id, so the runtime resolves a live `tauri` lease itself. The
-    /// reader pulls typed work envelopes and hands each to `dispatcher`.
+    /// opaque lease id, so the runtime resolves a live `tauri` lease itself.
+    /// The reader pulls typed work envelopes and hands each to `dispatcher`.
     /// Registering twice without an intervening release is refused.
     pub async fn start_bridge(
         &self,
@@ -751,12 +777,14 @@ impl RuntimeSupervisor {
     /// never kills a successor instance.
     ///
     /// A `202 Accepted` is an acceptance, never a completion: only the status
-    /// route reporting `stopped` is [`RuntimeStopOutcome::Confirmed`]. A gone
-    /// endpoint or an elapsed budget stays unconfirmed so a crash is never
-    /// mistaken for a graceful exit.
+    /// route reporting `stopped` or a confirmed exit of the exact target PID
+    /// completes a forced stop. A gone endpoint while the PID is still alive is
+    /// kept as a failure so a transient listener failure cannot stop the desktop
+    /// from exiting against an unverified runtime.
     pub async fn request_forced_runtime_shutdown(
         &self,
         expected_instance_id: &str,
+        expected_pid: u32,
         idempotency_key: &str,
         budget: Duration,
     ) -> RuntimeStopReport {
@@ -801,12 +829,17 @@ impl RuntimeSupervisor {
                 operation_id,
                 detail: None,
             },
-            Ok(ClientShutdownOutcome::EndpointGone) => RuntimeStopReport {
-                outcome: RuntimeStopOutcome::EndpointGone,
-                instance_id,
-                operation_id,
-                detail: None,
-            },
+            Ok(ClientShutdownOutcome::EndpointGone) => {
+                let outcome = endpoint_gone_stop_outcome(
+                    self.runtime_process_exited(expected_pid).await,
+                );
+                RuntimeStopReport {
+                    outcome,
+                    instance_id,
+                    operation_id,
+                    detail: None,
+                }
+            }
             Ok(ClientShutdownOutcome::TimedOut) => RuntimeStopReport {
                 outcome: RuntimeStopOutcome::TimedOut,
                 instance_id,
@@ -1339,6 +1372,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn endpoint_gone_is_confirmed_only_after_the_target_process_exits() {
+        assert_eq!(
+            endpoint_gone_stop_outcome(true),
+            RuntimeStopOutcome::Confirmed
+        );
+        assert_eq!(
+            endpoint_gone_stop_outcome(false),
+            RuntimeStopOutcome::EndpointGone
+        );
+    }
     #[test]
     fn runtime_client_and_error_debug_do_not_leak_secrets() {
         // The encapsulated client redacts its bearer token.

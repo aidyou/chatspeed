@@ -9,6 +9,8 @@ const app = read('../../App.vue')
 const composable = read('../../composables/useQuitConfirmation.js')
 const exitCoordinator = read('../../../src-tauri/src/exit_coordinator.rs')
 const runtimeClient = read('../../../src-tauri/src/runtime_client.rs')
+const titlebar = read('../../components/window/Titlebar.vue')
+const windowCommands = read('../../../src-tauri/src/commands/window.rs')
 
 const locales = ['en', 'zh-Hans', 'zh-Hant'].map(name => ({
   name,
@@ -152,6 +154,11 @@ test('the frontend phases and error codes mirror the Rust coordinator', () => {
   }
 })
 
+test('window menu quit opens the shared confirmation instead of exiting directly', () => {
+  assert.match(titlebar, /case 'quit':[\s\S]*?invoke\('quit_window'\)/)
+  assert.match(windowCommands, /pub fn quit_window\([\s\S]*?request_quit\(&app\)/)
+  assert.doesNotMatch(windowCommands, /pub fn quit_window\([\s\S]*?app\.exit\(0\)/)
+})
 test('Rust renders no user-visible quit prose', () => {
   // The coordinator and the supervisor only publish stable codes; every message
   // the user reads is localized on the frontend, so the Rust side never reaches

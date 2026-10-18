@@ -352,19 +352,6 @@ impl ExitCoordinator {
         self.cancel(nonce, host)
     }
 
-    /// Prepares a direct (non-tray) quit for the terminal commit.
-    ///
-    /// A direct quit such as the titlebar menu has no confirmation, so it enters
-    /// the exit path directly. It is refused once a commit already ran.
-    pub fn prepare_direct_exit(&self) -> QuitTransition {
-        let mut state = self.lock();
-        if state.committed {
-            return QuitTransition::Ignored;
-        }
-        state.phase = QuitPhase::ExitingDesktop;
-        QuitTransition::Applied
-    }
-
     /// Claims the terminal commit exactly once.
     ///
     /// Allowed from the desktop-only exit and from a coordinated stop that has
@@ -407,17 +394,17 @@ fn next_nonce(counter: u64) -> String {
     format!("quit-{nanos:x}-{counter:x}")
 }
 
-/// Registers a tray quit request and publishes it to the dialog host.
+/// Registers a quit request from the tray or a window menu and publishes it to the dialog host.
 ///
 /// The workflow host window is created or focused first, then the prompt is
 /// published. A host that mounts afterwards learns about the same prompt through
-/// its own `quit_status` query, so an event emitted before its listener exists is
+/// its `quit_status` query, so an event emitted before its listener exists is
 /// never the only handshake.
-pub fn request_quit_from_tray(app: &tauri::AppHandle) {
+pub fn request_quit(app: &tauri::AppHandle) {
     let coordinator = match app.try_state::<std::sync::Arc<ExitCoordinator>>() {
         Some(state) => state.inner().clone(),
         None => {
-            log::warn!("[ExitCoordinator] tray quit requested before the coordinator was registered");
+            log::warn!("[ExitCoordinator] quit requested before the coordinator was registered");
             return;
         }
     };
@@ -616,8 +603,6 @@ mod tests {
         assert!(!coordinator.commit_once(), "the second commit is a no-op");
         assert_eq!(coordinator.phase(), QuitPhase::CommittingExit);
         assert_eq!(coordinator.request_quit(HOST), QuitRequestOutcome::Committed);
-        // A direct quit after the commit is also refused.
-        assert_eq!(coordinator.prepare_direct_exit(), QuitTransition::Ignored);
     }
 
     #[test]
@@ -659,7 +644,11 @@ mod tests {
     #[test]
     fn a_direct_quit_prepares_and_commits_once() {
         let coordinator = ExitCoordinator::new();
-        assert_eq!(coordinator.prepare_direct_exit(), QuitTransition::Applied);
+        let nonce = started_nonce(&coordinator.request_quit(HOST));
+        assert_eq!(
+            coordinator.confirm_exit_desktop(&nonce, HOST),
+            QuitTransition::Applied
+        );
         assert!(coordinator.commit_once());
         assert!(!coordinator.commit_once());
     }

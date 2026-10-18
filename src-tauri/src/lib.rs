@@ -98,6 +98,7 @@ use std::time::Instant;
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::Manager;
 use tauri::PhysicalSize;
+#[cfg(not(debug_assertions))]
 use tauri_plugin_autostart::ManagerExt;
 
 // use commands::toolbar::*;
@@ -246,11 +247,13 @@ fn hide_then_destroy_window(window: &tauri::Window) {
 }
 
 pub async fn run() -> crate::error::Result<()> {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None::<Vec<&str>>,
-        ))
+    let builder = tauri::Builder::default();
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None::<Vec<&str>>,
+    ));
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -1072,24 +1075,30 @@ async fn apply_runtime_startup_config(
     set_locale(&user_lang);
     log::info!("Set interface language to {}", user_lang);
 
+    #[cfg(debug_assertions)]
+    let _ = app;
+
     // Reconcile the OS-managed autostart registration with the stored preference.
-    let auto_start = snapshot.get_bool(CFG_AUTO_START, false);
-    let autolaunch = app.autolaunch();
-    match autolaunch.is_enabled() {
-        Ok(is_enabled) if auto_start != is_enabled => {
-            let result = if auto_start {
-                autolaunch.enable()
-            } else {
-                autolaunch.disable()
-            };
-            if let Err(e) = result {
-                log::error!("Failed to synchronize autostart registration: {}", e);
-            } else {
-                log::info!("Autostart registration synchronized: {}", auto_start);
+    #[cfg(not(debug_assertions))]
+    {
+        let auto_start = snapshot.get_bool(CFG_AUTO_START, false);
+        let autolaunch = app.autolaunch();
+        match autolaunch.is_enabled() {
+            Ok(is_enabled) if auto_start != is_enabled => {
+                let result = if auto_start {
+                    autolaunch.enable()
+                } else {
+                    autolaunch.disable()
+                };
+                if let Err(e) = result {
+                    log::error!("Failed to synchronize autostart registration: {}", e);
+                } else {
+                    log::info!("Autostart registration synchronized: {}", auto_start);
+                }
             }
+            Ok(_) => {}
+            Err(e) => log::error!("Failed to read autostart registration: {}", e),
         }
-        Ok(_) => {}
-        Err(e) => log::error!("Failed to read autostart registration: {}", e),
     }
 
     // Mirror the idle-sleep inhibitor preference.
