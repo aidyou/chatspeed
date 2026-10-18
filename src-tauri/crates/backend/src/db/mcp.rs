@@ -53,10 +53,9 @@ impl MainStore {
 
             let config: McpServerConfig = serde_json::from_str(&config_json).map_err(|e| {
                 log::error!(
-                    "Failed to parse MCP config JSON for MCP (id: {} name: {}): {}, error: {}",
+                    "Failed to parse MCP config JSON for MCP (id: {} name: {}): error: {}",
                     id,
                     name,
-                    config_json,
                     e
                 );
                 StoreError::JsonError(

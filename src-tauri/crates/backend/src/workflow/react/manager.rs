@@ -134,15 +134,21 @@ impl WorkflowManager {
         session_id: &str,
         updated_at_ms: i64,
     ) -> Option<ManagedSession> {
-        if let Some(session) = self.sessions.get(session_id) {
-            if session.updated_at_ms != updated_at_ms {
-                return None;
-            }
-        } else {
-            return None;
-        }
+        let removed = self.sessions.remove_if(session_id, |_, session| {
+            matches!(session.status, ManagedSessionStatus::Completed)
+                && session.updated_at_ms == updated_at_ms
+        });
 
-        self.remove_session(session_id)
+        if let Some((_, session)) = removed {
+            log::info!(
+                "[WorkflowManager][session={}][event=session_removed] Session removed, was in status {:?}",
+                session_id,
+                session.status
+            );
+            Some(session)
+        } else {
+            None
+        }
     }
 
     pub fn has_session(&self, session_id: &str) -> bool {
@@ -708,8 +714,12 @@ mod tests {
             .is_none());
         assert!(manager.has_session("test-session-1"));
 
+        assert!(manager.update_session_status("test-session-1", ManagedSessionStatus::Completed));
+        let completed_updated_at = manager
+            .get_session_updated_at_ms("test-session-1")
+            .expect("completed updated_at should exist");
         assert!(manager
-            .remove_session_if_updated_matches("test-session-1", refreshed_updated_at)
+            .remove_session_if_updated_matches("test-session-1", completed_updated_at)
             .is_some());
         assert!(!manager.has_session("test-session-1"));
     }

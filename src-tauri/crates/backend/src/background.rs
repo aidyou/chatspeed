@@ -70,8 +70,15 @@ impl RuntimeBackground {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let handles = vec![
-            spawn_capability_reconcile(owner.service().capability().clone()),
-            spawn_mcp_registration(owner.chat_state().clone(), owner.main_store().clone()),
+            spawn_capability_reconcile(
+                owner.service().capability().clone(),
+                shutdown_rx.clone(),
+            ),
+            spawn_mcp_registration(
+                owner.chat_state().clone(),
+                owner.main_store().clone(),
+                shutdown_rx.clone(),
+            ),
             spawn_automation_scheduler(owner.service().clone(), shutdown_rx.clone(), gate),
             spawn_models_dev_catalog_refresh(
                 owner.service().catalog().clone(),
@@ -120,22 +127,32 @@ impl RuntimeBackground {
 /// Runs one evidence-driven reconcile pass, mirroring the desktop's post-boot
 /// convergence. Anything it cannot prove is left as `needs_reconcile` rather
 /// than blind-retried.
-fn spawn_capability_reconcile(capability: Arc<CapabilityApplicationService>) -> JoinHandle<()> {
+fn spawn_capability_reconcile(
+    capability: Arc<CapabilityApplicationService>,
+    mut shutdown: watch::Receiver<bool>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        match capability.reconcile().await {
-            Ok(report) if !report.is_noop() => log::info!(
-                "[Runtime][capability][reconcile] converged {} quarantine(s), {} install(s), {} mcp effect(s), removed {} staging residue, left {} needing reconcile",
-                report.quarantines_finalized.len(),
-                report.installs_recovered.len(),
-                report.mcp_effects_recovered.len(),
-                report.staging_residue_removed,
-                report.still_needs_reconcile.len()
-            ),
-            Ok(_) => {}
-            Err(error) => log::error!(
-                "[Runtime][capability][reconcile] startup reconcile failed: {}",
-                error.redacted_message()
-            ),
+        tokio::select! {
+            result = capability.reconcile() => match result {
+                Ok(report) if !report.is_noop() => log::info!(
+                    "[Runtime][capability][reconcile] converged {} quarantine(s), {} install(s), {} mcp effect(s), removed {} staging residue, left {} needing reconcile",
+                    report.quarantines_finalized.len(),
+                    report.installs_recovered.len(),
+                    report.mcp_effects_recovered.len(),
+                    report.staging_residue_removed,
+                    report.still_needs_reconcile.len()
+                ),
+                Ok(_) => {}
+                Err(error) => log::error!(
+                    "[Runtime][capability][reconcile] startup reconcile failed: {}",
+                    error.redacted_message()
+                ),
+            },
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    log::debug!("[Runtime][capability][reconcile] shutdown requested");
+                }
+            }
         }
     })
 }
@@ -146,15 +163,23 @@ fn spawn_capability_reconcile(capability: Arc<CapabilityApplicationService>) -> 
 fn spawn_mcp_registration(
     chat_state: Arc<ChatState>,
     main_store: Arc<MainStore>,
+    mut shutdown: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(error) = chat_state
-            .tool_manager
-            .clone()
-            .register_available_mcp_tools(main_store)
-            .await
-        {
-            log::error!("[Runtime][mcp] failed to register configured MCP servers: {error}");
+        tokio::select! {
+            result = chat_state
+                .tool_manager
+                .clone()
+                .register_available_mcp_tools(main_store) => {
+                    if let Err(error) = result {
+                        log::error!("[Runtime][mcp] failed to register configured MCP servers: {error}");
+                    }
+                }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    log::debug!("[Runtime][mcp] shutdown requested");
+                }
+            }
         }
     })
 }

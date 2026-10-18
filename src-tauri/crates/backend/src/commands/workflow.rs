@@ -3379,22 +3379,6 @@ fn schedule_completed_session_cleanup(
         ))
         .await;
 
-        let should_cleanup = matches!(
-            workflow_manager.get_session_status(&session_id),
-            Some(ManagedSessionStatus::Completed)
-        ) && workflow_manager
-            .get_session_updated_at_ms(&session_id)
-            .is_some_and(|current_updated_at| current_updated_at == completed_at_ms);
-
-        if !should_cleanup {
-            return;
-        }
-
-        log::info!(
-            "[Workflow][session={}][phase=cleanup] Completed-session grace period elapsed; removing inactive completed session",
-            session_id
-        );
-
         let removed =
             workflow_manager.remove_session_if_updated_matches(&session_id, completed_at_ms);
         if removed.is_some() {

@@ -51,10 +51,11 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
     log::debug!("Step 1: Trying system utilities...");
     #[cfg(target_family = "unix")]
     {
-        let cmd_to_exec = format!("command -v {}", command_name);
-        log::debug!("Step 1 (Unix): Executing sh -c \"{}\"", cmd_to_exec);
         let mut cmd = TokioCommand::new("sh");
-        cmd.arg("-c").arg(&cmd_to_exec);
+        cmd.arg("-c")
+            .arg("command -v \"$1\"")
+            .arg("chatspeed")
+            .arg(command_name);
 
         // Ensure no window is created on Windows (if cross-compiling)
         #[cfg(windows)]
@@ -65,8 +66,7 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
         match cmd.output().await {
             Ok(output) => {
                 log::debug!(
-                    "Step 1 (Unix) sh -c \"{}\" | Status: {:?}, STDOUT: \"{}\", STDERR: \"{}\"",
-                    cmd_to_exec,
+                    "Step 1 (Unix) command -v lookup | Status: {:?}, STDOUT: \"{}\", STDERR: \"{}\"",
                     output.status,
                     String::from_utf8_lossy(&output.stdout).trim(),
                     String::from_utf8_lossy(&output.stderr).trim()
@@ -99,11 +99,7 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
                 }
             }
             Err(e) => {
-                log::warn!(
-                    "Step 1 (Unix): Failed to execute sh -c \"{}\": {}",
-                    cmd_to_exec,
-                    e
-                );
+                log::warn!("Step 1 (Unix): Failed to execute command lookup: {}", e);
             }
         }
     }
@@ -230,20 +226,19 @@ pub async fn find_executable_in_common_paths(command_name: &str) -> Option<PathB
     {
         let shells = vec!["zsh", "bash", "fish", "ksh", "sh"];
         for shell in shells {
-            // Modified command to also print the PATH inside the shell
-            // The single quotes here are for the shell command string construction, not Rust's log macro.
-            let command_to_run_in_shell = format!(
-                "echo \"Attempting to find '{}' with shell '{}'\"; echo \"SHELL_PATH_START\"; echo \"$PATH\"; echo \"SHELL_PATH_END\"; command -v {} 2>/dev/null",
-                command_name, shell, command_name
-            );
+            let command_to_run_in_shell =
+                "echo \"SHELL_PATH_START\"; echo \"$PATH\"; echo \"SHELL_PATH_END\"; command -v \"$1\" 2>/dev/null";
             log::debug!(
-                "Step 4: Trying shell {} with: {} -l -c \"{}\"",
-                shell,
-                shell,
-                command_to_run_in_shell
+                "Step 4: Trying shell {} with an argument-safe command lookup",
+                shell
             );
             let mut command = TokioCommand::new(shell);
-            command.arg("-l").arg("-c").arg(&command_to_run_in_shell);
+            command
+                .arg("-l")
+                .arg("-c")
+                .arg(&command_to_run_in_shell)
+                .arg("chatspeed")
+                .arg(command_name);
 
             // Ensure no window is created on Windows (if cross-compiling)
             #[cfg(windows)]

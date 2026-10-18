@@ -27,6 +27,9 @@ use super::StoreError;
 
 const FORMAT_VERSION: u32 = 1;
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+const MCP_COMMAND_SHELL_METACHARACTERS: &[char] = &[
+    ' ', '\t', '\n', ';', '&', '|', '<', '>', '$', '`', '\\',
+];
 
 pub const AI_CONFIG_KEYS: &[&str] = &[
     "conversation_title_gen_model",
@@ -833,6 +836,23 @@ fn validate_mcp_config(value: &Value) -> Result<(), StoreError> {
                 )));
             }
         }
+    }
+    if let Some(command) = object.get("command").and_then(Value::as_str) {
+        if command.contains(MCP_COMMAND_SHELL_METACHARACTERS) {
+            return Err(StoreError::InvalidData(
+                "MCP stdio command must be one executable path or program name".into(),
+            ));
+        }
+    }
+    if object.get("type").and_then(Value::as_str) == Some("stdio")
+        && !object
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| !command.trim().is_empty())
+    {
+        return Err(StoreError::InvalidData(
+            "MCP stdio config requires a non-empty command".into(),
+        ));
     }
     for field in ["args", "disabled_tools"] {
         if let Some(value) = object.get(field) {
@@ -1839,6 +1859,27 @@ mod tests {
     }
 
     #[test]
+    fn mcp_stdio_commands_reject_shell_fragments() {
+        assert!(validate_mcp_config(&serde_json::json!({
+            "name": "server",
+            "type": "stdio",
+            "command": "server; touch /tmp/should-not-run"
+        }))
+        .is_err());
+        assert!(validate_mcp_config(&serde_json::json!({
+            "name": "server",
+            "type": "stdio"
+        }))
+        .is_err());
+        assert!(validate_mcp_config(&serde_json::json!({
+            "name": "server",
+            "type": "stdio",
+            "command": "server"
+        }))
+        .is_ok());
+    }
+
+    #[test]
     fn config_contract_rejects_malformed_values_but_allows_stale_references() {
         assert!(validate_model_selection(
             &serde_json::json!({ "id": "7", "model": "gpt" }),
@@ -2832,7 +2873,7 @@ mod tests {
                     ("description".into(), Value::from("MCP")),
                     (
                         "config".into(),
-                        Value::from(r#"{"name":"server","type":"stdio"}"#),
+                        Value::from(r#"{"name":"server","type":"stdio","command":"server"}"#),
                     ),
                 ])],
                 config: BTreeMap::new(),
