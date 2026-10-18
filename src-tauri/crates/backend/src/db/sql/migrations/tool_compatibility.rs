@@ -1,6 +1,9 @@
 use crate::db::StoreError;
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Transaction};
+#[cfg(test)]
+use rusqlite::Connection;
 use serde_json::Value;
+#[cfg(test)]
 use std::collections::HashSet;
 
 const LEGACY_GLOB_TOOL: &str = "glob";
@@ -12,6 +15,7 @@ const MIGRATION_BATCH_SIZE: i64 = 500;
 ///
 /// A plain string REPLACE cannot be used here because it would leave duplicates
 /// such as `["grep","grep"]` behind. Returns `true` when the array changed.
+#[cfg(test)]
 fn rewrite_tool_id_array(array: &mut Value) -> bool {
     let Some(items) = array.as_array_mut() else {
         return false;
@@ -55,6 +59,7 @@ fn rewrite_tool_id_array(array: &mut Value) -> bool {
 /// Rewrites a stored tool-id array (for example `agents.available_tools`) and
 /// returns the new JSON text when it changed. Unparsable or non-array values are
 /// left alone so a single bad row never aborts the migration.
+#[cfg(test)]
 fn rewrite_tool_ids_json(raw: &str) -> Option<String> {
     let mut value: Value = serde_json::from_str(raw).ok()?;
     if !rewrite_tool_id_array(&mut value) {
@@ -66,6 +71,7 @@ fn rewrite_tool_ids_json(raw: &str) -> Option<String> {
 /// Rewrites `availableTools` / `autoApprove` inside an `agent_config` object and
 /// returns the new JSON text when it changed. Every other key, including
 /// `shellPolicy`, is preserved.
+#[cfg(test)]
 fn rewrite_agent_config_json(raw: &str) -> Option<String> {
     let mut value: Value = serde_json::from_str(raw).ok()?;
     let Some(object) = value.as_object_mut() else {
@@ -88,6 +94,7 @@ fn rewrite_agent_config_json(raw: &str) -> Option<String> {
     serde_json::to_string(&value).ok()
 }
 
+#[cfg(test)]
 fn ensure_agent_tool_columns(conn: &Connection) -> Result<(), StoreError> {
     let rows = {
         let mut statement =
@@ -121,6 +128,7 @@ fn ensure_agent_tool_columns(conn: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_agent_config_columns(conn: &Connection, table: &str) -> Result<(), StoreError> {
     let mut last_rowid = 0_i64;
     loop {
@@ -155,6 +163,7 @@ fn ensure_agent_config_columns(conn: &Connection, table: &str) -> Result<(), Sto
 /// The ensure pass runs on every startup for versions in range, so it only
 /// checks tool settings and workflow config columns. Transcript and event
 /// scans live in `apply`, which runs once when a database crosses version 22.
+#[cfg(test)]
 pub(crate) fn ensure_v22_data(conn: &Connection) -> Result<(), StoreError> {
     ensure_agent_tool_columns(conn)?;
     ensure_agent_config_columns(conn, "workflows")?;

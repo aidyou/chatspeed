@@ -43,10 +43,10 @@ cs:
   skill_targets_header: Skill 安装目标
   skill_uninstall_header: Skill 卸载
   workflow_created: 'Workflow 已创建：%{session_id}'
+  workflow_follow_detached: 已退出跟随；workflow 仍在 ChatSpeed 中继续运行
+  workflow_signal_sent: '信号已送达 %{session_id}'
   workflow_started: 'Workflow 已启动：%{session_id}'
   workflow_stopped: 'Workflow 已停止：%{session_id}'
-  workflow_signal_sent: '信号已送达 %{session_id}'
-  workflow_follow_detached: 已退出跟随；workflow 仍在 ChatSpeed 中继续运行
 command:
   clipboard:
     failed_to_initialize: '初始化剪贴板失败: %{error}'
@@ -346,7 +346,6 @@ workflow:
     verification_not_run: 测试尚未运行|测试未运行|未运行测试|未测试|尚未测试|未验证|没有验证
     verification_passed: 测试通过|测试全部通过|全部测试通过|验证通过|测试成功|验证成功|已验证
   compression_in_progress: 上下文压缩中，请稍后...
-  manual_compression_unavailable: 当前没有可安全压缩的上下文片段
   dependency_not_found: 节点 '%{node_id}' 依赖的节点 '%{id}' 不存在
   duplicate_node_id: '重复的节点ID: %{id}'
   edge_reference_missing: '边引用不存在: %{from} -> %{to}'
@@ -375,6 +374,7 @@ workflow:
   invalid_workflow_json: '无效的工作流配置: %{error}'
   json_path_not_found: 'Json路径未找到: %{path}'
   left_value_not_number: 左值不是数字类型
+  manual_compression_unavailable: 当前没有可安全压缩的上下文片段
   nested_group: 嵌套组不允许：组 '%{id}' 内不能包含其他组
   node_output_not_found: '找不到节点 ''%{node_id}'' 的输出，路径: %{path}'
   not_bool_value: 值不是布尔类型

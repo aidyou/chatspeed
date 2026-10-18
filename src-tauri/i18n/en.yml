@@ -43,10 +43,10 @@ cs:
   skill_targets_header: Skill install targets
   skill_uninstall_header: Skill uninstall
   workflow_created: 'Workflow created: %{session_id}'
+  workflow_follow_detached: Follow detached; the workflow keeps running in ChatSpeed
+  workflow_signal_sent: 'Signal delivered to %{session_id}'
   workflow_started: 'Workflow started: %{session_id}'
   workflow_stopped: 'Workflow stopped: %{session_id}'
-  workflow_signal_sent: 'Signal delivered to %{session_id}'
-  workflow_follow_detached: Follow detached; the workflow keeps running in ChatSpeed
 command:
   clipboard:
     failed_to_initialize: 'Failed to initialize clipboard: %{error}'
@@ -353,7 +353,6 @@ workflow:
     verification_not_run: tests were not run|tests not run|test was not run|not tested|verification was not run|not verified|unverified
     verification_passed: tests passed|test passed|all tests pass|verification passed|verification succeeded|verified successfully
   compression_in_progress: Compressing context...
-  manual_compression_unavailable: No safe context segment is available to compress yet
   dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
   duplicate_node_id: 'Duplicate node ID: %{id}'
   edge_reference_missing: 'Edge reference does not exist: %{from} -> %{to}'
@@ -384,6 +383,7 @@ workflow:
   invalid_workflow_json: 'Invalid workflow configuration: %{error}'
   json_path_not_found: 'JSON path not found: %{path}'
   left_value_not_number: Left value is not number type
+  manual_compression_unavailable: No safe context segment is available to compress yet
   nested_group: 'Nested groups not allowed: group ''%{id}'' cannot contain other groups'
   node_output_not_found: 'Cannot find output of node ''%{node_id}'', path: %{path}'
   not_bool_value: Value is not boolean type

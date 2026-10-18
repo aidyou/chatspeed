@@ -404,7 +404,7 @@ impl ClientBridgeRegistry {
         let session = state
             .sessions
             .get_mut(session_id)
-            .expect("authorized session exists");
+            .ok_or_else(|| BridgeError::Unavailable("no live bridge session".to_string()))?;
         session
             .work_rx
             .take()
@@ -486,7 +486,7 @@ impl ClientBridgeRegistry {
         let session = state
             .sessions
             .get_mut(session_id)
-            .expect("authorized session exists");
+            .ok_or_else(|| BridgeError::Unavailable("no live bridge session".to_string()))?;
         let waiter = session
             .in_flight
             .remove(&result.request_id)

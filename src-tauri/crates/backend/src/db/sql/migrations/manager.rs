@@ -40,6 +40,7 @@ fn latest_schema_statements() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Executes a given set of SQL statements within a transaction and updates the db version.
+#[cfg(test)]
 fn execute_migration_statements<I>(
     conn: &mut Connection,
     sql_statements: I,
@@ -63,6 +64,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 fn execute_migration(
     conn: &mut Connection,
     migration: &MigrationDefinition,
@@ -82,7 +84,7 @@ fn execute_migration(
     Ok(())
 }
 
-fn run_post_migration_ensures(
+fn run_post_migration_ensures_in_transaction(
     conn: &Connection,
     current_version: i32,
     minimum_version: i32,
@@ -95,6 +97,68 @@ fn run_post_migration_ensures(
         }
     }
 
+    Ok(())
+}
+
+fn run_post_migration_ensures(
+    conn: &mut Connection,
+    current_version: i32,
+    minimum_version: i32,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    run_post_migration_ensures_in_transaction(&tx, current_version, minimum_version)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn execute_fresh_install(
+    conn: &mut Connection,
+    latest_version: i32,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    for (_name, sql) in latest_schema_statements() {
+        tx.execute(sql, [])?;
+    }
+    for migration in MIGRATIONS {
+        if let Some(apply) = migration.apply {
+            apply(&tx)?;
+        }
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO db_version (version) VALUES (?1)",
+        [latest_version],
+    )?;
+    run_post_migration_ensures_in_transaction(&tx, latest_version, 0)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn execute_pending_migrations(
+    conn: &mut Connection,
+    migrations: &[&MigrationDefinition],
+    current_version: i32,
+    final_version: i32,
+) -> Result<(), StoreError> {
+    let tx = conn.transaction()?;
+    for migration in migrations {
+        log::info!(
+            "Applying migration version {}... ({})",
+            migration.version,
+            migration.description
+        );
+        for (_name, sql) in migration.sql {
+            tx.execute(sql, [])?;
+        }
+        if let Some(apply) = migration.apply {
+            apply(&tx)?;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO db_version (version) VALUES (?1)",
+            [migration.version],
+        )?;
+    }
+    run_post_migration_ensures_in_transaction(&tx, final_version, current_version)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -130,14 +194,13 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             "Database not initialized. Installing latest schema at version {}...",
             latest_version
         );
-        execute_migration_statements(conn, latest_schema_statements(), latest_version)?;
+        execute_fresh_install(conn, latest_version)?;
         current_version = get_db_version(conn)?;
         log::info!(
             "Fresh database installation complete at v{}.",
             current_version
         );
 
-        run_post_migration_ensures(conn, current_version, 0)?;
         return Ok(());
     }
 
@@ -146,7 +209,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
             "Database is already up to date at version {}.",
             current_version
         );
-        run_post_migration_ensures(conn, current_version, current_version)?;
+        run_post_migration_ensures(conn, current_version, 15)?;
         return Ok(());
     }
 
@@ -176,22 +239,15 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), StoreError> {
         .collect();
     pending_migrations.sort_by_key(|m| m.version);
 
-    // Execute all pending migrations in order.
-    for migration in pending_migrations {
-        log::info!(
-            "Applying migration version {}... ({})",
-            migration.version,
-            migration.description
-        );
-        execute_migration(conn, migration)?;
-        log::info!(
-            "Successfully applied migration version {}.",
-            migration.version
-        );
-    }
-
-    let final_version = get_db_version(conn)?;
-    run_post_migration_ensures(conn, final_version, current_version)?;
+    let final_version = pending_migrations
+        .last()
+        .map_or(current_version, |migration| migration.version);
+    execute_pending_migrations(
+        conn,
+        &pending_migrations,
+        current_version,
+        final_version,
+    )?;
     log::info!(
         "All migrations applied. Database is now at version {}.",
         final_version

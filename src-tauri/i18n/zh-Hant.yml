@@ -43,10 +43,10 @@ cs:
   skill_targets_header: Skill 安裝目標
   skill_uninstall_header: Skill 卸載
   workflow_created: 'Workflow 已建立：%{session_id}'
+  workflow_follow_detached: 已退出跟隨；workflow 仍在 ChatSpeed 中繼續執行
+  workflow_signal_sent: '訊號已送達 %{session_id}'
   workflow_started: 'Workflow 已啟動：%{session_id}'
   workflow_stopped: 'Workflow 已停止：%{session_id}'
-  workflow_signal_sent: '訊號已送達 %{session_id}'
-  workflow_follow_detached: 已退出跟隨；workflow 仍在 ChatSpeed 中繼續執行
 command:
   clipboard:
     failed_to_initialize: 初始化剪貼簿失敗：%{error}
@@ -346,7 +346,6 @@ workflow:
     verification_not_run: 測試尚未執行|測試未執行|未執行測試|未測試|尚未測試|未驗證|沒有驗證
     verification_passed: 測試通過|測試全部通過|全部測試通過|驗證通過|測試成功|驗證成功|已驗證
   compression_in_progress: 上下文壓縮中，請稍後...
-  manual_compression_unavailable: 目前沒有可安全壓縮的上下文片段
   dependency_not_found: 節點 '%{node_id}' 相依的節點 '%{id}' 不存在
   duplicate_node_id: '重複的節點 ID: %{id}'
   edge_reference_missing: 邊參考不存在：%{from} -> %{to}
@@ -375,6 +374,7 @@ workflow:
   invalid_workflow_json: 無效的工作流程配置：%{error}
   json_path_not_found: Json 路徑未找到：%{path}
   left_value_not_number: 左值不是數字類型
+  manual_compression_unavailable: 目前沒有可安全壓縮的上下文片段
   nested_group: 不允許巢狀群組：群組 '%{id}' 內不能包含其他群組
   node_output_not_found: 找不到節點 '%{node_id}' 的輸出，路徑：%{path}
   not_bool_value: 值不是布林類型

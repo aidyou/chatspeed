@@ -1,7 +1,6 @@
 use super::automation_schema::ensure_automation_concurrency_schema;
 use super::capability_schema::ensure_capability_journal;
 use super::common::{column_exists, MigrationDefinition};
-use super::tool_compatibility::ensure_v22_data;
 use crate::db::StoreError;
 use rusqlite::{Connection, Transaction};
 
@@ -184,12 +183,6 @@ fn ensure_chat_hub_table(conn: &Connection) -> Result<(), StoreError> {
         && table_exists(conn, "workflow_automation_runs")?
     {
         ensure_automation_concurrency_schema(conn)?;
-    }
-    if table_exists(conn, "agents")?
-        && table_exists(conn, "workflows")?
-        && table_exists(conn, "workflow_automations")?
-    {
-        ensure_v22_data(conn)?;
     }
     if agents_exists && !column_exists(conn, "agents", "task_tracking_enabled")? {
         conn.execute(

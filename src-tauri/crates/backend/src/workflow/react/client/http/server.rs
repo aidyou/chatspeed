@@ -145,11 +145,25 @@ pub(crate) struct IdempotencyTracker {
 }
 
 impl IdempotencyTracker {
+    fn lock_in_flight(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<InFlightReservation>>> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_done(&self) -> std::sync::MutexGuard<'_, LruCache<String, DoneEntry>> {
+        self.done
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub(crate) fn new(done_capacity: usize) -> Self {
         Self {
             in_flight: std::sync::Mutex::new(HashMap::new()),
             done: std::sync::Mutex::new(LruCache::new(
-                NonZeroUsize::new(done_capacity).expect("non-zero"),
+                NonZeroUsize::new(done_capacity).unwrap_or(NonZeroUsize::MIN),
             )),
             done_max_bytes: IDEMPOTENCY_CACHE_MAX_BYTES,
         }
@@ -162,7 +176,7 @@ impl IdempotencyTracker {
     /// under that lock; `complete` never holds both locks at once, so the
     /// nesting order (`in_flight` → `done`) cannot deadlock.
     pub(crate) fn reserve(&self, key: &str, body_hash: u64) -> Reservation {
-        let mut in_flight = self.in_flight.lock().unwrap();
+        let mut in_flight = self.lock_in_flight();
         if let Some(existing) = in_flight.get(key).cloned() {
             if existing.body_hash != body_hash {
                 return Reservation::Conflict;
@@ -171,7 +185,7 @@ impl IdempotencyTracker {
         }
 
         {
-            let mut done = self.done.lock().unwrap();
+            let mut done = self.lock_done();
             if let Some(entry) = done.get(key) {
                 if entry.body_hash == body_hash {
                     return Reservation::Replay(entry.result.clone());
@@ -202,7 +216,7 @@ impl IdempotencyTracker {
         done: IdempotencyDone,
     ) {
         {
-            let mut cache = self.done.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut cache = self.lock_done();
             let mut retained_bytes: usize =
                 cache.iter().map(|(_, entry)| entry.result.body.len()).sum();
             while retained_bytes + done.body.len() > self.done_max_bytes {
@@ -245,7 +259,7 @@ impl IdempotencyTracker {
     }
 
     fn release(&self, key: &str, reservation: &Arc<InFlightReservation>) {
-        let mut in_flight = self.in_flight.lock().unwrap();
+        let mut in_flight = self.lock_in_flight();
         if in_flight
             .get(key)
             .map(|current| Arc::ptr_eq(current, reservation))
