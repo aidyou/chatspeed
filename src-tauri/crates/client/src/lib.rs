@@ -43,6 +43,7 @@ pub use paths::{
     build_profile, dev_app_data_dir, production_app_data_dir, resolve_launch_config,
     sandbox_launch_config, BuildProfile, LaunchConfigError, RuntimeLaunchConfig, DB_FILE_NAME,
     LEGACY_HOME_ENV, RUNTIME_APP_DATA_DIR_ENV, RUNTIME_DB_ENV, RUNTIME_DIR_ENV,
+    RUNTIME_RESOURCE_DIR_ENV,
 };
 
 /// Serializes tests that mutate the process environment so path resolution and
@@ -156,10 +157,11 @@ pub fn spawn_runtime(runtime_dir: &Path) -> Result<RuntimeChild, ClientError> {
 ///
 /// All three paths are passed explicitly (`CHATSPEED_RUNTIME_DIR`,
 /// `CHATSPEED_RUNTIME_DB`, `CHATSPEED_RUNTIME_APP_DATA_DIR`) and the legacy
-/// `CHATSPEED_HOME` is removed, so an inherited environment can never redirect
-/// the child to a different runtime directory, database or profile. A release
-/// runtime binary started by a debug client therefore still serves the
-/// development paths the client resolved.
+/// `CHATSPEED_HOME` is removed. When the caller resolved bundled assets, the
+/// resource directory is passed through `CHATSPEED_RUNTIME_RESOURCE_DIR` too,
+/// so a cross-profile or sidecar spawn cannot lose built-in skills and agents.
+/// An inherited resource override is removed when the config has no explicit
+/// resource directory.
 pub fn spawn_runtime_with_config(
     config: &RuntimeLaunchConfig,
 ) -> Result<RuntimeChild, ClientError> {
@@ -180,21 +182,25 @@ pub fn spawn_runtime_with_config(
     let stderr = Stdio::piped();
     #[cfg(not(test))]
     let stderr = Stdio::null();
-    let child = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .env(RUNTIME_DIR_ENV, config.runtime_dir())
         .env(RUNTIME_DB_ENV, config.db_path())
         .env(RUNTIME_APP_DATA_DIR_ENV, config.app_data_dir())
+        .env_remove(RUNTIME_RESOURCE_DIR_ENV)
         .env_remove(LEGACY_HOME_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(stderr)
-        .spawn()
-        .map_err(|error| {
-            ClientError::Transport(format!(
-                "cannot start runtime {}: {error}",
-                binary.display()
-            ))
-        })?;
+        .stderr(stderr);
+    if let Some(resource_dir) = config.resource_dir() {
+        command.env(RUNTIME_RESOURCE_DIR_ENV, resource_dir);
+    }
+    let child = command.spawn().map_err(|error| {
+        ClientError::Transport(format!(
+            "cannot start runtime {}: {error}",
+            binary.display()
+        ))
+    })?;
     Ok(RuntimeChild { child, exit: None })
 }
 
@@ -3964,15 +3970,18 @@ mod tests {
 
         let original_bin = std::env::var_os(RUNTIME_BINARY_ENV);
         let original_home = std::env::var_os(LEGACY_HOME_ENV);
+        let original_resource = std::env::var_os(RUNTIME_RESOURCE_DIR_ENV);
         std::env::set_var(RUNTIME_BINARY_ENV, &script);
-        // An inherited legacy home must not survive into the child.
+        // Inherited overrides must not redirect a typed spawn.
         std::env::set_var(LEGACY_HOME_ENV, "/inherited-home");
+        std::env::set_var(RUNTIME_RESOURCE_DIR_ENV, "/inherited-assets");
 
         let config = RuntimeLaunchConfig::new(
             "/typed/runtime",
             "/typed/profile/chatspeed.db",
             "/typed/app-data",
-        );
+        )
+        .with_resource_dir("/typed/assets");
         let mut child = spawn_runtime_with_config(&config).expect("spawn");
         loop {
             if child.try_wait().expect("try_wait").is_some() {
@@ -4001,6 +4010,18 @@ mod tests {
             "{env_dump}"
         );
         assert!(
+            env_dump
+                .lines()
+                .any(|line| line == "CHATSPEED_RUNTIME_RESOURCE_DIR=/typed/assets"),
+            "{env_dump}"
+        );
+        assert!(
+            !env_dump
+                .lines()
+                .any(|line| line == "CHATSPEED_RUNTIME_RESOURCE_DIR=/inherited-assets"),
+            "the inherited resource directory must be replaced: {env_dump}"
+        );
+        assert!(
             !env_dump
                 .lines()
                 .any(|line| line.starts_with("CHATSPEED_HOME=")),
@@ -4009,6 +4030,7 @@ mod tests {
 
         restore_env(RUNTIME_BINARY_ENV, original_bin);
         restore_env(LEGACY_HOME_ENV, original_home);
+        restore_env(RUNTIME_RESOURCE_DIR_ENV, original_resource);
         drop(child);
     }
 

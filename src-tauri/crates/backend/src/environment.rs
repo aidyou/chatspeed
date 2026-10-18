@@ -1,8 +1,13 @@
 use std::env;
+use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 /// A shell executable that can safely be offered to the workflow terminal UI.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,23 +79,150 @@ fn get_shell_path() -> Option<String> {
     ];
 
     for (shell, args) in methods {
-        let mut command = Command::new(shell);
-        command.args(&args);
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-        if let Ok(output) = command.output() {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() && path != "%PATH%" {
-                    return Some(path);
-                }
+        if let Some(path) = run_path_probe(shell, &args) {
+            if path != "%PATH%" {
+                return Some(path);
             }
         }
     }
     None
 }
 
-/// Shell candidates used by the non-interactive PATH probe.
+const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const PATH_PROBE_OUTPUT_LIMIT: usize = 64 * 1024;
+
+fn terminate_probe(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
+fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
+    let mut command = Command::new(shell);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = stdout.take(PATH_PROBE_OUTPUT_LIMIT as u64).read_to_end(&mut output);
+        let _ = output_tx.send(output);
+    });
+
+    let deadline = Instant::now() + PATH_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = output_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .ok()?;
+                if !status.success() || output.is_empty() {
+                    return None;
+                }
+                let path = String::from_utf8_lossy(&output).trim().to_string();
+                return (!path.is_empty()).then_some(path);
+            }
+            Ok(None) if Instant::now() < deadline => sleep(Duration::from_millis(10)),
+            Ok(None) | Err(_) => {
+                terminate_probe(&mut child);
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn user_tool_paths() -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    let mut paths = Vec::new();
+    if let Some(home) = &home {
+        let cargo_home = env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cargo"));
+        paths.push(cargo_home.join("bin"));
+        paths.push(home.join(".local/bin"));
+        paths.push(home.join(".bun/bin"));
+    }
+
+    #[cfg(windows)]
+    if let Some(home) = home {
+        paths.push(home.join("AppData/Roaming/npm"));
+        paths.push(home.join("AppData/Local/pnpm"));
+        paths.push(home.join(".bun/bin"));
+
+        for path in [
+            env::var_os("APPDATA").map(PathBuf::from),
+            env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            env::var_os("PNPM_HOME").map(PathBuf::from),
+            env::var_os("NPM_CONFIG_PREFIX")
+                .map(PathBuf::from)
+                .map(|path| path.join("bin")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            paths.push(path);
+        }
+
+        let mut roots = vec![home.join("AppData/Local/fnm"), home.join(".fnm")];
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            roots.push(local_app_data.join("fnm"));
+        }
+        if let Some(root) = env::var_os("FNM_DIR").map(PathBuf::from) {
+            roots.insert(0, root);
+        }
+        if let Some(root) = env::var_os("FNM_MULTISHELL_PATH").map(PathBuf::from) {
+            paths.push(root);
+        }
+        for root in roots {
+            let default_bin = root.join("aliases/default/installation");
+            if default_bin.is_dir() {
+                paths.push(default_bin);
+            }
+            let Ok(entries) = std::fs::read_dir(root.join("node-versions")) else {
+                continue;
+            };
+            let mut version_bins = entries
+                .flatten()
+                .map(|entry| entry.path().join("installation"))
+                .filter(|bin| bin.is_dir())
+                .collect::<Vec<_>>();
+            version_bins.sort();
+            paths.extend(version_bins);
+        }
+    }
+    paths
+}
+
+fn discovered_tool_path() -> String {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    user_tool_paths()
+        .into_iter()
+        .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
     let mut shell_paths = terminal_shells;
@@ -120,53 +252,22 @@ fn get_shell_path() -> Option<String> {
     }
 
     for shell_path in shell_paths {
-        let try_command =
-            |shell_name: &str, args: Vec<&str>| -> Result<Option<String>, std::io::ErrorKind> {
-                match Command::new(shell_name).args(&args).output() {
-                    Ok(output) => {
-                        if output.status.success() {
-                            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                            if !path.is_empty() {
-                                return Ok(Some(path));
-                            }
-                        }
-                        Ok(None)
-                    }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::NotFound {
-                            Err(std::io::ErrorKind::NotFound)
-                        } else {
-                            log::warn!("Failed to run shell command for {}: {}", shell_name, e);
-                            Ok(None)
-                        }
-                    }
-                }
-            };
-
-        // A PATH probe must remain non-interactive; user startup files can read from the
-        // terminal or invoke job-control commands and suspend the application process.
-        log::debug!(
-            "Attempting to get PATH using non-interactive login shell: {} -l -c \"echo $PATH\"",
-            shell_path
-        );
-        match try_command(&shell_path, vec!["-l", "-c", "echo $PATH"]) {
-            Ok(Some(path)) => {
-                log::debug!("Using {} -l -c to get PATH", shell_path);
+        let probes: &[&[&str]] = &[
+            &["-l", "-c", "echo $PATH"][..],
+            &["-c", "echo $PATH"][..],
+        ];
+        for args in probes {
+            if let Some(path) = run_path_probe(&shell_path, args) {
+                log::debug!("Using bounded PATH probe: {} {:?}", shell_path, args);
                 return Some(path);
             }
-            Err(std::io::ErrorKind::NotFound) => continue,
-            _ => {}
-        }
-
-        match try_command(&shell_path, vec!["-c", "echo $PATH"]) {
-            Ok(Some(path)) => {
-                log::debug!("Using {} -c to get PATH", shell_path);
-                return Some(path);
-            }
-            Err(std::io::ErrorKind::NotFound) => continue,
-            _ => {}
         }
     }
+    None
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn get_shell_path() -> Option<String> {
     None
 }
 
@@ -319,14 +420,19 @@ pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
 }
 
 /// Builds the minimal environment required by a terminal child without exposing it to the UI.
+/// The PATH includes the inherited environment, bounded login-shell discovery, and
+/// deterministic user tool directories such as Cargo and fnm installations.
 #[cfg(not(feature = "desktop"))]
 pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
     let mut environment = env::vars().collect::<Vec<_>>();
     let original_path = env::var("PATH").unwrap_or_default();
-    if let Some(shell_path) = get_shell_path() {
-        let merged_path = merge_paths(&original_path, &shell_path);
-        set_environment_value(&mut environment, "PATH", merged_path);
-    }
+    let discovered_path = discovered_tool_path();
+    let shell_path = get_shell_path().unwrap_or_default();
+    let merged_path = merge_paths(
+        &original_path,
+        &merge_paths(&discovered_path, &shell_path),
+    );
+    set_environment_value(&mut environment, "PATH", merged_path);
 
     if !environment.iter().any(|(key, _)| key == "HOME") {
         if let Some(home) = dirs::home_dir() {
@@ -366,26 +472,18 @@ fn set_environment_value(environment: &mut Vec<(String, String)>, key: &str, val
 fn setup_environment_variables() -> Result<(), String> {
     log::debug!("Setting up environment variables...");
 
-    // Save original PATH as backup
     let original_path = env::var("PATH").unwrap_or_default();
-    // log::debug!("Original PATH: {}", original_path);
-
-    // Try to get full PATH
-    match get_shell_path() {
-        Some(full_path) => {
-            // Merge PATHs, avoiding duplicates
-            let merged_path = merge_paths(&original_path, &full_path);
-            env::set_var("PATH", &merged_path);
-
-            log::info!("New PATH set: {}", merged_path);
-
-            Ok(())
-        }
-        None => {
-            log::debug!("Warning: Could not obtain full PATH, using original PATH.");
-            Err("Failed to obtain full shell PATH.".to_string())
-        }
+    let discovered_path = discovered_tool_path();
+    let shell_path = get_shell_path().unwrap_or_default();
+    let merged_path = merge_paths(
+        &original_path,
+        &merge_paths(&discovered_path, &shell_path),
+    );
+    if merged_path != original_path {
+        env::set_var("PATH", &merged_path);
+        log::info!("New PATH set: {}", merged_path);
     }
+    Ok(())
 }
 
 /// Merges two PATH strings, ensuring uniqueness and prioritizing paths from the `new` string.
@@ -429,8 +527,15 @@ fn merge_paths(original: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        dedupe_shells, merge_paths, select_default_shell, supports_terminal_shell, ShellDescriptor,
+        dedupe_shells, merge_paths, run_path_probe, select_default_shell, supports_terminal_shell,
+        ShellDescriptor,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_probe_does_not_wait_for_stdin_or_sleeping_startup_code() {
+        assert_eq!(run_path_probe("/bin/sh", &["-c", "sleep 10; echo bad"]), None);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -454,6 +559,7 @@ mod tests {
             );
         }
     }
+
 
     #[cfg(unix)]
     #[test]
@@ -505,6 +611,13 @@ mod tests {
         assert!(candidates.iter().any(|path| path.ends_with("/sh")));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_uses_windows_separator_and_deduplicates_entries() {
+        let merged = merge_paths(r"C:\Windows;C:\Tools", r"C:\UserBin;C:\Windows");
+        assert_eq!(merged, r"C:\UserBin;C:\Windows;C:\Tools");
+    }
+    #[cfg(unix)]
     #[test]
     fn merged_path_prioritizes_login_shell_entries_without_duplicates() {
         let merged = merge_paths("/usr/bin:/bin:/usr/bin", "/custom/bin:/usr/bin");
@@ -513,7 +626,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn merged_login_path_resolves_user_tools_in_non_login_host_shell() {
+    fn merged_path_resolves_user_tools_in_non_login_host_shell() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().expect("tool directory");

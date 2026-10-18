@@ -1489,7 +1489,7 @@ impl RuntimeHandle {
 /// when no candidate exists; the owner then reports a clear resource warning.
 fn initialize_runtime_resource_dir() {
     let candidates = [
-        std::env::var_os("CHATSPEED_RUNTIME_RESOURCE_DIR").map(PathBuf::from),
+        std::env::var_os(chatspeed_runtime_client::RUNTIME_RESOURCE_DIR_ENV).map(PathBuf::from),
         std::env::current_exe()
             .ok()
             .and_then(|path| path.parent().map(Path::to_path_buf))

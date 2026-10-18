@@ -870,6 +870,20 @@ pub async fn run() -> crate::error::Result<()> {
                             return;
                         }
                     };
+                    // Resolve the resource root before launching the runtime so the
+                    // standalone process can scan bundled skills and load built-in
+                    // agent assets from the same Tauri resource directory.
+                    #[cfg(not(debug_assertions))]
+                    let launch_config = match app_handle.path().resource_dir() {
+                        Ok(resource_dir) => launch_config.with_resource_dir(resource_dir),
+                        Err(error) => {
+                            log::warn!(
+                                "[RuntimeSupervisor] bundled resource directory unavailable: {}",
+                                error
+                            );
+                            launch_config
+                        }
+                    };
                     let runtime_dir = launch_config.runtime_dir().to_path_buf();
                     if let Err(error) = supervisor
                         .connect_or_start(

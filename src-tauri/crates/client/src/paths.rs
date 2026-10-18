@@ -35,6 +35,8 @@ pub const RUNTIME_DIR_ENV: &str = "CHATSPEED_RUNTIME_DIR";
 pub const RUNTIME_DB_ENV: &str = "CHATSPEED_RUNTIME_DB";
 /// Environment key overriding the runtime application-data directory.
 pub const RUNTIME_APP_DATA_DIR_ENV: &str = "CHATSPEED_RUNTIME_APP_DATA_DIR";
+/// Environment key overriding the runtime resource directory used for bundled assets.
+pub const RUNTIME_RESOURCE_DIR_ENV: &str = "CHATSPEED_RUNTIME_RESOURCE_DIR";
 /// Legacy environment key selecting a ChatSpeed home; keeps `${home}/runtime`.
 pub const LEGACY_HOME_ENV: &str = "CHATSPEED_HOME";
 
@@ -122,11 +124,14 @@ pub enum LaunchConfigError {
 /// three paths are the complete authority: the runtime directory owns the lock
 /// and discovery document, the database file is the persistence authority, and
 /// the application-data directory holds server-owned capability storage.
+/// The optional resource directory is the authority for bundled assets when a
+/// caller has a resource resolver (for example, the Tauri desktop host).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeLaunchConfig {
     runtime_dir: PathBuf,
     db_path: PathBuf,
     app_data_dir: PathBuf,
+    resource_dir: Option<PathBuf>,
 }
 
 impl RuntimeLaunchConfig {
@@ -140,7 +145,14 @@ impl RuntimeLaunchConfig {
             runtime_dir: runtime_dir.into(),
             db_path: db_path.into(),
             app_data_dir: app_data_dir.into(),
+            resource_dir: None,
         }
+    }
+
+    /// Sets the bundled resource directory passed to a spawned runtime.
+    pub fn with_resource_dir(mut self, resource_dir: impl Into<PathBuf>) -> Self {
+        self.resource_dir = Some(resource_dir.into());
+        self
     }
 
     /// Directory the runtime exclusively owns (lock and discovery document).
@@ -156,6 +168,11 @@ impl RuntimeLaunchConfig {
     /// Application-data directory for server-owned capability storage.
     pub fn app_data_dir(&self) -> &Path {
         &self.app_data_dir
+    }
+
+    /// Bundled resource directory, when the launching client resolved one.
+    pub fn resource_dir(&self) -> Option<&Path> {
+        self.resource_dir.as_deref()
     }
 
     /// Discovery document path inside [`RuntimeLaunchConfig::runtime_dir`].
@@ -177,6 +194,7 @@ pub fn sandbox_launch_config(runtime_dir: impl Into<PathBuf>) -> RuntimeLaunchCo
         app_data_dir: runtime_dir.clone(),
         db_path,
         runtime_dir,
+        resource_dir: None,
     }
 }
 
@@ -237,6 +255,7 @@ fn resolve_launch_config_with_profile(
         runtime_dir,
         db_path,
         app_data_dir,
+        resource_dir: None,
     })
 }
 
