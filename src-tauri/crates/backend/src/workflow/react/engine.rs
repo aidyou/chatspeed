@@ -976,7 +976,13 @@ impl WorkflowExecutor {
         &self,
         preserved_config: Option<&crate::db::agent::AgentConfig>,
     ) -> Value {
+        let workflow_mode = if self.is_child_agent_workflow() {
+            None
+        } else {
+            Some(self.agent_config.mode.clone().unwrap_or_default())
+        };
         let mut agent_config = serde_json::to_value(crate::db::agent::AgentConfig {
+            mode: workflow_mode,
             personality: self.agent_config.personality.clone(),
             allowed_paths: self
                 .agent_config
@@ -1163,29 +1169,6 @@ impl WorkflowExecutor {
             .context
             .task_goal_ledger_for_compression(compressed_until_message_id)?;
 
-        // The pressure handoff carries the runtime-tracked goal. The completed-task rollup keeps
-        // its existing contract, so it is intentionally not tracked here.
-        if matches!(mode, CompressionMode::Blocking) {
-            task_goal_ledger.tracked_current_goal = self
-                .track_goal_at_compression_boundary(&compression_candidate)
-                .await
-                .map_err(|error| {
-                    log::info!(
-                        "[Workflow][session={}][phase=goal_tracking] Goal tracking failed before blocking compression: display_error={}; debug_error={:?}",
-                        self.session_id,
-                        error,
-                        error
-                    );
-                    error
-                })?;
-            log::info!(
-                "[Workflow][session={}][phase=goal_tracking] Tracked current goal for boundary {}: {:?}",
-                self.session_id,
-                compressed_until_message_id,
-                task_goal_ledger.tracked_current_goal
-            );
-        }
-
         self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
             is_compressing: true,
             message: t!("workflow.compression_in_progress").to_string(),
@@ -1197,6 +1180,44 @@ impl WorkflowExecutor {
             category: Some("info".to_string()),
         })
         .await?;
+
+        // The pressure handoff carries the runtime-tracked goal. The completed-task rollup keeps
+        // its existing contract, so it is intentionally not tracked here.
+        if matches!(mode, CompressionMode::Blocking) {
+            task_goal_ledger.tracked_current_goal = match self
+                .track_goal_at_compression_boundary(&compression_candidate)
+                .await
+            {
+                Ok(goal) => goal,
+                Err(error) => {
+                    log::info!(
+                        "[Workflow][session={}][phase=goal_tracking] Goal tracking failed before blocking compression: display_error={}; debug_error={:?}",
+                        self.session_id,
+                        error,
+                        error
+                    );
+                    let _ = self
+                        .dispatch_ui_payload(GatewayPayload::CompressionStatus {
+                            is_compressing: false,
+                            message: String::new(),
+                        })
+                        .await;
+                    let _ = self
+                        .dispatch_ui_payload(GatewayPayload::Notification {
+                            message: String::new(),
+                            category: Some("info".to_string()),
+                        })
+                        .await;
+                    return Err(error);
+                }
+            };
+            log::info!(
+                "[Workflow][session={}][phase=goal_tracking] Tracked current goal for boundary {}: {:?}",
+                self.session_id,
+                compressed_until_message_id,
+                task_goal_ledger.tracked_current_goal
+            );
+        }
 
         let max_output_tokens = self
             .context

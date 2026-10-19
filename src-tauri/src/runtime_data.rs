@@ -819,6 +819,21 @@ pub async fn get_all_backups(
     )
 }
 
+/// `get_backup_dir` — resolves the effective backup directory.
+pub async fn get_backup_dir(
+    supervisor: &RuntimeSupervisor,
+    backup_dir: Option<String>,
+) -> Result<String, String> {
+    decode(
+        read_command(
+            supervisor,
+            "get_backup_dir",
+            encode(&BackupBody { backup_dir })?,
+        )
+        .await?,
+    )
+}
+
 /// `get_models_dev_providers` — the runtime-owned provider presets.
 pub async fn list_models_dev_providers(
     supervisor: &RuntimeSupervisor,

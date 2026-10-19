@@ -1,9 +1,10 @@
 schema_version: 1
 builtin_id: marketing
-builtin_version: 1
+builtin_version: 2
 name: Marketing
 description: Professional marketing and growth execution agent for SaaS, AI products, developer tools, and technical products.
 role: primary
+mode: normal
 disabled: true
 prompts:
   system: system.md

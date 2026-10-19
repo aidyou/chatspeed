@@ -67,7 +67,9 @@ mod imp {
                 Ok(webview) => webview,
                 Err(error) => {
                     remove_owner(app);
-                    return Err(format!("failed to create the Agent Skills webview: {error}"));
+                    return Err(format!(
+                        "failed to create the Agent Skills webview: {error}"
+                    ));
                 }
             };
 
@@ -156,7 +158,8 @@ mod imp {
     /// owners use.
     fn band_for(app: &AppHandle<Wry>, bounds: DockBounds) -> Result<Band, String> {
         let window = host_tauri_window(app)?;
-        let (width, height) = native_dock::window_size(&window).map_err(|error| error.to_string())?;
+        let (width, height) =
+            native_dock::window_size(&window).map_err(|error| error.to_string())?;
 
         Ok(native_dock::band_for(bounds, width, height))
     }

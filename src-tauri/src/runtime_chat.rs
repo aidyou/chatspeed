@@ -316,7 +316,12 @@ impl ChatStreamTail {
 /// receives a provider id and a model rather than a provider display name, and
 /// `details` carries the concrete cause.
 fn stream_error_message(model: &str, cause: &str) -> String {
-    t!("chat.error.stream_processing_failed", provider = model, details = cause).to_string()
+    t!(
+        "chat.error.stream_processing_failed",
+        provider = model,
+        details = cause
+    )
+    .to_string()
 }
 
 /// Converts a runtime chat DTO back into the canonical chunk the UI consumes.
@@ -443,8 +448,11 @@ mod tests {
 
     #[test]
     fn a_normal_finish_forwards_its_terminal_chunk_without_a_second_one() {
-        let mut tail =
-            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+        let mut tail = ChatStreamTail::new(
+            "chat-1".to_string(),
+            "main".to_string(),
+            "gpt-4".to_string(),
+        );
 
         assert!(!tail.forward_chunk(&chunk("chat-1", "think", MessageType::Reasoning, None)));
         assert!(tail.forward_chunk(&chunk(
@@ -466,12 +474,17 @@ mod tests {
 
     #[test]
     fn a_typed_error_without_its_chunk_reaches_the_ui_exactly_once() {
-        let mut tail =
-            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+        let mut tail = ChatStreamTail::new(
+            "chat-1".to_string(),
+            "main".to_string(),
+            "gpt-4".to_string(),
+        );
         assert!(!tail.forward_chunk(&chunk("chat-1", "think", MessageType::Reasoning, None)));
 
         let event = typed_error("The chat turn stopped producing output");
-        let response = tail.terminal_response(&event).expect("one synthesized error");
+        let response = tail
+            .terminal_response(&event)
+            .expect("one synthesized error");
         assert_eq!(response.chat_id, "chat-1");
         assert_eq!(response.r#type, MessageType::Error);
         assert_eq!(response.finish_reason, Some(FinishReason::Error));
@@ -485,18 +498,27 @@ mod tests {
 
     #[test]
     fn an_eof_or_read_error_ends_the_ui_with_one_error_chunk() {
-        let mut eof =
-            ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+        let mut eof = ChatStreamTail::new(
+            "chat-1".to_string(),
+            "main".to_string(),
+            "gpt-4".to_string(),
+        );
         let eof_response = eof.detached_response(None).expect("one synthesized error");
         assert_eq!(eof_response.chat_id, "chat-1");
         assert_eq!(eof_response.r#type, MessageType::Error);
         assert_eq!(eof_response.finish_reason, Some(FinishReason::Error));
-        assert_eq!(eof_response.metadata, Some(json!({ "windowLabel": "main" })));
+        assert_eq!(
+            eof_response.metadata,
+            Some(json!({ "windowLabel": "main" }))
+        );
         assert!(!error_message(&eof_response).is_empty());
         assert!(eof.detached_response(None).is_none());
 
-        let mut read =
-            ChatStreamTail::new("chat-2".to_string(), "main".to_string(), "gpt-4".to_string());
+        let mut read = ChatStreamTail::new(
+            "chat-2".to_string(),
+            "main".to_string(),
+            "gpt-4".to_string(),
+        );
         let read_response = read
             .detached_response(Some("connection reset"))
             .expect("one synthesized error");
@@ -512,8 +534,11 @@ mod tests {
             },
             ChatStreamEvent::Cancelled,
         ] {
-            let mut tail =
-                ChatStreamTail::new("chat-1".to_string(), "main".to_string(), "gpt-4".to_string());
+            let mut tail = ChatStreamTail::new(
+                "chat-1".to_string(),
+                "main".to_string(),
+                "gpt-4".to_string(),
+            );
             assert!(!tail.forward_chunk(&chunk("chat-1", "hi", MessageType::Text, None)));
             let response = tail.terminal_response(&event).expect("terminal UI chunk");
             assert_eq!(response.r#type, MessageType::Finished);

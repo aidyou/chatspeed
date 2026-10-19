@@ -196,7 +196,9 @@ impl PluginUiGateway {
                 let _ = shutdown_rx.await;
             });
             if let Err(error) = served.await {
-                log::warn!("[PluginUiGateway] the plugin UI gateway stopped with an error: {error}");
+                log::warn!(
+                    "[PluginUiGateway] the plugin UI gateway stopped with an error: {error}"
+                );
             }
         });
         log::info!("[PluginUiGateway] serving loopback plugin UI assets on {addr}");
@@ -503,12 +505,11 @@ mod tests {
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 1024];
         loop {
-            let read = match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk))
-                .await
-            {
-                Ok(Ok(read)) => read,
-                _ => break,
-            };
+            let read =
+                match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk)).await {
+                    Ok(Ok(read)) => read,
+                    _ => break,
+                };
             if read == 0 {
                 break;
             }
@@ -565,7 +566,10 @@ mod tests {
         let server = gateway(FakeSource::new(unsupported)).await;
         assert!(server.grant(PLUGIN_ID, ENTRY).await.is_err());
         let mut missing = FakeSource::enabled().inventory;
-        missing.as_object_mut().expect("inventory").remove("schema_version");
+        missing
+            .as_object_mut()
+            .expect("inventory")
+            .remove("schema_version");
         let server = gateway(FakeSource::new(missing)).await;
         assert!(server.grant(PLUGIN_ID, ENTRY).await.is_err());
     }
@@ -643,7 +647,10 @@ mod tests {
             Some(PLUGIN_UI_CSP)
         );
         assert!(
-            response.headers().get("access-control-allow-origin").is_none(),
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none(),
             "the gateway emits no CORS header"
         );
         assert_eq!(response.text().await.expect("body").as_bytes(), BODY);
@@ -657,23 +664,45 @@ mod tests {
         let host = host(&gateway);
 
         let traversal = format!("/ui/{capability}/{PLUGIN_ID}/../plugin.json");
-        let (status, text) = raw_request(&gateway, &format!("GET {traversal} HTTP/1.1"), &[("Host", &host)]).await;
+        let (status, text) = raw_request(
+            &gateway,
+            &format!("GET {traversal} HTTP/1.1"),
+            &[("Host", &host)],
+        )
+        .await;
         assert_eq!(status, 404);
         assert!(!text.contains("plugin.json"), "no physical path may leak");
 
         let encoded = format!("/ui/{capability}/{PLUGIN_ID}/%2e%2e/plugin.json");
-        let (status, _) = raw_request(&gateway, &format!("GET {encoded} HTTP/1.1"), &[("Host", &host)]).await;
+        let (status, _) = raw_request(
+            &gateway,
+            &format!("GET {encoded} HTTP/1.1"),
+            &[("Host", &host)],
+        )
+        .await;
         assert_eq!(status, 404);
 
         let url = format!("{}/ui/deadbeef/{PLUGIN_ID}/{ENTRY}", base(&gateway));
         assert_eq!(
-            client().get(&url).send().await.expect("send").status().as_u16(),
+            client()
+                .get(&url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
             404
         );
 
         let url = format!("{}/ui/{capability}/other-plugin/{ENTRY}", base(&gateway));
         assert_eq!(
-            client().get(&url).send().await.expect("send").status().as_u16(),
+            client()
+                .get(&url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
             404
         );
     }
@@ -706,7 +735,13 @@ mod tests {
 
         // An absent Origin is allowed.
         assert_eq!(
-            client().get(&url).send().await.expect("send").status().as_u16(),
+            client()
+                .get(&url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
             200
         );
     }
@@ -715,9 +750,21 @@ mod tests {
     async fn non_get_methods_are_refused() {
         let gateway = gateway(FakeSource::enabled()).await;
         let grant = gateway.grant(PLUGIN_ID, ENTRY).await.expect("grant");
-        let url = format!("{}/ui/{}/{}/{}", base(&gateway), grant.capability, PLUGIN_ID, ENTRY);
+        let url = format!(
+            "{}/ui/{}/{}/{}",
+            base(&gateway),
+            grant.capability,
+            PLUGIN_ID,
+            ENTRY
+        );
         assert_eq!(
-            client().post(&url).send().await.expect("send").status().as_u16(),
+            client()
+                .post(&url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
             405
         );
     }
@@ -727,15 +774,54 @@ mod tests {
         let gateway = gateway(FakeSource::enabled()).await;
         let first = gateway.grant(PLUGIN_ID, ENTRY).await.expect("grant");
         let second = gateway.grant(PLUGIN_ID, ENTRY).await.expect("grant");
-        let first_url = format!("{}/ui/{}/{}/{}", base(&gateway), first.capability, PLUGIN_ID, ENTRY);
-        let second_url = format!("{}/ui/{}/{}/{}", base(&gateway), second.capability, PLUGIN_ID, ENTRY);
+        let first_url = format!(
+            "{}/ui/{}/{}/{}",
+            base(&gateway),
+            first.capability,
+            PLUGIN_ID,
+            ENTRY
+        );
+        let second_url = format!(
+            "{}/ui/{}/{}/{}",
+            base(&gateway),
+            second.capability,
+            PLUGIN_ID,
+            ENTRY
+        );
 
         gateway.revoke(&first.capability).await;
-        assert_eq!(client().get(&first_url).send().await.expect("send").status().as_u16(), 404);
-        assert_eq!(client().get(&second_url).send().await.expect("send").status().as_u16(), 200);
+        assert_eq!(
+            client()
+                .get(&first_url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
+            404
+        );
+        assert_eq!(
+            client()
+                .get(&second_url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
+            200
+        );
 
         gateway.revoke_all().await;
-        assert_eq!(client().get(&second_url).send().await.expect("send").status().as_u16(), 404);
+        assert_eq!(
+            client()
+                .get(&second_url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16(),
+            404
+        );
     }
 
     #[tokio::test]
@@ -746,10 +832,22 @@ mod tests {
         source.delay = Duration::from_millis(200);
         let gateway = Arc::new(gateway(source).await);
         let grant = gateway.grant(PLUGIN_ID, ENTRY).await.expect("grant");
-        let url = format!("{}/ui/{}/{}/{}", base(&gateway), grant.capability, PLUGIN_ID, ENTRY);
+        let url = format!(
+            "{}/ui/{}/{}/{}",
+            base(&gateway),
+            grant.capability,
+            PLUGIN_ID,
+            ENTRY
+        );
 
         let requester = tokio::spawn(async move {
-            client().get(&url).send().await.expect("send").status().as_u16()
+            client()
+                .get(&url)
+                .send()
+                .await
+                .expect("send")
+                .status()
+                .as_u16()
         });
 
         started.notified().await;

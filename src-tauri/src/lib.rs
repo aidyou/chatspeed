@@ -23,13 +23,13 @@ use chatspeed_runtime_backend::owner::builtin_agents;
 pub use chatspeed_runtime_backend::plugin_types;
 pub mod agent_skills;
 pub mod chat_hub;
-pub mod dock_window;
-pub mod native_dock;
-pub mod plugin_ui;
 mod commands;
+pub mod dock_window;
 /// Single-instance quit coordinator: the tray quit entry opens a confirmation and
 /// the coordinator owns the nonce/host binding and the once-only terminal commit.
 mod exit_coordinator;
+pub mod native_dock;
+pub mod plugin_ui;
 use chatspeed_runtime_backend::constants;
 use chatspeed_runtime_backend::db;
 use chatspeed_runtime_backend::environment;
@@ -335,6 +335,7 @@ pub async fn run() -> crate::error::Result<()> {
             inspect_config_package,
             import_config_package,
             get_all_backups,
+            get_backup_dir,
             restore_setting,
             update_tray,
             // chat hub (web chat entries)

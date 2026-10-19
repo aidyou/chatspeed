@@ -34,9 +34,7 @@ pub const MAX_PLUGIN_UI_TABS: usize = 8;
 /// once here: the UUID form (hyphenated or simple) and the length bound keep a
 /// hostile or malformed id out of the host.
 pub fn is_valid_tab_id(tab_id: &str) -> bool {
-    !tab_id.is_empty()
-        && tab_id.len() <= MAX_TAB_ID_LEN
-        && uuid::Uuid::parse_str(tab_id).is_ok()
+    !tab_id.is_empty() && tab_id.len() <= MAX_TAB_ID_LEN && uuid::Uuid::parse_str(tab_id).is_ok()
 }
 
 /// One open plugin UI tab.
@@ -239,7 +237,10 @@ mod tests {
 
     #[test]
     fn a_new_tab_opens_until_the_panel_limit_is_reached() {
-        assert_eq!(plan_tab_open(None, "agent-skills", "index.html", 0), PluginUiTabPlan::Open);
+        assert_eq!(
+            plan_tab_open(None, "agent-skills", "index.html", 0),
+            PluginUiTabPlan::Open
+        );
         assert_eq!(
             plan_tab_open(None, "agent-skills", "index.html", MAX_PLUGIN_UI_TABS),
             PluginUiTabPlan::Rejected
@@ -247,7 +248,12 @@ mod tests {
         // A known tab still reuses or replaces even at the limit, so it never traps.
         let open = session("agent-skills", "index.html");
         assert_eq!(
-            plan_tab_open(Some(&open), "agent-skills", "index.html", MAX_PLUGIN_UI_TABS),
+            plan_tab_open(
+                Some(&open),
+                "agent-skills",
+                "index.html",
+                MAX_PLUGIN_UI_TABS
+            ),
             PluginUiTabPlan::Reuse
         );
     }

@@ -794,8 +794,9 @@ mod tests {
         assert!(!source.contains("apply_bottom_right"));
         // The shape belongs to the window, so it is applied from the overlay that spans the window
         // and again whenever that window is allocated.
-        assert!(source
-            .contains("pub fn set_corner_radius(&self, app: &AppHandle<Wry>, radius: f64)"));
+        assert!(
+            source.contains("pub fn set_corner_radius(&self, app: &AppHandle<Wry>, radius: f64)")
+        );
         assert!(source.contains("overlay.connect_size_allocate(move |overlay, _allocation|"));
         assert!(source.contains("apply_window_corner(overlay, corner.get())"));
         // No native view is left to paint over the frame, so the window keeps its own corner.
@@ -823,7 +824,11 @@ mod tests {
     #[test]
     fn the_view_reshapes_only_its_input_region() {
         let source = production_source();
-        let apply = block(source, "fn apply(&self)", "Cuts the rounded bottom-right corner");
+        let apply = block(
+            source,
+            "fn apply(&self)",
+            "Cuts the rounded bottom-right corner",
+        );
 
         assert!(apply.contains("apply_frame_band_and_corner"));
         assert!(!apply.contains("shape_combine_region"));

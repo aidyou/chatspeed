@@ -200,6 +200,7 @@ pub fn data_command_kind(command: &str) -> Option<DataCommandKind> {
         "backup_setting" => Mutation,
         "restore_setting" => Mutation,
         "get_all_backups" => Read,
+        "get_backup_dir" => Read,
         _ => return None,
     };
     Some(kind)
@@ -327,6 +328,8 @@ pub async fn dispatch_data_command(
         "restore_setting" => restore_setting_core(svc, body).await,
         #[cfg(not(feature = "desktop"))]
         "get_all_backups" => get_all_backups_core(svc, body),
+        #[cfg(not(feature = "desktop"))]
+        "get_backup_dir" => get_backup_dir_core(svc, body),
 
         other => Err(ApplicationError::not_found(format!(
             "unknown data command `{other}`"
@@ -1787,6 +1790,24 @@ fn get_all_backups_core(
             .map(|path| path.to_string_lossy().to_string())
             .collect::<Vec<_>>(),
     )
+}
+
+/// Resolves the effective backup directory through the canonical backup authority.
+#[cfg(not(feature = "desktop"))]
+fn get_backup_dir_core(
+    svc: &WorkflowApplicationService,
+    body: Value,
+) -> Result<Value, ApplicationError> {
+    let BackupBody { backup_dir } = parse_body(body)?;
+    let db_backup = DbBackup::new(
+        &svc.app_data_dir,
+        BackupConfig {
+            backup_dir,
+            read_only: true,
+        },
+    )
+    .map_err(store_error)?;
+    to_value(db_backup.backup_dir().to_string_lossy().to_string())
 }
 
 // ---------------------------------------------------------------------------

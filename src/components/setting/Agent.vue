@@ -132,6 +132,12 @@
                 :disabled="isSubAgentRoleOccupied(option.value)" :value="option.value" />
             </el-select>
           </el-form-item>
+          <el-form-item v-if="agentForm.role === AGENT_ROLE.PRIMARY" :label="$t('settings.agent.mode')" prop="mode">
+            <el-select v-model="agentForm.mode" style="width: 100%">
+              <el-option :label="$t('settings.agent.modeMini')" value="mini" />
+              <el-option :label="$t('settings.agent.modeNormal')" value="normal" />
+            </el-select>
+          </el-form-item>
           <el-form-item :label="$t('settings.agent.description')" prop="description">
             <el-input v-model="agentForm.description" type="textarea" :rows="2" :disabled="isSystemIdentityLocked" />
           </el-form-item>
@@ -850,6 +856,7 @@ const defaultFormData = {
   name: '',
   description: '',
   personality: '',
+  mode: 'normal',
   role: AGENT_ROLE.PRIMARY,
   parentAgentId: null,
   subAgentRole: '',
@@ -1460,6 +1467,7 @@ const normalizeAgentFormForSave = form => {
   normalized.mcpTools.autoExpand = normalized.mcpTools.autoExpand.filter(tool => normalized.mcpTools.available.includes(tool))
 
   if (normalized.role === AGENT_ROLE.CHILD) {
+    normalized.mode = null
     normalized.planningPrompt = ''
     normalized.imageRecognitionPrompt = ''
     normalized.personality = ''
@@ -1483,6 +1491,7 @@ const normalizeAgentFormForSave = form => {
     normalized.skillEnabled = false
     normalized.selectedSkills = []
   } else {
+    normalized.mode = normalized.mode === 'mini' ? 'mini' : 'normal'
     normalized.parentAgentId = null
     normalized.subAgentRole = ''
     normalized.shellPolicy = Array.isArray(normalized.shellPolicy)

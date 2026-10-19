@@ -758,6 +758,8 @@
             size="small"
             round
             type="primary"
+            :loading="canContinueSubmitting"
+            :disabled="canContinueSubmitting"
             @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>
@@ -856,6 +858,10 @@ const props = defineProps({
   currentWorkflow: {
     type: Object,
     default: null
+  },
+  canContinueSubmitting: {
+    type: Boolean,
+    default: false
   },
   currentWorkflowId: {
     type: String,

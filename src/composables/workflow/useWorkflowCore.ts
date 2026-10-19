@@ -83,6 +83,15 @@ export function useWorkflowCore({
     const isLiveWaiting = computed(() => workflowStore.isLiveWaiting)
     const canStop = computed(() => workflowStore.canStop)
     const canContinue = computed(() => workflowStore.canContinue)
+    const continueRequestSessionId = ref<string | null>(null)
+    const isContinueSubmitting = computed(
+        () => continueRequestSessionId.value === currentWorkflowId.value
+    )
+    const clearContinueRequestLock = (sessionId = null) => {
+        if (!sessionId || continueRequestSessionId.value === sessionId) {
+            continueRequestSessionId.value = null
+        }
+    }
     const canApprovePlan = computed(() => workflowStore.canApprovePlan)
     const isWaiting = computed(() => workflowStore.isWaiting)
     const isFinalReviewerConfigured = computed(() => {
@@ -2099,16 +2108,33 @@ export function useWorkflowCore({
     }
 
     const onContinue = async () => {
-        if (!currentWorkflowId.value || isRunning.value) return false
+        const sessionId = currentWorkflowId.value
+        if (!sessionId || isRunning.value || !canContinue.value || isContinueSubmitting.value) return false
 
+        continueRequestSessionId.value = sessionId
         try {
             await invokeWrapper('workflow_start', {
-                sessionId: currentWorkflowId.value,
-                agentId: selectedAgent.value.id
+                sessionId,
+                agentId: selectedAgent.value?.id
             })
             return true
         } catch (error) {
-            if (String(error).includes('Session is stopping')) {
+            const errorText = String(error)
+            if (errorText.includes('Session already exists')) {
+                try {
+                    workflowStore.setHasLiveSession(true)
+                    await invokeWrapper('workflow_signal', {
+                        sessionId,
+                        signal: JSON.stringify({ type: SIGNAL_TYPES.CONTINUE })
+                    })
+                    return true
+                } catch (signalError) {
+                    console.error('Failed to recover continue request through workflow_signal:', signalError)
+                    showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
+                    return false
+                }
+            }
+            if (errorText.includes('Session is stopping')) {
                 showMessage(
                     t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
                     'warning'
@@ -2116,8 +2142,12 @@ export function useWorkflowCore({
                 return false
             }
             console.error('Failed to continue workflow:', error)
-            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            showMessage(t('workflow.startFailed', { error: errorText }), 'error')
             return false
+        } finally {
+            if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) {
+                clearContinueRequestLock(sessionId)
+            }
         }
     }
 
@@ -2461,6 +2491,13 @@ export function useWorkflowCore({
     })
 
     watch(
+        () => currentWorkflowId.value,
+        (sessionId, previousSessionId) => {
+            if (sessionId !== previousSessionId) clearContinueRequestLock()
+        }
+    )
+
+    watch(
         () => [
             currentWorkflowId.value,
             ...workflows.value.map((workflow) => `${workflow.id}:${String(workflow.status || '').toLowerCase()}`)
@@ -2474,6 +2511,7 @@ export function useWorkflowCore({
     )
 
     onBeforeUnmount(() => {
+        clearContinueRequestLock()
         workflowEventSetupRevision += 1
         teardownBackgroundStateListeners()
     })
@@ -2497,6 +2535,7 @@ export function useWorkflowCore({
         isLiveWaiting,
         canStop,
         canContinue,
+        isContinueSubmitting,
         canApprovePlan,
         canToggleFinalAuditMode,
         isAwaitingApproval,

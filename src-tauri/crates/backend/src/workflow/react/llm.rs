@@ -6,7 +6,7 @@ use crate::ai::traits::chat::{
 use crate::db::{Agent, ThinkingConfig, WorkflowMessage};
 use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::error::{classify_ai_error, retry_error_summary, WorkflowEngineError};
 use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::runtime_observation::{
@@ -767,6 +767,8 @@ impl LlmProcessor {
                                         attempt: retry_count,
                                         total_attempts: max_retries,
                                         next_retry_in_seconds: wait_secs,
+                                        error_kind: Some("unknown".to_string()),
+                                        error_summary: Some("LLM returned no content".to_string()),
                                     },
                                 )
                                 .await?;
@@ -844,6 +846,8 @@ impl LlmProcessor {
                                     attempt: retry_count,
                                     total_attempts: max_retries,
                                     next_retry_in_seconds: wait_secs,
+                                    error_kind: Some(classify_ai_error(&e).to_string()),
+                                    error_summary: Some(retry_error_summary(&e)),
                                 },
                             )
                             .await?;
@@ -2070,6 +2074,7 @@ mod tests {
             id: "agent-test".to_string(),
             name: "Test Agent".to_string(),
             description: None,
+            mode: None,
             personality: None,
             role: None,
             parent_agent_id: None,

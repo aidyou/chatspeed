@@ -4,7 +4,9 @@ use crate::tools::llm_output::preview_path_lines_for_llm;
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 #[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
-use crate::workflow::react::security::{workspace_walk_builder, PathGuard};
+use crate::workflow::react::security::{
+    is_protected_ignore_path, workspace_walk_builder, PathGuard,
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
@@ -66,6 +68,11 @@ fn validate_tool_path_for_listing(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<(), ToolError> {
+    if is_protected_ignore_path(path) {
+        return Err(ToolError::Security(
+            "Protected ignore policy path".to_string(),
+        ));
+    }
     if let Some(path_guard) = path_guard {
         let guard = path_guard
             .read()
@@ -82,6 +89,9 @@ fn is_tool_path_allowed(
     is_dir: bool,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<bool, ToolError> {
+    if is_protected_ignore_path(path) {
+        return Ok(false);
+    }
     let Some(path_guard) = path_guard else {
         return Ok(true);
     };
@@ -1223,6 +1233,34 @@ mod tests {
         ));
         assert!(!content_uses_crlf_dominant_line_endings("line1\nline2\r\n"));
         assert!(!content_uses_crlf_dominant_line_endings("single line"));
+    }
+
+    #[tokio::test]
+    async fn protected_ignore_paths_deny_native_file_tools_without_guard() {
+        let root = stable_temp_dir();
+        for name in [".gitignore", ".csignore", "nested/.gitignore"] {
+            let path = root.path().join(name).to_string_lossy().into_owned();
+            assert!(matches!(
+                ReadFile::default().call(json!({"file_path": path})).await,
+                Err(ToolError::Security(_))
+            ));
+            assert!(matches!(
+                WriteFile::default()
+                    .call(json!({"file_path": path, "content": "blocked"}))
+                    .await,
+                Err(ToolError::Security(_))
+            ));
+            assert!(matches!(
+                EditFile::default()
+                    .call(json!({"file_path": path, "old_string": "old", "new_string": "new"}))
+                    .await,
+                Err(ToolError::Security(_))
+            ));
+            assert!(ListDir::default()
+                .call(json!({"path": path}))
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]

@@ -35,7 +35,8 @@ use chatspeed_contracts::{
 };
 use chatspeed_runtime_client::{
     process_alive, runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard,
-    RuntimeChild, RuntimeClient, RuntimeLaunchConfig, RuntimeShutdownOutcome as ClientShutdownOutcome,
+    RuntimeChild, RuntimeClient, RuntimeLaunchConfig,
+    RuntimeShutdownOutcome as ClientShutdownOutcome,
 };
 use serde::Serialize;
 #[cfg(feature = "desktop")]
@@ -437,10 +438,7 @@ impl RuntimeSupervisor {
                         );
                         logged_stopping = true;
                     }
-                    tokio::time::sleep(
-                        RUNTIME_STOPPING_RETRY_INTERVAL.min(deadline - now),
-                    )
-                    .await;
+                    tokio::time::sleep(RUNTIME_STOPPING_RETRY_INTERVAL.min(deadline - now)).await;
                 }
                 result => return result,
             }
@@ -452,7 +450,6 @@ impl RuntimeSupervisor {
         config: &RuntimeLaunchConfig,
         client_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
-
         let mut state = self.inner.lock().await;
         if state.connection.is_some() {
             return Err(RuntimeUnavailable::InvalidConfig(
@@ -588,10 +585,7 @@ impl RuntimeSupervisor {
             if now >= deadline {
                 return false;
             }
-            tokio::time::sleep(
-                (deadline - now).min(Duration::from_millis(100)),
-            )
-            .await;
+            tokio::time::sleep((deadline - now).min(Duration::from_millis(100))).await;
         }
     }
 

@@ -618,11 +618,15 @@ pub async fn create_or_focus_url_window(
             tauri::WebviewUrl::App(url.into()),
         )
         .title("Web View")
+        .decorations(false)
         .inner_size(1200.0, 800.0)
         .min_inner_size(800.0, 600.0)
         .center()
         .build()
         .map_err(|e| t!("main.failed_to_create_webview_window", error = e).to_string())?;
+
+        #[cfg(target_os = "linux")]
+        release_frame_band(&webview_window);
 
         // Show the window and set focus
         let _ = webview_window.show();

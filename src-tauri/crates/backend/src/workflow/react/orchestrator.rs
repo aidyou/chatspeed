@@ -850,6 +850,11 @@ impl SubAgentFactory for DefaultSubAgentFactory {
         agent_config.approval_level = Some(effective_approval_level.to_string());
 
         let workflow_config = AgentConfig {
+            mode: if agent_config.role.as_deref() == Some("child") {
+                None
+            } else {
+                Some(agent_config.mode.clone().unwrap_or_default())
+            },
             personality: agent_config.personality.clone(),
             allowed_paths: workflow_allowed_paths,
             // The child's own rules stay authoritative; the parent only contributes
@@ -1932,6 +1937,7 @@ impl ToolDefinition for TaskOutputTool {
         - Background sub-agents can be checked while running; call-mode sub-agents normally deliver results automatically, but this tool can return the already-delivered result again if needed\n\
         - Returns the latest sub-agent output along with status information\n\
         - Waits for a terminal result by default, so the parent receives one usable tool output before deciding the next step\n\
+        - Omit timeout or set it to 0 to wait for the terminal result; a positive integer limits only this call's wait in seconds and never stops the sub-agent\n\
         - Set wait_until_complete=false only for an explicit non-blocking status check while other useful parent work remains; do not poll repeatedly."
     }
 
@@ -1954,7 +1960,13 @@ impl ToolDefinition for TaskOutputTool {
                     "wait_until_complete": {
                         "type": "boolean",
                         "default": true,
-                        "description": "When omitted or true, wait until the sub-agent reaches a terminal state and return the final result in this tool call. Set false only for an explicit non-blocking status check while other useful parent work remains."
+                        "description": "When omitted or true, wait until the sub-agent reaches a terminal state (subject to timeout). Set false only for an explicit non-blocking status check while other useful parent work remains; timeout has no effect in that mode."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "Maximum seconds to wait in this call. Omit or set 0 to wait for the terminal result without a time limit. A positive value returns structured running status, current state when available, and timed_out=true if unfinished; it does not cancel or remove the sub-agent."
                     }
                 },
                 "required": ["task_id"]
@@ -1980,7 +1992,15 @@ impl ToolDefinition for TaskOutputTool {
             .as_str()
             .ok_or(ToolError::InvalidParams("task_id required".into()))?;
         let wait_until_complete = params["wait_until_complete"].as_bool().unwrap_or(true);
+        let timeout_secs = match params.get("timeout") {
+            None => 0,
+            Some(value) => value.as_u64().ok_or_else(|| {
+                ToolError::InvalidParams("timeout must be a non-negative integer in seconds".into())
+            })?,
+        };
         validate_task_access(&self.session_id, task_id)?;
+        let wait_started = tokio::time::Instant::now();
+        let wait_limit = std::time::Duration::from_secs(timeout_secs);
 
         if wait_until_complete {
             register_task_output_wait(task_id);
@@ -2035,7 +2055,31 @@ impl ToolDefinition for TaskOutputTool {
                     return Ok(ToolCallResult::success(Some(content), None));
                 }
 
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                if timeout_secs > 0 && wait_started.elapsed() >= wait_limit {
+                    // The executor may hold its lock for the whole run. Never let a
+                    // status read extend this call's wait or interfere with execution.
+                    let current_state = BACKGROUND_TASKS.get(task_id).and_then(|task| {
+                        let BackgroundTask::SubAgent { executor, .. } = task.value();
+                        executor.try_lock().ok().map(|guard| guard.state())
+                    });
+                    return Ok(ToolCallResult::success(
+                        Some("Status: Running. This call's wait timed out; the sub-agent continues in the background. Do not poll repeatedly; continue other work or wait for the completion event.".to_string()),
+                        Some(json!({
+                            "task_id": task_id,
+                            "status": "running",
+                            "current_state": current_state,
+                            "timed_out": true
+                        })),
+                    ));
+                }
+
+                let poll_interval = std::time::Duration::from_millis(50);
+                let sleep_duration = if timeout_secs > 0 {
+                    poll_interval.min(wait_limit.saturating_sub(wait_started.elapsed()))
+                } else {
+                    poll_interval
+                };
+                tokio::time::sleep(sleep_duration).await;
             }
         }
 
@@ -2178,7 +2222,7 @@ mod tests {
     use crate::db::{AgentConfig, MainStore, WorkflowMessage};
     use crate::libs::tsid::TsidGenerator;
     use crate::libs::window_channels::WindowChannels;
-    use crate::tools::ToolDefinition;
+    use crate::tools::{ToolDefinition, ToolError};
     use crate::workflow::react::engine::ReActExecutor;
     use crate::workflow::react::error::WorkflowEngineError;
     use crate::workflow::react::gateway::Gateway;
@@ -2717,57 +2761,134 @@ mod tests {
 
     #[tokio::test]
     async fn sub_agent_output_waits_by_default_for_final_result() {
-        let task_id = "subagent_test_default_wait";
-        COMPLETED_BACKGROUND_TASKS.remove(task_id);
-        BACKGROUND_TASKS.remove(task_id);
+        for timeout in [None, Some(0), Some(1)] {
+            let task_id = "subagent_test_default_wait";
+            COMPLETED_BACKGROUND_TASKS.remove(task_id);
+            BACKGROUND_TASKS.remove(task_id);
 
-        let executor: Arc<Mutex<dyn ReActExecutor>> =
-            Arc::new(Mutex::new(DiagnosticMockExecutor::new(task_id.to_string())));
-        BACKGROUND_TASKS.insert(
-            task_id.to_string(),
-            BackgroundTask::SubAgent {
-                owner_session_id: Some("session_a".to_string()),
-                executor: executor.clone(),
-                lifecycle_factory: None,
-                output_accessible: true,
-            },
-        );
-
-        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
-        let task_id_for_completion = task_id.to_string();
-        let completion = tokio::spawn(async move {
-            let guard = executor.lock().await;
-            let _ = locked_tx.send(());
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            drop(guard);
-            remember_completed_task(
-                task_id_for_completion,
-                Some("session_a".to_string()),
-                "final child result",
-                true,
+            let executor: Arc<Mutex<dyn ReActExecutor>> =
+                Arc::new(Mutex::new(DiagnosticMockExecutor::new(task_id.to_string())));
+            BACKGROUND_TASKS.insert(
+                task_id.to_string(),
+                BackgroundTask::SubAgent {
+                    owner_session_id: Some("session_a".to_string()),
+                    executor: executor.clone(),
+                    lifecycle_factory: None,
+                    output_accessible: true,
+                },
             );
-        });
-        locked_rx
-            .await
-            .expect("completion task should acquire the executor lock");
 
+            let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+            let task_id_for_completion = task_id.to_string();
+            let completion = tokio::spawn(async move {
+                let guard = executor.lock().await;
+                let _ = locked_tx.send(());
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                drop(guard);
+                remember_completed_task(
+                    task_id_for_completion,
+                    Some("session_a".to_string()),
+                    "final child result",
+                    true,
+                );
+            });
+            locked_rx
+                .await
+                .expect("completion task should acquire the executor lock");
+
+            let (_dir, store) = test_store();
+            let tool = TaskOutputTool::new("session_a".to_string(), store);
+            let mut params = json!({ "task_id": task_id });
+            if let Some(timeout) = timeout {
+                params["timeout"] = json!(timeout);
+            }
+            let result = tokio::time::timeout(std::time::Duration::from_secs(1), tool.call(params))
+                .await
+                .expect("default sub_agent_output should wait for the final result")
+                .expect("default sub_agent_output should return the final result");
+
+            assert_eq!(result.content.as_deref(), Some("final child result"));
+            completion
+                .await
+                .expect("completion task should finish successfully");
+
+            BACKGROUND_TASKS.remove(task_id);
+            COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn sub_agent_output_timeout_preserves_task_and_later_result() {
+        for busy in [false, true] {
+            let task_id = if busy {
+                "subagent_test_timeout_busy"
+            } else {
+                "subagent_test_timeout_idle"
+            };
+            let executor: Arc<Mutex<dyn ReActExecutor>> =
+                Arc::new(Mutex::new(DiagnosticMockExecutor::new(task_id.to_string())));
+            let guard = if busy {
+                Some(executor.lock().await)
+            } else {
+                None
+            };
+            BACKGROUND_TASKS.insert(
+                task_id.to_string(),
+                BackgroundTask::SubAgent {
+                    owner_session_id: Some("session_a".to_string()),
+                    executor: executor.clone(),
+                    lifecycle_factory: None,
+                    output_accessible: true,
+                },
+            );
+            let (_dir, store) = test_store();
+            let tool = TaskOutputTool::new("session_a".to_string(), store);
+            let started = tokio::time::Instant::now();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                tool.call(json!({ "task_id": task_id, "timeout": 1 })),
+            )
+            .await
+            .expect("timeout must not wait for the executor lock")
+            .expect("timeout should return a successful running result");
+            assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+            let status = result
+                .structured_content
+                .expect("structured timeout result");
+            assert_eq!(status["status"], "running");
+            assert_eq!(status["timed_out"], true);
+            assert_eq!(status["task_id"], task_id);
+            assert_eq!(status["current_state"].is_null(), busy);
+            assert!(BACKGROUND_TASKS.contains_key(task_id));
+            assert!(!super::has_pending_task_output_wait(task_id));
+            assert!(!TASK_OUTPUT_THROTTLE.contains_key(task_id));
+            drop(guard);
+            remember_completed_task(task_id, Some("session_a".to_string()), "later result", true);
+            let completed = tool
+                .call(json!({ "task_id": task_id, "timeout": 0 }))
+                .await
+                .expect("a timed-out task's result must remain retrievable");
+            assert_eq!(completed.content.as_deref(), Some("later result"));
+            BACKGROUND_TASKS.remove(task_id);
+            COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn sub_agent_output_timeout_schema_and_validation() {
         let (_dir, store) = test_store();
         let tool = TaskOutputTool::new("session_a".to_string(), store);
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            tool.call(json!({ "task_id": task_id })),
-        )
-        .await
-        .expect("default sub_agent_output should wait for the final result")
-        .expect("default sub_agent_output should return the final result");
-
-        assert_eq!(result.content.as_deref(), Some("final child result"));
-        completion
-            .await
-            .expect("completion task should finish successfully");
-
-        BACKGROUND_TASKS.remove(task_id);
-        COMPLETED_BACKGROUND_TASKS.remove(task_id);
+        let schema = tool.tool_calling_spec().input_schema;
+        assert_eq!(schema["properties"]["timeout"]["type"], "integer");
+        assert_eq!(schema["properties"]["timeout"]["minimum"], 0);
+        assert_eq!(schema["required"], json!(["task_id"]));
+        for invalid in [json!(-1), json!(0.5), json!("1"), json!(null), json!(true)] {
+            let error = tool
+                .call(json!({ "task_id": "subagent_invalid_timeout", "timeout": invalid }))
+                .await
+                .expect_err("invalid timeout must be rejected");
+            assert!(matches!(error, ToolError::InvalidParams(_)));
+        }
     }
 
     #[tokio::test]

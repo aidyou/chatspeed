@@ -1891,19 +1891,36 @@ Return the final verdict ONLY by calling `submit_result`.\n\
     fn completion_report_rejection_reminder(
         reason: &str,
         has_current_segment_pending_report: bool,
+        final_audit_enabled: bool,
     ) -> String {
+        let report_requirements = if final_audit_enabled {
+            "covering completed work, verification, and remaining limitations"
+        } else {
+            "briefly stating what was completed and the short verification performed; include remaining items only when any remain"
+        };
         if reason == "no valid completion report is available"
             && !has_current_segment_pending_report
         {
-            return "<SYSTEM_REMINDER>Completion rejected: no valid completion report is available. STATE: PENDING_COMPLETION_REPORT=false. An empty complete_workflow({}) call cannot succeed because neither the current response nor the runtime contains a valid report. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` containing:\nCompleted: <what you completed>.\nVerified: <what you checked, or what was not run>.\nRemaining: <remaining limitations, or state that none remain>.\nUse `complete_workflow({\"summary\":\"...\"})`. Do not retry with an empty object. Do not send the report as a separate text-only response.</SYSTEM_REMINDER>".to_string();
+            let remaining_line = if final_audit_enabled {
+                "Remaining: <remaining limitations, or state that none remain>.\n"
+            } else {
+                "Remaining: <only if something remains>.\n"
+            };
+            return format!(
+                "<SYSTEM_REMINDER>Completion rejected: no valid completion report is available. STATE: PENDING_COMPLETION_REPORT=false. An empty complete_workflow({{}}) call cannot succeed because neither the current response nor the runtime contains a valid report. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` containing:\nCompleted: <what you completed>.\nVerified: <what you checked, or what was not run>.\n{remaining_line}Use `complete_workflow({{\"summary\":\"...\"}})`. Do not retry with an empty object. Do not send the report as a separate text-only response.</SYSTEM_REMINDER>"
+            );
         }
 
         if reason == "no valid completion report is available" {
-            return "<SYSTEM_REMINDER>Completion rejected: stored completion draft data exists for the current segment, but no draft passed validation. STATE: PENDING_COMPLETION_REPORT=invalid. Repeating an empty complete_workflow({}) call cannot succeed. NEXT ACTION: use the next concrete task-relevant work or verification tool to invalidate the unusable draft. After that work is complete, call complete_workflow with one fresh non-empty `summary` covering completed work, verification, and remaining limitations. Do not reuse the invalid draft.</SYSTEM_REMINDER>".to_string();
+            return format!(
+                "<SYSTEM_REMINDER>Completion rejected: stored completion draft data exists for the current segment, but no draft passed validation. STATE: PENDING_COMPLETION_REPORT=invalid. Repeating an empty complete_workflow({{}}) call cannot succeed. NEXT ACTION: use the next concrete task-relevant work or verification tool to invalidate the unusable draft. After that work is complete, call complete_workflow with one fresh non-empty `summary` {report_requirements}. Do not reuse the invalid draft.</SYSTEM_REMINDER>"
+            );
         }
 
         if reason == "multiple different completion reports are available" {
-            return "<SYSTEM_REMINDER>Completion rejected: multiple conflicting completion reports are available for the current segment. STATE: COMPLETION_REPORT=ambiguous. Repeating complete_workflow or adding another report cannot resolve this conflict. NEXT ACTION: continue with the next concrete task-relevant work or verification tool so the stale drafts are invalidated. When the work is complete, call complete_workflow with one fresh non-empty `summary` covering completed work, verification, and remaining limitations.</SYSTEM_REMINDER>".to_string();
+            return format!(
+                "<SYSTEM_REMINDER>Completion rejected: multiple conflicting completion reports are available for the current segment. STATE: COMPLETION_REPORT=ambiguous. Repeating complete_workflow or adding another report cannot resolve this conflict. NEXT ACTION: continue with the next concrete task-relevant work or verification tool so the stale drafts are invalidated. When the work is complete, call complete_workflow with one fresh non-empty `summary` {report_requirements}.</SYSTEM_REMINDER>"
+            );
         }
 
         if has_current_segment_pending_report {
@@ -1912,7 +1929,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             )
         } else {
             format!(
-                "<SYSTEM_REMINDER>Completion rejected because the complete_workflow call was invalid: {reason}. STATE: PENDING_COMPLETION_REPORT=false. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` covering completed work, verification, and remaining limitations. Do not retry with an empty object.</SYSTEM_REMINDER>"
+                "<SYSTEM_REMINDER>Completion rejected because the complete_workflow call was invalid: {reason}. STATE: PENDING_COMPLETION_REPORT=false. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` {report_requirements}. Do not retry with an empty object.</SYSTEM_REMINDER>"
             )
         }
     }
@@ -2473,6 +2490,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     content: Self::completion_report_rejection_reminder(
                         reason,
                         has_current_segment_pending_report,
+                        self.final_review_mode_enabled(),
                     ),
                     llm_content: None,
                     title: "FinishTask Error".to_string(),
@@ -2614,6 +2632,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 content: Self::completion_report_rejection_reminder(
                     "multiple different completion reports are available",
                     true,
+                    self.final_review_mode_enabled(),
                 ),
                 llm_content: None,
                 title: "FinishTask Error".to_string(),
@@ -3276,6 +3295,7 @@ mod tests {
         let reminder = WorkflowExecutor::completion_report_rejection_reminder(
             "no valid completion report is available",
             false,
+            true,
         );
 
         assert!(reminder.contains("PENDING_COMPLETION_REPORT=false"));
@@ -3293,6 +3313,7 @@ mod tests {
         let reminder = WorkflowExecutor::completion_report_rejection_reminder(
             "no valid completion report is available",
             true,
+            true,
         );
 
         assert!(reminder.contains("PENDING_COMPLETION_REPORT=invalid"));
@@ -3306,10 +3327,12 @@ mod tests {
         let with_pending = WorkflowExecutor::completion_report_rejection_reminder(
             "complete_workflow summary must be a string",
             true,
+            true,
         );
         let without_pending = WorkflowExecutor::completion_report_rejection_reminder(
             "complete_workflow summary must be a string",
             false,
+            true,
         );
 
         assert!(with_pending.contains("PENDING_COMPLETION_REPORT=true"));
@@ -3320,6 +3343,19 @@ mod tests {
         assert!(without_pending.contains("Do not retry with an empty object"));
     }
 
+    #[test]
+    fn completion_report_rejection_reminder_is_brief_when_final_audit_is_off() {
+        let reminder = WorkflowExecutor::completion_report_rejection_reminder(
+            "no valid completion report is available",
+            false,
+            false,
+        );
+
+        assert!(reminder.contains("Completed: <what you completed>."));
+        assert!(reminder.contains("Verified: <what you checked, or what was not run>."));
+        assert!(reminder.contains("Remaining: <only if something remains>."));
+        assert!(!reminder.contains("Remaining: <remaining limitations, or state that none remain>."));
+    }
     #[test]
     fn completion_report_resolution_accepts_current_report_after_reasoning() {
         let report = "Completed the workflow change and verified the targeted tests passed.\nNo known limitations remain.";

@@ -346,6 +346,7 @@
               :file-suggestions="fileSuggestions"
               :selected-skill-index="selectedSkillIndex"
               :selected-file-index="selectedFileIndex"
+              :can-continue-submitting="isContinueSubmitting"
               :on-input-key-down="onInputKeyDown"
               :on-composition-start="onCompositionStart"
               :on-composition-end="onCompositionEnd"
@@ -1580,6 +1581,7 @@ const {
   canStop,
   canContinue,
   activeModelName,
+  isContinueSubmitting,
   canToggleFinalAuditMode,
   pendingApprovalList,
   isWorkflowBeingDeleted,

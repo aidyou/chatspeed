@@ -18,6 +18,52 @@ pub struct WorkflowTerminalError {
     pub metadata: Value,
 }
 
+/// Classifies upstream failures into stable, UI-safe snake_case categories.
+pub fn classify_ai_error(error: &AiError) -> &'static str {
+    match error {
+        AiError::ApiRequestFailed { status_code, .. }
+        | AiError::RawApiRequestFailed { status_code, .. } => match status_code {
+            401 => "llm_authentication",
+            402 => "llm_billing",
+            403 | 404 => "engine",
+            429 => "rate_limited",
+            500..=599 => "upstream_server",
+            _ => "upstream_http",
+        },
+        AiError::StreamProcessingFailed { .. } => "network",
+        _ => "unknown",
+    }
+}
+
+/// Produces a bounded summary without upstream bodies, headers, or credentials.
+pub fn retry_error_summary(error: &AiError) -> String {
+    match error {
+        AiError::ApiRequestFailed {
+            status_code,
+            provider,
+            ..
+        }
+        | AiError::RawApiRequestFailed {
+            status_code,
+            provider,
+            ..
+        } => {
+            format!(
+                "{} returned HTTP {}",
+                provider.chars().take(64).collect::<String>(),
+                status_code
+            )
+        }
+        AiError::StreamProcessingFailed { provider, .. } => {
+            format!(
+                "{} stream/network failure",
+                provider.chars().take(64).collect::<String>()
+            )
+        }
+        _ => "LLM request failed".to_string(),
+    }
+}
+
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "type", content = "details")]
 pub enum WorkflowEngineError {
@@ -86,25 +132,24 @@ impl WorkflowEngineError {
                 status_code,
                 provider,
                 details,
-            } => (
-                if details.trim().is_empty() {
-                    format!("{provider} returned HTTP {status_code} without an error body")
+                ..
+            } => {
+                let content = if details.trim().is_empty() {
+                    format!(
+                        "{} returned HTTP {} without an error body",
+                        provider, status_code
+                    )
                 } else {
                     details.clone()
-                },
-                Some((*status_code, provider.clone())),
-            ),
+                };
+                (content, Some((*status_code, provider.clone())))
+            }
             _ => (error.to_string(), None),
         };
-        let status_code = upstream.as_ref().map(|(status_code, _)| *status_code);
         let error_type = if retry_attempts.is_some() {
             "llm_retry_exhausted"
         } else {
-            match status_code {
-                Some(401) => "llm_authentication",
-                Some(402) => "llm_billing",
-                _ => "engine",
-            }
+            classify_ai_error(error)
         };
         let mut metadata = json!({
             "error_type": error_type

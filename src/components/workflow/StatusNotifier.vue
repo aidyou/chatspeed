@@ -484,12 +484,21 @@ const displayState = computed(() => {
     elapsedNow.value - latestToolUpdatedAt < 5000
 
   if (hasActiveRetry.value) {
+    const retryMessage = retryInfo.value.errorKind === 'rate_limited'
+      ? t('workflow.retrying', {
+          attempt: retryInfo.value.attempt,
+          total: retryInfo.value.total,
+          seconds: retryInfo.value.nextRetryIn
+        })
+      : t('workflow.retryingClassified', {
+          kind: retryInfo.value.errorKind || 'unknown',
+          summary: retryInfo.value.errorSummary || '',
+          attempt: retryInfo.value.attempt,
+          total: retryInfo.value.total,
+          seconds: retryInfo.value.nextRetryIn
+        })
     return {
-      text: t('workflow.retrying', {
-        attempt: retryInfo.value.attempt,
-        total: retryInfo.value.total,
-        seconds: retryInfo.value.nextRetryIn
-      }),
+      text: retryMessage,
       tone: 'warning',
       icon: 'loading',
       spinning: true

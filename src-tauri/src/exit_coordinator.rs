@@ -202,9 +202,7 @@ impl ExitCoordinator {
 
     /// Locks the machine, recovering a poisoned guard instead of panicking.
     fn lock(&self) -> MutexGuard<'_, QuitState> {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Current phase, used by the command layer before it touches any runtime.
@@ -542,7 +540,10 @@ mod tests {
             coordinator.confirm_exit_desktop(&nonce, "assistant"),
             QuitTransition::Ignored
         );
-        assert_eq!(coordinator.cancel("not-the-nonce", HOST), QuitTransition::Ignored);
+        assert_eq!(
+            coordinator.cancel("not-the-nonce", HOST),
+            QuitTransition::Ignored
+        );
         // None of the mismatched submits changed the phase.
         assert_eq!(coordinator.phase(), QuitPhase::Confirming);
     }
@@ -584,10 +585,19 @@ mod tests {
         let coordinator = ExitCoordinator::new();
         let nonce = started_nonce(&coordinator.request_quit(HOST));
 
-        assert_eq!(coordinator.expire_prompt(&nonce, HOST), QuitTransition::Applied);
+        assert_eq!(
+            coordinator.expire_prompt(&nonce, HOST),
+            QuitTransition::Applied
+        );
         assert_eq!(coordinator.phase(), QuitPhase::Idle);
-        assert_eq!(coordinator.confirm_stop_runtime(&nonce, HOST), QuitTransition::Ignored);
-        assert_eq!(coordinator.expire_prompt(&nonce, HOST), QuitTransition::Ignored);
+        assert_eq!(
+            coordinator.confirm_stop_runtime(&nonce, HOST),
+            QuitTransition::Ignored
+        );
+        assert_eq!(
+            coordinator.expire_prompt(&nonce, HOST),
+            QuitTransition::Ignored
+        );
     }
 
     #[test]
@@ -602,7 +612,10 @@ mod tests {
         assert!(coordinator.commit_once(), "the first commit is claimed");
         assert!(!coordinator.commit_once(), "the second commit is a no-op");
         assert_eq!(coordinator.phase(), QuitPhase::CommittingExit);
-        assert_eq!(coordinator.request_quit(HOST), QuitRequestOutcome::Committed);
+        assert_eq!(
+            coordinator.request_quit(HOST),
+            QuitRequestOutcome::Committed
+        );
     }
 
     #[test]
@@ -616,7 +629,10 @@ mod tests {
         coordinator.set_stop_target("instance-a", 42);
         coordinator.set_stop_failure("runtime_stop_timeout");
 
-        assert!(!coordinator.commit_once(), "a failed stop is not a successful exit");
+        assert!(
+            !coordinator.commit_once(),
+            "a failed stop is not a successful exit"
+        );
         assert_eq!(
             coordinator.begin_stop_retry(&nonce, HOST),
             QuitTransition::Applied
@@ -638,7 +654,10 @@ mod tests {
         let coordinator = ExitCoordinator::new();
         coordinator.set_stop_target("instance-a", 42);
         coordinator.set_stop_target("instance-b", 99);
-        assert_eq!(coordinator.stop_target(), Some(("instance-a".to_string(), 42)));
+        assert_eq!(
+            coordinator.stop_target(),
+            Some(("instance-a".to_string(), 42))
+        );
     }
 
     #[test]

@@ -229,13 +229,12 @@ pub(crate) fn agent_skills_builder(app: &AppHandle<Wry>) -> WebviewBuilder<Wry> 
 
 /// The Workflow window the surface is docked into, as the window builder needs it.
 pub(super) fn host_tauri_window(app: &AppHandle<Wry>) -> Result<Window<Wry>, String> {
-    app.get_window(CHAT_HUB_HOST_WINDOW_LABEL)
-        .ok_or_else(|| {
-            format!(
-                "the Workflow window '{}' is not available",
-                CHAT_HUB_HOST_WINDOW_LABEL
-            )
-        })
+    app.get_window(CHAT_HUB_HOST_WINDOW_LABEL).ok_or_else(|| {
+        format!(
+            "the Workflow window '{}' is not available",
+            CHAT_HUB_HOST_WINDOW_LABEL
+        )
+    })
 }
 
 /// Whether a navigation stays on the trusted surface's own origin and route.
@@ -317,7 +316,10 @@ mod tests {
             &url("https://example.com/agent-skills"),
             &dev
         ));
-        assert!(!super::is_agent_skills_origin(&url("file:///etc/passwd"), &dev));
+        assert!(!super::is_agent_skills_origin(
+            &url("file:///etc/passwd"),
+            &dev
+        ));
         assert!(!super::is_agent_skills_origin(&url("about:blank"), &dev));
         assert!(!super::is_agent_skills_origin(
             &url("chatspeed://open?url=https://example.com"),
@@ -351,7 +353,10 @@ mod tests {
             &dev
         ));
         // A different route inside the same origin is refused.
-        assert!(!super::is_agent_skills_origin(&url("http://localhost:1420/"), &dev));
+        assert!(!super::is_agent_skills_origin(
+            &url("http://localhost:1420/"),
+            &dev
+        ));
         assert!(!super::is_agent_skills_origin(
             &url("http://localhost:1420/workflow"),
             &dev
@@ -452,7 +457,9 @@ mod tests {
 
         assert!(source.contains("tauri::webview::NewWindowResponse::Deny"));
         assert!(source.contains("WebviewUrl::App(AGENT_SKILLS_ROUTE.into())"));
-        assert!(source.contains(".on_navigation(move |url| is_agent_skills_origin(url, &expected))"));
+        assert!(
+            source.contains(".on_navigation(move |url| is_agent_skills_origin(url, &expected))")
+        );
         // The navigation rule is built from the application's own origin, so a bare scheme or an
         // arbitrary loopback port can never be accepted.
         assert!(source.contains("let expected = expected_origin(app);"));

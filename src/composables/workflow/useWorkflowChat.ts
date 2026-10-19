@@ -129,7 +129,9 @@ export function useWorkflowChat({ currentWorkflowId }) {
     chatState.value.retryInfo = {
       attempt: payload.attempt,
       total: payload.total_attempts,
-      nextRetryIn: payload.next_retry_in_seconds
+      nextRetryIn: payload.next_retry_in_seconds,
+      errorKind: String(payload.error_kind || 'unknown').toLowerCase(),
+      errorSummary: String(payload.error_summary || '').slice(0, 160)
     }
 
     // Auto-decrement timer

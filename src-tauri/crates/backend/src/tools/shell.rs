@@ -854,6 +854,7 @@ impl ShellPolicyEngine {
 
         let needs_review = [
             "rm",
+            "unlink",
             "mv",
             "chmod",
             "chown",
@@ -888,7 +889,7 @@ impl ShellPolicyEngine {
             "service",
         ];
 
-        let destructive_commands = ["rm", "mv", "chmod", "chown"];
+        let destructive_commands = ["rm", "unlink", "mv", "chmod", "chown"];
 
         let mut final_decision = ShellDecision::Allow;
         let mut has_boundary_review = false;
@@ -979,7 +980,7 @@ impl ShellPolicyEngine {
                 Self::is_non_path_argument(&current_binary, command_args, arg_index);
 
             if !is_non_path_argument && is_operand {
-                let is_delete = current_binary == "rm";
+                let is_delete = matches!(current_binary.as_str(), "rm" | "unlink");
                 let force_path_validation = Self::should_force_path_validation(
                     &current_binary,
                     command_args,
@@ -4015,6 +4016,18 @@ mod tests {
         let cmd_file = format!("rm {}", root_path.join("file.txt").display());
         assert!(matches!(
             engine.check(&cmd_file, false),
+            ShellDecision::Deny(_)
+        ));
+
+        // unlink follows the same review, path-guard, and root-protection policy.
+        let cmd_unlink_root = format!("unlink {}", root_path.display());
+        assert!(matches!(
+            engine.check(&cmd_unlink_root, false),
+            ShellDecision::Deny(_)
+        ));
+        let cmd_unlink_file = format!("unlink {}", root_path.join("file.txt").display());
+        assert!(matches!(
+            engine.check(&cmd_unlink_file, false),
             ShellDecision::Deny(_)
         ));
     }

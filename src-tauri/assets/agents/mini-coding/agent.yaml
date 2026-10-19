@@ -1,9 +1,10 @@
 schema_version: 1
 builtin_id: mini-coding
-builtin_version: 2
+builtin_version: 3
 name: Mini Coding
 description: A minimal coding agent for direct implementation with a small tool surface.
 role: primary
+mode: mini
 disabled: true
 prompts:
   system: system.md

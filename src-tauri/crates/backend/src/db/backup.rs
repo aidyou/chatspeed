@@ -99,6 +99,11 @@ impl DbBackup {
         })
     }
 
+    /// Returns the effective directory used for backup operations.
+    pub fn backup_dir(&self) -> &Path {
+        &self.backup_dir
+    }
+
     /// Performs database backup operations.
     ///
     /// # Returns

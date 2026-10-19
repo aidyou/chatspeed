@@ -592,6 +592,7 @@ pub(crate) fn approvable_shell_pattern_for_stage(stage_tokens: &[String]) -> Opt
 
     let destructive_commands = [
         "rm",
+        "unlink",
         "rmdir",
         "del",
         "mv",
@@ -901,6 +902,38 @@ mod tests {
         assert!(parse_safe_compound_command(&over_limit).is_none());
     }
 
+    #[test]
+    fn unlink_is_not_approvable_like_other_destructive_commands() {
+        for command in [
+            "unlink file.txt",
+            "unlink \"file with spaces.txt\"",
+            "cd app && unlink ../file.txt && python script.py",
+        ] {
+            assert!(
+                generate_shell_approval_patterns(command).is_empty(),
+                "unexpected approval pattern for {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn unlink_is_recognized_in_quoted_and_compound_segments() {
+        let stage = classify_shell_stage("unlink \"file with spaces.txt\"");
+        assert!(matches!(
+            stage,
+            Some(ShellStage::Command { tokens, .. })
+                if tokens == vec!["unlink", "file with spaces.txt"]
+        ));
+        assert_eq!(
+            split_shell_command_segments("unlink 'first file' && unlink second"),
+            vec!["unlink 'first file'", "unlink second"]
+        );
+    }
+
+    #[test]
+    fn safe_compound_parser_does_not_treat_unlink_as_a_safe_stage() {
+        assert!(parse_safe_compound_command("unlink file.txt && python script.py").is_none());
+    }
     #[test]
     fn generate_shell_approval_patterns_keeps_primary_command_with_benign_stream_merge() {
         let patterns = generate_shell_approval_patterns(

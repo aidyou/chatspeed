@@ -475,6 +475,15 @@ pub async fn restore_setting(
     crate::runtime_data::restore_setting(supervisor.inner().as_ref(), backup_dir).await
 }
 
+/// Resolves the effective backup directory used by the runtime.
+#[tauri::command]
+pub async fn get_backup_dir(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+    backup_dir: Option<String>,
+) -> Result<String, String> {
+    crate::runtime_data::get_backup_dir(supervisor.inner().as_ref(), backup_dir).await
+}
+
 /// Lists available backups.
 #[tauri::command]
 pub async fn get_all_backups(

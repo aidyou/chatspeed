@@ -167,6 +167,12 @@ pub enum GatewayPayload {
         attempt: u32,
         total_attempts: u32,
         next_retry_in_seconds: u32,
+        /// Stable classification for retry UI; omitted by legacy producers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_kind: Option<String>,
+        /// Redacted, bounded summary; never an upstream body or credential.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_summary: Option<String>,
     },
     /// Context compression status notification
     CompressionStatus {

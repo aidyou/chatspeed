@@ -990,9 +990,10 @@ mod tests {
         for key in OPAQUE_RESPONSE_KEYS {
             snapshot[snake_to_camel(key)] = payload.clone();
         }
-        let wire = chatspeed_runtime_backend::workflow::react::client::http::dto::to_snake_case_keys(
-            snapshot.clone(),
-        );
+        let wire =
+            chatspeed_runtime_backend::workflow::react::client::http::dto::to_snake_case_keys(
+                snapshot.clone(),
+            );
         assert_eq!(wire["workflow"]["agent_id"], json!("a1"));
         for key in OPAQUE_RESPONSE_KEYS {
             assert_eq!(wire[key], payload, "opaque boundary: {key}");

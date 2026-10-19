@@ -37,6 +37,43 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
+/// Ignore policy files are configuration, never AI-visible file targets.
+pub fn is_protected_ignore_path(path: &Path) -> bool {
+    fn has_protected_component(path: &Path) -> bool {
+        path.components().any(|component| {
+            component.as_os_str() == ".gitignore" || component.as_os_str() == CHATSPEED_IGNORE_FILE
+        })
+    }
+
+    fn check(path: &Path, remaining_links: usize) -> bool {
+        if has_protected_component(path) {
+            return true;
+        }
+        if let Ok(physical) = path.canonicalize() {
+            return has_protected_component(&physical);
+        }
+        // Canonicalization fails for dangling links and not-yet-created files.
+        // Resolve link ancestors too, so writes cannot create a protected target
+        // through an innocently named alias.
+        if remaining_links > 0 {
+            for ancestor in path.ancestors() {
+                if let Ok(destination) = std::fs::read_link(ancestor) {
+                    let destination = if destination.is_absolute() {
+                        destination
+                    } else {
+                        ancestor.parent().unwrap_or(Path::new("")).join(destination)
+                    };
+                    let suffix = path.strip_prefix(ancestor).unwrap_or(Path::new(""));
+                    return check(&destination.join(suffix), remaining_links - 1);
+                }
+            }
+        }
+        false
+    }
+
+    check(path, 40)
+}
+
 #[cfg(not(feature = "desktop"))]
 pub fn is_user_skill_path(path: &Path) -> bool {
     dirs::home_dir().is_some_and(|home| is_user_skill_path_for_home(path, &home))
@@ -80,11 +117,12 @@ pub fn workspace_walk_builder(path: &Path) -> ignore::WalkBuilder {
         .hidden(false)
         .add_custom_ignore_filename(CHATSPEED_IGNORE_FILE);
     builder.filter_entry(|entry| {
-        entry.depth() == 0
-            || entry
-                .file_name()
-                .to_str()
-                .is_none_or(|name| !is_workspace_noise_name(name))
+        !is_protected_ignore_path(entry.path())
+            && (entry.depth() == 0
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_none_or(|name| !is_workspace_noise_name(name)))
     });
     builder
 }
@@ -350,8 +388,20 @@ impl PathGuard {
                 None => return Ok(false),
             }
         };
+        if is_protected_ignore_path(&abs_path) {
+            return Err(WorkflowEngineError::Security(format!(
+                "Path Access Denied: {:?} is a protected ignore policy path",
+                target
+            )));
+        }
         let requested_path = Self::normalize_path(&abs_path);
         let final_path = Self::resolve_physical_path(&requested_path);
+        if is_protected_ignore_path(&final_path) {
+            return Err(WorkflowEngineError::Security(format!(
+                "Path Access Denied: {:?} resolves to a protected ignore policy path",
+                target
+            )));
+        }
 
         for root in self.sandbox_roots.iter().chain(self.workspace_roots.iter()) {
             if final_path.starts_with(&root.path) {
@@ -384,8 +434,20 @@ impl PathGuard {
             }
         };
 
+        if is_protected_ignore_path(&abs_path) {
+            return Err(WorkflowEngineError::Security(format!(
+                "Path Access Denied: {:?} is a protected ignore policy path",
+                target
+            )));
+        }
         let requested_path = Self::normalize_path(&abs_path);
         let final_path = Self::resolve_physical_path(&requested_path);
+        if is_protected_ignore_path(&final_path) {
+            return Err(WorkflowEngineError::Security(format!(
+                "Path Access Denied: {:?} resolves to a protected ignore policy path",
+                target
+            )));
+        }
 
         if Self::is_sensitive_path(&final_path) {
             return Err(WorkflowEngineError::Security(format!(
@@ -545,6 +607,71 @@ mod tests {
             cwd
         };
         tempfile::tempdir_in(base).expect("failed to create an isolated test fixture directory")
+    }
+
+    #[test]
+    fn protected_ignore_paths_are_exact_components() {
+        for path in [
+            ".gitignore",
+            ".csignore",
+            "nested/.gitignore",
+            "nested/./.csignore",
+            "nested/../.gitignore",
+            ".csignore/child",
+        ] {
+            assert!(is_protected_ignore_path(Path::new(path)), "{path}");
+        }
+        for path in [
+            ".gitignore.bak",
+            ".csignore-example",
+            "my.gitignore",
+            "gitignore",
+            "csignore",
+            "nested/ordinary.rs",
+        ] {
+            assert!(!is_protected_ignore_path(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn protected_ignore_paths_deny_all_guard_operations() {
+        let root = isolated_temp_dir();
+        let guard = PathGuard::new(
+            vec![root.path().to_path_buf()],
+            vec![root.path().to_path_buf()],
+            vec![root.path().to_path_buf()],
+        );
+        for name in [
+            ".gitignore",
+            ".csignore",
+            "nested/.gitignore",
+            "nested/../.csignore",
+        ] {
+            for path in [PathBuf::from(name), root.path().join(name)] {
+                for (write, delete) in [(false, false), (true, false), (false, true)] {
+                    assert!(guard.validate(&path, false, write, delete).is_err());
+                }
+                assert!(guard.validate_for_listing(&path, false).is_err());
+                assert!(!guard.is_chatspeed_allowed(&path, false).unwrap_or(false));
+            }
+        }
+        assert!(guard
+            .validate(&root.path().join(".gitignore.bak"), false, true, false)
+            .is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_ignore_paths_reject_dangling_symlink_aliases() {
+        let root = isolated_temp_dir();
+        let alias = root.path().join("ordinary-alias");
+        std::os::unix::fs::symlink("nested/.gitignore", &alias).unwrap();
+        let guard = PathGuard::new(vec![root.path().to_path_buf()], vec![], vec![]);
+        assert!(is_protected_ignore_path(&alias));
+        assert!(guard.validate(&alias, false, true, false).is_err());
+        assert!(guard
+            .validate(&alias.join("new.txt"), false, true, false)
+            .is_err());
     }
 
     #[test]

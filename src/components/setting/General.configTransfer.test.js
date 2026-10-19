@@ -14,6 +14,14 @@ test('keeps complete backup handlers and gates configuration import behind risk 
   assert.match(source, /invokeWrapper\('import_config_package'/)
 })
 
+test('resolves the dialog default backup directory through runtime authority and preserves custom directory selection', () => {
+  assert.match(source, /invokeWrapper\('get_backup_dir', \{ backupDir: settings\.value\.backupDir \|\| null \}\)/)
+  assert.match(source, /const backupDirForOperation = computed\(\(\) => settings\.value\.backupDir \|\| defaultBackupDir\.value\)/)
+  assert.match(source, /backupDir: backupDirForOperation\.value/)
+  assert.match(source, /backupDir: settings\.value\.backupDir \|\| null/)
+  assert.match(source, /settings\.value\.backupDir = selected/)
+})
+
 test('applies frontend category dependency closure and defaults export to every category', () => {
   assert.match(source, /const configCategories = \['aiModels', 'skills', 'mcp', 'proxy', 'agents', 'sandbox', 'chatHubs'\]/)
   assert.match(source, /configExportCategories\.value = \[\.\.\.configCategories\]/)

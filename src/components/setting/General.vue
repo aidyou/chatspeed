@@ -1079,6 +1079,7 @@ const searchEngines = computed(() => {
 })
 
 const defaultBackupDir = ref('')
+const backupDirForOperation = computed(() => settings.value.backupDir || defaultBackupDir.value)
 const terminalShells = ref([])
 const defaultShortcutMap = {
   terminalToggleShortcut: 'CommandOrControl+J',
@@ -1161,7 +1162,7 @@ onMounted(async () => {
     console.error('Failed to inspect API key encryption status:', error)
     showMessage(t('settings.general.apiKeyProtection.statusFailed'), 'error')
   }
-  defaultBackupDir.value = `${await appDataDir()}/backups`
+  defaultBackupDir.value = await invokeWrapper('get_backup_dir', { backupDir: settings.value.backupDir || null })
   getAllBackups()
   await sensitiveStore.fetchConfig()
   await sensitiveStore.fetchSupportedFilters()
@@ -1717,7 +1718,7 @@ const startBackup = async () => {
   try {
     isBackingUp.value = true
 
-    await invokeWrapper('backup_setting', { backupDir: settings.value.backupDir })
+    await invokeWrapper('backup_setting', { backupDir: backupDirForOperation.value })
     getAllBackups()
     showMessage(t('settings.general.backupSuccess'), 'success')
   } catch (error) {
@@ -1811,7 +1812,7 @@ const submitConfigurationExport = async () => {
   configExportBusy.value = true
   try {
     const path = await save({
-      defaultPath: `chatspeed-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+      defaultPath: `${backupDirForOperation.value}/chatspeed-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (!path) return
@@ -1831,7 +1832,11 @@ const submitConfigurationExport = async () => {
 }
 
 const selectConfigurationImport = async () => {
-  const path = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
+  const path = await open({
+    multiple: false,
+    defaultPath: backupDirForOperation.value,
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  })
   if (!path) return
   try {
     configImportPreview.value = await invokeWrapper('inspect_config_package', { path })
@@ -1862,7 +1867,7 @@ const importConfiguration = async () => {
 }
 
 const getAllBackups = () => {
-  invokeWrapper('get_all_backups', { backupDir: settings.value.backupDir })
+  invokeWrapper('get_all_backups', { backupDir: settings.value.backupDir || null })
     .then(dirs => {
       if (!dirs || !Array.isArray(dirs)) {
         backups.value = []

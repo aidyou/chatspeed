@@ -124,6 +124,9 @@ const _transformFromBackend = (backendAgent) => {
     name: String(backendAgent.name || backendAgent.id || ''),
     description: backendAgent.description,
     personality: backendAgent.personality || '',
+    mode: (backendAgent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.CHILD
+      ? null
+      : (backendAgent.mode === 'mini' ? 'mini' : 'normal'),
     role: backendAgent.role || AGENT_ROLE.PRIMARY,
     parentAgentId: backendAgent.parent_agent_id || null,
     subAgentRole: backendAgent.sub_agent_role || '',
@@ -213,6 +216,7 @@ const _transformToBackend = (frontendAgent) => {
     name: frontendAgent.name.trim(),
     description: frontendAgent.description?.trim() || '',
     personality: frontendAgent.personality?.trim() || null,
+    mode: frontendAgent.role === AGENT_ROLE.CHILD ? null : (frontendAgent.mode === 'mini' ? 'mini' : 'normal'),
     role: frontendAgent.role || AGENT_ROLE.PRIMARY,
     parent_agent_id: frontendAgent.role === AGENT_ROLE.CHILD ? (frontendAgent.parentAgentId || null) : null,
     sub_agent_role: frontendAgent.role === AGENT_ROLE.CHILD

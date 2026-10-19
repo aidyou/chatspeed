@@ -1,6 +1,6 @@
 //! Built-in agent synchronization from bundled assets.
 
-use crate::db::agent::ShellPolicyRule;
+use crate::db::agent::{AgentMode, ShellPolicyRule};
 // Built-in agent synchronization writes to the runtime-owned database, so the
 // manifest model and the sync entry point are runtime-only. The desktop keeps
 // only the bundled default shell-policy loader.
@@ -35,6 +35,8 @@ struct BuiltinAgentManifest {
     description: String,
     #[serde(default)]
     role: BuiltinAgentRole,
+    #[serde(default)]
+    mode: Option<AgentMode>,
     #[serde(default)]
     parent_builtin_id: Option<String>,
     #[serde(default)]
@@ -349,6 +351,11 @@ fn definition_to_agent(
         } else {
             Some(manifest.description.clone())
         },
+        mode: if matches!(manifest.role, BuiltinAgentRole::Child) {
+            None
+        } else {
+            Some(manifest.mode.clone().unwrap_or_default())
+        },
         personality: None,
         role: Some(manifest.role.as_db_role().to_string()),
         parent_agent_id: manifest
@@ -422,6 +429,7 @@ fn sync_single_builtin_agent(
                 current.available_tools.as_deref(),
             );
             let mut updated = current;
+            updated.mode = desired.mode;
             updated.role = desired.role;
             updated.parent_agent_id = desired.parent_agent_id;
             updated.sub_agent_role = desired.sub_agent_role;
@@ -447,7 +455,7 @@ mod tests {
         builtin_agent_db_id, sync_single_builtin_agent, BuiltinAgentConfig, BuiltinAgentDefinition,
         BuiltinAgentManifest, BuiltinAgentPrompts, BuiltinAgentRole,
     };
-    use crate::db::agent::{AgentModels, ModelConfig};
+    use crate::db::agent::{AgentMode, AgentModels, ModelConfig};
     use crate::db::{Agent, MainStore};
 
     #[test]
@@ -513,6 +521,7 @@ mod tests {
                 builtin_version: 3,
                 name: "Updated Child".to_string(),
                 description: "updated description".to_string(),
+                mode: None,
                 role: BuiltinAgentRole::Child,
                 parent_builtin_id: Some("test-parent".to_string()),
                 sub_agent_role: Some("final_reviewer".to_string()),
@@ -600,6 +609,71 @@ mod tests {
     }
 
     #[test]
+    fn builtin_primary_upgrade_syncs_manifest_mode() {
+        let store = MainStore::new(":memory:").expect("in-memory store");
+        let mut existing = Agent::new(
+            builtin_agent_db_id("test-primary"),
+            "Test Primary".to_string(),
+            None,
+            Some("primary".to_string()),
+            None,
+            "old prompt".to_string(),
+            None,
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            None,
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            Some(false),
+            Some("default".to_string()),
+            Some(true),
+            Some("[]".to_string()),
+            Some("standard".to_string()),
+            Some(true),
+            Some(false),
+            Some(128000),
+        );
+        existing.version = Some(1);
+        existing.mode = None;
+        store
+            .add_agent(&existing)
+            .expect("seed primary builtin agent");
+
+        let definition = BuiltinAgentDefinition {
+            manifest: BuiltinAgentManifest {
+                schema_version: 1,
+                builtin_id: "test-primary".to_string(),
+                builtin_version: 2,
+                name: "Test Primary".to_string(),
+                description: String::new(),
+                mode: Some(AgentMode::Mini),
+                role: BuiltinAgentRole::Primary,
+                parent_builtin_id: None,
+                sub_agent_role: None,
+                prompts: BuiltinAgentPrompts {
+                    system: "system.md".to_string(),
+                    planning: None,
+                    image_recognition: None,
+                },
+                config: BuiltinAgentConfig::default(),
+                disabled: false,
+            },
+            system_prompt: "new prompt".to_string(),
+            planning_prompt: None,
+            image_recognition_prompt: None,
+        };
+
+        sync_single_builtin_agent(&store, &definition, None).expect("sync primary builtin agent");
+        let updated = store
+            .get_agent(&builtin_agent_db_id("test-primary"))
+            .expect("load agent")
+            .expect("agent exists");
+        assert_eq!(updated.version, Some(2));
+        assert_eq!(updated.mode, Some(AgentMode::Mini));
+    }
+
+    #[test]
     fn builtin_creation_uses_manifest_disabled_and_models_defaults() {
         let store = MainStore::new(":memory:").expect("in-memory store");
         let definition = BuiltinAgentDefinition {
@@ -609,6 +683,7 @@ mod tests {
                 builtin_version: 1,
                 name: "New Child".to_string(),
                 description: String::new(),
+                mode: None,
                 role: BuiltinAgentRole::Child,
                 parent_builtin_id: None,
                 sub_agent_role: Some("explorer".to_string()),
