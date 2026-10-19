@@ -123,6 +123,7 @@ pub fn normalize_agent_tool_config(
     Option<McpToolConfig>,
 ) {
     let mcp_was_configured = mcp_tools.is_some();
+    let native_tools_were_configured = available_tools.is_some();
     let mut mcp = mcp_tools.unwrap_or_default();
     let legacy_available = available_tools.unwrap_or_default();
     let legacy_auto = auto_approve.unwrap_or_default();
@@ -155,7 +156,7 @@ pub fn normalize_agent_tool_config(
     mcp.normalize();
 
     (
-        Some(available),
+        native_tools_were_configured.then_some(available),
         Some(auto),
         (had_mcp_values || mcp_was_configured).then_some(mcp),
     )
@@ -1021,6 +1022,19 @@ mod tests {
                 auto_expand: vec!["server__MCP__write".to_string()],
             })
         );
+    }
+
+    #[test]
+    fn mcp_only_config_does_not_create_an_empty_native_tool_allowlist() {
+        let config = AgentConfig::from_json(
+            r#"{"mcpTools":{"available":["server__MCP__read"],"autoApprove":[],"autoExpand":[]}}"#,
+        )
+        .expect("MCP-only config");
+        assert_eq!(config.available_tools, None);
+
+        let explicit_empty =
+            AgentConfig::from_json(r#"{"availableTools":[]}"#).expect("explicit empty allowlist");
+        assert_eq!(explicit_empty.available_tools, Some(Vec::new()));
     }
 
     #[test]

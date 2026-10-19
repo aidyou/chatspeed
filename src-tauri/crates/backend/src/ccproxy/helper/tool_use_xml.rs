@@ -150,7 +150,7 @@ impl Arg {
                         // for integer values (e.g., 5.0 instead of 5). For Number type both are valid,
                         // but for Integer type 5.0 is incorrect. To maximize compatibility and minimize
                         // errors, we treat floating-point numbers with zero fractional part as integers.
-                        if f.fract().abs() < std::f64::EPSILON {
+                        if f.fract().abs() < f64::EPSILON {
                             return json!(f as i64);
                         }
                         return json!(f);

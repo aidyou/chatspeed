@@ -2293,7 +2293,7 @@ impl WorkflowExecutor {
             );
         }
 
-        self.register_foundation_tools().await?;
+        self.rebuild_foundation_tools_for_runtime_update().await?;
 
         // Sync TODO list on initialization
         let _ = self.sync_todo_list().await;
@@ -2598,10 +2598,11 @@ impl WorkflowExecutor {
         .await
     }
 
-    async fn register_foundation_tools(&self) -> Result<(), WorkflowEngineError> {
+    async fn register_foundation_tools(
+        &self,
+        tm: &Arc<ToolManager>,
+    ) -> Result<(), WorkflowEngineError> {
         use crate::tools::*;
-        let tm: &Arc<ToolManager> = &self.tool_manager;
-        let _ = tm.clear(true).await;
 
         // Use global tool manager to discover available tools and check scopes
         let all_meta = self
@@ -2758,8 +2759,15 @@ impl WorkflowExecutor {
             .contains(&ToolCategory::System)
         {
             if self.agent_config.skill_enabled.unwrap_or(false) {
-                tm.register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
-                    .await?;
+                if let Err(error) = tm
+                    .register_tool(Arc::new(SkillExecute::new(self.available_skills.clone())))
+                    .await
+                {
+                    log::error!(
+                        "[Workflow][session={}][capability=skill][operation=register] Skill tool unavailable: {}",
+                        self.session_id, error
+                    );
+                }
             }
 
             // CRITICAL: Prevent infinite recursion by only allowing multi-agent tools for a
@@ -2888,30 +2896,55 @@ impl WorkflowExecutor {
             // tool rebuilds MCP aliases in ToolManager; doing that after copied wrappers would
             // remove them because the session-local manager does not own the global MCP cache.
             if should_register_folded_mcp_controls && is_allowed(TOOL_MCP_TOOL_EXECUTE) {
-                tm.register_tool(Arc::new(McpToolExecute {
-                    tool_manager: self.global_tool_manager.clone(),
-                    allowed_tools: Some(allowed_mcp_tool_names.clone()),
-                }))
-                .await?;
+                if let Err(error) = tm
+                    .register_tool(Arc::new(McpToolExecute {
+                        tool_manager: self.global_tool_manager.clone(),
+                        allowed_tools: Some(allowed_mcp_tool_names.clone()),
+                    }))
+                    .await
+                {
+                    log::error!(
+                        "[Workflow][session={}][phase=mcp_registration] Failed to register mcp_tool_execute: {}",
+                        self.session_id, error
+                    );
+                }
             }
             if should_register_folded_mcp_controls && is_allowed(TOOL_MCP_TOOL_EXPAND) {
-                tm.register_tool(Arc::new(McpToolExpand {
-                    tool_manager: self.global_tool_manager.clone(),
-                    allowed_tools: Some(allowed_mcp_tool_names),
-                }))
-                .await?;
+                if let Err(error) = tm
+                    .register_tool(Arc::new(McpToolExpand {
+                        tool_manager: self.global_tool_manager.clone(),
+                        allowed_tools: Some(allowed_mcp_tool_names),
+                    }))
+                    .await
+                {
+                    log::error!(
+                        "[Workflow][session={}][phase=mcp_registration] Failed to register mcp_tool_expand: {}",
+                        self.session_id, error
+                    );
+                }
             }
 
             // MCP wrappers are registered last so no subsequent native registration can remove
             // the model-visible autoExpand declarations from the session-local tool list.
             for tool in &allowed_mcp_tools {
                 if exposed_mcp_tools.contains(&tool.canonical_name) {
-                    if let Ok(mcp_tool) = self
+                    match self
                         .global_tool_manager
                         .get_tool(&tool.canonical_name)
                         .await
                     {
-                        tm.register_mcp_tool_wrapper(mcp_tool).await?;
+                        Ok(mcp_tool) => {
+                            if let Err(error) = tm.register_mcp_tool_wrapper(mcp_tool).await {
+                                log::error!(
+                                    "[Workflow][session={}][phase=mcp_registration] Failed to register MCP tool {}: {}",
+                                    self.session_id, tool.canonical_name, error
+                                );
+                            }
+                        }
+                        Err(error) => log::error!(
+                            "[Workflow][session={}][phase=mcp_registration] Failed to resolve MCP tool {}: {}",
+                            self.session_id, tool.canonical_name, error
+                        ),
                     }
                 }
             }
@@ -3052,7 +3085,7 @@ impl WorkflowExecutor {
 
         self.current_step = 0;
         self.consecutive_no_tool_calls = 0;
-        self.register_foundation_tools().await?;
+        self.rebuild_foundation_tools_for_runtime_update().await?;
         self.dispatch_context_usage().await?;
         self.dispatch_ui_payload(GatewayPayload::AgentConfigUpdated {
             agent_config: updated_agent_config,
@@ -7394,31 +7427,24 @@ impl WorkflowExecutor {
             new_state
         );
 
-        // Persist the authoritative workflow status before mutating in-memory state or publishing
-        // events. The frontend refreshes the workflow list as soon as it receives a terminal
-        // state; publishing first can let that refresh restore the previous running status. A
-        // failed write must leave the transition unapplied and invisible to all observers.
+        // Persist state and its recovery event together before publishing either to observers.
+        // A failed write must leave the transition unapplied and invisible.
         {
             let store = self.context.main_store.as_ref();
+            let event = (old_state != new_state).then(|| {
+                WorkflowEvent::state_changed(
+                    self.session_id.clone(),
+                    old_state.to_string(),
+                    new_state.to_string(),
+                )
+            });
             store
-                .update_workflow_status(&self.session_id, &new_state.to_string())
+                .update_workflow_status_with_event(
+                    &self.session_id,
+                    &new_state.to_string(),
+                    event.as_ref(),
+                )
                 .map_err(WorkflowEngineError::Db)?;
-        }
-
-        // Write StateChanged event if state actually changed
-        if old_state != new_state {
-            let event = WorkflowEvent::state_changed(
-                self.session_id.clone(),
-                old_state.to_string(),
-                new_state.to_string(),
-            );
-            if let Err(e) = self.append_event(&event) {
-                log::error!(
-                    "[Workflow][session={}] workflow.event.append_failed - error={}",
-                    self.session_id,
-                    e
-                );
-            }
         }
 
         self.state = new_state.clone();
@@ -8111,8 +8137,10 @@ impl WorkflowExecutor {
     async fn rebuild_foundation_tools_for_runtime_update(
         &mut self,
     ) -> Result<(), WorkflowEngineError> {
-        self.tool_manager.clear(false).await;
-        self.register_foundation_tools().await
+        let next = Arc::new(ToolManager::new());
+        self.register_foundation_tools(&next).await?;
+        self.tool_manager = next;
+        Ok(())
     }
 
     /// Diagnose missing MCP tools without delaying the ReAct loop.
@@ -8253,9 +8281,6 @@ impl WorkflowExecutor {
                 expected_folded_names.len()
             );
         }
-        self.llm_processor.mcp_tool_summaries = refreshed_summaries;
-        self.llm_processor.mcp_tool_expander_available = should_have_expander;
-
         if rebuild_if_loader_missing && registrations_changed {
             log::info!(
                 "WorkflowExecutor {}: Refreshing MCP tool registration (direct={}, folded={})",
@@ -8265,6 +8290,9 @@ impl WorkflowExecutor {
             );
             self.rebuild_foundation_tools_for_runtime_update().await?;
         }
+
+        self.llm_processor.mcp_tool_summaries = refreshed_summaries;
+        self.llm_processor.mcp_tool_expander_available = should_have_expander;
 
         Ok(())
     }
@@ -9412,6 +9440,7 @@ mod recovery_tests {
     use super::*;
     use crate::db::MainStore;
     use crate::libs::window_channels::WindowChannels;
+    use crate::tools::TOOL_READ_FILE;
     use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
     use tempfile::tempdir;
     use tokio::sync::{mpsc, Mutex};
@@ -9743,7 +9772,7 @@ mod recovery_tests {
             ExecutionPolicy::standard(),
         );
         executor
-            .register_foundation_tools()
+            .register_foundation_tools(&executor.tool_manager)
             .await
             .expect("foundation tools must register");
 
@@ -9756,6 +9785,7 @@ mod recovery_tests {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<HashSet<_>>();
+        assert!(initial_names.contains(TOOL_READ_FILE));
         assert!(!initial_names.contains("browser_click"));
         assert!(!initial_names.contains("browser_hover"));
         assert!(initial_names.contains(TOOL_MCP_TOOL_EXECUTE));
@@ -9790,6 +9820,7 @@ mod recovery_tests {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<HashSet<_>>();
+        assert!(active_names.contains(TOOL_READ_FILE));
         assert!(!active_names.contains("browser_click"));
         assert!(!active_names.contains("browser_hover"));
         assert!(active_names.contains(TOOL_MCP_TOOL_EXECUTE));
@@ -9831,6 +9862,7 @@ mod recovery_tests {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<HashSet<_>>();
+        assert!(declaration_names.contains(TOOL_READ_FILE));
         assert!(declaration_names.contains("browser_click"));
         assert!(!declaration_names.contains("browser_hover"));
         assert!(declaration_names.contains(TOOL_MCP_TOOL_EXECUTE));
@@ -10453,6 +10485,16 @@ mod recovery_tests {
         executor.agent_config.mcp_tool_exposure = Some(json!({"available": ["late__MCP__search"]}).to_string());
         let missing = executor.check_mcp_readiness().await;
         assert!(matches!(missing, Err(WorkflowEngineError::General(_))));
+        executor
+            .rebuild_foundation_tools_for_runtime_update()
+            .await
+            .expect("native tools must register without MCP");
+        assert!(executor.tool_manager.has_tool(TOOL_READ_FILE).await);
+        executor
+            .refresh_workflow_mcp_runtime_capabilities(true)
+            .await
+            .expect("missing MCP must not fail refresh");
+        assert!(executor.tool_manager.has_tool(TOOL_READ_FILE).await);
         global.register_test_mcp_tool("late", "search", json!({})).await.expect("late tool");
         global.get_mcp_server("late").await.expect("late client")
             .set_status(crate::mcp::client::McpStatus::Running).await;

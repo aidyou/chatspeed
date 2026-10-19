@@ -2385,6 +2385,47 @@ impl MainStore {
     }
 
     #[cfg(not(feature = "desktop"))]
+    pub fn update_workflow_status_with_event(
+        &self,
+        id: &str,
+        status: &str,
+        event: Option<&WorkflowEvent>,
+    ) -> Result<(), StoreError> {
+        let id = id.to_string();
+        let status = status.to_string();
+        let event = event
+            .map(|event| {
+                serde_json::to_string(&event.event_data).map(|data| {
+                    (
+                        event.event_type.as_str().to_string(),
+                        event.version.clone(),
+                        data,
+                    )
+                })
+            })
+            .transpose()?;
+        self.db_runtime()?.write_blocking(move |conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE workflows
+                 SET status = ?1,
+                     updated_at = CASE WHEN status IS NOT ?1 THEN CURRENT_TIMESTAMP ELSE updated_at END
+                 WHERE id = ?2",
+                params![status, id],
+            )?;
+            if let Some((event_type, version, data)) = event {
+                tx.execute(
+                    "INSERT INTO workflow_events (session_id, event_type, event_version, event_data)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![id, event_type, version, data],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
     pub(crate) async fn update_workflow_title_with_runtime(
         runtime: std::sync::Arc<crate::db::runtime::DbRuntime>,
         id: String,
@@ -4350,6 +4391,49 @@ mod tests {
         assert_eq!(
             index_exists, 1,
             "idx_workflow_events_session_id_id index should exist"
+        );
+    }
+
+    #[test]
+    fn workflow_status_and_state_event_roll_back_together() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-main");
+        store
+            .create_workflow("atomic-state", "Test", "agent-main", None, None)
+            .expect("workflow");
+        let original = store
+            .get_workflow_snapshot("atomic-state")
+            .expect("snapshot")
+            .workflow
+            .status;
+        store
+            .db_runtime()
+            .expect("database")
+            .write_blocking(|conn| {
+                conn.execute_batch(
+                    "CREATE TRIGGER reject_atomic_state_event
+                     BEFORE INSERT ON workflow_events
+                     BEGIN SELECT RAISE(ABORT, 'event unavailable'); END;",
+                )?;
+                Ok(())
+            })
+            .expect("trigger");
+        let event = WorkflowEvent::state_changed(
+            "atomic-state".to_string(),
+            original.clone(),
+            "thinking".to_string(),
+        );
+
+        assert!(store
+            .update_workflow_status_with_event("atomic-state", "thinking", Some(&event))
+            .is_err());
+        assert_eq!(
+            store
+                .get_workflow_snapshot("atomic-state")
+                .expect("snapshot")
+                .workflow
+                .status,
+            original
         );
     }
 

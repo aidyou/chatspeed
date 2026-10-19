@@ -135,18 +135,30 @@ impl SkillScanner {
                 continue;
             }
 
-            if let Ok(entries) = std::fs::read_dir(path) {
-                for entry in entries.flatten() {
-                    let skill_dir = entry.path();
-                    if skill_dir.is_dir() {
-                        if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
-                            manifest.source = if builtin_roots.iter().any(|root| path == root) {
-                                "builtin".to_string()
-                            } else {
-                                "user".to_string()
-                            };
-                            skills.insert(manifest.name.clone(), manifest);
-                        }
+            let entries = match std::fs::read_dir(path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    log::warn!("Skipping unreadable skill root {:?}: {}", path, error);
+                    continue;
+                }
+            };
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        log::warn!("Skipping unreadable skill entry in {:?}: {}", path, error);
+                        continue;
+                    }
+                };
+                let skill_dir = entry.path();
+                if skill_dir.is_dir() {
+                    if let Some(mut manifest) = self.try_load_skill(&skill_dir) {
+                        manifest.source = if builtin_roots.iter().any(|root| path == root) {
+                            "builtin".to_string()
+                        } else {
+                            "user".to_string()
+                        };
+                        skills.insert(manifest.name.clone(), manifest);
                     }
                 }
             }
@@ -179,11 +191,18 @@ impl SkillScanner {
             let entries = match std::fs::read_dir(path) {
                 Ok(entries) => entries,
                 Err(error) => {
-                    log::debug!("Skipping unreadable skill root {:?}: {}", path, error);
+                    log::warn!("Skipping unreadable skill root {:?}: {}", path, error);
                     continue;
                 }
             };
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        log::warn!("Skipping unreadable skill entry in {:?}: {}", path, error);
+                        continue;
+                    }
+                };
                 let skill_dir = entry.path();
                 if !skill_dir.is_dir() {
                     continue;
@@ -211,55 +230,60 @@ impl SkillScanner {
         // 1. Check for SKILL.md (Claude Code standard)
         let skill_md_path = dir.join("SKILL.md");
         if skill_md_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
-                // Trim BOM if present
-                let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+            match std::fs::read_to_string(&skill_md_path) {
+                Ok(content) => {
+                    // Trim BOM if present
+                    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
 
-                if content.starts_with("---") {
-                    let parts: Vec<&str> = content.splitn(3, "---").collect();
-                    if parts.len() >= 3 {
-                        let yaml_part = parts[1];
-                        let body_part = parts[2]; // Everything after the second ---
+                    if content.starts_with("---") {
+                        let parts: Vec<&str> = content.splitn(3, "---").collect();
+                        if parts.len() >= 3 {
+                            let yaml_part = parts[1];
+                            let body_part = parts[2]; // Everything after the second ---
 
-                        match serde_yaml::from_str::<SkillManifest>(yaml_part) {
-                            Ok(mut manifest) => {
-                                manifest.instructions = body_part.to_string(); // Keep full body
-                                manifest.skill_dir = Some(dir.to_path_buf());
-                                manifest.references = self.scan_references(dir);
-                                return Some(manifest);
-                            }
-                            Err(e) => {
-                                log::info!("Failed to parse YAML frontmatter in {:?}: {}. Trying fallback...", skill_md_path, e);
-
-                                // Fallback: regex for name and description
-                                let name_re = regex::Regex::new(r"(?m)^name:\s*(.+)$").unwrap();
-                                let desc_re =
-                                    regex::Regex::new(r"(?m)^description:\s*(.+)$").unwrap();
-
-                                if let Some(cap) = name_re.captures(yaml_part) {
-                                    let skill_name =
-                                        cap.get(1).unwrap().as_str().trim().to_string();
-                                    let description = desc_re
-                                        .captures(yaml_part)
-                                        .and_then(|c| c.get(1))
-                                        .map(|m| m.as_str().trim().to_string())
-                                        .unwrap_or_default();
-
-                                    let manifest = SkillManifest {
-                                        name: skill_name,
-                                        version: "1.0.0".to_string(),
-                                        source: default_source(),
-                                        description,
-                                        tools: vec![],
-                                        instructions: body_part.to_string(),
-                                        skill_dir: Some(dir.to_path_buf()),
-                                        references: self.scan_references(dir),
-                                    };
+                            match serde_yaml::from_str::<SkillManifest>(yaml_part) {
+                                Ok(mut manifest) => {
+                                    manifest.instructions = body_part.to_string(); // Keep full body
+                                    manifest.skill_dir = Some(dir.to_path_buf());
+                                    manifest.references = self.scan_references(dir);
                                     return Some(manifest);
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to parse YAML frontmatter in {:?}: {}. Trying fallback...", skill_md_path, e);
+
+                                    // Fallback: regex for name and description
+                                    let name_re = regex::Regex::new(r"(?m)^name:\s*(.+)$").unwrap();
+                                    let desc_re =
+                                        regex::Regex::new(r"(?m)^description:\s*(.+)$").unwrap();
+
+                                    if let Some(cap) = name_re.captures(yaml_part) {
+                                        let skill_name =
+                                            cap.get(1).unwrap().as_str().trim().to_string();
+                                        let description = desc_re
+                                            .captures(yaml_part)
+                                            .and_then(|c| c.get(1))
+                                            .map(|m| m.as_str().trim().to_string())
+                                            .unwrap_or_default();
+
+                                        let manifest = SkillManifest {
+                                            name: skill_name,
+                                            version: "1.0.0".to_string(),
+                                            source: default_source(),
+                                            description,
+                                            tools: vec![],
+                                            instructions: body_part.to_string(),
+                                            skill_dir: Some(dir.to_path_buf()),
+                                            references: self.scan_references(dir),
+                                        };
+                                        return Some(manifest);
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                Err(error) => {
+                    log::warn!("Skipping unreadable skill {:?}: {}", skill_md_path, error)
                 }
             }
         }
@@ -269,21 +293,26 @@ impl SkillScanner {
         for name in manifest_names {
             let manifest_path = dir.join(name);
             if manifest_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-                    match serde_json::from_str::<SkillManifest>(&content) {
+                match std::fs::read_to_string(&manifest_path) {
+                    Ok(content) => match serde_json::from_str::<SkillManifest>(&content) {
                         Ok(mut manifest) => {
                             manifest.skill_dir = Some(dir.to_path_buf());
                             manifest.references = self.scan_references(dir);
                             return Some(manifest);
                         }
                         Err(e) => {
-                            log::info!(
+                            log::warn!(
                                 "Failed to parse JSON manifest in {:?}: {}",
                                 manifest_path,
                                 e
                             );
                         }
-                    }
+                    },
+                    Err(error) => log::warn!(
+                        "Skipping unreadable skill manifest {:?}: {}",
+                        manifest_path,
+                        error
+                    ),
                 }
             }
         }
@@ -351,6 +380,34 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn broken_skill_does_not_hide_valid_sibling() {
+        let root = TempDir::new().expect("skill root");
+        let broken = root.path().join("broken");
+        let unreadable = root.path().join("unreadable");
+        let valid = root.path().join("valid");
+        fs::create_dir(&broken).expect("broken directory");
+        fs::create_dir(&unreadable).expect("unreadable directory");
+        fs::create_dir(&valid).expect("valid directory");
+        fs::write(
+            broken.join("SKILL.md"),
+            "---\ndescription: [invalid\n---\nbody",
+        )
+        .expect("broken skill");
+        fs::write(unreadable.join("SKILL.md"), [0xff]).expect("invalid UTF-8 skill");
+        fs::write(
+            valid.join("SKILL.md"),
+            "---\nname: valid\ndescription: Works\n---\nbody",
+        )
+        .expect("valid skill");
+
+        let skills = SkillScanner::with_search_paths(vec![root.path().to_path_buf()])
+            .scan()
+            .expect("scan continues");
+        assert_eq!(skills.len(), 1);
+        assert!(skills.contains_key("valid"));
+    }
 
     #[test]
     fn test_scan_references_with_files() {

@@ -4870,10 +4870,23 @@ pub(crate) async fn workflow_stop_core(
     // normal shutdown path after it processes the stop signal.
     let gateway_arc = gateway.clone();
     let workflow_manager = workflow_manager.clone();
-    match gateway_arc
+    let delivery = gateway_arc
         .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
         .await
-    {
+        .or_else(|error| {
+            WorkflowManager::try_send_signal_to_session(
+                &session_id,
+                "{\"type\": \"stop\"}".to_string(),
+            )
+            .map(|_| {
+                log::warn!(
+                    "[Workflow][session={}][phase=stop] Gateway input failed; stop delivered through the manager channel: {}",
+                    session_id, error
+                );
+            })
+            .map_err(|_| error)
+        });
+    match delivery {
         Ok(_) => {
             let _ =
                 workflow_manager.update_session_status(&session_id, ManagedSessionStatus::Stopping);
@@ -4914,7 +4927,13 @@ pub(crate) async fn workflow_stop_core(
         }
         Err(e) if workflow_manager.has_session(&session_id) => {
             if let Some(executor) = workflow_manager.get_executor(&session_id) {
-                let mut guard = executor.lock().await;
+                let Ok(mut guard) = executor.try_lock() else {
+                    log::error!(
+                        "[Workflow][session={}][phase=stop] Both signal channels failed while the executor is busy; retaining the live session: {}",
+                        session_id, e
+                    );
+                    return Err(ApplicationError::gateway(e.to_string()));
+                };
                 guard.set_state(WorkflowState::Cancelled);
             }
             let _ = persist_cancelled_workflow_state(state.as_ref(), &session_id);
