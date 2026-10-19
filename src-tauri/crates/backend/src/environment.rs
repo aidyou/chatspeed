@@ -1,11 +1,13 @@
+use std::collections::HashSet;
 use std::env;
 use std::io::Read;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -61,25 +63,19 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-/// Attempts to retrieve the full system PATH environment variable on Windows.
-///
-/// This function tries multiple shell commands (PowerShell, CMD) to get the complete
-/// PATH, as the process's environment might not always reflect the full system PATH.
-///
-/// # Returns
-/// - `Some(String)`: The full PATH string if successfully retrieved.
-/// - `None`: If the PATH could not be retrieved using the attempted methods.
 fn get_shell_path() -> Option<String> {
-    // Windows: Try multiple methods to get full PATH
-    let methods = vec![
-        // PowerShell
-        ("powershell", vec!["-Command", "$env:PATH"]),
-        // CMD
-        ("cmd", vec!["/C", "echo %PATH%"]),
+    let deadline = Instant::now() + SHELL_PATH_PROBE_BUDGET;
+    let methods = [
+        ("powershell", ["-Command", "$env:PATH"]),
+        ("cmd", ["/C", "echo %PATH%"]),
     ];
 
     for (shell, args) in methods {
-        if let Some(path) = run_path_probe(shell, &args) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if let Some(path) = run_path_probe_with_timeout(shell, &args, remaining) {
             if path != "%PATH%" {
                 return Some(path);
             }
@@ -88,8 +84,9 @@ fn get_shell_path() -> Option<String> {
     None
 }
 
-const PATH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const PATH_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const PATH_PROBE_OUTPUT_LIMIT: usize = 64 * 1024;
+const SHELL_PATH_PROBE_BUDGET: Duration = Duration::from_millis(750);
 
 fn terminate_probe(child: &mut Child) {
     #[cfg(unix)]
@@ -99,7 +96,11 @@ fn terminate_probe(child: &mut Child) {
     let _ = child.kill();
 }
 
-fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
+fn run_path_probe_with_timeout(
+    shell: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<String> {
     let mut command = Command::new(shell);
     command
         .args(args)
@@ -117,7 +118,7 @@ fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
         });
     }
     #[cfg(target_os = "windows")]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    command.creation_flags(0x08000000);
 
     let mut child = command.spawn().ok()?;
     let stdout = child.stdout.take()?;
@@ -128,12 +129,12 @@ fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
         let _ = output_tx.send(output);
     });
 
-    let deadline = Instant::now() + PATH_PROBE_TIMEOUT;
+    let deadline = Instant::now() + timeout.min(PATH_PROBE_TIMEOUT);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let output = output_rx
-                    .recv_timeout(Duration::from_millis(100))
+                    .recv_timeout(Duration::from_millis(50))
                     .ok()?;
                 if !status.success() || output.is_empty() {
                     return None;
@@ -151,65 +152,164 @@ fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
+    run_path_probe_with_timeout(shell, args, PATH_PROBE_TIMEOUT)
+}
+
+fn append_env_path(paths: &mut Vec<PathBuf>, name: &str, suffix: &[&str]) {
+    if let Some(mut path) = env::var_os(name).map(PathBuf::from) {
+        for component in suffix {
+            path.push(component);
+        }
+        paths.push(path);
+    }
+}
+
 fn user_tool_paths() -> Vec<PathBuf> {
     let home = dirs::home_dir();
     let mut paths = Vec::new();
+
     if let Some(home) = &home {
-        let cargo_home = env::var_os("CARGO_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cargo"));
-        paths.push(cargo_home.join("bin"));
-        paths.push(home.join(".local/bin"));
-        paths.push(home.join(".bun/bin"));
+        paths.extend([
+            home.join(".cargo/bin"),
+            home.join(".local/bin"),
+            home.join(".local/share/pnpm"),
+            home.join(".config/pnpm"),
+            home.join(".bun/bin"),
+            home.join(".volta/bin"),
+            home.join(".fnm"),
+            home.join(".pyenv/bin"),
+            home.join(".pyenv/shims"),
+            home.join(".goenv/bin"),
+            home.join(".goenv/shims"),
+            home.join(".rbenv/bin"),
+            home.join(".rbenv/shims"),
+            home.join(".rvm/bin"),
+            home.join(".asdf/bin"),
+            home.join(".asdf/shims"),
+            home.join(".mise/bin"),
+            home.join(".mise/shims"),
+            home.join(".local/share/mise/bin"),
+            home.join(".local/share/mise/shims"),
+            home.join(".local/share/rtx/bin"),
+            home.join(".local/share/rtx/shims"),
+            home.join(".nvm/current/bin"),
+            home.join(".phpenv/bin"),
+            home.join(".phpenv/shims"),
+            home.join(".config/composer/vendor/bin"),
+            home.join(".composer/vendor/bin"),
+            home.join(".poetry/bin"),
+            home.join("go/bin"),
+            home.join(".sdkman/candidates/java/current/bin"),
+            home.join(".sdkman/candidates/maven/current/bin"),
+            home.join(".sdkman/candidates/gradle/current/bin"),
+        ]);
+
+        // Version managers commonly keep the active runtime one level below a
+        // stable root. Scan only that bounded level; never execute an init script.
+        for (root, suffix) in [
+            (home.join(".nvm/versions/node"), PathBuf::from("bin")),
+            (home.join(".pyenv/versions"), PathBuf::from("bin")),
+            (home.join(".goenv/versions"), PathBuf::from("bin")),
+            (home.join(".rbenv/versions"), PathBuf::from("bin")),
+            (home.join(".sdkman/candidates"), PathBuf::from("current/bin")),
+        ] {
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten().take(128) {
+                    let path = entry.path().join(&suffix);
+                    if path.is_dir() {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
     }
+
+    append_env_path(&mut paths, "CARGO_HOME", &["bin"]);
+    append_env_path(&mut paths, "PNPM_HOME", &[]);
+    append_env_path(&mut paths, "XDG_DATA_HOME", &["pnpm"]);
+    append_env_path(&mut paths, "NPM_CONFIG_PREFIX", &["bin"]);
+    append_env_path(&mut paths, "GOBIN", &[]);
+    append_env_path(&mut paths, "GOPATH", &["bin"]);
+    append_env_path(&mut paths, "PYENV_ROOT", &["bin"]);
+    append_env_path(&mut paths, "PYENV_ROOT", &["shims"]);
+    append_env_path(&mut paths, "UV_TOOL_BIN_DIR", &[]);
+    append_env_path(&mut paths, "PIPX_BIN_DIR", &[]);
+    append_env_path(&mut paths, "POETRY_HOME", &["bin"]);
+    append_env_path(&mut paths, "CONDA_PREFIX", &["bin"]);
+    append_env_path(&mut paths, "PIXI_HOME", &["bin"]);
+    append_env_path(&mut paths, "MISE_BIN_PATH", &[]);
+    append_env_path(&mut paths, "MISE_DATA_DIR", &["shims"]);
+    append_env_path(&mut paths, "ASDF_DATA_DIR", &["shims"]);
+    append_env_path(&mut paths, "RBENV_ROOT", &["bin"]);
+    append_env_path(&mut paths, "RBENV_ROOT", &["shims"]);
+    append_env_path(&mut paths, "RVM_BIN", &[]);
+    append_env_path(&mut paths, "COMPOSER_HOME", &["vendor/bin"]);
+    append_env_path(&mut paths, "PHP_PEAR_BIN_DIR", &[]);
+    append_env_path(&mut paths, "FNM_MULTISHELL_PATH", &[]);
+    append_env_path(&mut paths, "VOLTA_HOME", &["bin"]);
+    append_env_path(&mut paths, "NVM_BIN", &[]);
+    append_env_path(&mut paths, "NVM_SYMLINK", &[]);
+    append_env_path(&mut paths, "SDKMAN_DIR", &["candidates/java/current/bin"]);
+    append_env_path(&mut paths, "SDKMAN_DIR", &["candidates/maven/current/bin"]);
+    append_env_path(&mut paths, "SDKMAN_DIR", &["candidates/gradle/current/bin"]);
+
+    #[cfg(target_os = "macos")]
+    paths.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+        PathBuf::from("/opt/local/bin"),
+        PathBuf::from("/opt/local/sbin"),
+    ]);
+
+    #[cfg(target_os = "linux")]
+    paths.extend([
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+        PathBuf::from("/snap/bin"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/sbin"),
+    ]);
 
     #[cfg(windows)]
-    if let Some(home) = home {
-        paths.push(home.join("AppData/Roaming/npm"));
-        paths.push(home.join("AppData/Local/pnpm"));
-        paths.push(home.join(".bun/bin"));
-
-        for path in [
-            env::var_os("APPDATA").map(PathBuf::from),
-            env::var_os("LOCALAPPDATA").map(PathBuf::from),
-            env::var_os("PNPM_HOME").map(PathBuf::from),
-            env::var_os("NPM_CONFIG_PREFIX")
-                .map(PathBuf::from)
-                .map(|path| path.join("bin")),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            paths.push(path);
+    {
+        if let Some(home) = home {
+            paths.extend([
+                home.join("AppData/Roaming/npm"),
+                home.join("AppData/Local/pnpm"),
+                home.join(".bun/bin"),
+                home.join(".volta/bin"),
+                home.join(".pyenv/pyenv-win/bin"),
+                home.join(".pyenv/pyenv-win/shims"),
+                home.join("scoop/shims"),
+            ]);
         }
-
-        let mut roots = vec![home.join("AppData/Local/fnm"), home.join(".fnm")];
+        paths.extend([
+            PathBuf::from(r"C:\ProgramData\chocolatey\bin"),
+            PathBuf::from(r"C:\Program Files\nodejs"),
+        ]);
         if let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-            roots.push(local_app_data.join("fnm"));
+            paths.extend([
+                local_app_data.join("pnpm"),
+                local_app_data.join("Volta/bin"),
+                local_app_data.join("Microsoft/WinGet/Links"),
+                local_app_data.join("fnm"),
+            ]);
         }
-        if let Some(root) = env::var_os("FNM_DIR").map(PathBuf::from) {
-            roots.insert(0, root);
+        if let Some(app_data) = env::var_os("APPDATA").map(PathBuf::from) {
+            paths.push(app_data.join("npm"));
         }
-        if let Some(root) = env::var_os("FNM_MULTISHELL_PATH").map(PathBuf::from) {
-            paths.push(root);
+        if let Some(nvm_home) = env::var_os("NVM_HOME").map(PathBuf::from) {
+            paths.push(nvm_home);
         }
-        for root in roots {
-            let default_bin = root.join("aliases/default/installation");
-            if default_bin.is_dir() {
-                paths.push(default_bin);
-            }
-            let Ok(entries) = std::fs::read_dir(root.join("node-versions")) else {
-                continue;
-            };
-            let mut version_bins = entries
-                .flatten()
-                .map(|entry| entry.path().join("installation"))
-                .filter(|bin| bin.is_dir())
-                .collect::<Vec<_>>();
-            version_bins.sort();
-            paths.extend(version_bins);
+        if let Some(fnm_dir) = env::var_os("FNM_DIR").map(PathBuf::from) {
+            paths.push(fnm_dir);
         }
     }
+
     paths
 }
 
@@ -218,6 +318,66 @@ fn discovered_tool_path() -> String {
     user_tool_paths()
         .into_iter()
         .filter(|path| path.is_dir())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+fn normalize_path_entry(entry: &str) -> Option<PathBuf> {
+    let entry = entry.trim().trim_matches('"');
+    if entry.is_empty() {
+        return None;
+    }
+
+    let raw = PathBuf::from(entry);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        std::env::current_dir().ok()?.join(raw)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir | Component::Normal(_) => normalized.push(component.as_os_str()),
+        }
+    }
+
+    Some(std::fs::canonicalize(&normalized).unwrap_or(normalized))
+}
+
+fn path_identity(path: &Path) -> String {
+    let value = path.to_string_lossy().into_owned();
+    if cfg!(windows) {
+        value.to_ascii_lowercase()
+    } else {
+        value
+    }
+}
+
+fn normalized_path_entries(path_value: &str) -> Vec<PathBuf> {
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let mut entries = Vec::new();
+    let mut identities = HashSet::new();
+    for entry in path_value.split(separator) {
+        let Some(normalized) = normalize_path_entry(entry) else {
+            continue;
+        };
+        if identities.insert(path_identity(&normalized)) {
+            entries.push(normalized);
+        }
+    }
+    entries
+}
+
+fn format_path_entries(entries: impl IntoIterator<Item = PathBuf>) -> String {
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    entries
+        .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(separator)
@@ -236,31 +396,23 @@ fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn get_shell_path() -> Option<String> {
-    // Keep this general environment probe independent of the terminal UI allowlist: a POSIX
-    // `sh` remains a valid login-PATH fallback even though it lacks the terminal prompt contract.
+    let deadline = Instant::now() + SHELL_PATH_PROBE_BUDGET;
     let mut shell_paths = login_path_shell_candidates(
-        get_available_shells()
-            .into_iter()
-            .map(|shell| shell.path)
-            .collect(),
+        env::var("SHELL").into_iter().collect(),
     );
-    if let Ok(output) = Command::new("which").arg("sh").output() {
-        let shell = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if output.status.success() && !shell.is_empty() && !shell_paths.contains(&shell) {
-            shell_paths.push(shell);
-        }
-    }
 
-    for shell_path in shell_paths {
-        let probes: &[&[&str]] = &[
-            &["-l", "-c", "echo $PATH"][..],
-            &["-c", "echo $PATH"][..],
-        ];
-        for args in probes {
-            if let Some(path) = run_path_probe(&shell_path, args) {
-                log::debug!("Using bounded PATH probe: {} {:?}", shell_path, args);
-                return Some(path);
-            }
+    for shell_path in shell_paths.drain(..) {
+        if !is_executable_file(Path::new(&shell_path)) || Instant::now() >= deadline {
+            continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if let Some(path) = run_path_probe_with_timeout(
+            &shell_path,
+            &["-l", "-c", "echo $PATH"],
+            remaining,
+        ) {
+            log::debug!("Using bounded PATH probe: {}", shell_path);
+            return Some(path);
         }
     }
     None
@@ -419,19 +571,69 @@ pub(crate) fn get_default_shell() -> Option<ShellDescriptor> {
     select_default_shell(get_available_shells(), user_shell.as_deref())
 }
 
-/// Builds the minimal environment required by a terminal child without exposing it to the UI.
-/// The PATH includes the inherited environment, bounded login-shell discovery, and
-/// deterministic user tool directories such as Cargo and fnm installations.
+struct ChildEnvironment {
+    values: RwLock<Vec<(String, String)>>,
+    probe_complete: tokio::sync::watch::Sender<bool>,
+}
+
+static CHILD_ENVIRONMENT: OnceLock<Arc<ChildEnvironment>> = OnceLock::new();
+
+fn start_child_environment(
+    values: Vec<(String, String)>,
+    probe: impl FnOnce() -> Option<String> + Send + 'static,
+) -> Arc<ChildEnvironment> {
+    let (probe_complete, _) = tokio::sync::watch::channel(false);
+    let environment = Arc::new(ChildEnvironment {
+        values: RwLock::new(values),
+        probe_complete,
+    });
+    let background = Arc::clone(&environment);
+    let started = std::thread::Builder::new()
+        .name("chatspeed-path-probe".to_string())
+        .spawn(move || {
+            if let Some(shell_path) = probe() {
+                if let Ok(mut current) = background.values.write() {
+                    let original_path = current
+                        .iter()
+                        .find(|(key, _)| key == "PATH")
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_default();
+                    let merged_path = merge_paths(&original_path, &shell_path);
+                    set_environment_value(&mut current, "PATH", merged_path);
+                }
+            }
+            background.probe_complete.send_replace(true);
+        });
+    if started.is_err() {
+        environment.probe_complete.send_replace(true);
+    }
+    environment
+}
+
+#[cfg(any(test, not(feature = "desktop")))]
+async fn wait_for_path_probe(environment: &ChildEnvironment, budget: Duration) -> bool {
+    let mut complete = environment.probe_complete.subscribe();
+    tokio::time::timeout(budget, complete.wait_for(|ready| *ready))
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
+/// Lets stdio resolve its executable after the one bounded PATH probe has settled.
+/// Shell and terminal launches keep their non-blocking fail-open environment.
 #[cfg(not(feature = "desktop"))]
-pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
+pub(crate) async fn wait_for_child_environment() {
+    let shared = CHILD_ENVIRONMENT
+        .get_or_init(|| start_child_environment(base_child_environment(), get_shell_path));
+    if !wait_for_path_probe(shared, Duration::from_secs(1)).await {
+        log::warn!("Child PATH probe did not settle within the MCP startup budget");
+    }
+}
+
+fn base_child_environment() -> Vec<(String, String)> {
     let mut environment = env::vars().collect::<Vec<_>>();
     let original_path = env::var("PATH").unwrap_or_default();
     let discovered_path = discovered_tool_path();
-    let shell_path = get_shell_path().unwrap_or_default();
-    let merged_path = merge_paths(
-        &original_path,
-        &merge_paths(&discovered_path, &shell_path),
-    );
+    let merged_path = merge_paths(&original_path, &discovered_path);
     set_environment_value(&mut environment, "PATH", merged_path);
 
     if !environment.iter().any(|(key, _)| key == "HOME") {
@@ -443,11 +645,30 @@ pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
             );
         }
     }
-
     environment
 }
 
-#[cfg(not(feature = "desktop"))]
+/// Returns the fail-open environment shared by host shell and MCP children.
+pub(crate) fn get_child_environment() -> Vec<(String, String)> {
+    let shared = CHILD_ENVIRONMENT
+        .get_or_init(|| start_child_environment(base_child_environment(), get_shell_path));
+
+    shared
+        .values
+        .read()
+        .map(|environment| environment.clone())
+        .unwrap_or_else(|_| base_child_environment())
+}
+
+/// Builds the environment shared by host shell and MCP child processes.
+///
+/// PATH discovery is deliberately fail-open: the inherited PATH and existing
+/// deterministic tool directories are available even when a login shell is
+/// missing, slow, or has a broken startup script.
+pub(crate) fn get_terminal_environment() -> Vec<(String, String)> {
+    get_child_environment()
+}
+
 fn set_environment_value(environment: &mut Vec<(String, String)>, key: &str, value: String) {
     if let Some((_, existing_value)) = environment
         .iter_mut()
@@ -459,29 +680,16 @@ fn set_environment_value(environment: &mut Vec<(String, String)>, key: &str, val
     }
 }
 
-/// Sets up environment variables, primarily by attempting to obtain and merge the full system PATH.
-///
-/// This function first saves the current PATH, then tries to get a more complete PATH
-/// using `get_shell_path`. If successful, it merges the new PATH with the original,
-/// prioritizing the new one, and sets it as the process's PATH. It also verifies
-/// the availability of essential commands like `node`, `npm`, and `npx`.
-///
-/// # Returns
-/// - `Ok(())`: If the environment variables were set up successfully.
-/// - `Err(String)`: If there was an error obtaining the full shell PATH.
+/// Sets up the process PATH from the same fail-open child environment used by
+/// host shell and MCP subprocesses. Discovery failures never fail initialization.
 fn setup_environment_variables() -> Result<(), String> {
     log::debug!("Setting up environment variables...");
-
-    let original_path = env::var("PATH").unwrap_or_default();
-    let discovered_path = discovered_tool_path();
-    let shell_path = get_shell_path().unwrap_or_default();
-    let merged_path = merge_paths(
-        &original_path,
-        &merge_paths(&discovered_path, &shell_path),
-    );
-    if merged_path != original_path {
-        env::set_var("PATH", &merged_path);
-        log::info!("New PATH set: {}", merged_path);
+    let environment = get_child_environment();
+    if let Some((_, path)) = environment.iter().find(|(key, _)| key == "PATH") {
+        if env::var("PATH").as_deref() != Ok(path.as_str()) {
+            env::set_var("PATH", path);
+            log::debug!("Normalized process PATH for child compatibility");
+        }
     }
     Ok(())
 }
@@ -499,29 +707,17 @@ fn setup_environment_variables() -> Result<(), String> {
 /// # Returns
 /// - `String`: The merged and deduplicated PATH string.
 fn merge_paths(original: &str, new: &str) -> String {
-    let separator = if cfg!(windows) { ";" } else { ":" };
-
-    let mut paths = Vec::new();
-    let original_paths: Vec<&str> = original.split(separator).collect();
-    let new_paths: Vec<&str> = new.split(separator).collect();
-
-    // Add new paths to the front (higher priority)
-    for path in new_paths {
-        let path = path.trim();
-        if !path.is_empty() && !paths.contains(&path) {
-            paths.push(path);
+    let mut entries = normalized_path_entries(new);
+    let mut identities = entries
+        .iter()
+        .map(|path| path_identity(path))
+        .collect::<HashSet<_>>();
+    for path in normalized_path_entries(original) {
+        if identities.insert(path_identity(&path)) {
+            entries.push(path);
         }
     }
-
-    // Add original paths to the end (lower priority)
-    for path in original_paths {
-        let path = path.trim();
-        if !path.is_empty() && !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-
-    paths.join(separator)
+    format_path_entries(entries)
 }
 
 #[cfg(test)]
@@ -530,6 +726,39 @@ mod tests {
         dedupe_shells, merge_paths, run_path_probe, select_default_shell, supports_terminal_shell,
         ShellDescriptor,
     };
+    #[cfg(unix)]
+    use super::user_tool_paths;
+
+    #[tokio::test]
+    async fn child_path_wait_observes_the_completed_probe_before_resolution() {
+        let (release, wait) = std::sync::mpsc::channel();
+        let environment = super::start_child_environment(
+            vec![("PATH".to_string(), "/initial/bin".to_string())],
+            move || wait.recv().ok(),
+        );
+        let budget = std::time::Duration::from_millis(10);
+        assert!(!super::wait_for_path_probe(&environment, budget).await);
+        assert_eq!(
+            environment.values.read().expect("environment")[0].1,
+            "/initial/bin"
+        );
+
+        release.send("/late/bin".to_string()).expect("release probe");
+        assert!(super::wait_for_path_probe(&environment, std::time::Duration::from_secs(1)).await);
+        let values = environment.values.read().expect("settled environment");
+        assert_eq!(values[0].1, merge_paths("/initial/bin", "/late/bin"));
+        drop(values);
+        // Completion is retained even when the probe finishes before a subscriber arrives.
+        assert!(super::wait_for_path_probe(&environment, budget).await);
+    }
+
+    #[tokio::test]
+    async fn child_path_failed_probe_settles_and_keeps_the_base_environment() {
+        let initial = vec![("PATH".to_string(), "base-path".to_string())];
+        let environment = super::start_child_environment(initial.clone(), || None);
+        assert!(super::wait_for_path_probe(&environment, std::time::Duration::from_secs(1)).await);
+        assert_eq!(*environment.values.read().expect("environment"), initial);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -619,9 +848,38 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn user_tool_paths_include_linux_pnpm_default_directory() {
+        let home = dirs::home_dir().expect("test home directory");
+        assert!(user_tool_paths().contains(&home.join(".local/share/pnpm")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merged_path_absolutizes_and_deduplicates_entries() {
+        let directory = tempfile::tempdir().expect("path directory");
+        let nested = directory.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("nested directory");
+        let relative = format!("{}/../nested", nested.display());
+        let merged = merge_paths(&relative, &nested.to_string_lossy());
+        let entries = merged.split(':').collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], nested.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_environment_is_available_without_shell_probe_success() {
+        let environment = super::get_child_environment();
+        assert!(environment.iter().any(|(key, value)| {
+            key == "PATH" && !value.is_empty() && value.split(':').all(|entry| entry.starts_with('/'))
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn merged_path_prioritizes_login_shell_entries_without_duplicates() {
         let merged = merge_paths("/usr/bin:/bin:/usr/bin", "/custom/bin:/usr/bin");
-        assert_eq!(merged, "/custom/bin:/usr/bin:/bin");
+        assert_eq!(merged, "/custom/bin:/usr/bin");
     }
 
     #[cfg(unix)]

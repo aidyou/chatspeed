@@ -143,14 +143,22 @@ export const useCapabilityStore = defineStore('capability', () => {
    * Kept separate from the legacy MCP list call so the settings page can show
    * the same facts the CLI reports without changing the edit wire (AC-12).
    */
+  let mcpReadRevision = 0;
   async function loadMcpServers() {
+    const revision = ++mcpReadRevision;
     lastError.value = null;
     try {
       const servers = await invokeCapability('capability_mcp_servers');
-      mcpViews.value = mcpViewIndex(servers);
+      if (revision === mcpReadRevision) {
+        mcpViews.value = mcpViewIndex(servers);
+      }
       return servers;
     } catch (error) {
-      lastError.value = error.message;
+      if (revision === mcpReadRevision) {
+        // A failed read is unknown, never evidence that a cached server still runs.
+        mcpViews.value = {};
+        lastError.value = error.message;
+      }
       throw error;
     }
   }

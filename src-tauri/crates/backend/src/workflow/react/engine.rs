@@ -229,6 +229,8 @@ pub struct WorkflowExecutor {
     /// Request-local runtime guidance. This is consumed by the next LLM call and is never
     /// persisted into transcript history or the AI context projection cache.
     pub(crate) next_llm_runtime_reminder: Option<String>,
+    /// Segment for which MCP readiness has already been established.
+    mcp_ready_segment_id: Option<i32>,
 }
 
 impl WorkflowExecutor {
@@ -1990,6 +1992,7 @@ impl WorkflowExecutor {
             pending_final_review: None,
             pending_completion_reports: Vec::new(),
             next_llm_runtime_reminder: None,
+            mcp_ready_segment_id: None,
         };
 
         // UI delivery stays isolated behind the best-effort dispatcher. Recovery-authoritative
@@ -2283,8 +2286,12 @@ impl WorkflowExecutor {
         }
         self.sync_runtime_skills_from_agent_config();
         self.rebuild_auto_approve_from_agent_config();
-        self.refresh_workflow_mcp_runtime_capabilities(false)
-            .await?;
+        if let Err(error) = self.refresh_workflow_mcp_runtime_capabilities(false).await {
+            log::error!(
+                "[Workflow][session={}][phase=mcp_refresh] MCP tool refresh failed during initialization; continuing ReAct: {}",
+                self.session_id, error
+            );
+        }
 
         self.register_foundation_tools().await?;
 
@@ -4888,7 +4895,24 @@ impl WorkflowExecutor {
                         .clone()
                 };
 
-                self.refresh_workflow_mcp_runtime_capabilities(true).await?;
+                if let Err(error) = self.refresh_workflow_mcp_runtime_capabilities(true).await {
+                    log::error!(
+                        "[Workflow][session={}][phase=mcp_refresh] MCP tool refresh failed; continuing ReAct: {}",
+                        self.session_id, error
+                    );
+                }
+                if self.mcp_ready_segment_id != Some(self.context.current_segment_id) {
+                    match self.check_mcp_readiness().await {
+                        Ok(()) => {}
+                        Err(error) => {
+                            log::error!(
+                                "[Workflow][session={}][phase=mcp_readiness] MCP tools are unavailable; continuing ReAct without them: {}",
+                                self.session_id, error
+                            );
+                        }
+                    }
+                    self.mcp_ready_segment_id = Some(self.context.current_segment_id);
+                }
 
                 let available_tools = self
                     .tool_manager
@@ -8091,6 +8115,67 @@ impl WorkflowExecutor {
         self.register_foundation_tools().await
     }
 
+    /// Diagnose missing MCP tools without delaying the ReAct loop.
+    async fn check_mcp_readiness(&self) -> Result<(), WorkflowEngineError> {
+        if !self.policy.allowed_categories.contains(&ToolCategory::Mcp) {
+            return Ok(());
+        }
+        let Some(allowlist) = self.mcp_tools_allowlist() else {
+            return Ok(());
+        };
+        if allowlist.is_empty() {
+            return Ok(());
+        }
+        log::debug!(
+            "[Workflow][session={}][phase=mcp_readiness] Checking {} configured MCP tools in segment {}",
+            self.session_id, allowlist.len(), self.context.current_segment_id
+        );
+        let statuses = self
+            .global_tool_manager
+            .get_mcp_serves_status()
+            .await
+            .map_err(|error| WorkflowEngineError::General(error.to_string()))?;
+        let registered_tools = self
+            .global_tool_manager
+            .get_mcp_tool_specs(Some(ToolScope::Workflow))
+            .await
+            .into_iter()
+            .map(|tool| tool.canonical_name)
+            .collect::<HashSet<_>>();
+        let mut unavailable = Vec::new();
+        for canonical in allowlist {
+            let Some((server, tool_name)) = canonical.split_once(MCP_TOOL_NAME_SPLIT) else {
+                unavailable.push(canonical);
+                continue;
+            };
+            let explicitly_disabled = self
+                .global_tool_manager
+                .get_mcp_server_tools(server)
+                .await
+                .ok()
+                .and_then(|tools| tools.into_iter().find(|tool| tool.name == tool_name))
+                .is_some_and(|tool| tool.disabled);
+            if explicitly_disabled {
+                continue;
+            }
+            if !registered_tools.contains(&canonical)
+                || !statuses
+                    .get(server)
+                    .is_some_and(|status| *status == crate::mcp::client::McpStatus::Running)
+            {
+                unavailable.push(canonical);
+            }
+        }
+        if unavailable.is_empty() {
+            Ok(())
+        } else {
+            unavailable.sort();
+            Err(WorkflowEngineError::General(
+                t!("workflow.error.mcp_tools_not_ready", tools = unavailable.join(", ")).to_string(),
+            ))
+        }
+    }
+
     async fn refresh_workflow_mcp_runtime_capabilities(
         &mut self,
         rebuild_if_loader_missing: bool,
@@ -8636,7 +8721,12 @@ impl WorkflowExecutor {
                 Self::mcp_runtime_config_after_active_update(self.mcp_tool_config(), &mcp_tools);
             self.agent_config.mcp_tool_exposure = serde_json::to_string(&runtime_mcp_tools).ok();
             self.rebuild_auto_approve_from_agent_config();
-            self.refresh_workflow_mcp_runtime_capabilities(true).await?;
+            if let Err(error) = self.refresh_workflow_mcp_runtime_capabilities(true).await {
+                log::error!(
+                    "[Workflow][session={}][phase=mcp_refresh] MCP tool refresh failed after configuration update; continuing ReAct: {}",
+                    self.session_id, error
+                );
+            }
             let tools = self.get_auto_approved_tools();
             self.dispatch_ui_payload(GatewayPayload::AutoApprovedToolsUpdated { tools })
                 .await?;
@@ -10334,6 +10424,43 @@ mod recovery_tests {
             previous_context.sub_agent_sessions,
             vec!["subagent-old".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_readiness_covers_empty_missing_running_and_stopped_tools() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "mcp-readiness";
+        let agent = test_agent("mcp-readiness-agent");
+        store.add_agent(&agent).expect("test agent");
+        store.create_workflow(session_id, "test", &agent.id, None, None).expect("test workflow");
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let global = Arc::new(ToolManager::new());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(), store, chat_state, gateway,
+            Arc::new(UnusedSubAgentFactory), agent,
+            vec![temp_dir.path().to_path_buf()], temp_dir.path().join("app-data"),
+            None, None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(31).expect("tsid")),
+            global.clone(), false, ExecutionPolicy::standard(),
+        );
+        executor.agent_config.mcp_tool_exposure = None;
+        executor.check_mcp_readiness().await.expect("absent config");
+        executor.agent_config.mcp_tool_exposure = Some(json!({"available": []}).to_string());
+        executor.check_mcp_readiness().await.expect("explicit deny");
+        executor.agent_config.mcp_tool_exposure = Some(json!({"available": ["late__MCP__search"]}).to_string());
+        let missing = executor.check_mcp_readiness().await;
+        assert!(matches!(missing, Err(WorkflowEngineError::General(_))));
+        global.register_test_mcp_tool("late", "search", json!({})).await.expect("late tool");
+        global.get_mcp_server("late").await.expect("late client")
+            .set_status(crate::mcp::client::McpStatus::Running).await;
+        executor.check_mcp_readiness().await.expect("running tool");
+        assert_eq!(executor.mcp_tools_allowlist().expect("allowlist").len(), 1);
+        global.get_mcp_server("late").await.expect("client")
+            .set_status(crate::mcp::client::McpStatus::Stopped).await;
+        assert!(executor.check_mcp_readiness().await.is_err());
     }
 
     #[tokio::test]

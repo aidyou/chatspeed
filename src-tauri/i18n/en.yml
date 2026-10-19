@@ -365,6 +365,7 @@ workflow:
     invalid_graph: Invalid graph
     invalid_state: Invalid state
     io: I/O error
+    mcp_tools_not_ready: 'Configured MCP tools were not ready within 5 seconds (%{tools}). Check the MCP servers and retry.'
     other: Other error
     serialization: Serialization error
     store: Store error

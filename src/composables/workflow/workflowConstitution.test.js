@@ -383,8 +383,13 @@ assert.match(
 )
 assert.match(
   visibleAutoApprovalTools,
-  /const mcp = workflowMcpTools\.value[\s\S]*\.filter\(tool => tool\.available\)/,
-  'the effective available set must keep MCP targets so native toggles cannot disable them'
+  /const mcp = workflowMcpTools\.value[\s\S]*\.filter\(tool => tool\.available && tool\.effective\)/,
+  'the effective capability projection must exclude configured but unavailable MCP targets'
+)
+assert.match(
+  workflowInputArea,
+  /const configuredMcpIds = workflowMcpTools\.value\.filter\(tool => tool\.available\)[\s\S]*workflowAvailableToolIds\.value, \.\.\.configuredMcpIds/,
+  'native toggles must preserve saved MCP preferences even during a runtime outage'
 )
 const approvalToolOptions = sourceSection(
   workflowInputArea,

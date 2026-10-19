@@ -1030,7 +1030,7 @@ async fn start_runtime(
     let client = RuntimeClient::new(&document).map_err(RuntimeUnavailable::from_client_error)?;
     if owned {
         // Readiness is proven; the child is long-lived from here.
-        child.silence_stderr();
+        child.forward_stderr();
         Ok((client, Some(child), RuntimeConnectionState::Spawned))
     } else {
         log::info!(
@@ -1200,15 +1200,32 @@ async fn run_workflow_event_reader(
                         failures = 0;
                         cursor = Some(chatspeed_runtime_client::stream_envelope_cursor(&envelope));
                         let terminal = is_terminal_workflow_payload(&envelope.payload);
+                        let terminal_state = envelope
+                            .payload
+                            .get("state")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let wait_reason = envelope
+                            .payload
+                            .get("wait_reason")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("none")
+                            .to_string();
                         if let Err(error) = app.emit(&event_name, envelope.payload) {
                             log::debug!(
                                 "[RuntimeSupervisor] emitting a workflow event failed for session {session_id}: {error}"
                             );
                         }
                         if terminal {
-                            log::info!(
-                                "[RuntimeSupervisor] workflow stream for session {session_id} reached a terminal state"
-                            );
+                            match terminal_state.as_str() {
+                                "error" | "failed" => log::warn!(
+                                    "[RuntimeSupervisor] workflow stream for session {session_id} reached terminal state={terminal_state}, wait_reason={wait_reason}"
+                                ),
+                                _ => log::info!(
+                                    "[RuntimeSupervisor] workflow stream for session {session_id} reached terminal state={terminal_state}, wait_reason={wait_reason}"
+                                ),
+                            }
                             return;
                         }
                     }

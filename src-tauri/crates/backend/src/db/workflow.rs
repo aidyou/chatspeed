@@ -262,7 +262,6 @@ struct WorkflowUiMessagePageSelection {
 fn select_workflow_ui_message_page(
     messages_descending: Vec<WorkflowMessage>,
     message_limit: usize,
-    recent_only: bool,
 ) -> WorkflowUiMessagePageSelection {
     let page_limit = message_limit.max(1);
     let mut messages = messages_descending
@@ -271,37 +270,12 @@ fn select_workflow_ui_message_page(
         .collect::<Vec<_>>();
     messages.reverse();
 
-    if recent_only {
-        // A recent page shows the active task, or the latest completed task when no
-        // task is active. Older completed tasks belong to earlier pages and must not
-        // leak into the current UI projection.
-        let last_manual_clear = messages.iter().rposition(is_manual_clear_context_message);
-        let last_completed = messages
-            .iter()
-            .rposition(is_completed_workflow_task_boundary);
-        let start = match (last_manual_clear, last_completed) {
-            (Some(clear), _) if clear + 1 < messages.len() => clear + 1,
-            (Some(clear), _) => messages
-                .iter()
-                .take(clear)
-                .rposition(is_completed_workflow_task_boundary)
-                .map_or(0, |boundary| boundary + 1),
-            (None, Some(completed)) if completed + 1 < messages.len() => completed + 1,
-            (None, Some(completed)) => messages
-                .iter()
-                .take(completed)
-                .rposition(is_completed_workflow_task_boundary)
-                .map_or(0, |boundary| boundary + 1),
-            (None, None) => 0,
-        };
-        messages.drain(..start);
-    } else {
-        // Keep boundary markers with the older page when they are at the oldest
-        // edge. This prevents a page from starting with an orphan completion or
-        // clear-context marker.
-        while messages.first().is_some_and(is_workflow_ui_task_boundary) {
-            messages.remove(0);
-        }
+    // Keep boundary markers with the older page when they are at the oldest
+    // edge. This prevents a page from starting with an orphan completion or
+    // clear-context marker. A completion at the newest edge remains visible at
+    // the bottom of the current page.
+    while messages.first().is_some_and(is_workflow_ui_task_boundary) {
+        messages.remove(0);
     }
 
     let has_more_in_current_task = messages.len() > page_limit
@@ -1820,7 +1794,7 @@ impl MainStore {
                 Ok(WorkflowMessage::from(row))
             })?;
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
-            let selection = select_workflow_ui_message_page(descending, message_limit, true);
+            let selection = select_workflow_ui_message_page(descending, message_limit);
             let has_more_in_current_task = selection.has_more_in_current_task;
             let messages = selection.messages;
 
@@ -1864,7 +1838,7 @@ impl MainStore {
                     Ok(WorkflowMessage::from(row))
                 })?;
             let descending = rows.collect::<Result<Vec<_>, _>>()?;
-            let selection = select_workflow_ui_message_page(descending, message_limit, false);
+            let selection = select_workflow_ui_message_page(descending, message_limit);
             let has_more_in_current_task = selection.has_more_in_current_task;
             let messages = selection.messages;
 
@@ -4028,6 +4002,69 @@ mod tests {
             ],
             "the previous completion must stay immediately before the new-session divider"
         );
+    }
+
+    #[test]
+    fn test_workflow_message_page_keeps_recent_history_after_trailing_clear_marker() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-trailing-clear-context");
+        store
+            .create_workflow(
+                "trailing-clear-context-session",
+                "Trailing clear context query",
+                "agent-trailing-clear-context",
+                None,
+                None,
+            )
+            .expect("failed to create workflow");
+
+        for index in 1..=300 {
+            add_window_test_message(
+                &store,
+                "trailing-clear-context-session",
+                &format!("history-message-{index}"),
+                false,
+            );
+        }
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "trailing-clear-context-session".to_string(),
+                role: "system".to_string(),
+                message: String::new(),
+                reasoning: None,
+                message_kind: "summary".to_string(),
+                message_subtype: Some("manual_clear_context".to_string()),
+                segment_id: 2,
+                source_event_type: None,
+                metadata: Some(json!({ "subtype": "manual_clear_context" })),
+                attached_context: None,
+                step_type: None,
+                step_index: 0,
+                is_error: false,
+                error_type: None,
+                created_at: None,
+            })
+            .expect("failed to add trailing clear-context marker");
+        add_window_test_message(
+            &store,
+            "trailing-clear-context-session",
+            "new-context-message",
+            false,
+        );
+
+        let recent = store
+            .get_recent_workflow_message_page("trailing-clear-context-session", 300)
+            .expect("failed to load recent messages after clearing context");
+
+        assert_eq!(recent.messages.len(), 300);
+        assert_eq!(recent.hidden_message_count, 2);
+        assert_eq!(recent.messages[0].message, "history-message-3");
+        assert_eq!(recent.messages[298].message_subtype.as_deref(), Some("manual_clear_context"));
+        assert_eq!(recent.messages[299].message, "new-context-message");
+        assert!(recent.messages.iter().any(|message| {
+            message.message == "history-message-3"
+        }));
     }
 
     #[test]

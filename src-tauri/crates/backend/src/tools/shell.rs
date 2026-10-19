@@ -1,6 +1,7 @@
 use crate::ai::traits::chat::MCPToolDeclaration;
 #[cfg(test)]
 use crate::libs::ai_temp::ToolOutputWriter;
+use crate::environment::get_child_environment;
 use crate::owned_process::{OwnedProcessCancellation, OwnedProcessTicket};
 use crate::tools::helper::is_node_build_command;
 use crate::tools::helper::{
@@ -247,6 +248,7 @@ fn host_process_command(command: &str) -> Result<Command, ToolError> {
         process.args(["-c", &host_command]);
         process
     };
+    process.envs(get_child_environment());
     configure_no_window(&mut process);
     Ok(process)
 }

@@ -39,6 +39,7 @@ use tokio::{process::Command, sync::RwLock};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+use crate::environment::{get_child_environment, wait_for_child_environment};
 use crate::mcp::client::types::McpClientInternal;
 use crate::mcp::client::util::find_executable_in_common_paths;
 use crate::mcp::McpError;
@@ -141,6 +142,9 @@ impl McpClient for StdioClient {
                 )
             })?;
 
+        // Executable resolution and the child PATH must observe the same settled probe.
+        wait_for_child_environment().await;
+
         // Try to find the executable, fallback to original_cmd_str if not found by helper
         let executable_to_run =
             if let Some(abs_path) = find_executable_in_common_paths(&original_cmd_str).await {
@@ -193,6 +197,8 @@ impl McpClient for StdioClient {
 
         #[cfg(not(windows))]
         let mut cmd = Command::new(&executable_to_run);
+
+        cmd.envs(get_child_environment());
 
         let args = config
             .args

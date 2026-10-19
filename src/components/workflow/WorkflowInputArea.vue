@@ -286,23 +286,27 @@
                               <span v-if="getMcpToolServerName(tool)" class="tool-server">
                                 {{ getMcpToolServerName(tool) }}
                               </span>
+                              <el-tag size="small" :type="mcpToolStatePresentation[tool.state].type">
+                                {{ $t(mcpToolStatePresentation[tool.state].key) }}
+                              </el-tag>
                             </span>
                           </el-tooltip>
                           <el-switch
                             size="small"
                             :model-value="tool.available"
+                            :disabled="!tool.effective && !tool.available"
                             :aria-label="$t('settings.agent.mcpToolAvailable')"
                             @change="checked => toggleWorkflowMcpConfig(tool.id, 'available', checked)" />
                           <el-switch
                             size="small"
                             :model-value="tool.autoApprove"
-                            :disabled="!tool.available"
+                            :disabled="(!tool.effective || !tool.available) && !tool.autoApprove"
                             :aria-label="$t('settings.agent.mcpToolAutoApprove')"
                             @change="checked => toggleWorkflowMcpConfig(tool.id, 'autoApprove', checked)" />
                           <el-switch
                             size="small"
                             :model-value="tool.autoExpand"
-                            :disabled="!tool.available"
+                            :disabled="(!tool.effective || !tool.available) && !tool.autoExpand"
                             :aria-label="$t('settings.agent.mcpToolAutoExpand')"
                             @change="checked => toggleWorkflowMcpConfig(tool.id, 'autoExpand', checked)" />
                         </div>
@@ -1014,6 +1018,7 @@ const emit = defineEmits([
 
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
+import { useCapabilityStore } from '@/stores/capability'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 import {
@@ -1024,6 +1029,7 @@ import {
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
 const agentStore = useAgentStore()
+const capabilityStore = useCapabilityStore()
 const modelStore = useModelStore()
 const settingStore = useSettingStore()
 const sandboxSchemeStore = useSandboxSchemeStore()
@@ -1180,23 +1186,34 @@ const autoApprovedPopoverVisible = ref(false)
 const mcpConfigPopoverVisible = ref(false)
 // Runtime-owned MCP discovery can settle after the window's initial catalog read.
 // Refresh only while the panel is visible, including changes made by other clients.
+let mcpPanelRefreshing = false
 watch(mcpConfigPopoverVisible, (visible, _, onCleanup) => {
   if (!visible) return
-  let refreshing = false
+  let active = true
   const refresh = async () => {
-    if (refreshing) return
-    refreshing = true
+    if (!active || mcpPanelRefreshing) return
+    mcpPanelRefreshing = true
     try {
-      await agentStore.fetchAvailableTools()
-    } catch (error) {
-      console.error('Failed to refresh MCP tool catalog:', error)
+      // Wait for both reads even when one fails, so the next tick cannot overlap.
+      const results = await Promise.allSettled([
+        agentStore.fetchAvailableTools(),
+        capabilityStore.loadMcpServers()
+      ])
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('Failed to refresh MCP projection:', result.reason)
+        }
+      }
     } finally {
-      refreshing = false
+      mcpPanelRefreshing = false
     }
   }
   refresh()
   const timer = setInterval(refresh, 2000)
-  onCleanup(() => clearInterval(timer))
+  onCleanup(() => {
+    active = false
+    clearInterval(timer)
+  })
 })
 const approvalToolsTab = ref('available')
 const isImportingShellPolicies = ref(false)
@@ -1264,6 +1281,30 @@ const agentAvailableTools = computed(() => {
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 
+const getMcpToolState = (id, registered) => {
+  const serverName = getMcpToolServerName({ id })
+  const server = Object.values(capabilityStore.mcpViews).find(view => view.name === serverName)
+  if (!server) return 'unknown'
+  if (server.desired?.enabled === false) return 'disabled'
+  if (!server.runtime?.observed) return 'unknown'
+  const state = server.runtime.state
+  if (state === 'error') return 'error'
+  if (state === 'starting' || state === 'connected') return state
+  if (state === 'running') {
+    return registered && server.tools?.freshness === 'observed' ? 'running' : 'unavailable'
+  }
+  return state === 'stopped' ? 'unavailable' : 'unknown'
+}
+const mcpToolStatePresentation = {
+  running: { key: 'settings.mcp.statusRunning', type: 'success' },
+  starting: { key: 'settings.mcp.statusStarting', type: 'warning' },
+  connected: { key: 'settings.mcp.statusConnected', type: 'warning' },
+  error: { key: 'workflow.taskLedger.failed', type: 'danger' },
+  disabled: { key: 'settings.agent.disabled', type: 'info' },
+  unavailable: { key: 'settings.mcp.toolsUnavailable', type: 'info' },
+  unknown: { key: 'settings.mcp.statusUnknown', type: 'info' }
+}
+
 const workflowMcpTools = computed(() => {
   const config = props.currentWorkflow?.agentConfig?.mcpTools || props.selectedAgent?.mcpTools || {}
   const available = new Set(Array.isArray(config.available) ? config.available : [])
@@ -1277,14 +1318,18 @@ const workflowMcpTools = computed(() => {
   )
   const configuredMcpTools = new Set([...available, ...autoApprove, ...autoExpand])
   return [...new Set([...currentlyAvailableMcpTools, ...configuredMcpTools])]
-    .filter(id => currentlyAvailableMcpTools.has(id))
-    .map(id => ({
-      id,
-      name: toolDetails.get(id)?.name || id,
-      available: available.has(id),
-      autoApprove: autoApprove.has(id),
-      autoExpand: autoExpand.has(id)
-    }))
+    .map(id => {
+      const state = getMcpToolState(id, currentlyAvailableMcpTools.has(id))
+      return {
+        id,
+        name: toolDetails.get(id)?.name || id,
+        state,
+        effective: state === 'running',
+        available: available.has(id),
+        autoApprove: autoApprove.has(id),
+        autoExpand: autoExpand.has(id)
+      }
+    })
     .sort((a, b) => a.id.localeCompare(b.id, 'zh-Hans'))
 })
 
@@ -1296,13 +1341,13 @@ const workflowAvailableToolIds = computed(() => {
     const ordinary = props.currentWorkflow.agentConfig.availableTools.filter(id =>
       nativeCapabilityIds.has(id)
     )
-    const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
+    const mcp = workflowMcpTools.value.filter(tool => tool.available && tool.effective).map(tool => tool.id)
     return [...new Set([...ordinary, ...mcp])]
   }
   const ordinary = Array.isArray(props.selectedAgent?.availableTools)
     ? props.selectedAgent.availableTools.filter(id => nativeCapabilityIds.has(id))
     : []
-  const mcp = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
+  const mcp = workflowMcpTools.value.filter(tool => tool.available && tool.effective).map(tool => tool.id)
   return [...new Set([...ordinary, ...mcp])]
 })
 const autoApprovedTools = computed(() => {
@@ -1506,7 +1551,9 @@ watch(sandboxPopoverVisible, async isVisible => {
 const toggleWorkflowAvailableTool = async (toolId, checked) => {
   if (!props.currentWorkflowId) return
 
-  const currentTools = workflowAvailableToolIds.value
+  // A transient runtime outage must not revoke saved MCP preferences through a native toggle.
+  const configuredMcpIds = workflowMcpTools.value.filter(tool => tool.available).map(tool => tool.id)
+  const currentTools = [...new Set([...workflowAvailableToolIds.value, ...configuredMcpIds])]
   const nextAvailableTools = checked
     ? [...new Set([...currentTools, toolId])]
     : currentTools.filter(id => id !== toolId)
@@ -1527,6 +1574,10 @@ const toggleWorkflowAvailableTool = async (toolId, checked) => {
 
 const toggleWorkflowMcpConfig = async (toolId, key, checked) => {
   if (!props.currentWorkflowId) return
+  if (!['available', 'autoApprove', 'autoExpand'].includes(key)) return
+  const tool = workflowMcpTools.value.find(item => item.id === toolId)
+  // Missing capabilities may be revoked, but a stale control must never grant them.
+  if (checked && (!tool?.effective || (key !== 'available' && !tool.available))) return
   const current = props.currentWorkflow?.agentConfig?.mcpTools || props.selectedAgent?.mcpTools || {
     available: [],
     autoApprove: [],

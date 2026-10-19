@@ -358,6 +358,7 @@ workflow:
     invalid_graph: 无效的图
     invalid_state: 无效的状态
     io: IO错误
+    mcp_tools_not_ready: '配置的 MCP 工具在 5 秒内未就绪（%{tools}），请检查 MCP 服务后重试'
     other: 其他错误
     serialization: 序列化错误
     store: 存储错误

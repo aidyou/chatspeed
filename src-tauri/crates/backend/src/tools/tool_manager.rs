@@ -354,6 +354,9 @@ pub struct ToolManager {
     mcp_tool_change_event_sender: broadcast::Sender<()>,
     /// Registration generations prevent stale discovery tasks from restoring old state.
     mcp_registration_generations: Mutex<McpRegistrationGenerations>,
+    /// Overrides client state until discovery commits or an attempt fails.
+    /// Access is serialized by `mcp_registration_generations`.
+    mcp_registration_status: RwLock<HashMap<String, McpStatus>>,
     /// The one runtime work-admission gate, when the runtime installed one.
     ///
     /// Starting an MCP server is canonical runtime work, so it is fenced here,
@@ -375,6 +378,7 @@ impl ToolManager {
             mcp_status_event_sender,
             mcp_tool_change_event_sender,
             mcp_registration_generations: Mutex::new(HashMap::new()),
+            mcp_registration_status: RwLock::new(HashMap::new()),
             admission: std::sync::OnceLock::new(),
         }
     }
@@ -411,7 +415,11 @@ impl ToolManager {
             .canonical_to_alias
             .clear();
         if clear_mcp {
-            let _generations = self.mcp_registration_generations.lock().await;
+            let mut generations = self.mcp_registration_generations.lock().await;
+            for generation in generations.values_mut() {
+                *generation = generation.saturating_add(1);
+            }
+            self.mcp_registration_status.write().await.clear();
             self.mcp_tools.write().await.clear();
             self.mcp_servers.write().await.clear();
             self.notify_mcp_tools_changed();
@@ -442,7 +450,11 @@ impl ToolManager {
         // Take every handle under the lock, then release it before awaiting any
         // teardown. The lock order matches `clear`/`rebuild_mcp_wrappers`.
         let handles: Vec<Arc<dyn McpClient>> = {
-            let _generations = self.mcp_registration_generations.lock().await;
+            let mut generations = self.mcp_registration_generations.lock().await;
+            for generation in generations.values_mut() {
+                *generation = generation.saturating_add(1);
+            }
+            self.mcp_registration_status.write().await.clear();
             self.mcp_tools.write().await.clear();
             let mut mcp_servers = self.mcp_servers.write().await;
             mcp_servers.drain().map(|(_, client)| client).collect()
@@ -1109,9 +1121,34 @@ impl ToolManager {
         self.unregister_mcp_server(name).await
     }
 
-    /// Registers a new MCP (Message Communication Protocol) server with the given configuration.
-    /// This involves creating the appropriate client, starting it, and then spawning a task
-    /// to list its tools and register them internally.
+    async fn set_registration_status(&self, name: &str, generation: u64, status: McpStatus) {
+        let generations = self.mcp_registration_generations.lock().await;
+        if generations.get(name).copied() != Some(generation) {
+            return;
+        }
+        let mut registration_status = self.mcp_registration_status.write().await;
+        let status = match status {
+            McpStatus::Running => {
+                // Discovery has committed; future reads must observe live disconnects.
+                registration_status.remove(name);
+                McpStatus::Running
+            }
+            McpStatus::Error(_) => {
+                let status = McpStatus::Error("registration_failed".to_string());
+                registration_status.insert(name.to_string(), status.clone());
+                status
+            }
+            other => {
+                registration_status.insert(name.to_string(), other.clone());
+                other
+            }
+        };
+        let _ = self
+            .mcp_status_event_sender
+            .send((name.to_string(), status));
+    }
+
+    /// Registers a server and asynchronously commits its generation-fenced tool list.
     ///
     /// # Arguments
     /// * `self` - An Arc pointing to the FunctionManager instance.
@@ -1170,15 +1207,21 @@ impl ToolManager {
         // Clone for logging in case of early error
         let server_name_for_log = mcp_server_config.name.clone();
 
-        // Invalidate any older attempt for the same server before starting this one.
-        // A detached tool-list task from that attempt may still complete later.
+        // Registration starts asynchronously and publishes a generation-fenced discovery result.
         let registration_generation = {
             let mut generations = self.mcp_registration_generations.lock().await;
+            let mut statuses = self.mcp_registration_status.write().await;
+            if matches!(statuses.get(&server_name_for_log), Some(McpStatus::Starting)) {
+                return Err(ToolError::StateChangeFailed(format!(
+                    "MCP server '{}' registration is already in progress",
+                    server_name_for_log
+                )));
+            }
             let generation = generations.entry(server_name_for_log.clone()).or_insert(0);
             *generation = generation.saturating_add(1);
+            statuses.insert(server_name_for_log.clone(), McpStatus::Starting);
             *generation
         };
-
         // Immediately broadcast "Starting" status to provide user feedback
         if let Err(e) = self
             .mcp_status_event_sender
@@ -1193,39 +1236,44 @@ impl ToolManager {
 
         // 1. Create the MCP client
         // This happens without holding FunctionManager's locks
-        let client_arc: Arc<dyn McpClient> = match mcp_server_config.protocol_type {
-            McpProtocolType::Sse => Err(crate::mcp::McpError::ClientConfigError(
-                t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
-            )),
-            McpProtocolType::Stdio => {
-                StdioClient::new(mcp_server_config.clone()) // Clone for the client
-                    .map(|c| Arc::new(c) as Arc<dyn McpClient>)
+        let client_result: Result<Arc<dyn McpClient>, crate::mcp::McpError> =
+            match mcp_server_config.protocol_type {
+                McpProtocolType::Sse => Err(crate::mcp::McpError::ClientConfigError(
+                    t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
+                )),
+                McpProtocolType::Stdio => StdioClient::new(mcp_server_config.clone())
+                    .map(|c| Arc::new(c) as Arc<dyn McpClient>),
+                McpProtocolType::StreamableHttp => match provider_max_retries {
+                    // The dedicated Web provider must fail closed without reconnecting.
+                    Some(max_retries) => StreamableHttpClient::with_retry(
+                        mcp_server_config.clone(),
+                        max_retries,
+                        std::time::Duration::from_millis(250),
+                    )
+                    .map(|c| Arc::new(c) as Arc<dyn McpClient>),
+                    None => StreamableHttpClient::new(mcp_server_config.clone())
+                        .map(|c| Arc::new(c) as Arc<dyn McpClient>),
+                },
+            };
+        let client_arc: Arc<dyn McpClient> = match client_result {
+            Ok(client) => client,
+            Err(error) => {
+                self.set_registration_status(
+                    &server_name_for_log,
+                    registration_generation,
+                    McpStatus::Error(error.to_string()),
+                )
+                .await;
+                return Err(ToolError::Config(
+                    t!(
+                        "mcp.client.config_error_for_server",
+                        server_name = &server_name_for_log,
+                        error = error.to_string()
+                    )
+                    .to_string(),
+                ));
             }
-            McpProtocolType::StreamableHttp => match provider_max_retries {
-                // The dedicated desktop provider is reached once: a dead or
-                // released provider must fail closed, never reconnect.
-                Some(max_retries) => StreamableHttpClient::with_retry(
-                    mcp_server_config.clone(),
-                    max_retries,
-                    std::time::Duration::from_millis(250),
-                )
-                .map(|c| Arc::new(c) as Arc<dyn McpClient>),
-                None => {
-                    StreamableHttpClient::new(mcp_server_config.clone()) // Clone for the client
-                        .map(|c| Arc::new(c) as Arc<dyn McpClient>)
-                }
-            },
-        }
-        .map_err(|e_mcp| {
-            ToolError::Config(
-                t!(
-                    "mcp.client.config_error_for_server",
-                    server_name = &server_name_for_log, // Use cloned name
-                    error = e_mcp.to_string()
-                )
-                .to_string(),
-            )
-        })?;
+        };
 
         // Set a status change callback for the client to broadcast its status changes.
         // This callback is invoked when the client's internal status changes
@@ -1253,10 +1301,15 @@ impl ToolManager {
 
         // 2. Start the client
         // This .await happens without holding FunctionManager's locks
-        client_arc
-            .start()
-            .await
-            .map_err(|e_mcp_start| ToolError::Initialization(e_mcp_start.to_string()))?;
+        if let Err(error) = client_arc.start().await {
+            self.set_registration_status(
+                &server_name_for_log,
+                registration_generation,
+                McpStatus::Error(error.to_string()),
+            )
+            .await;
+            return Err(ToolError::Initialization(error.to_string()));
+        }
         log::info!("MCP client {} started successfully.", &name);
 
         // 3. Publish the connected client before its tool list is read.
@@ -1268,6 +1321,12 @@ impl ToolManager {
             .publish_connected_mcp_client(client_arc.clone(), registration_generation)
             .await
         {
+            self.set_registration_status(
+                &server_name_for_log,
+                registration_generation,
+                McpStatus::Error(error.to_string()),
+            )
+            .await;
             let _ = client_arc.stop().await;
             return Err(error);
         }
@@ -1283,14 +1342,29 @@ impl ToolManager {
         let server_name_for_task = name.clone();
         let config_for_task = client_arc.config().await.clone();
         if provider_max_retries.is_some() {
-            tool_manager_arc
+            if let Err(error) = tool_manager_arc
                 .discover_and_register_mcp_tools(
                     client_arc_for_task,
                     registration_generation,
                     config_for_task,
                     true,
                 )
-                .await?;
+                .await
+            {
+                self.set_registration_status(
+                    &server_name_for_task,
+                    registration_generation,
+                    McpStatus::Error(error.to_string()),
+                )
+                .await;
+                return Err(error);
+            }
+            self.set_registration_status(
+                &server_name_for_task,
+                registration_generation,
+                McpStatus::Running,
+            )
+            .await;
         } else {
             tokio::spawn(async move {
                 if let Err(error) = tool_manager_arc
@@ -1302,6 +1376,13 @@ impl ToolManager {
                     )
                     .await
                 {
+                    tool_manager_arc
+                        .set_registration_status(
+                            &server_name_for_task,
+                            registration_generation,
+                            McpStatus::Error(error.to_string()),
+                        )
+                        .await;
                     log::debug!(
                         "Discarded MCP server {} discovery result for generation {}: {}",
                         server_name_for_task,
@@ -1309,11 +1390,13 @@ impl ToolManager {
                         error
                     );
                 } else {
-                    log::info!(
-                        "MCP server {} tools registered for generation {}",
-                        server_name_for_task,
-                        registration_generation
-                    );
+                    tool_manager_arc
+                        .set_registration_status(
+                            &server_name_for_task,
+                            registration_generation,
+                            McpStatus::Running,
+                        )
+                        .await;
                 }
             });
         }
@@ -1342,7 +1425,7 @@ impl ToolManager {
                 return Err(error);
             }
             log::warn!("{}", error);
-            return Ok(());
+            return Err(error);
         }
 
         let declarations = match client.list_tools().await {
@@ -1370,7 +1453,7 @@ impl ToolManager {
                     server_name,
                     error
                 );
-                None
+                return Err(ToolError::ExecutionFailed(error.to_string()));
             }
         };
 
@@ -1471,6 +1554,7 @@ impl ToolManager {
             let mut mcp_tools = self.mcp_tools.write().await;
             mcp_tools.remove(name);
         }
+        self.mcp_registration_status.write().await.remove(name);
         let server_to_stop = {
             let mut servers_guard = self.mcp_servers.write().await;
             servers_guard.remove(name)
@@ -1524,14 +1608,14 @@ impl ToolManager {
             .send((name.to_string(), McpStatus::Starting))
             .ok();
 
-        let client = match self.get_mcp_server(name).await {
-            Ok(client) => client,
-            Err(e) => {
-                self.mcp_status_event_sender
-                    .send((name.to_string(), McpStatus::Error(e.to_string())))
-                    .ok();
-                return Err(e);
-            }
+        let (client, generation) = {
+            let mut generations = self.mcp_registration_generations.lock().await;
+            let client = self.get_mcp_server(name).await?;
+            // A newer explicit refresh owns discovery; an earlier startup list cannot overwrite it.
+            let generation = generations.entry(name.to_string()).or_insert(0);
+            *generation = generation.saturating_add(1);
+            self.mcp_registration_status.write().await.insert(name.to_string(), McpStatus::Starting);
+            (client, *generation)
         };
 
         let tools_result = client.list_tools().await;
@@ -1555,17 +1639,12 @@ impl ToolManager {
                     })
                     .collect();
 
-                {
-                    let mut mcp_tools_guard = self.mcp_tools.write().await;
-                    mcp_tools_guard.insert(name.to_string(), tools_with_disabled_flag);
-                }
-                self.rebuild_mcp_wrappers().await;
-                self.notify_mcp_tools_changed();
-
-                // On success, notify that it's "Running" again.
-                self.mcp_status_event_sender
-                    .send((name.to_string(), McpStatus::Running))
-                    .ok();
+                self.register_mcp_server_inner(
+                    client.clone(), generation, Some(tools_with_disabled_flag),
+                )
+                .await?;
+                self.set_registration_status(name, generation, McpStatus::Running)
+                    .await;
                 log::info!("Successfully refreshed tools for MCP server: {}", name);
                 Ok(())
             }
@@ -1575,17 +1654,10 @@ impl ToolManager {
                     name,
                     e.to_string()
                 );
-                {
-                    let mut mcp_tools_guard = self.mcp_tools.write().await;
-                    mcp_tools_guard.insert(name.to_string(), Vec::new());
-                }
-                self.rebuild_mcp_wrappers().await;
-                self.notify_mcp_tools_changed();
-
-                // On failure, notify "Error" status.
-                self.mcp_status_event_sender
-                    .send((name.to_string(), McpStatus::Error(e.to_string())))
-                    .ok();
+                self.register_mcp_server_inner(client.clone(), generation, Some(Vec::new()))
+                    .await?;
+                self.set_registration_status(name, generation, McpStatus::Error("list_failed".into()))
+                    .await;
                 Err(ToolError::ExecutionFailed(e.to_string()))
             }
         }
@@ -1600,10 +1672,7 @@ impl ToolManager {
     ///   If an error occurs during the status retrieval, an error is returned.
     ///   The error message will indicate the specific error that occurred.
     pub async fn get_mcp_serves_status(&self) -> Result<HashMap<String, McpStatus>, ToolError> {
-        let mut status = HashMap::new();
-
-        // Step 1: Collect the Arcs of the McpClient while holding the read lock.
-        // This minimizes the time the lock is held.
+        let mut status = self.mcp_registration_status.read().await.clone();
         let server_arcs_to_check: Vec<(String, Arc<dyn McpClient>)> = {
             let servers_guard = self.mcp_servers.read().await;
             servers_guard
@@ -1611,11 +1680,10 @@ impl ToolManager {
                 .map(|(name, server_arc)| (name.clone(), server_arc.clone()))
                 .collect()
         };
-
-        // Step 2: Iterate over the collected Arcs and await their status.
-        // These .await calls now happen *without* holding the self.mcp_servers lock.
         for (name, server_arc) in server_arcs_to_check {
-            status.insert(name.clone(), server_arc.status().await);
+            if !status.contains_key(&name) {
+                status.insert(name, server_arc.status().await);
+            }
         }
         Ok(status)
     }
@@ -1783,6 +1851,55 @@ mod tests {
     use super::*;
     use crate::tools::{ToolCallResult, ToolCategory, ToolScope};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn configuration_failure_is_observable_before_a_client_is_published() {
+        let manager = Arc::new(ToolManager::new());
+        let result = manager.clone().register_mcp_server(McpServerConfig {
+            name: "invalid-transport".into(),
+            protocol_type: McpProtocolType::Sse,
+            ..Default::default()
+        }).await;
+        assert!(result.is_err());
+        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("invalid-transport"),
+            Some(&McpStatus::Error("registration_failed".into())));
+        assert!(manager.get_mcp_server("invalid-transport").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_registration_is_observable_and_old_generations_cannot_restore_it() {
+        let manager = ToolManager::new();
+        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
+        manager.set_registration_status("test", 1, McpStatus::Error("secret".into())).await;
+        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
+            Some(&McpStatus::Error("registration_failed".into())));
+        manager.unregister_mcp_server("test").await.expect("stop");
+        manager.set_registration_status("test", 1, McpStatus::Starting).await;
+        assert!(!manager.get_mcp_serves_status().await.expect("statuses").contains_key("test"));
+    }
+
+    #[tokio::test]
+    async fn completed_registration_follows_live_client_status() {
+        let manager = ToolManager::new();
+        manager.register_test_mcp_tool("test", "search", json!({})).await.expect("tool");
+        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
+        manager.set_registration_status("test", 1, McpStatus::Running).await;
+        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
+            Some(&McpStatus::Connected));
+        manager.get_mcp_server("test").await.expect("client").set_status(McpStatus::Stopped).await;
+        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
+            Some(&McpStatus::Stopped));
+    }
+
+    #[tokio::test]
+    async fn clear_invalidates_unpublished_registration() {
+        let manager = ToolManager::new();
+        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
+        manager.set_registration_status("test", 1, McpStatus::Starting).await;
+        manager.clear(true).await;
+        manager.set_registration_status("test", 1, McpStatus::Error("late".into())).await;
+        assert!(!manager.get_mcp_serves_status().await.expect("statuses").contains_key("test"));
+    }
 
     // A structured provider error is classified down to its allowlisted code,
     // and the provider's own message (which may carry a URL or credential) is

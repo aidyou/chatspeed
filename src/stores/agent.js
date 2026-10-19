@@ -293,6 +293,8 @@ export const useAgentStore = defineStore('agent', () => {
       }
     } catch (err) {
       if (revision === toolCatalogRevision) {
+        // Catalog failure revokes the read projection, not persisted permissions.
+        availableTools.value = [];
         _handleError(err, 'Failed to fetch available tools');
       }
     } finally {

@@ -31,7 +31,7 @@ use reqwest::{header, Method, Response, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::fmt;
-use std::io::Read as _;
+use std::io::{BufRead as _, Read as _};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -105,11 +105,29 @@ impl RuntimeChild {
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     }
 
-    /// Detaches a reader that discards the child's remaining stderr.
+    /// Forwards the child's remaining stderr to this process's stderr.
     ///
     /// Called after the ready handshake: diagnostics only matter before
     /// readiness, and leaving the pipe unread could eventually block a
     /// long-lived runtime on a full pipe.
+    pub fn forward_stderr(&mut self) {
+        let Some(mut stderr) = self.child.stderr.take() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(&mut stderr);
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok() {
+                if line.is_empty() {
+                    break;
+                }
+                eprint!("[chatspeed-runtime] {line}");
+                line.clear();
+            }
+        });
+    }
+
+    /// Detaches a reader that discards the child's remaining stderr.
     pub fn silence_stderr(&mut self) {
         let Some(mut stderr) = self.child.stderr.take() else {
             return;
@@ -178,10 +196,7 @@ pub fn spawn_runtime_with_config(
             runtime_binary_name()
         ))
     })?;
-    #[cfg(test)]
     let stderr = Stdio::piped();
-    #[cfg(not(test))]
-    let stderr = Stdio::null();
     let mut command = Command::new(&binary);
     command
         .env(RUNTIME_DIR_ENV, config.runtime_dir())
