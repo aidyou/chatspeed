@@ -402,6 +402,13 @@ impl WorkflowApplicationService {
         workflow_stop_core(self, session_id.to_string()).await
     }
 
+    /// Returns the workflow sessions this runtime process currently owns in a
+    /// live state. Durable rows are intentionally excluded: a row left active
+    /// by a crashed process must not keep a fresh runtime alive forever.
+    pub fn live_workflow_count(&self) -> usize {
+        self.workflow_manager.live_session_ids().len()
+    }
+
     /// Stops every workflow this instance is actively running.
     ///
     /// The coordinated runtime shutdown uses this to cancel the live roots (and,

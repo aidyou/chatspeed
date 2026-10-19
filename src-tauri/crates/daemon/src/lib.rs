@@ -1729,8 +1729,8 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         }
     });
 
-    // Idle supervisor: grace-based shutdown only when leases and automation both
-    // agree the runtime is idle.
+    // Idle supervisor: grace-based shutdown only when clients, live workflows,
+    // admissions and automation all agree the runtime is idle.
     tokio::spawn(supervise_idle(
         leases.subscribe(),
         shutdown_rx.clone(),
@@ -1763,14 +1763,15 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
 
 /// Shuts the instance down only when it is genuinely idle.
 ///
-/// Three authorities decide: the live lease count (a registration during the
-/// grace window wins and restarts a full grace), the count of in-flight
-/// admissions on the one work gate, and the authoritative automation
-/// keep-alive summary. The summary is re-read on a bounded cadence and once more
-/// at grace expiry, so a newly enabled schedule or a live run keeps the runtime
-/// alive without a lease and a last-moment work arrival is observed instead of
-/// lost. A summary it cannot read is unknown and keeps the runtime alive: an
-/// unobservable state is never mistaken for "nothing to do".
+/// Four authorities decide: the live lease count (a registration during the
+/// grace window wins and restarts a full grace), live workflow sessions owned
+/// by the manager, the count of in-flight admissions on the one work gate, and
+/// the authoritative automation keep-alive summary. The summary is re-read on
+/// a bounded cadence and once more at grace expiry, so a newly enabled schedule
+/// or a live run keeps the runtime alive without a lease and a last-moment work
+/// arrival is observed instead of lost. A summary it cannot read is unknown and
+/// keeps the runtime alive: an unobservable state is never mistaken for
+/// "nothing to do".
 ///
 /// The close itself is atomic: the supervisor captures the gate's activity epoch
 /// before it waits the grace and re-checks that epoch (and that no admission is
@@ -1883,10 +1884,10 @@ async fn supervise_idle(
 
 /// Whether the runtime must stay alive right now.
 ///
-/// A live lease or any in-flight admitted work keeps it alive; otherwise the
-/// authoritative automation summary decides. A summary the runtime cannot read
-/// is unknown and keeps it alive, so it is never shut down on an unobserved
-/// state.
+/// A live client lease, a live workflow session owned by this runtime, or any
+/// in-flight admitted work keeps it alive; otherwise the authoritative
+/// automation summary decides. A summary the runtime cannot read is unknown
+/// and keeps it alive, so it is never shut down on an unobserved state.
 fn keep_alive(
     count_rx: &watch::Receiver<usize>,
     service: &Arc<WorkflowApplicationService>,
@@ -1900,6 +1901,12 @@ fn keep_alive(
     // capability start, ...). The gate counts them even without a lease, so the
     // supervisor never shuts the runtime down mid-work.
     if gate.active_admissions() > 0 {
+        return true;
+    }
+    // The HTTP admission ticket only covers starting/resuming the workflow.
+    // Once the ReAct run loop owns the session, the manager is the authority
+    // that it is still executing or waiting and must keep the runtime alive.
+    if service.live_workflow_count() > 0 {
         return true;
     }
     let now = normalize_datetime_for_db(chrono::Local::now());

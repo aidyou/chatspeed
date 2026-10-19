@@ -26,7 +26,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chatspeed_contracts::{
     ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
@@ -56,6 +56,12 @@ const ATTACH_READY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long a freshly started runtime may take to publish discovery and answer.
 const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A runtime that is already quiescing must finish before a new desktop can
+/// register its lease. Retry for one bounded shutdown window instead of
+/// surfacing a transient `runtime_stopping` error as a permanent auth failure.
+const RUNTIME_STOPPING_RETRY_WINDOW: Duration = Duration::from_secs(35);
+const RUNTIME_STOPPING_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 /// How long to wait for a cancelled bridge reader to stop before unregistering.
 const BRIDGE_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -192,6 +198,10 @@ impl RuntimeUnavailable {
             ClientError::Serialization(message) => Self::Protocol(redact_secrets(&message)),
         }
     }
+
+    fn is_runtime_stopping(&self) -> bool {
+        matches!(self, Self::Server(message) if message.contains("runtime_stopping"))
+    }
 }
 
 /// Lifecycle of the desktop's relationship with the runtime.
@@ -268,14 +278,6 @@ pub enum RuntimeStopOutcome {
     NotConnected,
     /// The request or the observation failed with a structured error.
     Failed,
-}
-
-fn endpoint_gone_stop_outcome(process_exited: bool) -> RuntimeStopOutcome {
-    if process_exited {
-        RuntimeStopOutcome::Confirmed
-    } else {
-        RuntimeStopOutcome::EndpointGone
-    }
 }
 
 impl RuntimeStopOutcome {
@@ -420,6 +422,37 @@ impl RuntimeSupervisor {
     ) -> Result<(), RuntimeUnavailable> {
         validate_client_id(client_id)?;
 
+        let deadline = tokio::time::Instant::now() + RUNTIME_STOPPING_RETRY_WINDOW;
+        let mut logged_stopping = false;
+        loop {
+            match self.connect_or_start_once(config, client_id).await {
+                Err(error) if error.is_runtime_stopping() => {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
+                        return Err(error);
+                    }
+                    if !logged_stopping {
+                        log::warn!(
+                            "[RuntimeSupervisor] runtime is stopping; waiting for it to exit before retrying lease registration"
+                        );
+                        logged_stopping = true;
+                    }
+                    tokio::time::sleep(
+                        RUNTIME_STOPPING_RETRY_INTERVAL.min(deadline - now),
+                    )
+                    .await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn connect_or_start_once(
+        &self,
+        config: &RuntimeLaunchConfig,
+        client_id: &str,
+    ) -> Result<(), RuntimeUnavailable> {
+
         let mut state = self.inner.lock().await;
         if state.connection.is_some() {
             return Err(RuntimeUnavailable::InvalidConfig(
@@ -538,6 +571,28 @@ impl RuntimeSupervisor {
             }
         }
         !process_alive(expected_pid)
+    }
+
+    /// Waits for the exact runtime process to exit after its endpoint disappears.
+    ///
+    /// The runtime closes its listener before the serve task finishes draining
+    /// and releasing its process. A single PID probe in that interval races the
+    /// normal shutdown path and falsely reports an unknown state, so keep
+    /// observing the target until the caller's shutdown budget is exhausted.
+    async fn wait_for_runtime_process_exit(&self, expected_pid: u32, deadline: Instant) -> bool {
+        loop {
+            if self.runtime_process_exited(expected_pid).await {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            tokio::time::sleep(
+                (deadline - now).min(Duration::from_millis(100)),
+            )
+            .await;
+        }
     }
 
     /// Opens the client WebView capability bridge and starts its reader.
@@ -822,6 +877,7 @@ impl RuntimeSupervisor {
 
         let instance_id = Some(accepted.instance_id.clone());
         let operation_id = Some(accepted.operation_id.clone());
+        let deadline = Instant::now() + budget;
         match client.wait_runtime_stopped(budget).await {
             Ok(ClientShutdownOutcome::Stopped) => RuntimeStopReport {
                 outcome: RuntimeStopOutcome::Confirmed,
@@ -830,9 +886,14 @@ impl RuntimeSupervisor {
                 detail: None,
             },
             Ok(ClientShutdownOutcome::EndpointGone) => {
-                let outcome = endpoint_gone_stop_outcome(
-                    self.runtime_process_exited(expected_pid).await,
-                );
+                let outcome = if self
+                    .wait_for_runtime_process_exit(expected_pid, deadline)
+                    .await
+                {
+                    RuntimeStopOutcome::Confirmed
+                } else {
+                    RuntimeStopOutcome::EndpointGone
+                };
                 RuntimeStopReport {
                     outcome,
                     instance_id,
@@ -1389,17 +1450,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn endpoint_gone_is_confirmed_only_after_the_target_process_exits() {
-        assert_eq!(
-            endpoint_gone_stop_outcome(true),
-            RuntimeStopOutcome::Confirmed
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn endpoint_gone_waits_for_a_runtime_that_exits_after_the_listener() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("0.15")
+            .spawn()
+            .expect("spawn delayed-exit process");
+        let pid = child.id();
+        let reaper = std::thread::spawn(move || child.wait().expect("reap delayed-exit process"));
+        let supervisor = RuntimeSupervisor::new();
+        let started = Instant::now();
+
+        assert!(
+            supervisor
+                .wait_for_runtime_process_exit(pid, started + Duration::from_secs(1))
+                .await
         );
-        assert_eq!(
-            endpoint_gone_stop_outcome(false),
-            RuntimeStopOutcome::EndpointGone
-        );
+        assert!(started.elapsed() >= Duration::from_millis(50));
+        reaper.join().expect("join delayed-exit reaper");
     }
+
     #[test]
     fn runtime_client_and_error_debug_do_not_leak_secrets() {
         // The encapsulated client redacts its bearer token.

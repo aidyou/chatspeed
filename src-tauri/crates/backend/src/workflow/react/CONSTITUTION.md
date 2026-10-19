@@ -98,6 +98,28 @@ Core workflow logic must not accept both casing styles for the same field as a n
 
 Do not add ad-hoc dual reads such as `field_name || fieldName` inside workflow state recovery, approval handling, observation reinforcement, or runtime metadata construction for newly produced data.
 
+### 3.6 External dependency isolation
+
+ReAct execution must not depend on the availability of optional external capabilities. MCP
+servers, external tools, skill discovery, PATH or shell probes, and capability refreshes are
+extensions of the workflow, not prerequisites for its core loop.
+
+When an external capability cannot be started, registered, discovered, refreshed, or used:
+
+- record one structured `warn` or `error` log containing the session id, capability name,
+  operation, and underlying error;
+- remove or omit only the unavailable capability from the current tool set;
+- continue the ReAct loop and allow the model to run without that capability;
+- do not convert the workflow to `error`, `failed`, or a waiting state solely because of the
+  external failure;
+- do not block on an external readiness condition without a bounded timeout and a degraded
+  execution path.
+
+Only failures in core workflow responsibilities may terminate ReAct, including model calls,
+context or event persistence, lifecycle state transitions, explicit cancellation, and required
+approval or recovery invariants. Any new integration with an external service must include a
+test proving that its failure is logged and that the core ReAct path remains executable.
+
 ## 4. Session Lifecycle Law
 
 ### 4.1 `WorkflowManager` is the lifecycle registry
