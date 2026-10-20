@@ -100,6 +100,12 @@ fn inner_rect(width: i32, height: i32, band: Band) -> Option<(i32, i32, i32, i32
 /// from it whenever that state changes.
 pub fn give_frame_band_to_window<W: gtk::glib::IsA<gtk::Widget>>(widget: &W, band: Band) {
     apply_frame_band_and_corner(widget, band, 0.0);
+    // A window built hidden has no GdkWindow when the call above runs, and showing it does not
+    // necessarily allocate the webview again. The widget is realized before it is mapped, which
+    // is when its GdkWindow first exists, so the band is applied again there.
+    widget.connect_realize(move |widget| {
+        apply_frame_band_and_corner(widget, band, 0.0)
+    });
     widget.connect_size_allocate(move |widget, _allocation| {
         apply_frame_band_and_corner(widget, band, 0.0)
     });
@@ -120,14 +126,16 @@ pub(crate) fn apply_frame_band_and_corner<W: gtk::glib::IsA<gtk::Widget>>(
     band: Band,
     corner_radius: f64,
 ) {
+    // An unrealized widget has no GdkWindow to shape, and GDK would only store the cleared
+    // region for a window that does not exist yet.
+    let Some(window) = widget.window() else {
+        return;
+    };
+
     // A shape is combined with the one that is already set, so the band of the previous
     // allocation has to go first: a window that grew would otherwise keep the narrower shape
     // it had before.
     widget.input_shape_combine_region(None);
-
-    let Some(window) = widget.window() else {
-        return;
-    };
 
     // A window that cannot be resized keeps its band with the page instead of swallowing the
     // press for a drag that never starts.
@@ -313,6 +321,26 @@ mod tests {
         let source = production_source();
         assert!(!source.contains(".scale_factor()"));
         assert!(!source.contains("f64::from("));
+    }
+
+    /// A window built hidden has no GdkWindow when the band is first installed, and showing it
+    /// does not necessarily allocate the webview again. Realizing the widget is what applies the
+    /// band for those windows.
+    #[test]
+    fn a_window_built_hidden_applies_the_band_when_it_is_realized() {
+        let source = production_source();
+
+        assert!(source.contains("connect_realize"));
+
+        // The widget is only shaped once its GdkWindow exists, so the window check comes before
+        // the previous region is cleared.
+        let window_check = source
+            .find("let Some(window) = widget.window()")
+            .expect("the shape is applied only to a realized widget");
+        let clear = source
+            .find("widget.input_shape_combine_region(None)")
+            .expect("the previous region is cleared before the new one is applied");
+        assert!(window_check < clear);
     }
 
     #[test]
