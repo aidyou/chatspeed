@@ -140,6 +140,72 @@ fn serialize_json<T: serde::Serialize>(value: &Option<T>) -> Option<String> {
     value.as_ref().and_then(|v| serde_json::to_string(v).ok())
 }
 
+/// Builds MCP exposure from the manifest. MCP tools in `available_tools` are
+/// schema-expanded by default, while auto-approval remains an explicit
+/// per-tool choice in `auto_approve`.
+#[cfg(not(feature = "desktop"))]
+fn mcp_exposure_from_manifest(config: &BuiltinAgentConfig) -> Option<String> {
+    let available = config
+        .available_tools
+        .as_ref()?
+        .iter()
+        .filter(|tool| tool.contains(MCP_TOOL_NAME_SPLIT))
+        .cloned()
+        .collect::<Vec<_>>();
+    if available.is_empty() {
+        return None;
+    }
+
+    let available_set = available.iter().collect::<std::collections::HashSet<_>>();
+    let mut exposure = crate::db::agent::McpToolConfig {
+        auto_approve: config
+            .auto_approve
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .filter(|tool| available_set.contains(tool))
+            .cloned()
+            .collect(),
+        auto_expand: available.clone(),
+        available,
+    };
+    exposure.normalize();
+    serde_json::to_string(&exposure).ok()
+}
+
+/// Merges manifest defaults into the existing MCP exposure without dropping
+/// MCP tools configured by the user.
+#[cfg(not(feature = "desktop"))]
+fn merge_mcp_tool_exposure(desired: Option<String>, existing: Option<&str>) -> Option<String> {
+    let Some(desired) = desired else {
+        return existing
+            .map(str::to_string)
+            .filter(|value| !value.is_empty());
+    };
+    let mut exposure: crate::db::agent::McpToolConfig = existing
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default();
+    let desired: crate::db::agent::McpToolConfig =
+        serde_json::from_str(&desired).unwrap_or_default();
+    for tool in desired.available {
+        if !exposure.available.contains(&tool) {
+            exposure.available.push(tool);
+        }
+    }
+    for tool in desired.auto_expand {
+        if !exposure.auto_expand.contains(&tool) {
+            exposure.auto_expand.push(tool);
+        }
+    }
+    for tool in desired.auto_approve {
+        if !exposure.auto_approve.contains(&tool) {
+            exposure.auto_approve.push(tool);
+        }
+    }
+    exposure.normalize();
+    serde_json::to_string(&exposure).ok()
+}
+
 #[cfg(not(feature = "desktop"))]
 fn merge_builtin_tools_with_existing_mcp(
     builtin_tools: Option<String>,
@@ -343,6 +409,7 @@ fn definition_to_agent(
     default_shell_policy: Option<&Vec<ShellPolicyRule>>,
 ) -> Result<Agent, String> {
     let manifest = &definition.manifest;
+    let mcp_tool_exposure = mcp_exposure_from_manifest(&manifest.config);
     Ok(Agent {
         id: builtin_agent_db_id(&manifest.builtin_id),
         name: manifest.name.clone(),
@@ -383,7 +450,7 @@ fn definition_to_agent(
         approval_level: manifest.config.approval_level.clone(),
         skill_enabled: manifest.config.skill_enabled,
         selected_skills: serialize_json(&manifest.config.selected_skills),
-        mcp_tool_exposure: None,
+        mcp_tool_exposure,
         phase: manifest.config.phase.clone(),
         is_system: Some(true),
         disabled: Some(manifest.disabled),
@@ -428,6 +495,10 @@ fn sync_single_builtin_agent(
                 desired.available_tools,
                 current.available_tools.as_deref(),
             );
+            let mcp_tool_exposure = merge_mcp_tool_exposure(
+                desired.mcp_tool_exposure,
+                current.mcp_tool_exposure.as_deref(),
+            );
             let mut updated = current;
             updated.mode = desired.mode;
             updated.role = desired.role;
@@ -437,6 +508,7 @@ fn sync_single_builtin_agent(
             updated.planning_prompt = desired.planning_prompt;
             updated.image_recognition_prompt = desired.image_recognition_prompt;
             updated.available_tools = available_tools;
+            updated.mcp_tool_exposure = mcp_tool_exposure;
             updated.task_tracking_enabled = desired.task_tracking_enabled;
             updated.auto_approve = desired.auto_approve;
             updated.report_required_sections = desired.report_required_sections;
@@ -457,6 +529,49 @@ mod tests {
     };
     use crate::db::agent::{AgentMode, AgentModels, ModelConfig};
     use crate::db::{Agent, MainStore};
+
+    fn builtin_agent_config_with_tools(
+        available_tools: Vec<&str>,
+        auto_approve: Vec<&str>,
+    ) -> BuiltinAgentConfig {
+        BuiltinAgentConfig {
+            available_tools: Some(
+                available_tools
+                    .into_iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            ),
+            auto_approve: Some(auto_approve.into_iter().map(ToString::to_string).collect()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn manifest_mcp_tools_are_expanded_and_only_explicit_tools_are_auto_approved() {
+        let config = builtin_agent_config_with_tools(
+            vec!["read_file", "server__MCP__fetch", "server__MCP__search"],
+            vec!["grep", "server__MCP__search"],
+        );
+        let exposure = super::mcp_exposure_from_manifest(&config)
+            .and_then(|value| serde_json::from_str::<crate::db::agent::McpToolConfig>(&value).ok())
+            .expect("manifest MCP exposure");
+
+        assert_eq!(
+            exposure.available,
+            vec![
+                "server__MCP__fetch".to_string(),
+                "server__MCP__search".to_string(),
+            ]
+        );
+        assert_eq!(exposure.auto_expand, exposure.available);
+        assert_eq!(exposure.auto_approve, vec!["server__MCP__search"]);
+    }
+
+    #[test]
+    fn manifest_without_mcp_tools_has_no_mcp_exposure() {
+        let config = builtin_agent_config_with_tools(vec!["read_file", "grep"], vec!["grep"]);
+        assert!(super::mcp_exposure_from_manifest(&config).is_none());
+    }
 
     #[test]
     fn builtin_upgrade_preserves_user_configuration_and_updates_core_definition() {

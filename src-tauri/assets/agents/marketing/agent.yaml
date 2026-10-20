@@ -1,6 +1,6 @@
 schema_version: 1
 builtin_id: marketing
-builtin_version: 2
+builtin_version: 3
 name: Marketing
 description: Professional marketing and growth execution agent for SaaS, AI products, developer tools, and technical products.
 role: primary
@@ -14,20 +14,18 @@ config:
   approval_level: default
   auto_approve:
     - edit_file
-    - glob
     - grep
     - list_dir
     - read_file
-    - web_fetch
-    - web_search
+    - chatspeed_web__MCP__web_fetch
+    - chatspeed_web__MCP__web_search
     - write_file
   available_tools:
-    - glob
     - grep
     - list_dir
     - read_file
-    - web_fetch
-    - web_search
+    - chatspeed_web__MCP__web_fetch
+    - chatspeed_web__MCP__web_search
   final_audit: false
   skill_enabled: true
   selected_skills:

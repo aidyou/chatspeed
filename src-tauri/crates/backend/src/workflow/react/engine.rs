@@ -778,7 +778,15 @@ impl WorkflowExecutor {
     }
 
     fn available_tools_allowlist(raw_tools: Option<&str>) -> Option<HashSet<String>> {
-        raw_tools.map(|tools| serde_json::from_str::<HashSet<String>>(tools).unwrap_or_default())
+        raw_tools.map(|tools| {
+            serde_json::from_str::<HashSet<String>>(tools)
+                .unwrap_or_default()
+                // Legacy data may still contain the removed `glob` tool; filter it
+                // out so old agent configs cannot re-enable it.
+                .into_iter()
+                .filter(|tool| tool != crate::tools::TOOL_GLOB)
+                .collect()
+        })
     }
 
     fn mcp_tools_allowlist(&self) -> Option<HashSet<String>> {
@@ -8251,7 +8259,11 @@ impl WorkflowExecutor {
         } else {
             unavailable.sort();
             Err(WorkflowEngineError::General(
-                t!("workflow.error.mcp_tools_not_ready", tools = unavailable.join(", ")).to_string(),
+                t!(
+                    "workflow.error.mcp_tools_not_ready",
+                    tools = unavailable.join(", ")
+                )
+                .to_string(),
             ))
         }
     }
@@ -10568,7 +10580,10 @@ mod recovery_tests {
             executor.context.max_tokens,
             tsid,
         );
-        compressor_context.load_history().await.expect("load history");
+        compressor_context
+            .load_history()
+            .await
+            .expect("load history");
         compressor_context
             .compress("Checkpoint".to_string(), 1, boundary)
             .await
@@ -10576,7 +10591,8 @@ mod recovery_tests {
         assert_eq!(compressor_context.current_segment_id, 35);
         let mut compressed_snapshot = executor.export_execution_context();
         compressed_snapshot.current_segment_id = compressor_context.current_segment_id;
-        compressed_snapshot.current_context_tokens = Some(compressor_context.current_token_estimate());
+        compressed_snapshot.current_context_tokens =
+            Some(compressor_context.current_token_estimate());
         store
             .upsert_execution_context(&compressed_snapshot)
             .expect("compression snapshot");
@@ -10626,9 +10642,11 @@ mod recovery_tests {
         assert_eq!(persisted.current_segment_id, 36);
         assert_eq!(persisted.state, RuntimeState::Pending);
         assert_eq!(executor.state, WorkflowState::Pending);
-        assert!(executor.context.get_messages_for_llm().iter().all(|message| {
-            message.id != Some(boundary) && message.id != Some(summary_id)
-        }));
+        assert!(executor
+            .context
+            .get_messages_for_llm()
+            .iter()
+            .all(|message| { message.id != Some(boundary) && message.id != Some(summary_id) }));
     }
 
     #[tokio::test]
@@ -10637,25 +10655,36 @@ mod recovery_tests {
         let session_id = "mcp-readiness";
         let agent = test_agent("mcp-readiness-agent");
         store.add_agent(&agent).expect("test agent");
-        store.create_workflow(session_id, "test", &agent.id, None, None).expect("test workflow");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("test workflow");
         let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
             payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
         let global = Arc::new(ToolManager::new());
         let mut executor = WorkflowExecutor::new(
-            session_id.to_string(), store, chat_state, gateway,
-            Arc::new(UnusedSubAgentFactory), agent,
-            vec![temp_dir.path().to_path_buf()], temp_dir.path().join("app-data"),
-            None, None,
+            session_id.to_string(),
+            store,
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![temp_dir.path().to_path_buf()],
+            temp_dir.path().join("app-data"),
+            None,
+            None,
             Arc::new(crate::libs::tsid::TsidGenerator::new(31).expect("tsid")),
-            global.clone(), false, ExecutionPolicy::standard(),
+            global.clone(),
+            false,
+            ExecutionPolicy::standard(),
         );
         executor.agent_config.mcp_tool_exposure = None;
         executor.check_mcp_readiness().await.expect("absent config");
         executor.agent_config.mcp_tool_exposure = Some(json!({"available": []}).to_string());
         executor.check_mcp_readiness().await.expect("explicit deny");
-        executor.agent_config.mcp_tool_exposure = Some(json!({"available": ["late__MCP__search"]}).to_string());
+        executor.agent_config.mcp_tool_exposure =
+            Some(json!({"available": ["late__MCP__search"]}).to_string());
         let missing = executor.check_mcp_readiness().await;
         assert!(matches!(missing, Err(WorkflowEngineError::General(_))));
         executor
@@ -10668,13 +10697,24 @@ mod recovery_tests {
             .await
             .expect("missing MCP must not fail refresh");
         assert!(executor.tool_manager.has_tool(TOOL_READ_FILE).await);
-        global.register_test_mcp_tool("late", "search", json!({})).await.expect("late tool");
-        global.get_mcp_server("late").await.expect("late client")
-            .set_status(crate::mcp::client::McpStatus::Running).await;
+        global
+            .register_test_mcp_tool("late", "search", json!({}))
+            .await
+            .expect("late tool");
+        global
+            .get_mcp_server("late")
+            .await
+            .expect("late client")
+            .set_status(crate::mcp::client::McpStatus::Running)
+            .await;
         executor.check_mcp_readiness().await.expect("running tool");
         assert_eq!(executor.mcp_tools_allowlist().expect("allowlist").len(), 1);
-        global.get_mcp_server("late").await.expect("client")
-            .set_status(crate::mcp::client::McpStatus::Stopped).await;
+        global
+            .get_mcp_server("late")
+            .await
+            .expect("client")
+            .set_status(crate::mcp::client::McpStatus::Stopped)
+            .await;
         assert!(executor.check_mcp_readiness().await.is_err());
     }
 
