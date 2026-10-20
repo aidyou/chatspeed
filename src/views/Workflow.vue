@@ -278,7 +278,7 @@
             @mousedown="onCodeEditorResizeStart" />
 
           <div class="workflow-chat-pane">
-            <el-alert v-if="!runtimeUsable" :title="runtimeMessage" type="warning" :closable="false" show-icon />
+            <el-alert v-if="runtimeMessage" :title="runtimeMessage" type="warning" :closable="false" show-icon />
             <WorkflowSessionMessagePane
               ref="messageListRef"
               :session-id="currentWorkflowId"
@@ -1108,10 +1108,15 @@ const osType = ref('')
 // Local state - MUST be defined FIRST before any composables
 // ============================================================
 const runtime = useRuntimeStatus(invokeWrapper, refreshRuntimeData)
-const { usable: runtimeUsable, ready: runtimeReady, error: runtimeError } = runtime
-const runtimeMessage = computed(() => t(!runtimeReady.value
-  ? 'chat.runtimeUnavailable'
-  : runtimeError.value ? 'chat.runtimeLoadFailed' : 'chat.runtimeLoading'))
+const { usable: runtimeUsable, error: runtimeError } = runtime
+const runtimeMessage = computed(() => {
+  if (runtimeError.value) return t('chat.runtimeLoadFailed')
+  const status = runtime.status.value
+  if (runtime.statusError?.value || status?.last_error || status?.heartbeat_ok === false || status?.state === 'unavailable') {
+    return t('chat.runtimeUnavailable')
+  }
+  return ''
+})
 const isInitializing = ref(true)
 watch(runtimeUsable, usable => {
   if (usable) isInitializing.value = false
@@ -3410,7 +3415,7 @@ async function refreshRuntimeData(isCurrent) {
   if (sessionId) {
     // Reuse snapshot hydration, approval reconciliation and SSE subscription; same-id selection
     // does not trigger the input-draft watcher or clear the user's draft.
-    await selectWorkflow(sessionId)
+    await selectWorkflow(sessionId, { background: true })
     if (!isCurrent()) {
       unlistenWorkflowEvents.value?.()
       unlistenWorkflowEvents.value = null
@@ -3421,7 +3426,7 @@ async function refreshRuntimeData(isCurrent) {
     }
     lastHistoryWorkflowId.value = sessionId
   } else if (agentStore.agents.length > 0) {
-    await coreCreateNewWorkflow()
+    await coreCreateNewWorkflow({ background: true })
     if (!isCurrent()) {
       unlistenWorkflowEvents.value?.()
       unlistenWorkflowEvents.value = null

@@ -11,6 +11,8 @@ const exitCoordinator = read('../../../src-tauri/src/exit_coordinator.rs')
 const runtimeClient = read('../../../src-tauri/src/runtime_client.rs')
 const titlebar = read('../../components/window/Titlebar.vue')
 const windowCommands = read('../../../src-tauri/src/commands/window.rs')
+const desktop = read('../../../src-tauri/src/lib.rs')
+const windows = read('../../../src-tauri/src/window.rs')
 
 const locales = ['en', 'zh-Hans', 'zh-Hant'].map(name => ({
   name,
@@ -159,6 +161,20 @@ test('window menu quit opens the shared confirmation instead of exiting directly
   assert.match(windowCommands, /pub fn quit_window\([\s\S]*?request_quit\(&app\)/)
   assert.doesNotMatch(windowCommands, /pub fn quit_window\([\s\S]*?app\.exit\(0\)/)
 })
+test('desktop lifecycle diagnostics distinguish hiding, destruction, exit and native WebKit failure', () => {
+  for (const event of ['desktop starting', 'window close requested', 'window hidden after close request',
+    'window destroyed', 'application exit requested', 'application exiting']) {
+    assert.ok(desktop.includes(`[DesktopLifecycle] ${event}`), event)
+  }
+  assert.match(desktop, /RunEvent::ExitRequested \{ code, \.\. \}/)
+  assert.match(windows, /#\[cfg\(target_os = "linux"\)\]\s*fn install_webview_diagnostics/)
+  assert.match(windows, /connect_local\("web-process-terminated"/)
+  assert.match(windows, /install_webview_diagnostics\(&webview_window\)/)
+  const diagnostics = windows.split('fn install_webview_diagnostics')[1].split('fn create_window_internal')[0]
+  assert.match(diagnostics, /WebKit web process terminated; label=\{\}, reason=\{:\?\}/)
+  assert.doesNotMatch(diagnostics, /\.reload\(|\.close\(|\.exit\(/)
+})
+
 test('Rust renders no user-visible quit prose', () => {
   // The coordinator and the supervisor only publish stable codes; every message
   // the user reads is localized on the frontend, so the Rust side never reaches

@@ -1083,6 +1083,41 @@ test('workflow startup uses the primary message skeleton without covering the wi
   assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
 })
 
+test('workflow runtime banner stays hidden during startup and only displays actual failures', async () => {
+  const source = await readFile('src/views/Workflow.vue', 'utf8')
+  assert.match(source, /<el-alert v-if="runtimeMessage" :title="runtimeMessage"/)
+  const start = source.indexOf('const runtimeMessage = computed(')
+  const end = source.indexOf('\nconst isInitializing', start)
+  assert.ok(start >= 0 && end > start)
+  // A mounted view may still hold the composable result from before a hot update.
+  const state = { status: { value: null } }
+  const error = { value: null }
+  const message = runInNewContext(
+    `${source.slice(start, end)}\n;runtimeMessage`,
+    { computed: getter => ({ get value() { return getter() } }), runtime: state, runtimeError: error, t: key => key }
+  )
+  for (const status of [null, { state: 'disconnected' }, { state: 'spawned' }, { state: 'attached', heartbeat_ok: true }]) {
+    state.status.value = status
+    assert.equal(message.value, '', 'normal startup and hydration use only the skeleton')
+  }
+  for (const status of [
+    { state: 'unavailable' },
+    { state: 'disconnected', last_error: 'connection failed' },
+    { state: 'attached', heartbeat_ok: false }
+  ]) {
+    state.status.value = status
+    assert.equal(message.value, 'chat.runtimeUnavailable')
+  }
+  state.status.value = { state: 'attached', heartbeat_ok: true }
+  error.value = new Error('load failed')
+  assert.equal(message.value, 'chat.runtimeLoadFailed')
+  error.value = null
+  state.statusError = { value: new Error('status request failed') }
+  assert.equal(message.value, 'chat.runtimeUnavailable')
+  state.statusError.value = null
+  assert.equal(message.value, '', 'the error banner disappears after recovery')
+})
+
 test('tool duration badges use structured backend metadata and preserve the requested exclusions', async () => {
   const [messageList, workflowEngine] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),

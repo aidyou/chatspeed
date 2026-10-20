@@ -975,6 +975,27 @@ fn release_frame_band(window: &WebviewWindow) {
     }
 }
 
+/// Native WebKit termination does not reach Rust's panic hook, so keep a
+/// separate breadcrumb without automatically reloading or closing the window.
+#[cfg(target_os = "linux")]
+fn install_webview_diagnostics(window: &WebviewWindow) {
+    use gtk::glib::object::ObjectExt;
+
+    let label = window.label().to_string();
+    if let Err(error) = window.with_webview(move |webview| {
+        webview.inner().connect_local("web-process-terminated", false, move |values| {
+            log::error!(
+                "[DesktopLifecycle] WebKit web process terminated; label={}, reason={:?}",
+                label,
+                values.get(1)
+            );
+            None
+        });
+    }) {
+        warn!("[DesktopLifecycle] failed to attach WebKit diagnostics; label={}, error={}", window.label(), error);
+    }
+}
+
 /// Internal helper to create a webview window with consistent styling.
 fn create_window_internal(
     app: &tauri::AppHandle,
@@ -1022,7 +1043,10 @@ fn create_window_internal(
         .map_err(|e| format!("Failed to create window '{}': {}", label, e))?;
 
     #[cfg(target_os = "linux")]
-    release_frame_band(&webview_window);
+    {
+        release_frame_band(&webview_window);
+        install_webview_diagnostics(&webview_window);
+    }
 
     Ok(webview_window)
 }

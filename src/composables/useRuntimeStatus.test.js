@@ -8,7 +8,7 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const ready = generation => ({ state: 'attached', heartbeat_ok: null, generation })
 function mount(invoke, refresh) {
   const scope = effectScope()
-  const runtime = scope.run(() => useRuntimeStatus(invoke, refresh, { interval: 5 }))
+  const runtime = scope.run(() => useRuntimeStatus(invoke, refresh, { interval: 5, retryDelay: 5 }))
   runtime.start()
   return { runtime, stop: () => scope.stop() }
 }
@@ -44,6 +44,24 @@ test('refreshes once on first ready, generation change and same-generation recov
   } finally { app.stop() }
 })
 
+test('status request failures are exposed separately from normal startup and clear on recovery', async () => {
+  let fail = true
+  const app = mount(async () => {
+    if (fail) throw new Error('status request failed')
+    return ready(1)
+  }, async () => {})
+  try {
+    await wait(20)
+    assert.equal(app.runtime.status.value, null)
+    assert.ok(app.runtime.statusError.value)
+    assert.equal(app.runtime.error.value, null)
+    fail = false
+    await wait(20)
+    assert.equal(app.runtime.statusError.value, null)
+    assert.equal(app.runtime.usable.value, true)
+  } finally { app.stop() }
+})
+
 test('failed data hydration is not empty success and retries while still ready', async () => {
   let fail = true
   const app = mount(async () => ready(1), async () => {
@@ -58,6 +76,94 @@ test('failed data hydration is not empty success and retries while still ready',
     assert.equal(app.runtime.error.value, null)
     assert.equal(app.runtime.usable.value, true)
   } finally { app.stop() }
+})
+
+test('hydration failures back off, cap retries and reset immediately for a new generation', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 })
+  let status = ready(1)
+  let loads = 0
+  let polls = 0
+  let fail = true
+  const scope = effectScope()
+  const runtime = scope.run(() => useRuntimeStatus(async () => { polls++; return status }, async () => {
+    loads++
+    if (fail) throw new Error('snapshot offline')
+  }, { maxRetryDelay: 4000 }))
+  const advance = async ms => {
+    t.mock.timers.tick(ms)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  runtime.start()
+  try {
+    await advance(0)
+    assert.equal(loads, 1)
+    await advance(1000)
+    assert.equal(loads, 1, 'status polling does not bypass hydration backoff')
+    await advance(1000)
+    assert.equal(loads, 2)
+    await advance(3000)
+    assert.equal(loads, 2)
+    await advance(1000)
+    assert.equal(loads, 3)
+    await advance(4000)
+    assert.equal(loads, 4, 'retry delay is capped')
+    assert.ok(polls > loads, 'health polling stays independent')
+    status = ready(2)
+    fail = false
+    await advance(1000)
+    assert.equal(loads, 5, 'a new runtime does not inherit the old failure delay')
+    assert.equal(runtime.error.value, null)
+    assert.equal(runtime.usable.value, true)
+    await advance(4000)
+    assert.equal(loads, 5, 'successful hydration stays single-shot')
+    status = { state: 'unavailable' }
+    await advance(1000)
+    status = ready(2)
+    fail = true
+    await advance(1000)
+    assert.equal(loads, 6)
+    await advance(1000)
+    assert.equal(loads, 6)
+    await advance(1000)
+    assert.equal(loads, 7, 'recovery resets the failure count')
+    scope.stop()
+    const count = polls
+    await advance(30000)
+    assert.equal(polls, count, 'disposal cancels pending retries')
+  } finally { scope.stop() }
+})
+
+test('background snapshot failure propagates to the banner without a toast; manual selection still notifies', async () => {
+  const source = readFileSync(new URL('./workflow/useWorkflowCore.ts', import.meta.url), 'utf8')
+  const body = source.split('const selectWorkflow = async ')[1].split('\n    const startNewWorkflow')[0]
+  const failure = new Error('snapshot transport failed')
+  const messages = []
+  const select = new Function('canSwitchWorkflow', 'workflowStore', 'currentSessionId', 'safeExecute',
+    'resetChatState', 'clearRetryTimer', 'showMessage', 't', 'console', `return async ${body}`)(
+    { value: true }, { selectWorkflow: async () => { throw failure } }, { value: null }, fn => fn(),
+    () => {}, () => {}, (...args) => messages.push(args), key => key, { error() {} })
+  for (let i = 0; i < 3; i++) {
+    await assert.rejects(select('chosen', { background: true }), error => error === failure)
+  }
+  assert.equal(messages.length, 0)
+  await select('chosen')
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0][1], 'error')
+})
+
+test('background workflow bootstrap failures also propagate without toasts', async () => {
+  const source = readFileSync(new URL('./workflow/useWorkflowCore.ts', import.meta.url), 'utf8')
+  const body = source.split('const createNewWorkflow = async ')[1].split('\n    const toggleFinalAuditMode')[0]
+  const failure = new Error('create transport failed')
+  const messages = []
+  const create = new Function('selectedAgent', 'workflowStore', 'getCurrentWorkflowAgentConfig',
+    'invokeWrapper', 'showMessage', 'console', 't', `return async ${body}`)(
+    { value: { id: 'agent' } }, {}, () => ({}), async () => { throw failure },
+    (...args) => messages.push(args), { error() {} }, key => key)
+  await assert.rejects(create({ background: true }), error => error === failure)
+  assert.equal(messages.length, 0)
+  assert.equal(await create(), false)
+  assert.equal(messages.length, 1)
 })
 
 test('poll and hydration stay single-flight; restart invalidates slow work; disposal cancels polling', async () => {
@@ -110,7 +216,11 @@ test('workflow recovery executes snapshot/SSE selection again and never bootstra
     { updateModelStore: async () => { calls.push('models') } }, workflowStore,
     { fetchAutomations: async () => { calls.push('automations') } },
     { agents: [{}], fetchAgents: async () => { calls.push('agents') } }, () => null,
-    async id => { calls.push(`snapshot/SSE:${id}`); listeners.value = () => {} },
+    async (id, options) => {
+      assert.deepEqual(options, { background: true })
+      calls.push(`snapshot/SSE:${id}`)
+      listeners.value = () => {}
+    },
     listeners, { value: null }, async () => { calls.push('create') })
   let status = ready(1)
   const app = mount(async () => status, refresh)
@@ -160,12 +270,12 @@ test('views refresh through existing data and SSE paths without clearing drafts'
   const workflow = readFileSync(new URL('../views/Workflow.vue', import.meta.url), 'utf8')
   const section = workflow.split('async function refreshRuntimeData(isCurrent) {')[1].split('onMounted(')[0]
   for (const call of ['modelStore.updateModelStore()', 'workflowStore.loadWorkflows()',
-    'workflowAutomationStore.fetchAutomations()', 'agentStore.fetchAgents()', 'selectWorkflow(sessionId)']) {
+    'workflowAutomationStore.fetchAutomations()', 'agentStore.fetchAgents()', 'selectWorkflow(sessionId, { background: true })']) {
     assert.ok(section.includes(call), call)
   }
   assert.ok(section.includes('workflowStore.currentWorkflowId || resolveInitialWorkflowId()'))
   assert.doesNotMatch(section, /clearInput|clearImageAttachments|inputMessage.value\s*=/)
-  assert.ok(section.indexOf('await workflowStore.loadWorkflows()') < section.indexOf('await coreCreateNewWorkflow()'))
+  assert.ok(section.indexOf('await workflowStore.loadWorkflows()') < section.indexOf('await coreCreateNewWorkflow({ background: true })'))
   const chat = readFileSync(new URL('../views/Index.vue', import.meta.url), 'utf8')
   const refresh = chat.split('const runtime = useRuntimeStatus')[1].split('const { usable:')[0]
   assert.match(refresh, /await chatStore.loadConversations\(\)/)

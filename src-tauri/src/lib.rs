@@ -581,6 +581,7 @@ pub async fn run() -> crate::error::Result<()> {
             // Settings, note, and proxy switcher are briefly hidden and then force-destroyed on
             // macOS to avoid WKWebView close-time layer tree races while still releasing resources.
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                log::info!("[DesktopLifecycle] window close requested; label={}", window.label());
                 match window.label() {
                     // For these windows, we just hide them.
                     "assistant" | "workflow" => {
@@ -595,7 +596,7 @@ pub async fn run() -> crate::error::Result<()> {
                             if let Err(e) = window.hide() {
                                 warn!("Failed to hide window '{}': {}", window.label(), e);
                             } else {
-                                log::debug!("Window '{}' hidden", window.label());
+                                log::info!("[DesktopLifecycle] window hidden after close request; label={}", window.label());
                             }
                         } else {
                             #[cfg(debug_assertions)]
@@ -723,6 +724,7 @@ pub async fn run() -> crate::error::Result<()> {
             // Release the ChatHub page together with the Workflow window it is docked
             // into, so application exit leaves no page and no stale view state behind.
             tauri::WindowEvent::Destroyed => {
+                log::info!("[DesktopLifecycle] window destroyed; label={}", window.label());
                 if window.label() == chat_hub::CHAT_HUB_HOST_WINDOW_LABEL {
                     let app_handle = window.app_handle();
                     if let Some(chat_hub_state) = app_handle.try_state::<chat_hub::ChatHubPageState>()
@@ -767,6 +769,7 @@ pub async fn run() -> crate::error::Result<()> {
         .setup(|app| {
             // Initialize the logger - this is critical and must stay here
             setup_logger(&app);
+            log::info!("[DesktopLifecycle] desktop starting; pid={}", std::process::id());
 
             // Initialize RESOURCE_DIR for production
             #[cfg(not(debug_assertions))]
@@ -1070,7 +1073,11 @@ pub async fn run() -> crate::error::Result<()> {
         .build(tauri::generate_context!())
         .map_err(|e| AppError::General{message:e.to_string()})?
         .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { code, .. } = &event {
+                log::info!("[DesktopLifecycle] application exit requested; code={code:?}");
+            }
             if matches!(event, tauri::RunEvent::Exit) {
+                log::info!("[DesktopLifecycle] application exiting; pid={}", std::process::id());
                 // Hand the runtime lease back. Releasing is I/O and cannot be
                 // awaited on the event thread, so it is spawned best-effort; if
                 // the process exits first, the lease TTL and the runtime's idle

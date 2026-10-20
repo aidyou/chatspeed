@@ -1552,7 +1552,7 @@ export function useWorkflowCore({
      * Select workflow with session isolation
      * Phase 9: Multi-session switching doesn't cross-contaminate, UI rendering exceptions don't affect workflow execution
      */
-    const selectWorkflow = async (id) => {
+    const selectWorkflow = async (id, { background = false } = {}) => {
         if (!canSwitchWorkflow.value) {
             console.warn('Cannot switch workflow while another is running')
             return
@@ -1604,6 +1604,8 @@ export function useWorkflowCore({
             await workflowStore.selectWorkflow(id)
         } catch (error) {
             console.error('[Workflow] selectWorkflow failed:', error)
+            // Automatic recovery reports through the runtime banner, never a toast loop.
+            if (background) throw error
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
             return
         }
@@ -2411,7 +2413,7 @@ export function useWorkflowCore({
         })
     }
 
-    const createNewWorkflow = async ({ inheritCurrent = true } = {}) => {
+    const createNewWorkflow = async ({ inheritCurrent = true, background = false } = {}) => {
         try {
             if (!selectedAgent.value) {
                 if (agentStore.agents.length > 0) {
@@ -2420,6 +2422,7 @@ export function useWorkflowCore({
                 } else {
                     const errorMsg = t('workflow.noAgentError') || 'No agent available. Please create an agent first.'
                     console.error('[Workflow] Cannot create workflow: no agent available')
+                    if (background) throw new Error(errorMsg)
                     showMessage(errorMsg, 'error')
                     return false
                 }
@@ -2454,12 +2457,13 @@ export function useWorkflowCore({
             }
 
             await workflowStore.loadWorkflows()
-            await selectWorkflow(newWorkflowId)
+            await selectWorkflow(newWorkflowId, { background })
 
             console.log('Created empty workflow:', newWorkflowId)
             return true
         } catch (error) {
             console.error('Failed to create new workflow:', error)
+            if (background) throw error
             showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
             return false
         }

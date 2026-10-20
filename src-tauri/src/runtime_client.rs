@@ -94,6 +94,9 @@ const WORKFLOW_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Backoff between supervisor health checks and recovery attempts.
 const RUNTIME_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Reachability must not wait for the lease renewal cadence or a full RPC timeout.
+const RUNTIME_HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// A future that resolves to one typed capability result.
 pub type BridgeDispatchFuture =
     Pin<Box<dyn Future<Output = ClientCapabilityResult> + Send + 'static>>;
@@ -1011,8 +1014,8 @@ async fn cleanup_connection(mut connection: Connection) -> Result<(), RuntimeUna
         .map_err(RuntimeUnavailable::from_client_error)
 }
 
-/// Watches the lease heartbeat and any desktop-owned child, then reconnects
-/// through the same discovery/lock/lease handshake after a confirmed failure.
+/// Watches control-plane reachability, the lease heartbeat and any desktop-owned
+/// child, then reconnects through the same discovery/lock/lease handshake.
 async fn run_health_monitor(
     inner: Weak<Mutex<SupervisorState>>,
     monitor: Arc<MonitorState>,
@@ -1028,18 +1031,45 @@ async fn run_health_monitor(
         }
         let Some(inner) = inner.upgrade() else { return };
 
+        // Never hold the supervisor lock over I/O: status and desktop exit must
+        // stay responsive even when the old runtime accepts but stops answering.
+        let probe = {
+            let state = inner.lock().await;
+            if state.stopping { return; }
+            state.connection.as_ref().map(|connection| (state.generation, connection.client.clone()))
+        };
+        let probe_failure = if let Some((generation, client)) = probe {
+            let result = tokio::select! {
+                _ = stop_rx.changed() => return,
+                result = tokio::time::timeout(
+                    RUNTIME_HEALTH_PROBE_TIMEOUT,
+                    client.get(chatspeed_runtime_client::META_PATH),
+                ) => result,
+            };
+            match result {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some((generation, format!("control-plane health probe failed: {}", redact_secrets(&error.to_string())))),
+                Err(_) => Some((generation, "control-plane health probe timed out".to_string())),
+            }
+        } else {
+            None
+        };
+
         let failed = {
             let mut state = inner.lock().await;
             if state.stopping {
                 return;
             }
+            let generation = state.generation;
             let reason = state.connection.as_mut().and_then(|connection| {
                 if connection.heartbeat.as_ref().is_some_and(|heartbeat| heartbeat.status().is_err()) {
                     Some("runtime lease heartbeat failed".to_string())
                 } else if connection.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(Some(_)))) {
                     Some("spawned runtime child exited".to_string())
                 } else {
-                    None
+                    probe_failure.as_ref()
+                        .filter(|(probe_generation, _)| *probe_generation == generation)
+                        .map(|(_, reason)| reason.clone())
                 }
             });
             if let Some(reason) = reason {
@@ -1803,6 +1833,98 @@ mod tests {
         assert_eq!(status.generation, 2);
         assert_eq!(status.state, RuntimeConnectionState::Released);
         next_server.abort();
+    }
+
+    #[tokio::test]
+    async fn health_probe_recovers_a_dead_endpoint_before_the_next_lease_heartbeat() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let (document, server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&document).expect("encode")).expect("write");
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.connect_or_start(&config, "tauri-main").await.expect("connect");
+        let old_heartbeat = {
+            let mut state = supervisor.inner.lock().await;
+            let connection = state.connection.as_mut().expect("connection");
+            connection.heartbeat.replace(connection.lease.heartbeat_with_interval(Duration::from_secs(60)))
+        };
+        if let Some(heartbeat) = old_heartbeat { heartbeat.stop().await; }
+        server.abort();
+        let _ = server.await;
+        let (successor, next_server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&successor).expect("encode")).expect("write successor");
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while supervisor.status().await.generation < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("health probe recovers without waiting for lease renewal");
+        let status = supervisor.status().await;
+        assert_eq!(status.base_url, Some(format!("http://127.0.0.1:{}", successor.port)));
+        assert_eq!(status.heartbeat_ok, Some(true));
+        assert!(process_alive(std::process::id()), "attached runtime must never be killed");
+        supervisor.release().await.expect("release");
+        next_server.abort();
+    }
+
+    #[tokio::test]
+    async fn hanging_health_probe_does_not_block_status_or_desktop_exit() {
+        use axum::{routing::get, Router};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let (document, server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&document).expect("encode")).expect("write");
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.connect_or_start(&config, "tauri-main").await.expect("connect");
+        server.abort();
+        let _ = server.await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", document.port)).await.expect("rebind endpoint");
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let signal = entered.clone();
+        let app = Router::new().route(chatspeed_runtime_client::META_PATH, get(move || {
+            let signal = signal.clone();
+            async move {
+                signal.notify_one();
+                std::future::pending::<String>().await
+            }
+        }));
+        let hung_server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve hung endpoint"); });
+        tokio::time::timeout(Duration::from_secs(4), entered.notified()).await.expect("probe started");
+        tokio::time::timeout(Duration::from_millis(100), supervisor.status()).await.expect("status remains responsive");
+        tokio::time::timeout(Duration::from_millis(100), supervisor.begin_stopping()).await.expect("exit fences recovery without waiting for I/O");
+        tokio::time::sleep(RUNTIME_HEALTH_PROBE_TIMEOUT + Duration::from_millis(50)).await;
+        assert_eq!(supervisor.status().await.generation, 1, "cancelled probes cannot reconnect");
+        let _ = supervisor.release().await;
+        hung_server.abort();
+    }
+
+    #[tokio::test]
+    async fn health_probe_timeout_marks_a_hung_endpoint_unavailable() {
+        use axum::{routing::get, Router};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let (document, server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&document).expect("encode")).expect("write");
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.connect_or_start(&config, "tauri-main").await.expect("connect");
+        server.abort();
+        let _ = server.await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", document.port)).await.expect("rebind endpoint");
+        let app = Router::new().route(chatspeed_runtime_client::META_PATH, get(|| async {
+            std::future::pending::<String>().await
+        }));
+        let hung_server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve hung endpoint"); });
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while supervisor.status().await.state != RuntimeConnectionState::Unavailable {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("probe timeout invalidates stale ready state");
+        let status = supervisor.status().await;
+        assert_eq!(status.last_error.as_deref(), Some("control-plane health probe timed out"));
+        assert_eq!(status.generation, 1);
+        assert_eq!(status.base_url, None, "failed endpoint is no longer available to commands");
+        supervisor.begin_stopping().await;
+        hung_server.abort();
+        let _ = supervisor.release().await;
     }
 
     #[tokio::test]
