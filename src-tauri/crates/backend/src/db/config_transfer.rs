@@ -27,9 +27,8 @@ use super::StoreError;
 
 const FORMAT_VERSION: u32 = 1;
 const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-const MCP_COMMAND_SHELL_METACHARACTERS: &[char] = &[
-    ' ', '\t', '\n', ';', '&', '|', '<', '>', '$', '`', '\\',
-];
+const MCP_COMMAND_SHELL_METACHARACTERS: &[char] =
+    &[' ', '\t', '\n', ';', '&', '|', '<', '>', '$', '`', '\\'];
 
 pub const AI_CONFIG_KEYS: &[&str] = &[
     "conversation_title_gen_model",
@@ -748,7 +747,15 @@ fn validate_agent_models(row: &BTreeMap<String, Value>) -> Result<(), StoreError
     let object = value
         .as_object()
         .ok_or_else(|| StoreError::InvalidData("agent models must be an object".into()))?;
-    const ALLOWED: &[&str] = &["plan", "act", "vision", "utility", "lite", "decisionEnabled", "decision"];
+    const ALLOWED: &[&str] = &[
+        "plan",
+        "act",
+        "vision",
+        "utility",
+        "lite",
+        "decisionEnabled",
+        "decision",
+    ];
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return Err(StoreError::InvalidData(
             "agent models contains an unsupported field".into(),
@@ -1596,8 +1603,8 @@ mod tests {
                     "decision": {"id": 2, "model": "decision-model"}
                 })
                 .to_string(),
-            )),
-        ]);
+            ),
+        )]);
 
         assert!(validate_agent_models(&row).is_ok());
     }

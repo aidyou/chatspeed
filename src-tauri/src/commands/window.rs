@@ -49,7 +49,9 @@ use crate::exit_coordinator::{
     QUIT_ERROR_RUNTIME_NOT_CONNECTED, QUIT_RELEASE_BUDGET, QUIT_STATUS_EVENT, QUIT_STOP_BUDGET,
 };
 use crate::plugin_types::PluginError;
-use crate::runtime_client::{RuntimeStatus, RuntimeStopOutcome, RuntimeSupervisor, RuntimeUnavailable};
+use crate::runtime_client::{
+    RuntimeStatus, RuntimeStopOutcome, RuntimeSupervisor, RuntimeUnavailable,
+};
 use tauri::{command, Emitter, Manager, State}; //window::Color, WindowEvent,
 
 use crate::error::{AppError, Result};

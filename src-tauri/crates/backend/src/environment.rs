@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 use std::env;
 use std::io::Read;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -96,11 +96,7 @@ fn terminate_probe(child: &mut Child) {
     let _ = child.kill();
 }
 
-fn run_path_probe_with_timeout(
-    shell: &str,
-    args: &[&str],
-    timeout: Duration,
-) -> Option<String> {
+fn run_path_probe_with_timeout(shell: &str, args: &[&str], timeout: Duration) -> Option<String> {
     let mut command = Command::new(shell);
     command
         .args(args)
@@ -125,7 +121,9 @@ fn run_path_probe_with_timeout(
     let (output_tx, output_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut output = Vec::new();
-        let _ = stdout.take(PATH_PROBE_OUTPUT_LIMIT as u64).read_to_end(&mut output);
+        let _ = stdout
+            .take(PATH_PROBE_OUTPUT_LIMIT as u64)
+            .read_to_end(&mut output);
         let _ = output_tx.send(output);
     });
 
@@ -133,9 +131,7 @@ fn run_path_probe_with_timeout(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let output = output_rx
-                    .recv_timeout(Duration::from_millis(50))
-                    .ok()?;
+                let output = output_rx.recv_timeout(Duration::from_millis(50)).ok()?;
                 if !status.success() || output.is_empty() {
                     return None;
                 }
@@ -213,7 +209,10 @@ fn user_tool_paths() -> Vec<PathBuf> {
             (home.join(".pyenv/versions"), PathBuf::from("bin")),
             (home.join(".goenv/versions"), PathBuf::from("bin")),
             (home.join(".rbenv/versions"), PathBuf::from("bin")),
-            (home.join(".sdkman/candidates"), PathBuf::from("current/bin")),
+            (
+                home.join(".sdkman/candidates"),
+                PathBuf::from("current/bin"),
+            ),
         ] {
             if let Ok(entries) = std::fs::read_dir(root) {
                 for entry in entries.flatten().take(128) {
@@ -397,20 +396,16 @@ fn login_path_shell_candidates(terminal_shells: Vec<String>) -> Vec<String> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn get_shell_path() -> Option<String> {
     let deadline = Instant::now() + SHELL_PATH_PROBE_BUDGET;
-    let mut shell_paths = login_path_shell_candidates(
-        env::var("SHELL").into_iter().collect(),
-    );
+    let mut shell_paths = login_path_shell_candidates(env::var("SHELL").into_iter().collect());
 
     for shell_path in shell_paths.drain(..) {
         if !is_executable_file(Path::new(&shell_path)) || Instant::now() >= deadline {
             continue;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Some(path) = run_path_probe_with_timeout(
-            &shell_path,
-            &["-l", "-c", "echo $PATH"],
-            remaining,
-        ) {
+        if let Some(path) =
+            run_path_probe_with_timeout(&shell_path, &["-l", "-c", "echo $PATH"], remaining)
+        {
             log::debug!("Using bounded PATH probe: {}", shell_path);
             return Some(path);
         }
@@ -722,12 +717,12 @@ fn merge_paths(original: &str, new: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::user_tool_paths;
     use super::{
         dedupe_shells, merge_paths, run_path_probe, select_default_shell, supports_terminal_shell,
         ShellDescriptor,
     };
-    #[cfg(unix)]
-    use super::user_tool_paths;
 
     #[tokio::test]
     async fn child_path_wait_observes_the_completed_probe_before_resolution() {
@@ -743,7 +738,9 @@ mod tests {
             "/initial/bin"
         );
 
-        release.send("/late/bin".to_string()).expect("release probe");
+        release
+            .send("/late/bin".to_string())
+            .expect("release probe");
         assert!(super::wait_for_path_probe(&environment, std::time::Duration::from_secs(1)).await);
         let values = environment.values.read().expect("settled environment");
         assert_eq!(values[0].1, merge_paths("/initial/bin", "/late/bin"));
@@ -763,7 +760,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn bounded_probe_does_not_wait_for_stdin_or_sleeping_startup_code() {
-        assert_eq!(run_path_probe("/bin/sh", &["-c", "sleep 10; echo bad"]), None);
+        assert_eq!(
+            run_path_probe("/bin/sh", &["-c", "sleep 10; echo bad"]),
+            None
+        );
     }
 
     #[cfg(unix)]
@@ -788,7 +788,6 @@ mod tests {
             );
         }
     }
-
 
     #[cfg(unix)]
     #[test]
@@ -871,7 +870,9 @@ mod tests {
     fn child_environment_is_available_without_shell_probe_success() {
         let environment = super::get_child_environment();
         assert!(environment.iter().any(|(key, value)| {
-            key == "PATH" && !value.is_empty() && value.split(':').all(|entry| entry.starts_with('/'))
+            key == "PATH"
+                && !value.is_empty()
+                && value.split(':').all(|entry| entry.starts_with('/'))
         }));
     }
 

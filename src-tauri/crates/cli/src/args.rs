@@ -994,10 +994,7 @@ mod tests {
         ] {
             let mut argv = vec!["cscli", "automation", "create"];
             argv.extend(flags.iter().copied());
-            assert!(
-                parse(&argv).is_err(),
-                "expected a conflict for {flags:?}"
-            );
+            assert!(parse(&argv).is_err(), "expected a conflict for {flags:?}");
         }
     }
 
@@ -1135,7 +1132,14 @@ mod tests {
                 "plan.json",
                 "--acknowledge-permission-changes",
             ],
-            &["cscli", "automation", "update", "auto-1", "--title", "Renamed"],
+            &[
+                "cscli",
+                "automation",
+                "update",
+                "auto-1",
+                "--title",
+                "Renamed",
+            ],
             &[
                 "cscli",
                 "automation",
@@ -1185,7 +1189,11 @@ mod tests {
                 "missing AutomationSpec field {field}"
             );
         }
-        assert_eq!(object.len(), 12, "the fixture must not carry unknown fields");
+        assert_eq!(
+            object.len(),
+            12,
+            "the fixture must not carry unknown fields"
+        );
         assert_eq!(object["schedule_kind"], "daily");
     }
 }

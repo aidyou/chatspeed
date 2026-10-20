@@ -244,7 +244,11 @@ pub fn spawn_runtime_with_config(
             binary.display()
         ))
     })?;
-    Ok(RuntimeChild { pid: child.id(), child: Some(child), exit: None })
+    Ok(RuntimeChild {
+        pid: child.id(),
+        child: Some(child),
+        exit: None,
+    })
 }
 
 /// Resolves the runtime binary from the environment or the sibling default.
@@ -1357,9 +1361,7 @@ impl RuntimeClient {
                     return Ok(RuntimeShutdownOutcome::Stopped)
                 }
                 Ok(_) => {}
-                Err(ClientError::Transport(_)) => {
-                    return Ok(RuntimeShutdownOutcome::EndpointGone)
-                }
+                Err(ClientError::Transport(_)) => return Ok(RuntimeShutdownOutcome::EndpointGone),
                 Err(error) => return Err(error),
             }
             if tokio::time::Instant::now() >= deadline {
@@ -2847,7 +2849,10 @@ mod tests {
     #[test]
     fn process_liveness_accepts_the_current_process() {
         assert!(process_alive(std::process::id()));
-        assert!(process_alive(0), "an invalid PID must not authorize cleanup");
+        assert!(
+            process_alive(0),
+            "an invalid PID must not authorize cleanup"
+        );
     }
 
     #[cfg(any(unix, windows))]
@@ -2899,16 +2904,26 @@ mod tests {
             .spawn()
             .expect("spawn gated child");
         let pid = child.id();
-        let owned = RuntimeChild { child: Some(child), pid, exit: None };
+        let owned = RuntimeChild {
+            child: Some(child),
+            pid,
+            exit: None,
+        };
         drop(owned);
-        assert!(process_alive(pid), "dropping a live runtime must not kill it");
+        assert!(
+            process_alive(pid),
+            "dropping a live runtime must not kill it"
+        );
         std::fs::write(gate, b"exit").expect("release child gate");
         let proc_path = PathBuf::from(format!("/proc/{pid}"));
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while proc_path.exists() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(!proc_path.exists(), "the waiter must reap, not merely detect a zombie");
+        assert!(
+            !proc_path.exists(),
+            "the waiter must reap, not merely detect a zombie"
+        );
     }
 
     #[cfg(unix)]
@@ -2919,10 +2934,21 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn diagnostic child");
-        let mut owned = RuntimeChild { pid: child.id(), child: Some(child), exit: None };
+        let mut owned = RuntimeChild {
+            pid: child.id(),
+            child: Some(child),
+            exit: None,
+        };
         let (sender, receiver) = std::sync::mpsc::channel();
-        owned.forward_stderr_to(move |line| { let _ = sender.send(line.to_string()); });
-        assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).expect("startup log"), "startup stage");
+        owned.forward_stderr_to(move |line| {
+            let _ = sender.send(line.to_string());
+        });
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("startup log"),
+            "startup stage"
+        );
         owned.reap_in_background();
     }
 
@@ -3281,9 +3307,15 @@ mod tests {
         assert!(signal.timeout().is_none());
 
         for (path, body) in [
-            ("/control/v1/workflows/session-1/signal", json!({"type": "stop"})),
+            (
+                "/control/v1/workflows/session-1/signal",
+                json!({"type": "stop"}),
+            ),
             ("/control/v1/workflows/session-1/signal", json!({})),
-            ("/control/v1/workflow-commands/workflow_signal", manual.clone()),
+            (
+                "/control/v1/workflow-commands/workflow_signal",
+                manual.clone(),
+            ),
             ("/control/v1/workflows//signal", manual.clone()),
             ("/control/v1/workflows/session-1/other/signal", manual),
         ] {
@@ -3701,8 +3733,7 @@ mod tests {
         // A body with no declared length is bounded by the incremental reader.
         let server = FakeServer::start(|_| {
             let mut response =
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
-                    .to_vec();
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n".to_vec();
             response.extend(std::iter::repeat(b'a').take(PLUGIN_UI_ASSET_MAX_BYTES + 1));
             response
         })
@@ -5047,8 +5078,8 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
         let released_port = listener.local_addr().expect("addr").port();
         drop(listener);
-        let gone = RuntimeClient::new(&discovery_on(released_port, "instance-a", 1))
-            .expect("client");
+        let gone =
+            RuntimeClient::new(&discovery_on(released_port, "instance-a", 1)).expect("client");
         assert_eq!(
             gone.wait_runtime_stopped(Duration::from_millis(200))
                 .await

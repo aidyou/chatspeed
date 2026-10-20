@@ -76,7 +76,8 @@ pub async fn stream_workflow_events(
     // `ControlPlaneHandle::wait` could never complete. `take_until` ends the stream
     // (closing the connection) as soon as the broadcast fires.
     let stream = ReceiverStream::new(rx);
-    let stream = futures_util::StreamExt::take_until(stream, await_shutdown(state.shutdown.clone()));
+    let stream =
+        futures_util::StreamExt::take_until(stream, await_shutdown(state.shutdown.clone()));
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

@@ -1189,11 +1189,13 @@ mod tests {
             "end_date": null
         });
         assert!(
-            is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 09:00:00")).expect("valid")
+            is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 09:00:00"))
+                .expect("valid")
         );
         // A time the configuration does not define is not a slot.
         assert!(
-            !is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 12:00:00")).expect("valid")
+            !is_valid_schedule_slot("daily", &daily, test_now("2026-06-25 12:00:00"))
+                .expect("valid")
         );
 
         let interval = json!({
@@ -1204,19 +1206,24 @@ mod tests {
             "anchor_time": "08:00"
         });
         // 10:00 is 08:00 + 120m: on the grid.
-        assert!(is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 10:00:00"))
-            .expect("valid"));
+        assert!(
+            is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 10:00:00"))
+                .expect("valid")
+        );
         // 09:00 is off the anchor grid and is not a slot.
-        assert!(!is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 09:00:00"))
-            .expect("valid"));
+        assert!(
+            !is_valid_schedule_slot("interval", &interval, test_now("2026-06-25 09:00:00"))
+                .expect("valid")
+        );
 
         // A configured instant carrying sub-second digits must still match the
         // DB-second cursor, so an RFC3339 `run_at` never looks corrupt.
         let once = json!({"run_at": "2026-06-25T09:00:00.500+00:00"});
         let cursor = parse_once_run_at("2026-06-25T09:00:00+00:00").expect("parse once");
         assert!(is_valid_schedule_slot("once", &once, cursor).expect("valid"));
-        assert!(!is_valid_schedule_slot("once", &once, test_now("2026-06-25 10:00:00"))
-            .expect("valid"));
+        assert!(
+            !is_valid_schedule_slot("once", &once, test_now("2026-06-25 10:00:00")).expect("valid")
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::db::StoreError;
-use rusqlite::{params, Transaction};
 #[cfg(test)]
 use rusqlite::Connection;
+use rusqlite::{params, Transaction};
 use serde_json::Value;
 #[cfg(test)]
 use std::collections::HashSet;

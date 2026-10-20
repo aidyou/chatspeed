@@ -4101,11 +4101,15 @@ mod tests {
         assert_eq!(recent.messages.len(), 300);
         assert_eq!(recent.hidden_message_count, 2);
         assert_eq!(recent.messages[0].message, "history-message-3");
-        assert_eq!(recent.messages[298].message_subtype.as_deref(), Some("manual_clear_context"));
+        assert_eq!(
+            recent.messages[298].message_subtype.as_deref(),
+            Some("manual_clear_context")
+        );
         assert_eq!(recent.messages[299].message, "new-context-message");
-        assert!(recent.messages.iter().any(|message| {
-            message.message == "history-message-3"
-        }));
+        assert!(recent
+            .messages
+            .iter()
+            .any(|message| { message.message == "history-message-3" }));
     }
 
     #[test]

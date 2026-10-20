@@ -17,15 +17,15 @@ use crate::capability::mcp_service::McpServerView;
 use crate::db::{Agent, Mcp};
 use crate::mcp::client::McpStatus;
 use crate::workflow::react::application::{ApplicationError, WorkflowApplicationService};
+#[cfg(feature = "plugin-service")]
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+#[cfg(feature = "plugin-service")]
+use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-#[cfg(feature = "plugin-service")]
-use axum::body::Body;
-#[cfg(feature = "plugin-service")]
-use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG};
 use axum::{Json, Router};
 use chatspeed_contracts::workflow::{
     WorkflowCreateRequest, WorkflowEventsQuery, WorkflowStartRequest,
@@ -872,178 +872,179 @@ fn add_legacy_bridge_routes(router: Router<ControlPlaneState>) -> Router<Control
 }
 
 fn build_router(state: ControlPlaneState) -> Router {
-    let router = Router::new()
-        .route("/control/v1/meta", get(meta))
-        // Agent reads and the canonical agent mutations. The collection POST
-        // creates; the item PUT/PATCH updates and DELETE removes. The POST
-        // `/update` and `/delete` aliases exist because the desktop's runtime
-        // client is deliberately POST-only (it exposes no PUT/DELETE verb), so
-        // the desktop adapter reaches the exact same typed handler as any other
-        // client instead of a second code path. Mutations require the bearer
-        // token and an `Idempotency-Key`.
-        .route("/control/v1/agents", get(list_agents).post(add_agent))
-        .route(
-            "/control/v1/agents/{agent_id}",
-            get(get_agent)
-                .put(update_agent)
-                .patch(update_agent)
-                .delete(delete_agent),
-        )
-        .route("/control/v1/agents/{agent_id}/update", post(update_agent))
-        .route("/control/v1/agents/{agent_id}/delete", post(delete_agent))
-        .route(
-            "/control/v1/workflows",
-            get(list_workflows)
-                .post(create_workflow)
-                .layer(axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES)),
-        )
-        .route("/control/v1/workflows/{session_id}", get(get_workflow))
-        .route(
-            "/control/v1/workflows/{session_id}/start",
-            post(start_workflow).layer(axum::extract::DefaultBodyLimit::max(
-                LARGE_PAYLOAD_BODY_BYTES,
-            )),
-        )
-        .route(
-            "/control/v1/workflows/{session_id}/signal",
-            post(signal_workflow).layer(axum::extract::DefaultBodyLimit::max(
-                LARGE_PAYLOAD_BODY_BYTES,
-            )),
-        )
-        .route(
-            "/control/v1/workflows/{session_id}/stop",
-            post(stop_workflow),
-        )
-        .route(
-            "/control/v1/workflows/{session_id}/events",
-            get(list_events),
-        )
-        .route(
-            "/control/v1/workflows/{session_id}/stream",
-            get(sse::stream_workflow_events),
-        )
-        // Phase 3 capability read surface. Additive and read-only: the Agent
-        // Skill and MCP inventory/doctor facts are exposed from the same
-        // CapabilityApplicationService the Tauri adapters use, so the CLI and
-        // the desktop can never disagree about them (AC-1/AC-11).
-        //
-        // The workflow/data compatibility command routers carry a single large
-        // payload route family (`add_workflow_message`, `add_message` with an
-        // image DataURL), so they get the large-payload limit. It is applied to
-        // the sub-router before the merge; the outer default still wraps the
-        // route, but this inner layer runs later and therefore wins for these
-        // routes only.
-        .merge(
-            crate::workflow::react::client::http::workflow_commands::workflow_command_router()
-                .layer(axum::extract::DefaultBodyLimit::max(
+    let router =
+        Router::new()
+            .route("/control/v1/meta", get(meta))
+            // Agent reads and the canonical agent mutations. The collection POST
+            // creates; the item PUT/PATCH updates and DELETE removes. The POST
+            // `/update` and `/delete` aliases exist because the desktop's runtime
+            // client is deliberately POST-only (it exposes no PUT/DELETE verb), so
+            // the desktop adapter reaches the exact same typed handler as any other
+            // client instead of a second code path. Mutations require the bearer
+            // token and an `Idempotency-Key`.
+            .route("/control/v1/agents", get(list_agents).post(add_agent))
+            .route(
+                "/control/v1/agents/{agent_id}",
+                get(get_agent)
+                    .put(update_agent)
+                    .patch(update_agent)
+                    .delete(delete_agent),
+            )
+            .route("/control/v1/agents/{agent_id}/update", post(update_agent))
+            .route("/control/v1/agents/{agent_id}/delete", post(delete_agent))
+            .route(
+                "/control/v1/workflows",
+                get(list_workflows).post(create_workflow).layer(
+                    axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES),
+                ),
+            )
+            .route("/control/v1/workflows/{session_id}", get(get_workflow))
+            .route(
+                "/control/v1/workflows/{session_id}/start",
+                post(start_workflow).layer(axum::extract::DefaultBodyLimit::max(
                     LARGE_PAYLOAD_BODY_BYTES,
                 )),
-        )
-        .merge(
-            crate::workflow::react::client::http::data_commands::data_command_router().layer(
-                axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES),
-            ),
-        )
-        .route("/control/v1/skill-targets", get(list_skill_targets))
-        .route("/control/v1/skills", get(list_capability_skills))
-        .route("/control/v1/mcp-servers", get(list_capability_mcp_servers))
-        .route(
-            "/control/v1/capability-operations/{operation_id}",
-            get(get_capability_operation),
-        )
-        .route("/control/v1/capability-doctor", get(get_capability_doctor))
-        .route(
-            "/control/v1/capability-doctor/reconcile",
-            post(reconcile_capability),
-        )
-        // Fixed desktop Web MCP provider lifecycle. The provider is the only
-        // production web execution path: it is registered with the runtime and
-        // reached through the canonical MCP client/tool registry. The legacy
-        // client-pull bridge is intentionally not mounted here; its types and
-        // unit tests remain as migration material, but no production request can
-        // enqueue web work through it.
-        .route(CLIENT_CAPABILITIES_PATH, get(list_client_capabilities))
-        // Phase 3 capability mutations. These are the only Skill mutation
-        // routes: each one delegates to the same CapabilityApplicationService
-        // the Tauri commands use, so the CLI cannot reach a second installer
-        // (AC-1).
-        .route("/control/v1/skill-check", post(check_capability_skill))
-        .route("/control/v1/skill-install", post(install_capability_skill))
-        .route(
-            "/control/v1/skill-uninstall",
-            post(uninstall_capability_skill),
-        )
-        // Phase 3 MCP mutations and bounded reads. Same rule as the Skill routes:
-        // one facade, no second mutation path (AC-1/AC-9..AC-12).
-        .route("/control/v1/mcp-install", post(install_capability_mcp))
-        .route("/control/v1/mcp-uninstall", post(uninstall_capability_mcp))
-        .route("/control/v1/mcp-enable", post(enable_capability_mcp))
-        .route("/control/v1/mcp-disable", post(disable_capability_mcp))
-        .route("/control/v1/mcp-restart", post(restart_capability_mcp))
-        .route("/control/v1/mcp-refresh", post(refresh_capability_mcp))
-        .route("/control/v1/mcp-tools", get(get_capability_mcp_tools))
-        .route("/control/v1/mcp-status", get(get_capability_mcp_status))
-        // Phase 3 MCP compatibility reads/mutations. The desktop MCP page keeps
-        // its legacy config-shaped command wire (editable records, a single
-        // record, a whole-config update, typed tool declarations, one tool's
-        // enable/disable), which the descriptor routes above do not cover. Each
-        // handler delegates to the same `CapabilityApplicationService` and the
-        // same idempotency journal as every other route, so there is never a
-        // second installer or a second read path (AC-1/AC-11).
-        .route("/control/v1/mcp-records", get(list_capability_mcp_records))
-        .route("/control/v1/mcp-record", get(get_capability_mcp_record))
-        .route("/control/v1/mcp-update", post(update_capability_mcp))
-        .route(
-            "/control/v1/mcp-tool-declarations",
-            get(get_capability_mcp_tool_declarations),
-        )
-        .route(
-            "/control/v1/mcp-tool-status",
-            post(set_capability_mcp_tool_status),
-        )
-        // Manual tool invocation. Deliberately non-durable: it opens no journal
-        // and needs no `Idempotency-Key`, and it returns the exact MCP result so
-        // the caller sees what the server produced (AC-11).
-        .route("/control/v1/mcp-call", post(call_capability_mcp_tool))
-        // Phase 3D local automation surface. Additive: every route resolves to
-        // the same `AutomationApplicationService` the Tauri commands and the
-        // scheduler use, so HTTP, the `cs` CLI and the desktop can never
-        // disagree about validation, revision, idempotency or run status
-        // (AC-1/AC-9/INV-2). Mutations are bearer + idempotency-key required.
-        .route(
-            "/control/v1/automations",
-            get(list_automations).post(create_automation),
-        )
-        .route("/control/v1/automation-draft", post(draft_automation))
-        .route("/control/v1/automation-apply", post(apply_automation))
-        .route(
-            "/control/v1/automations/{automation_id}",
-            get(get_automation),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/runs",
-            get(list_automation_runs),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/update",
-            post(update_automation),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/enable",
-            post(enable_automation),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/disable",
-            post(disable_automation),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/run",
-            post(run_automation),
-        )
-        .route(
-            "/control/v1/automations/{automation_id}/delete",
-            post(delete_automation),
-        );
+            )
+            .route(
+                "/control/v1/workflows/{session_id}/signal",
+                post(signal_workflow).layer(axum::extract::DefaultBodyLimit::max(
+                    LARGE_PAYLOAD_BODY_BYTES,
+                )),
+            )
+            .route(
+                "/control/v1/workflows/{session_id}/stop",
+                post(stop_workflow),
+            )
+            .route(
+                "/control/v1/workflows/{session_id}/events",
+                get(list_events),
+            )
+            .route(
+                "/control/v1/workflows/{session_id}/stream",
+                get(sse::stream_workflow_events),
+            )
+            // Phase 3 capability read surface. Additive and read-only: the Agent
+            // Skill and MCP inventory/doctor facts are exposed from the same
+            // CapabilityApplicationService the Tauri adapters use, so the CLI and
+            // the desktop can never disagree about them (AC-1/AC-11).
+            //
+            // The workflow/data compatibility command routers carry a single large
+            // payload route family (`add_workflow_message`, `add_message` with an
+            // image DataURL), so they get the large-payload limit. It is applied to
+            // the sub-router before the merge; the outer default still wraps the
+            // route, but this inner layer runs later and therefore wins for these
+            // routes only.
+            .merge(
+                crate::workflow::react::client::http::workflow_commands::workflow_command_router()
+                    .layer(axum::extract::DefaultBodyLimit::max(
+                        LARGE_PAYLOAD_BODY_BYTES,
+                    )),
+            )
+            .merge(
+                crate::workflow::react::client::http::data_commands::data_command_router().layer(
+                    axum::extract::DefaultBodyLimit::max(LARGE_PAYLOAD_BODY_BYTES),
+                ),
+            )
+            .route("/control/v1/skill-targets", get(list_skill_targets))
+            .route("/control/v1/skills", get(list_capability_skills))
+            .route("/control/v1/mcp-servers", get(list_capability_mcp_servers))
+            .route(
+                "/control/v1/capability-operations/{operation_id}",
+                get(get_capability_operation),
+            )
+            .route("/control/v1/capability-doctor", get(get_capability_doctor))
+            .route(
+                "/control/v1/capability-doctor/reconcile",
+                post(reconcile_capability),
+            )
+            // Fixed desktop Web MCP provider lifecycle. The provider is the only
+            // production web execution path: it is registered with the runtime and
+            // reached through the canonical MCP client/tool registry. The legacy
+            // client-pull bridge is intentionally not mounted here; its types and
+            // unit tests remain as migration material, but no production request can
+            // enqueue web work through it.
+            .route(CLIENT_CAPABILITIES_PATH, get(list_client_capabilities))
+            // Phase 3 capability mutations. These are the only Skill mutation
+            // routes: each one delegates to the same CapabilityApplicationService
+            // the Tauri commands use, so the CLI cannot reach a second installer
+            // (AC-1).
+            .route("/control/v1/skill-check", post(check_capability_skill))
+            .route("/control/v1/skill-install", post(install_capability_skill))
+            .route(
+                "/control/v1/skill-uninstall",
+                post(uninstall_capability_skill),
+            )
+            // Phase 3 MCP mutations and bounded reads. Same rule as the Skill routes:
+            // one facade, no second mutation path (AC-1/AC-9..AC-12).
+            .route("/control/v1/mcp-install", post(install_capability_mcp))
+            .route("/control/v1/mcp-uninstall", post(uninstall_capability_mcp))
+            .route("/control/v1/mcp-enable", post(enable_capability_mcp))
+            .route("/control/v1/mcp-disable", post(disable_capability_mcp))
+            .route("/control/v1/mcp-restart", post(restart_capability_mcp))
+            .route("/control/v1/mcp-refresh", post(refresh_capability_mcp))
+            .route("/control/v1/mcp-tools", get(get_capability_mcp_tools))
+            .route("/control/v1/mcp-status", get(get_capability_mcp_status))
+            // Phase 3 MCP compatibility reads/mutations. The desktop MCP page keeps
+            // its legacy config-shaped command wire (editable records, a single
+            // record, a whole-config update, typed tool declarations, one tool's
+            // enable/disable), which the descriptor routes above do not cover. Each
+            // handler delegates to the same `CapabilityApplicationService` and the
+            // same idempotency journal as every other route, so there is never a
+            // second installer or a second read path (AC-1/AC-11).
+            .route("/control/v1/mcp-records", get(list_capability_mcp_records))
+            .route("/control/v1/mcp-record", get(get_capability_mcp_record))
+            .route("/control/v1/mcp-update", post(update_capability_mcp))
+            .route(
+                "/control/v1/mcp-tool-declarations",
+                get(get_capability_mcp_tool_declarations),
+            )
+            .route(
+                "/control/v1/mcp-tool-status",
+                post(set_capability_mcp_tool_status),
+            )
+            // Manual tool invocation. Deliberately non-durable: it opens no journal
+            // and needs no `Idempotency-Key`, and it returns the exact MCP result so
+            // the caller sees what the server produced (AC-11).
+            .route("/control/v1/mcp-call", post(call_capability_mcp_tool))
+            // Phase 3D local automation surface. Additive: every route resolves to
+            // the same `AutomationApplicationService` the Tauri commands and the
+            // scheduler use, so HTTP, the `cs` CLI and the desktop can never
+            // disagree about validation, revision, idempotency or run status
+            // (AC-1/AC-9/INV-2). Mutations are bearer + idempotency-key required.
+            .route(
+                "/control/v1/automations",
+                get(list_automations).post(create_automation),
+            )
+            .route("/control/v1/automation-draft", post(draft_automation))
+            .route("/control/v1/automation-apply", post(apply_automation))
+            .route(
+                "/control/v1/automations/{automation_id}",
+                get(get_automation),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/runs",
+                get(list_automation_runs),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/update",
+                post(update_automation),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/enable",
+                post(enable_automation),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/disable",
+                post(disable_automation),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/run",
+                post(run_automation),
+            )
+            .route(
+                "/control/v1/automations/{automation_id}/delete",
+                post(delete_automation),
+            );
 
     // Runtime-only plugin management. The static `agent-skills` bundle is owned
     // by the runtime's `PluginService`; the desktop and every other client reach
@@ -2242,10 +2243,19 @@ async fn get_plugin_ui_asset(
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, asset.content_type)
             .header(CACHE_CONTROL, "no-store")
-            .header(CONTENT_SECURITY_POLICY, "default-src 'self'; object-src 'none'; base-uri 'none'")
+            .header(
+                CONTENT_SECURITY_POLICY,
+                "default-src 'self'; object-src 'none'; base-uri 'none'",
+            )
             .header(ETAG, format!("\"{}\"", asset.content_digest))
             .body(Body::from(asset.bytes))
-            .unwrap_or_else(|_| dto::error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "failed to build plugin UI response".to_string())),
+            .unwrap_or_else(|_| {
+                dto::error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "failed to build plugin UI response".to_string(),
+                )
+            }),
         Err(_) => dto::error_response(
             StatusCode::NOT_FOUND,
             "plugin_ui_refused",
@@ -3005,12 +3015,13 @@ where
             let status = response.status();
             // Large request bodies do not widen the retained response bound.
             // Read responses bypass capture entirely.
-            let done = match capture_idempotency_body(response, IDEMPOTENCY_RESPONSE_MAX_BYTES).await {
-                Ok(body) => IdempotencyDone { status, body },
-                // Keep the failure under the key: the effect may have run, so
-                // a retry must not execute it again.
-                Err(failure) => failure,
-            };
+            let done =
+                match capture_idempotency_body(response, IDEMPOTENCY_RESPONSE_MAX_BYTES).await {
+                    Ok(body) => IdempotencyDone { status, body },
+                    // Keep the failure under the key: the effect may have run, so
+                    // a retry must not execute it again.
+                    Err(failure) => failure,
+                };
 
             state.idempotency.complete(&key, &reservation, done.clone());
             guard.defuse();
@@ -4344,7 +4355,10 @@ mod tests {
             .await
             .expect("asset request");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
-        assert_eq!(response.headers()["content-type"], "text/html; charset=utf-8");
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
         assert_eq!(response.headers()["cache-control"], "no-store");
         assert!(response.headers().contains_key("content-security-policy"));
         let body = response.text().await.expect("asset body");
@@ -4506,8 +4520,7 @@ mod tests {
         let inventory: serde_json::Value = response.json().await.expect("inventory json");
         assert_eq!(inventory["plugins"][0]["state"], "disabled");
         assert_eq!(
-            inventory["plugins"][0]["state"],
-            "disabled",
+            inventory["plugins"][0]["state"], "disabled",
             "a replayed load must not re-enable the bundle"
         );
         assert!(plugin_dir.join("index.html").is_file());
@@ -4676,7 +4689,10 @@ mod tests {
                 let (url, key) = if index % 2 == 0 {
                     (load_url, format!("plugin-concurrent-load-{index}"))
                 } else {
-                    (uninstall_url, format!("plugin-concurrent-uninstall-{index}"))
+                    (
+                        uninstall_url,
+                        format!("plugin-concurrent-uninstall-{index}"),
+                    )
                 };
                 http.post(&url)
                     .header("Authorization", &auth)
@@ -5241,7 +5257,10 @@ mod tests {
         assert!(cache.peek("second").is_some());
         assert!(cache.peek("third").is_some());
         assert_eq!(
-            cache.iter().map(|(_, entry)| entry.result.body.len()).sum::<usize>(),
+            cache
+                .iter()
+                .map(|(_, entry)| entry.result.body.len())
+                .sum::<usize>(),
             32
         );
     }
@@ -5508,10 +5527,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(created.status(), StatusCode::CREATED);
-        let session_id = created
-            .json::<serde_json::Value>()
-            .await
-            .unwrap()["session_id"]
+        let session_id = created.json::<serde_json::Value>().await.unwrap()["session_id"]
             .as_str()
             .unwrap()
             .to_string();
@@ -5519,8 +5535,7 @@ mod tests {
         // Store a > 1 MiB todo list through the mutation compat route. The large
         // request body also proves the compat route accepts more than the
         // management limit.
-        let huge_todo =
-            serde_json::json!([{ "id": "t1", "content": "a".repeat(1_200_000) }]);
+        let huge_todo = serde_json::json!([{ "id": "t1", "content": "a".repeat(1_200_000) }]);
         let todo_list = serde_json::to_string(&huge_todo).unwrap();
         let write = http
             .post(auth_url(
@@ -5777,7 +5792,10 @@ mod tests {
             .expect_err("an oversized body must not be captured as an empty success");
         assert_eq!(failure.status, StatusCode::INTERNAL_SERVER_ERROR);
         let error: serde_json::Value = serde_json::from_str(&failure.body).expect("failure JSON");
-        assert_eq!(error["error"]["code"], "idempotency_response_capture_failed");
+        assert_eq!(
+            error["error"]["code"],
+            "idempotency_response_capture_failed"
+        );
 
         let response = (StatusCode::OK, "small".to_string()).into_response();
         let captured = capture_idempotency_body(response, 64)
@@ -5938,10 +5956,14 @@ mod tests {
             _lease_id: &str,
             request: &RuntimeShutdownRequest,
         ) -> Result<
-            (chatspeed_contracts::RuntimeShutdownAcceptedDto, crate::lifecycle::ShutdownHandoff),
+            (
+                chatspeed_contracts::RuntimeShutdownAcceptedDto,
+                crate::lifecycle::ShutdownHandoff,
+            ),
             RuntimeShutdownError,
         > {
-            self.starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.starts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let (handoff, receiver) = crate::lifecycle::ShutdownHandoff::channel();
             *self.released.lock().unwrap() = Some(receiver);
             Ok((
@@ -6019,9 +6041,10 @@ mod tests {
         .await
         .into_response();
 
-        let body_task = tokio::spawn(async move {
-            axum::body::to_bytes(response.into_body(), usize::MAX).await
-        });
+        let body_task =
+            tokio::spawn(
+                async move { axum::body::to_bytes(response.into_body(), usize::MAX).await },
+            );
 
         // The stream is live: with a live session it keeps streaming and would not
         // finish on its own.

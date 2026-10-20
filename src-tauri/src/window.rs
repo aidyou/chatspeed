@@ -983,16 +983,22 @@ fn install_webview_diagnostics(window: &WebviewWindow) {
 
     let label = window.label().to_string();
     if let Err(error) = window.with_webview(move |webview| {
-        webview.inner().connect_local("web-process-terminated", false, move |values| {
-            log::error!(
-                "[DesktopLifecycle] WebKit web process terminated; label={}, reason={:?}",
-                label,
-                values.get(1)
-            );
-            None
-        });
+        webview
+            .inner()
+            .connect_local("web-process-terminated", false, move |values| {
+                log::error!(
+                    "[DesktopLifecycle] WebKit web process terminated; label={}, reason={:?}",
+                    label,
+                    values.get(1)
+                );
+                None
+            });
     }) {
-        warn!("[DesktopLifecycle] failed to attach WebKit diagnostics; label={}, error={}", window.label(), error);
+        warn!(
+            "[DesktopLifecycle] failed to attach WebKit diagnostics; label={}, error={}",
+            window.label(),
+            error
+        );
     }
 }
 

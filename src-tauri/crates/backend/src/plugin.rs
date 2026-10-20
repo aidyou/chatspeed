@@ -277,9 +277,7 @@ impl PluginPaths {
         let environment = TargetEnvironment::detect();
         self.ensure_real_path(&self.plugins_root, true).is_ok()
             && self.ensure_real_path(&self.plugin_dir, true).is_ok()
-            && self
-                .ensure_clear_of_skill_targets(&environment)
-                .is_ok()
+            && self.ensure_clear_of_skill_targets(&environment).is_ok()
     }
 }
 
@@ -479,7 +477,9 @@ impl PluginService {
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|_| PluginError::refused("the plugin UI asset is unavailable"))?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(PluginError::refused("the plugin UI asset is not a regular file"));
+            return Err(PluginError::refused(
+                "the plugin UI asset is not a regular file",
+            ));
         }
         let bytes = std::fs::read(&path)
             .map_err(|_| PluginError::refused("the plugin UI asset is unavailable"))?;
@@ -489,7 +489,9 @@ impl PluginService {
             .find(|asset| asset.path == asset_path)
             .map(|asset| sha256_hex(asset.bytes));
         if expected.as_deref() != Some(content_digest.as_str()) {
-            return Err(PluginError::refused("the plugin UI asset integrity proof failed"));
+            return Err(PluginError::refused(
+                "the plugin UI asset integrity proof failed",
+            ));
         }
         Ok(PluginUiAsset {
             bytes,
@@ -1065,16 +1067,8 @@ fn remove_owned(paths: &PluginPaths, target: &Path) -> Result<(), PluginError> {
 /// matches the plugin prefix, a partial staging tree, a symlink or any foreign
 /// directory is preserved instead of deleted.
 fn cleanup_residue(paths: &PluginPaths) -> Result<(), PluginError> {
-    remove_proven_residue(
-        paths,
-        &paths.staging_root,
-        &format!("{PLUGIN_ID}-"),
-    )?;
-    remove_proven_residue(
-        paths,
-        &paths.plugins_root,
-        &format!(".{PLUGIN_ID}-backup-"),
-    )?;
+    remove_proven_residue(paths, &paths.staging_root, &format!("{PLUGIN_ID}-"))?;
+    remove_proven_residue(paths, &paths.plugins_root, &format!(".{PLUGIN_ID}-backup-"))?;
     Ok(())
 }
 
@@ -1410,7 +1404,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn load_stages_verifies_and_publishes_the_bundle() {
         let temp = TempDir::new().expect("temp dir");
@@ -1484,7 +1477,9 @@ mod tests {
         let paths = PluginPaths::under(temp.path().to_path_buf());
         std::fs::write(paths.plugin_dir.join("stray.txt"), b"stray").expect("write stray");
 
-        let error = service.uninstall().expect_err("an extra file must be refused");
+        let error = service
+            .uninstall()
+            .expect_err("an extra file must be refused");
         assert_eq!(error.code, plugin_code::REFUSED);
         assert!(
             paths.plugin_dir.join("stray.txt").is_file(),
@@ -1941,7 +1936,9 @@ mod tests {
         std::fs::remove_file(&asset).expect("remove asset");
         std::os::unix::fs::symlink(&real, &asset).expect("symlink asset");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -1965,7 +1962,9 @@ mod tests {
         std::fs::remove_file(&manifest).expect("remove manifest");
         std::os::unix::fs::symlink(&real, &manifest).expect("symlink manifest");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -1994,7 +1993,9 @@ mod tests {
             service.uninstall().expect_err("uninstall").code,
             plugin_code::REFUSED
         );
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert!(
             !real.join("plugins").exists(),
             "nothing may be written through the home link"
@@ -2019,7 +2020,9 @@ mod tests {
             service.uninstall().expect_err("uninstall").code,
             plugin_code::REFUSED
         );
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert!(
             !real.join("skills").exists(),
             "nothing may be written through the parent link"
@@ -2150,10 +2153,12 @@ mod tests {
         );
 
         // The reported digest is the accurate digest of the legacy content.
-        let legacy_digest =
-            installed_bundle_digest(&paths.plugin_dir, &["index.html".to_string()])
-                .expect("legacy digest");
-        assert_eq!(record.bundle_digest.as_deref(), Some(legacy_digest.as_str()));
+        let legacy_digest = installed_bundle_digest(&paths.plugin_dir, &["index.html".to_string()])
+            .expect("legacy digest");
+        assert_eq!(
+            record.bundle_digest.as_deref(),
+            Some(legacy_digest.as_str())
+        );
         assert_ne!(
             legacy_digest,
             embedded_bundle_digest(),
@@ -2168,7 +2173,9 @@ mod tests {
         publish_legacy(&paths, true);
         let service = service_at(temp.path());
 
-        assert!(inventory_installed(&service.inventory().expect("inventory")));
+        assert!(inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         // The UI route is current-only, so a recognized legacy install is never
         // served even though it declares `index.html`.
         assert_eq!(
@@ -2248,7 +2255,10 @@ mod tests {
         let inventory = service.uninstall().expect("uninstall");
         assert!(!inventory_installed(&inventory));
         assert!(!paths.plugin_dir.exists());
-        assert!(paths.plugins_root.is_dir(), "the plugins root is not removed");
+        assert!(
+            paths.plugins_root.is_dir(),
+            "the plugins root is not removed"
+        );
     }
 
     #[test]
@@ -2260,7 +2270,9 @@ mod tests {
 
         // A leftover staging directory holding exactly the phase-1 bundle passes
         // the ownership proof and is cleared.
-        let residue = paths.staging_root.join(format!("{PLUGIN_ID}-legacy-orphan"));
+        let residue = paths
+            .staging_root
+            .join(format!("{PLUGIN_ID}-legacy-orphan"));
         std::fs::create_dir_all(&residue).expect("residue");
         stage_into(&residue, &BundleSpec::legacy()).expect("stage legacy residue");
 
@@ -2277,7 +2289,9 @@ mod tests {
 
         std::fs::write(paths.plugin_dir.join("index.html"), b"drifted").expect("drift entry");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.disable().expect_err("disable").code,
@@ -2308,7 +2322,9 @@ mod tests {
         )
         .expect("drift manifest");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -2330,7 +2346,9 @@ mod tests {
         )
         .expect("drift state");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -2348,7 +2366,9 @@ mod tests {
 
         std::fs::write(paths.plugin_dir.join("stray.txt"), b"stray").expect("write stray");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,
@@ -2375,7 +2395,9 @@ mod tests {
         std::fs::remove_file(&asset).expect("remove asset");
         std::os::unix::fs::symlink(&real, &asset).expect("symlink asset");
 
-        assert!(!inventory_installed(&service.inventory().expect("inventory")));
+        assert!(!inventory_installed(
+            &service.inventory().expect("inventory")
+        ));
         assert_eq!(service.load().expect_err("load").code, plugin_code::REFUSED);
         assert_eq!(
             service.uninstall().expect_err("uninstall").code,

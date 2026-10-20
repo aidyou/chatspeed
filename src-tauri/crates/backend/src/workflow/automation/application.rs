@@ -329,10 +329,7 @@ impl AutomationApplicationService {
     /// structurally invalid user schedule — is reported as `unknown` health
     /// instead of an error, so a broken configuration can never make the
     /// daemon's decision sticky.
-    pub fn runtime_summary(
-        &self,
-        now: &str,
-    ) -> Result<AutomationRuntimeSummary, AutomationError> {
+    pub fn runtime_summary(&self, now: &str) -> Result<AutomationRuntimeSummary, AutomationError> {
         let now_dt = parse_local_datetime(now)?;
         // Observe the live manager first: this is the one failure the summary
         // must surface rather than classify away.
@@ -418,9 +415,7 @@ impl AutomationApplicationService {
                 continue;
             }
             match self.schedule_cursor_state(automation, now) {
-                Ok(ScheduleCursor::Future | ScheduleCursor::DueOnline) => {
-                    effective_schedules += 1
-                }
+                Ok(ScheduleCursor::Future | ScheduleCursor::DueOnline) => effective_schedules += 1,
                 Ok(ScheduleCursor::NotEffective) => {}
                 Err(_) => {
                     // A structurally invalid *schedule configuration* is not a
@@ -1133,10 +1128,7 @@ impl AutomationApplicationService {
         };
         // An unavailable manager is an observation failure, not "not live".
         let manager_status = self.owner_session_status(session_id)?;
-        if manager_status
-            .as_ref()
-            .is_some_and(session_status_is_live)
-        {
+        if manager_status.as_ref().is_some_and(session_status_is_live) {
             // Live manager evidence wins over a stale terminal snapshot.
             return Ok(run.clone());
         }
@@ -2201,7 +2193,11 @@ mod tests {
         }
     }
 
-    fn scheduled_run(automation_id: &str, run_id: &str, status: &str) -> WorkflowAutomationRunInsert {
+    fn scheduled_run(
+        automation_id: &str,
+        run_id: &str,
+        status: &str,
+    ) -> WorkflowAutomationRunInsert {
         WorkflowAutomationRunInsert {
             id: run_id.to_string(),
             automation_id: automation_id.to_string(),
@@ -2355,13 +2351,7 @@ mod tests {
             ))
             .expect("create once");
         store
-            .create_workflow_automation(&upsert(
-                "a-null",
-                "daily",
-                daily_config(),
-                true,
-                None,
-            ))
+            .create_workflow_automation(&upsert("a-null", "daily", daily_config(), true, None))
             .expect("create null");
         store
             .create_workflow_automation(&upsert(
@@ -2659,7 +2649,9 @@ mod tests {
             .expect("read")
             .expect("row");
         assert_eq!(
-            facade.schedule_cursor_state(&automation, now).expect("state"),
+            facade
+                .schedule_cursor_state(&automation, now)
+                .expect("state"),
             ScheduleCursor::NotEffective
         );
 
@@ -2676,7 +2668,9 @@ mod tests {
             .expect("read")
             .expect("row");
         assert_eq!(
-            facade.schedule_cursor_state(&automation, now).expect("state"),
+            facade
+                .schedule_cursor_state(&automation, now)
+                .expect("state"),
             ScheduleCursor::Future
         );
     }
@@ -2784,9 +2778,7 @@ mod tests {
         let mut run = scheduled_run("a-orphan", "run-orphan", "running");
         run.workflow_session_id = Some("session-orphan".to_string());
         seed_session(&store, "session-orphan");
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         // The owner exists but its weak manager is gone: observation fails, and
         // that failure must surface as an error, never as a zero live count.
@@ -2885,9 +2877,7 @@ mod tests {
         run.workflow_session_id = Some("sess-wait".to_string());
         run.dispatch_key = None;
         seed_session(&store, "sess-wait");
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
         register_session(
@@ -2918,15 +2908,19 @@ mod tests {
     fn a_terminal_manager_session_converges_a_run_instead_of_zero_live() {
         let (_dir, store) = seeded_store(&["agent-main"]);
         store
-            .create_workflow_automation(&upsert("a-done", "interval", json!({"interval_minutes": 60}), true, None))
+            .create_workflow_automation(&upsert(
+                "a-done",
+                "interval",
+                json!({"interval_minutes": 60}),
+                true,
+                None,
+            ))
             .expect("create");
         let mut run = scheduled_run("a-done", "run-done", "running");
         run.workflow_session_id = Some("sess-done".to_string());
         run.dispatch_key = None;
         seed_session(&store, "sess-done");
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
         // A completed session the manager still hot-caches is terminal, not live.
@@ -2965,7 +2959,9 @@ mod tests {
         let facade = facade_with_owner(&store, owner.clone());
 
         // A pass that errors before finishing must not be recorded as done.
-        assert!(facade.normalize_schedules_at_startup("not-a-datetime").is_err());
+        assert!(facade
+            .normalize_schedules_at_startup("not-a-datetime")
+            .is_err());
         assert!(!owner.startup_pass_completed());
         assert!(owner.startup_cutoff().is_none());
 
@@ -3015,9 +3011,7 @@ mod tests {
         let mut run = scheduled_run("a-live", "run-live", "running");
         run.workflow_session_id = Some("sess-live".to_string());
         run.dispatch_key = None;
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         let manager = Arc::new(crate::workflow::react::manager::WorkflowManager::new());
         register_session(
@@ -3058,9 +3052,7 @@ mod tests {
         let mut run = scheduled_run("a-unowned", "run-unowned", "running");
         run.workflow_session_id = Some("sess-unowned".to_string());
         run.dispatch_key = None;
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         // With no live owner and a non-terminal snapshot, neither the workflow
         // row nor the run's own `running` status may be read as a live run.
@@ -3097,9 +3089,7 @@ mod tests {
         let mut run = scheduled_run("a-recover", "run-recover", "running");
         run.workflow_session_id = Some("sess-recover".to_string());
         run.dispatch_key = None;
-        store
-            .add_workflow_automation_run(&run)
-            .expect("add run");
+        store.add_workflow_automation_run(&run).expect("add run");
 
         // The bounded reconcile converges the run on its terminal snapshot, so
         // the future enabled slot becomes effective again instead of staying

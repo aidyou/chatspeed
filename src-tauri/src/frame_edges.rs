@@ -103,9 +103,7 @@ pub fn give_frame_band_to_window<W: gtk::glib::IsA<gtk::Widget>>(widget: &W, ban
     // A window built hidden has no GdkWindow when the call above runs, and showing it does not
     // necessarily allocate the webview again. The widget is realized before it is mapped, which
     // is when its GdkWindow first exists, so the band is applied again there.
-    widget.connect_realize(move |widget| {
-        apply_frame_band_and_corner(widget, band, 0.0)
-    });
+    widget.connect_realize(move |widget| apply_frame_band_and_corner(widget, band, 0.0));
     widget.connect_size_allocate(move |widget, _allocation| {
         apply_frame_band_and_corner(widget, band, 0.0)
     });

@@ -271,9 +271,7 @@ impl MainStore {
     /// The enabled automations only. Read paths that classify schedules (the
     /// runtime keep-alive summary) need nothing else, so this avoids listing and
     /// filtering disabled rows on every tick.
-    pub fn list_enabled_workflow_automations(
-        &self,
-    ) -> Result<Vec<WorkflowAutomation>, StoreError> {
+    pub fn list_enabled_workflow_automations(&self) -> Result<Vec<WorkflowAutomation>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
                 "SELECT * FROM workflow_automations

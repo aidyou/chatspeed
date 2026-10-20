@@ -1211,7 +1211,10 @@ impl ToolManager {
         let registration_generation = {
             let mut generations = self.mcp_registration_generations.lock().await;
             let mut statuses = self.mcp_registration_status.write().await;
-            if matches!(statuses.get(&server_name_for_log), Some(McpStatus::Starting)) {
+            if matches!(
+                statuses.get(&server_name_for_log),
+                Some(McpStatus::Starting)
+            ) {
                 return Err(ToolError::StateChangeFailed(format!(
                     "MCP server '{}' registration is already in progress",
                     server_name_for_log
@@ -1614,7 +1617,10 @@ impl ToolManager {
             // A newer explicit refresh owns discovery; an earlier startup list cannot overwrite it.
             let generation = generations.entry(name.to_string()).or_insert(0);
             *generation = generation.saturating_add(1);
-            self.mcp_registration_status.write().await.insert(name.to_string(), McpStatus::Starting);
+            self.mcp_registration_status
+                .write()
+                .await
+                .insert(name.to_string(), McpStatus::Starting);
             (client, *generation)
         };
 
@@ -1640,7 +1646,9 @@ impl ToolManager {
                     .collect();
 
                 self.register_mcp_server_inner(
-                    client.clone(), generation, Some(tools_with_disabled_flag),
+                    client.clone(),
+                    generation,
+                    Some(tools_with_disabled_flag),
                 )
                 .await?;
                 self.set_registration_status(name, generation, McpStatus::Running)
@@ -1656,8 +1664,12 @@ impl ToolManager {
                 );
                 self.register_mcp_server_inner(client.clone(), generation, Some(Vec::new()))
                     .await?;
-                self.set_registration_status(name, generation, McpStatus::Error("list_failed".into()))
-                    .await;
+                self.set_registration_status(
+                    name,
+                    generation,
+                    McpStatus::Error("list_failed".into()),
+                )
+                .await;
                 Err(ToolError::ExecutionFailed(e.to_string()))
             }
         }
@@ -1855,50 +1867,115 @@ mod tests {
     #[tokio::test]
     async fn configuration_failure_is_observable_before_a_client_is_published() {
         let manager = Arc::new(ToolManager::new());
-        let result = manager.clone().register_mcp_server(McpServerConfig {
-            name: "invalid-transport".into(),
-            protocol_type: McpProtocolType::Sse,
-            ..Default::default()
-        }).await;
+        let result = manager
+            .clone()
+            .register_mcp_server(McpServerConfig {
+                name: "invalid-transport".into(),
+                protocol_type: McpProtocolType::Sse,
+                ..Default::default()
+            })
+            .await;
         assert!(result.is_err());
-        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("invalid-transport"),
-            Some(&McpStatus::Error("registration_failed".into())));
+        assert_eq!(
+            manager
+                .get_mcp_serves_status()
+                .await
+                .expect("statuses")
+                .get("invalid-transport"),
+            Some(&McpStatus::Error("registration_failed".into()))
+        );
         assert!(manager.get_mcp_server("invalid-transport").await.is_err());
     }
 
     #[tokio::test]
     async fn failed_registration_is_observable_and_old_generations_cannot_restore_it() {
         let manager = ToolManager::new();
-        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
-        manager.set_registration_status("test", 1, McpStatus::Error("secret".into())).await;
-        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
-            Some(&McpStatus::Error("registration_failed".into())));
+        manager
+            .mcp_registration_generations
+            .lock()
+            .await
+            .insert("test".into(), 1);
+        manager
+            .set_registration_status("test", 1, McpStatus::Error("secret".into()))
+            .await;
+        assert_eq!(
+            manager
+                .get_mcp_serves_status()
+                .await
+                .expect("statuses")
+                .get("test"),
+            Some(&McpStatus::Error("registration_failed".into()))
+        );
         manager.unregister_mcp_server("test").await.expect("stop");
-        manager.set_registration_status("test", 1, McpStatus::Starting).await;
-        assert!(!manager.get_mcp_serves_status().await.expect("statuses").contains_key("test"));
+        manager
+            .set_registration_status("test", 1, McpStatus::Starting)
+            .await;
+        assert!(!manager
+            .get_mcp_serves_status()
+            .await
+            .expect("statuses")
+            .contains_key("test"));
     }
 
     #[tokio::test]
     async fn completed_registration_follows_live_client_status() {
         let manager = ToolManager::new();
-        manager.register_test_mcp_tool("test", "search", json!({})).await.expect("tool");
-        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
-        manager.set_registration_status("test", 1, McpStatus::Running).await;
-        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
-            Some(&McpStatus::Connected));
-        manager.get_mcp_server("test").await.expect("client").set_status(McpStatus::Stopped).await;
-        assert_eq!(manager.get_mcp_serves_status().await.expect("statuses").get("test"),
-            Some(&McpStatus::Stopped));
+        manager
+            .register_test_mcp_tool("test", "search", json!({}))
+            .await
+            .expect("tool");
+        manager
+            .mcp_registration_generations
+            .lock()
+            .await
+            .insert("test".into(), 1);
+        manager
+            .set_registration_status("test", 1, McpStatus::Running)
+            .await;
+        assert_eq!(
+            manager
+                .get_mcp_serves_status()
+                .await
+                .expect("statuses")
+                .get("test"),
+            Some(&McpStatus::Connected)
+        );
+        manager
+            .get_mcp_server("test")
+            .await
+            .expect("client")
+            .set_status(McpStatus::Stopped)
+            .await;
+        assert_eq!(
+            manager
+                .get_mcp_serves_status()
+                .await
+                .expect("statuses")
+                .get("test"),
+            Some(&McpStatus::Stopped)
+        );
     }
 
     #[tokio::test]
     async fn clear_invalidates_unpublished_registration() {
         let manager = ToolManager::new();
-        manager.mcp_registration_generations.lock().await.insert("test".into(), 1);
-        manager.set_registration_status("test", 1, McpStatus::Starting).await;
+        manager
+            .mcp_registration_generations
+            .lock()
+            .await
+            .insert("test".into(), 1);
+        manager
+            .set_registration_status("test", 1, McpStatus::Starting)
+            .await;
         manager.clear(true).await;
-        manager.set_registration_status("test", 1, McpStatus::Error("late".into())).await;
-        assert!(!manager.get_mcp_serves_status().await.expect("statuses").contains_key("test"));
+        manager
+            .set_registration_status("test", 1, McpStatus::Error("late".into()))
+            .await;
+        assert!(!manager
+            .get_mcp_serves_status()
+            .await
+            .expect("statuses")
+            .contains_key("test"));
     }
 
     // A structured provider error is classified down to its allowlisted code,
@@ -2973,7 +3050,8 @@ mod tests {
 
             fn client(
                 &self,
-            ) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>> {
+            ) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>>
+            {
                 Arc::new(RwLock::new(None))
             }
 

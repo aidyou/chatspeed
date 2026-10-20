@@ -141,19 +141,12 @@ fn anchor_time_invalid(raw: &str) -> CliError {
 
 fn date_range_invalid(start: &str, end: &str) -> CliError {
     CliError::usage(
-        rust_i18n::t!(
-            "cs.automation_date_range_invalid",
-            start = start,
-            end = end
-        )
-        .to_string(),
+        rust_i18n::t!("cs.automation_date_range_invalid", start = start, end = end).to_string(),
     )
 }
 
 fn schedule_kind_unknown(raw: &str) -> CliError {
-    CliError::usage(
-        rust_i18n::t!("cs.automation_schedule_kind_unknown", value = raw).to_string(),
-    )
+    CliError::usage(rust_i18n::t!("cs.automation_schedule_kind_unknown", value = raw).to_string())
 }
 
 fn anchor_only_interval() -> CliError {
@@ -535,9 +528,7 @@ pub fn spec_from_view(view: &Value) -> Result<Map<String, Value>, CliError> {
         .ok_or_else(|| view_incomplete("automation"))?;
     let mut spec = Map::new();
     for field in SPEC_FIELDS {
-        let value = object
-            .get(field)
-            .ok_or_else(|| view_incomplete(field))?;
+        let value = object.get(field).ok_or_else(|| view_incomplete(field))?;
         spec.insert(field.to_string(), value.clone());
     }
     Ok(spec)
@@ -700,15 +691,15 @@ mod tests {
         for raw in ["5", "0m", "5d", "1h30m", "", "abc", "m"] {
             assert!(parse_interval(raw).is_err(), "{raw} must be rejected");
         }
-        assert_eq!(
-            parse_interval("3m").expect_err("too short").exit_code(),
-            2
-        );
+        assert_eq!(parse_interval("3m").expect_err("too short").exit_code(), 2);
     }
 
     #[test]
     fn weekdays_are_a_deduped_sorted_one_to_seven_list() {
-        assert_eq!(parse_weekdays("1,2,3,4,5").expect("range"), vec![1, 2, 3, 4, 5]);
+        assert_eq!(
+            parse_weekdays("1,2,3,4,5").expect("range"),
+            vec![1, 2, 3, 4, 5]
+        );
         assert_eq!(parse_weekdays("5, 1 ,5").expect("dedup"), vec![1, 5]);
         for raw in ["0", "8", "1,,2", "", "a", "-1"] {
             assert!(parse_weekdays(raw).is_err(), "{raw} must be rejected");

@@ -32,7 +32,7 @@ use chatspeed_contracts::{
     ClientLease, ClientLeaseRequest, ClientLeaseResponse, RuntimeAutomationHealth,
     RuntimeAutomationSummaryDto, RuntimeLifecyclePhase, RuntimeOperationDto, RuntimeOperationStage,
     RuntimeShutdownAcceptedDto, RuntimeShutdownOutcome, RuntimeShutdownRequest, RuntimeStatusDto,
-    RUNTIME_LIFECYCLE_SCHEMA_VERSION, PROTOCOL_VERSION,
+    PROTOCOL_VERSION, RUNTIME_LIFECYCLE_SCHEMA_VERSION,
 };
 use chatspeed_runtime_backend::background::RuntimeBackground;
 use chatspeed_runtime_backend::lifecycle::{
@@ -1335,11 +1335,15 @@ impl RuntimeControlPlane for RuntimeControl {
         // The fence lives in the lease registry itself, the lowest canonical
         // layer, so both this authority and a direct registry caller are refused
         // on the one gate while the runtime is quiescing.
-        self.leases.register(request).map_err(RuntimeLeaseError::from)
+        self.leases
+            .register(request)
+            .map_err(RuntimeLeaseError::from)
     }
 
     fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
-        self.leases.renew(client_id).map_err(RuntimeLeaseError::from)
+        self.leases
+            .renew(client_id)
+            .map_err(RuntimeLeaseError::from)
     }
 
     fn validate_lease(
@@ -1549,7 +1553,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         })
         .map_err(|error| RuntimeError::Assembly(error.to_string()))?,
     );
-    log::info!("[Runtime] owner assembly complete after {:?}", startup_started.elapsed());
+    log::info!(
+        "[Runtime] owner assembly complete after {:?}",
+        startup_started.elapsed()
+    );
 
     // Fail-closed ordering: classify crash-interrupted capability operations and
     // load the desktop-free core tool surface *before* discovery is published or
@@ -1569,7 +1576,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     // the scheduler on the strength of a normalization that never ran.
     log::info!("[Runtime] normalizing automation schedules");
     let startup_cutoff = normalize_datetime_for_db(chrono::Local::now());
-    if let Err(error) = owner.service().automation_normalize_at_startup(&startup_cutoff) {
+    if let Err(error) = owner
+        .service()
+        .automation_normalize_at_startup(&startup_cutoff)
+    {
         return Err(RuntimeError::Assembly(format!(
             "automation startup normalization failed: {error}"
         )));
@@ -1616,13 +1626,12 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     // It starts before the control plane so a connecting client can rely on the
     // same paths the desktop wires in `tauri::setup`. The gate fences the
     // automation tick's dispatch, which is a canonical non-HTTP work start.
-    log::info!("[Runtime] starting background services after {:?}", startup_started.elapsed());
-    let background = RuntimeBackground::start(
-        &owner,
-        env!("CARGO_PKG_VERSION").to_string(),
-        gate.clone(),
-    )
-    .await;
+    log::info!(
+        "[Runtime] starting background services after {:?}",
+        startup_started.elapsed()
+    );
+    let background =
+        RuntimeBackground::start(&owner, env!("CARGO_PKG_VERSION").to_string(), gate.clone()).await;
 
     let runtime_control: Arc<dyn RuntimeControlPlane> = Arc::new(RuntimeControl {
         instance_id: instance_id.clone(),
@@ -1636,7 +1645,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     // owner the serve task takes, so its handle is cloned before the owner moves.
     let idle_service = owner.service().clone();
 
-    log::info!("[Runtime] binding and publishing control plane after {:?}", startup_started.elapsed());
+    log::info!(
+        "[Runtime] binding and publishing control plane after {:?}",
+        startup_started.elapsed()
+    );
     let control = match server::start_runtime_control_plane(
         owner.service().clone(),
         RuntimeControlPlaneOptions {
@@ -1663,7 +1675,11 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         }
     };
 
-    log::info!("[Runtime] ready after {:?}; pid={}", startup_started.elapsed(), std::process::id());
+    log::info!(
+        "[Runtime] ready after {:?}; pid={}",
+        startup_started.elapsed(),
+        std::process::id()
+    );
     let port = control.port;
     let runtime_dir = config.runtime_dir().to_path_buf();
     let db_path = config.db_path().to_path_buf();
@@ -1682,7 +1698,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         // Bound the control-plane wait: the SSE broadcast ends open streams, so
         // this completes promptly, and the timeout keeps a stuck connection from
         // holding the lock forever.
-        if tokio::time::timeout(serve_budget, control.wait()).await.is_err() {
+        if tokio::time::timeout(serve_budget, control.wait())
+            .await
+            .is_err()
+        {
             log::error!(
                 "[Runtime] control plane did not stop within {:?}; withholding the `stopped` claim and holding the lock until a forced shutdown terminates this instance",
                 serve_budget
@@ -3323,9 +3342,8 @@ mod tests {
 
         let wrong_instance =
             r#"{"expected_instance_id":"other-instance","confirm":true,"force":true}"#;
-        let valid = format!(
-            r#"{{"expected_instance_id":"{instance}","confirm":true,"force":true}}"#
-        );
+        let valid =
+            format!(r#"{{"expected_instance_id":"{instance}","confirm":true,"force":true}}"#);
 
         // A missing Idempotency-Key is refused before anything else.
         let response = http
@@ -3345,14 +3363,24 @@ mod tests {
         // the idempotency cache, so the refusal is re-derived on every call and
         // the same key/body yields the same refusal instead of a cached conflict.
         let response = http
-            .shutdown(&wrong_instance, Some("client-a"), Some(&lease_id), Some("k-inst"))
+            .shutdown(
+                &wrong_instance,
+                Some("client-a"),
+                Some(&lease_id),
+                Some("k-inst"),
+            )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
         let stale_body = response.text().await.expect("stale body");
         assert!(stale_body.contains("instance_mismatch"), "{stale_body}");
 
         let response = http
-            .shutdown(&wrong_instance, Some("client-a"), Some(&lease_id), Some("k-inst"))
+            .shutdown(
+                &wrong_instance,
+                Some("client-a"),
+                Some(&lease_id),
+                Some("k-inst"),
+            )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
         assert_eq!(response.text().await.expect("replayed body"), stale_body);
@@ -3360,7 +3388,12 @@ mod tests {
         // An unconfirmed request against the live instance is refused.
         let unconfirmed = format!(r#"{{"expected_instance_id":"{instance}","confirm":false}}"#);
         let response = http
-            .shutdown(&unconfirmed, Some("client-a"), Some(&lease_id), Some("k-conf"))
+            .shutdown(
+                &unconfirmed,
+                Some("client-a"),
+                Some(&lease_id),
+                Some("k-conf"),
+            )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
         let envelope: Value = response.json().await.expect("error envelope");
@@ -3375,7 +3408,10 @@ mod tests {
         assert_eq!(accepted["accepted"], true);
         assert_eq!(accepted["force"], true);
         assert_eq!(accepted["instance_id"], instance);
-        assert!(!accepted["operation_id"].as_str().expect("operation").is_empty());
+        assert!(!accepted["operation_id"]
+            .as_str()
+            .expect("operation")
+            .is_empty());
 
         // The coordinated exit drains and stops without waiting on its own
         // server; the lock is released for a successor.
@@ -3393,8 +3429,7 @@ mod tests {
     fn seed_enabled_once_automation(db_path: &Path) {
         use chatspeed_runtime_backend::db::automation::WorkflowAutomationUpsert;
         use chatspeed_runtime_backend::db::Agent;
-        let store =
-            chatspeed_runtime_backend::db::MainStore::new(db_path).expect("seed store");
+        let store = chatspeed_runtime_backend::db::MainStore::new(db_path).expect("seed store");
         // The automation's `agent_id` is a foreign key, so the owning agent row
         // must exist first.
         let agent = Agent::new(
@@ -3531,11 +3566,17 @@ mod tests {
     async fn an_idle_shutdown_never_forces_and_never_fires_the_termination_hook() {
         let dir = tempfile::tempdir().expect("tempdir");
         let fired = Arc::new(AtomicUsize::new(0));
-        let hook = Arc::new(RecordingHook { fired: fired.clone() });
+        let hook = Arc::new(RecordingHook {
+            fired: fired.clone(),
+        });
         let handle = start_runtime(
-            short_config(dir.path(), Duration::from_millis(300), Duration::from_secs(5))
-                .with_force_budget(Duration::from_millis(200))
-                .with_termination_hook(hook),
+            short_config(
+                dir.path(),
+                Duration::from_millis(300),
+                Duration::from_secs(5),
+            )
+            .with_force_budget(Duration::from_millis(200))
+            .with_termination_hook(hook),
         )
         .await
         .expect("start runtime");
@@ -3584,11 +3625,13 @@ mod tests {
     /// report `stopped`; it spends the forced budget and then fires the
     /// last-resort termination fallback, which the test records instead of exiting.
     #[tokio::test]
-    async fn a_forced_shutdown_that_cannot_drain_fires_the_termination_hook_without_claiming_stopped()
-    {
+    async fn a_forced_shutdown_that_cannot_drain_fires_the_termination_hook_without_claiming_stopped(
+    ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let fired = Arc::new(AtomicUsize::new(0));
-        let hook = Arc::new(RecordingHook { fired: fired.clone() });
+        let hook = Arc::new(RecordingHook {
+            fired: fired.clone(),
+        });
         let handle = start_runtime(
             short_config(dir.path(), Duration::from_secs(30), Duration::from_secs(30))
                 .with_shutdown_budget(Duration::from_millis(300))

@@ -73,8 +73,7 @@ pub struct WorkflowApplicationService {
     /// hands out so a facade read can verify the current guard and the manager
     /// before it declares an automation effect unknown. It never copies the
     /// manager and is never persisted.
-    pub(crate) automation_owner:
-        Arc<crate::workflow::automation::runtime::AutomationRuntimeOwner>,
+    pub(crate) automation_owner: Arc<crate::workflow::automation::runtime::AutomationRuntimeOwner>,
     pub(crate) app_data_dir: PathBuf,
     /// The unique Agent Skill / MCP capability service shared by the Tauri
     /// commands, the control plane and (through it) the `cs` CLI. Holding it

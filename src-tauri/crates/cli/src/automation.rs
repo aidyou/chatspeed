@@ -862,9 +862,14 @@ mod tests {
             "/tmp/a",
         ]);
         let io = MockIo::new(view());
-        create(&cli, &io, friendly_inputs(&friendly), &Some("k-1".to_string()))
-            .await
-            .expect("create");
+        create(
+            &cli,
+            &io,
+            friendly_inputs(&friendly),
+            &Some("k-1".to_string()),
+        )
+        .await
+        .expect("create");
 
         assert!(io.gets.borrow().is_empty(), "create must not read a view");
         let posts = io.posts.borrow();
@@ -948,14 +953,8 @@ mod tests {
         let mut once_view = view();
         once_view["schedule_kind"] = json!("once");
         once_view["schedule_config"] = json!({ "run_at": "2026-06-25T10:00:00Z" });
-        let (cli, friendly) = parse_friendly(&[
-            "cscli",
-            "automation",
-            "update",
-            "auto-1",
-            "--weekdays",
-            "1",
-        ]);
+        let (cli, friendly) =
+            parse_friendly(&["cscli", "automation", "update", "auto-1", "--weekdays", "1"]);
         let io = MockIo::new(once_view);
         let error = update(&cli, &io, "auto-1", friendly_inputs(&friendly), None, &None)
             .await
@@ -1061,8 +1060,14 @@ mod tests {
             "enabled": true,
         });
         let raw = document.to_string();
-        let (cli, friendly) =
-            parse_friendly(&["cscli", "automation", "update", "auto-1", "--spec-json", &raw]);
+        let (cli, friendly) = parse_friendly(&[
+            "cscli",
+            "automation",
+            "update",
+            "auto-1",
+            "--spec-json",
+            &raw,
+        ]);
         let spec_json = Some(raw.clone());
 
         let io = MockIo::new(view());
@@ -1125,11 +1130,7 @@ mod tests {
             1,
             "a conflict must not re-read the view"
         );
-        assert_eq!(
-            io.posts.borrow().len(),
-            1,
-            "a conflict must not be retried"
-        );
+        assert_eq!(io.posts.borrow().len(), 1, "a conflict must not be retried");
     }
 
     #[tokio::test]
@@ -1528,9 +1529,16 @@ mod tests {
             "--title",
             "Renamed",
         ]);
-        update(&cli, &client, "auto-1", friendly_inputs(&friendly), None, &None)
-            .await
-            .expect("update over http");
+        update(
+            &cli,
+            &client,
+            "auto-1",
+            friendly_inputs(&friendly),
+            None,
+            &None,
+        )
+        .await
+        .expect("update over http");
 
         let requests = plane.recorded();
         let routes: Vec<(&str, &str)> = requests
@@ -1566,9 +1574,16 @@ mod tests {
             "--weekdays",
             "3,5",
         ]);
-        update(&cli, &client, "auto-1", friendly_inputs(&friendly), None, &None)
-            .await
-            .expect("window-only update over http");
+        update(
+            &cli,
+            &client,
+            "auto-1",
+            friendly_inputs(&friendly),
+            None,
+            &None,
+        )
+        .await
+        .expect("window-only update over http");
 
         let requests = plane.recorded();
         let body = &requests.last().expect("post").body;
@@ -1591,9 +1606,16 @@ mod tests {
             "--title",
             "Renamed",
         ]);
-        let error = update(&cli, &client, "auto-1", friendly_inputs(&friendly), None, &None)
-            .await
-            .expect_err("conflict over http");
+        let error = update(
+            &cli,
+            &client,
+            "auto-1",
+            friendly_inputs(&friendly),
+            None,
+            &None,
+        )
+        .await
+        .expect_err("conflict over http");
         match error {
             CliError::Server { status, code, .. } => {
                 assert_eq!(status, 409);

@@ -70,10 +70,7 @@ impl RuntimeBackground {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let handles = vec![
-            spawn_capability_reconcile(
-                owner.service().capability().clone(),
-                shutdown_rx.clone(),
-            ),
+            spawn_capability_reconcile(owner.service().capability().clone(), shutdown_rx.clone()),
             spawn_mcp_registration(
                 owner.chat_state().clone(),
                 owner.main_store().clone(),

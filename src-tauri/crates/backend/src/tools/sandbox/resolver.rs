@@ -657,20 +657,25 @@ mod tests {
     #[test]
     fn developer_host_rules_survive_snapshot_serialization_and_route_commands_to_host() {
         let mut config = config(ShellExecutionMode::Auto);
-        config.host_rules.push(super::super::types::HostCommandRule {
-            id: "developer-host".to_string(),
-            name: "Developer Host".to_string(),
-            enabled: true,
-            priority: 10,
-            command_patterns: vec![
-                r"^cargo(?:\s|$)".to_string(),
-                r"^(?:pnpm|npm|npx)(?:\s|$)".to_string(),
-                r"^rustfmt(:?\s|$)".to_string(),
-                r"^git\s+status(?:\s|$)".to_string(),
-            ],
-        });
+        config
+            .host_rules
+            .push(super::super::types::HostCommandRule {
+                id: "developer-host".to_string(),
+                name: "Developer Host".to_string(),
+                enabled: true,
+                priority: 10,
+                command_patterns: vec![
+                    r"^cargo(?:\s|$)".to_string(),
+                    r"^(?:pnpm|npm|npx)(?:\s|$)".to_string(),
+                    r"^rustfmt(:?\s|$)".to_string(),
+                    r"^git\s+status(?:\s|$)".to_string(),
+                ],
+            });
         let wire = serde_json::to_value(config).expect("sandbox snapshot");
-        assert_eq!(wire["hostRules"][0]["commandPatterns"][0], r"^cargo(?:\s|$)");
+        assert_eq!(
+            wire["hostRules"][0]["commandPatterns"][0],
+            r"^cargo(?:\s|$)"
+        );
         let config: AgentSandboxConfig = serde_json::from_value(wire).expect("restore snapshot");
         let status = SandboxRuntimeStatusSummary {
             msb: ready_status(SandboxRuntime::Msb, vec!["busybox:latest"]),

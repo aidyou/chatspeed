@@ -1294,8 +1294,8 @@ mod admission_tests {
     use super::{start_new_chat_interaction, ChatState};
     use crate::db::MainStore;
     use crate::error::AppError;
-    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
     use crate::libs::window_channels::WindowChannels;
+    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
     use std::sync::Arc;
 
     fn state_with_gate() -> (Arc<ChatState>, Arc<RuntimeLifecycleGate>) {
@@ -1309,7 +1309,9 @@ mod admission_tests {
     #[tokio::test]
     async fn a_running_chat_state_counts_a_held_turn() {
         let (state, gate) = state_with_gate();
-        let ticket = state.admit_work(WorkKind::ChatTurn).expect("running admits");
+        let ticket = state
+            .admit_work(WorkKind::ChatTurn)
+            .expect("running admits");
         assert_eq!(gate.active_admissions(), 1);
         drop(ticket);
         assert_eq!(gate.active_admissions(), 0);

@@ -158,7 +158,11 @@ impl PluginUiManifest {
                 "the plugin UI entry is not a declared bundle asset",
             ));
         }
-        if self.assets.iter().any(|asset| !manifest.assets.contains(asset)) {
+        if self
+            .assets
+            .iter()
+            .any(|asset| !manifest.assets.contains(asset))
+        {
             return Err(PluginError::invalid_manifest(
                 "the plugin UI asset is not a declared bundle asset",
             ));

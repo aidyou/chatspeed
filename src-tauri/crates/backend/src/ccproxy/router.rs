@@ -202,11 +202,7 @@ fn hold_admission(response: Response, ticket: crate::lifecycle::AdmissionTicket)
 /// a quiescing runtime refuses proxy chat and embedding work with the stable
 /// `runtime_stopping` code. Read-only routes (model listing, version) never call
 /// it, so they stay readable.
-async fn gated<F>(
-    state: &SharedState,
-    kind: crate::lifecycle::WorkKind,
-    work: F,
-) -> Response
+async fn gated<F>(state: &SharedState, kind: crate::lifecycle::WorkKind, work: F) -> Response
 where
     F: std::future::Future<Output = Result<Response, CCProxyError>>,
 {
@@ -502,16 +498,14 @@ async fn decision_logic(
     // this the single provider entry `/v1/systemone` would keep starting provider
     // work after the gate closed, breaking the one admission decision that fences
     // every other canonical provider route.
-    Ok(gated(
-        &state,
-        crate::lifecycle::WorkKind::ChatTurn,
-        async move {
+    Ok(
+        gated(&state, crate::lifecycle::WorkKind::ChatTurn, async move {
             handle_decision(headers, body, final_group, main_store)
                 .await
                 .map(|res| res.into_response())
-        },
+        })
+        .await,
     )
-    .await)
 }
 
 // ----------------------------------------------------------------------------
@@ -1269,8 +1263,8 @@ mod usage_attribution_tests {
 mod admission_tests {
     use super::*;
     use crate::ai::interaction::chat_completion::ChatState;
-    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
     use crate::libs::window_channels::WindowChannels;
+    use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
     use axum::body::Body;
 
     fn shared_state(gate: Option<Arc<RuntimeLifecycleGate>>) -> Arc<SharedState> {
@@ -1314,7 +1308,10 @@ mod admission_tests {
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         (
             status,
-            value["error"]["code"].as_str().unwrap_or_default().to_string(),
+            value["error"]["code"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             String::from_utf8_lossy(&body).to_string(),
         )
     }
@@ -1397,9 +1394,7 @@ mod admission_tests {
             decision_logic(
                 state.clone(),
                 HeaderMap::new(),
-                Bytes::from_static(
-                    br#"{"model":"alias","state":{},"questions":[]}"#,
-                ),
+                Bytes::from_static(br#"{"model":"alias","state":{},"questions":[]}"#),
                 None,
             )
             .await
@@ -1579,10 +1574,8 @@ mod admission_tests {
     #[tokio::test]
     async fn hold_admission_keeps_a_streaming_body_counted_until_the_body_ends() {
         let gate = Arc::new(RuntimeLifecycleGate::new());
-        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
-            Ok(Bytes::from_static(b"a")),
-            Ok(Bytes::from_static(b"b")),
-        ];
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from_static(b"a")), Ok(Bytes::from_static(b"b"))];
         let response = Response::new(Body::from_stream(futures_util::stream::iter(chunks)));
         let ticket = gate.admit(WorkKind::ChatTurn).expect("admit");
         assert_eq!(gate.active_admissions(), 1);

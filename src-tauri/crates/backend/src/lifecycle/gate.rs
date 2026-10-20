@@ -422,10 +422,7 @@ mod tests {
         let gate = gate();
         let ticket = gate.admit(WorkKind::ChatTurn).expect("admit");
         let captured = gate.activity_epoch();
-        assert!(
-            !gate.try_begin_idle(captured, 0),
-            "active work keeps it up"
-        );
+        assert!(!gate.try_begin_idle(captured, 0), "active work keeps it up");
         assert_eq!(gate.phase(), RuntimeLifecyclePhase::Running);
         drop(ticket);
     }
