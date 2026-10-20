@@ -18,9 +18,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use parking_lot::RwLock;
@@ -43,80 +43,143 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone)]
 pub struct ModelsDevCatalogService {
-    index: Arc<RwLock<Arc<ModelsDevCatalog>>>,
-    preset_providers: Arc<RwLock<Arc<ModelsDevProviderList>>>,
+    state: Arc<OnceLock<CatalogState>>,
     snapshot_path: PathBuf,
     providers_snapshot_path: PathBuf,
     success_path: PathBuf,
     refresh_lock: Arc<AtomicBool>,
 }
 
+struct CatalogState {
+    index: RwLock<Arc<ModelsDevCatalog>>,
+    preset_providers: RwLock<Arc<ModelsDevProviderList>>,
+}
+
 impl ModelsDevCatalogService {
+    /// Defers template data without delaying the independent transport rules.
+    pub fn deferred(app_data_dir: impl AsRef<Path>) -> Self {
+        let directory = app_data_dir.as_ref();
+        Self {
+            state: Arc::new(OnceLock::new()),
+            snapshot_path: directory.join(SNAPSHOT_FILE),
+            providers_snapshot_path: directory.join(PROVIDERS_SNAPSHOT_FILE),
+            success_path: directory.join(SUCCESS_FILE),
+            refresh_lock: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn state(&self) -> &CatalogState {
+        self.state_with_publisher(set_models_dev_catalog)
+    }
+
+    fn state_with_publisher(
+        &self,
+        publish: impl FnOnce(Arc<ModelsDevCatalog>) -> Result<(), CatalogError>,
+    ) -> &CatalogState {
+        self.state.get_or_init(|| {
+            match self.read_state(publish) {
+                Ok(state) => state,
+                Err(error) => {
+                    log::error!(
+                        "Failed to load the Models.dev catalog snapshot: {error}; using the embedded catalog"
+                    );
+                    Self::embedded_state()
+                }
+            }
+        })
+    }
+
+    /// Warms the same single-flight state used by catalog-dependent commands.
+    pub fn prewarm(&self) {
+        self.state();
+    }
+
     pub fn load(app_data_dir: impl AsRef<Path>) -> Result<Self, CatalogError> {
-        let snapshot_path = app_data_dir.as_ref().join(SNAPSHOT_FILE);
-        let providers_snapshot_path = app_data_dir.as_ref().join(PROVIDERS_SNAPSHOT_FILE);
-        let index = match fs::read(&snapshot_path) {
+        Self::load_with_publisher(app_data_dir, set_models_dev_catalog)
+    }
+
+    fn load_with_publisher(
+        app_data_dir: impl AsRef<Path>,
+        publish: impl FnOnce(Arc<ModelsDevCatalog>) -> Result<(), CatalogError>,
+    ) -> Result<Self, CatalogError> {
+        let mut service = Self::deferred(app_data_dir);
+        service.state = Arc::new(OnceLock::from(service.read_state(publish)?));
+        Ok(service)
+    }
+
+    fn read_state(
+        &self,
+        publish: impl FnOnce(Arc<ModelsDevCatalog>) -> Result<(), CatalogError>,
+    ) -> Result<CatalogState, CatalogError> {
+        let started = Instant::now();
+        let read_started = Instant::now();
+        let snapshot = fs::read(&self.snapshot_path);
+        log::info!(
+            "Models.dev startup catalog read: {:?}",
+            read_started.elapsed()
+        );
+        let parse_started = Instant::now();
+        let index = match snapshot {
             Ok(bytes) if bytes.len() <= MAX_SNAPSHOT_BYTES => {
                 match catalog_from_slice(&bytes).and_then(|catalog| {
                     validate_catalog(&catalog)?;
                     Ok(catalog)
                 }) {
-                    Ok(catalog) => catalog,
-                    Err(_) => models_dev_catalog()?.as_ref().clone(),
+                    Ok(catalog) => Arc::new(catalog),
+                    Err(_) => models_dev_catalog()?,
                 }
             }
-            _ => models_dev_catalog()?.as_ref().clone(),
+            _ => models_dev_catalog()?,
         };
-        let preset_providers = match fs::read(&providers_snapshot_path) {
+        log::info!(
+            "Models.dev startup catalog parse/fallback: {:?}",
+            parse_started.elapsed()
+        );
+        let read_started = Instant::now();
+        let providers_snapshot = fs::read(&self.providers_snapshot_path);
+        log::info!(
+            "Models.dev startup providers read: {:?}",
+            read_started.elapsed()
+        );
+        let parse_started = Instant::now();
+        let preset_providers = match providers_snapshot {
             Ok(bytes) if bytes.len() <= MAX_SNAPSHOT_BYTES => match providers_from_slice(&bytes) {
                 Ok(providers) => providers,
                 Err(_) => models_dev_preset_providers()?,
             },
             _ => models_dev_preset_providers()?,
         };
+        log::info!(
+            "Models.dev startup providers parse/fallback: {:?}",
+            parse_started.elapsed()
+        );
         validate_catalog(&index)?;
-        set_models_dev_catalog(index.clone())?;
-        Ok(Self {
-            index: Arc::new(RwLock::new(Arc::new(index))),
-            preset_providers: Arc::new(RwLock::new(Arc::new(preset_providers))),
-            providers_snapshot_path,
-            success_path: app_data_dir.as_ref().join(SUCCESS_FILE),
-            refresh_lock: Arc::new(AtomicBool::new(false)),
-            snapshot_path,
+        publish(index.clone())?;
+        log::info!("Models.dev startup load total: {:?}", started.elapsed());
+        Ok(CatalogState {
+            index: RwLock::new(index),
+            preset_providers: RwLock::new(Arc::new(preset_providers)),
         })
     }
 
-    /// Loads the snapshot, falling back to the embedded catalog when a snapshot
-    /// cannot be established.
-    ///
-    /// The application service is assembled infallibly, so it uses this entry
-    /// point: a malformed snapshot file is already handled inside [`Self::load`],
-    /// and this only covers the residual poisoning/validation failures by
-    /// serving the bundled catalog instead of aborting runtime assembly.
+    /// Eagerly loads the catalog for callers that need compatibility with the
+    /// previous startup behavior. Production assembly uses [`Self::deferred`]
+    /// so the background refresh task can warm the same shared state later.
     pub fn load_or_embedded(app_data_dir: impl AsRef<Path>) -> Self {
-        let app_data_dir = app_data_dir.as_ref();
-        match Self::load(app_data_dir) {
-            Ok(service) => service,
-            Err(error) => {
-                log::error!(
-                    "Failed to load the Models.dev catalog snapshot: {error}; using the embedded catalog"
-                );
-                Self::embedded(app_data_dir)
-            }
-        }
+        let service = Self::deferred(app_data_dir);
+        service.prewarm();
+        service
     }
 
-    /// Builds a service backed only by the bundled catalog.
-    fn embedded(app_data_dir: &Path) -> Self {
-        let index = models_dev_catalog()
-            .map(|catalog| catalog.as_ref().clone())
-            .unwrap_or_else(|error| {
-                log::error!("Embedded Models.dev catalog is unusable: {error}");
-                ModelsDevCatalog {
-                    models: HashMap::new(),
-                    providers: HashMap::new(),
-                }
-            });
+    /// Builds a state backed only by the bundled catalog.
+    fn embedded_state() -> CatalogState {
+        let index = models_dev_catalog().unwrap_or_else(|error| {
+            log::error!("Embedded Models.dev catalog is unusable: {error}");
+            Arc::new(ModelsDevCatalog {
+                models: HashMap::new(),
+                providers: HashMap::new(),
+            })
+        });
         let preset_providers = models_dev_preset_providers().unwrap_or_else(|error| {
             log::error!("Embedded Models.dev provider presets are unusable: {error}");
             ModelsDevProviderList {
@@ -124,22 +187,18 @@ impl ModelsDevCatalogService {
             }
         });
         let _ = set_models_dev_catalog(index.clone());
-        Self {
-            index: Arc::new(RwLock::new(Arc::new(index))),
-            preset_providers: Arc::new(RwLock::new(Arc::new(preset_providers))),
-            providers_snapshot_path: app_data_dir.join(PROVIDERS_SNAPSHOT_FILE),
-            success_path: app_data_dir.join(SUCCESS_FILE),
-            refresh_lock: Arc::new(AtomicBool::new(false)),
-            snapshot_path: app_data_dir.join(SNAPSHOT_FILE),
+        CatalogState {
+            index: RwLock::new(index),
+            preset_providers: RwLock::new(Arc::new(preset_providers)),
         }
     }
 
     pub fn snapshot(&self) -> Arc<ModelsDevCatalog> {
-        self.index.read().clone()
+        self.state().index.read().clone()
     }
 
     pub fn preset_providers(&self) -> Arc<ModelsDevProviderList> {
-        self.preset_providers.read().clone()
+        self.state().preset_providers.read().clone()
     }
 
     pub fn is_fresh(&self) -> bool {
@@ -160,6 +219,11 @@ impl ModelsDevCatalogService {
             return Err("catalog refresh already in progress".to_string());
         }
         let _release = RefreshGuard(self.refresh_lock.clone());
+        // Initialization must precede refresh publication, including fresh snapshots.
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || service.prewarm())
+            .await
+            .map_err(|error| format!("catalog initialization failed: {error}"))?;
         if self.is_fresh() {
             return Ok(false);
         }
@@ -313,8 +377,9 @@ impl ModelsDevCatalogService {
         let _ = fs::remove_file(&backup);
         let _ = fs::remove_file(&providers_backup);
         let _ = fs::remove_file(&success_backup);
-        *self.index.write() = Arc::new(catalog.clone());
-        *self.preset_providers.write() = Arc::new(preset_providers);
+        let catalog = Arc::new(catalog);
+        *self.state().index.write() = catalog.clone();
+        *self.state().preset_providers.write() = Arc::new(preset_providers);
         set_models_dev_catalog(catalog).map_err(|error| error.to_string())?;
         Ok(true)
     }
@@ -442,6 +507,193 @@ fn providers_from_slice(bytes: &[u8]) -> Result<ModelsDevProviderList, CatalogEr
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn write_template_fixture(directory: &Path) {
+        fs::write(
+            directory.join(SNAPSHOT_FILE),
+            br#"{"models":{"test-model":{"id":"test-model","name":"Template","reasoning":true,"limit":{"context":32768},"vendor_option":{"enabled":true}}},"providers":{"test-provider":{"id":"test-provider","name":"Provider","models":{"test-model":{"id":"test-model","name":"Template","cost":{"input":2.5},"vendor_option":{"enabled":true}}}}}}"#,
+        ).expect("catalog fixture");
+        fs::write(
+            directory.join(PROVIDERS_SNAPSHOT_FILE),
+            br#"{"providers":[]}"#,
+        )
+        .expect("provider fixture");
+    }
+
+    #[test]
+    fn deferred_catalog_keeps_transport_available_without_loading_templates() {
+        let directory = tempdir().expect("temporary directory");
+        let service = ModelsDevCatalogService::deferred(directory.path());
+        assert!(service.state.get().is_none());
+        let transport = crate::model_catalog_engine::resolve_transport(
+            "gpt-5",
+            Some("https://api.openai.com/v1"),
+            Some("openai"),
+            None,
+        )
+        .expect("transport rules");
+        assert!(transport.is_some());
+        assert!(service.state.get().is_none());
+        // A snapshot installed after construction must be read on first use.
+        write_template_fixture(directory.path());
+        let state = service.state_with_publisher(|catalog| {
+            assert_eq!(
+                catalog.models["test-model"].limit.as_ref().unwrap().context,
+                Some(32768)
+            );
+            Ok(())
+        });
+        let snapshot = state.index.read().clone();
+        assert_eq!(
+            snapshot.models["test-model"].extra["vendor_option"]["enabled"],
+            true
+        );
+        assert_eq!(
+            snapshot.providers["test-provider"].models["test-model"]
+                .cost
+                .as_ref()
+                .unwrap()
+                .input,
+            Some(2.5)
+        );
+        assert!(Arc::ptr_eq(&snapshot, &service.snapshot()));
+        assert!(service.preset_providers().providers.is_empty());
+    }
+
+    #[test]
+    fn concurrent_first_use_publishes_once_and_shares_allocation() {
+        let directory = tempdir().expect("temporary directory");
+        write_template_fixture(directory.path());
+        let service = ModelsDevCatalogService::deferred(directory.path());
+        let publications = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let state = service.state_with_publisher(|catalog| {
+                            publications.fetch_add(1, Ordering::SeqCst);
+                            assert!(catalog.models.contains_key("test-model"));
+                            Ok(())
+                        });
+                        state.index.read().clone()
+                    })
+                })
+                .collect();
+            let snapshots: Vec<_> = handles
+                .into_iter()
+                .map(|handle| handle.join().expect("reader"))
+                .collect();
+            assert!(snapshots
+                .iter()
+                .all(|snapshot| Arc::ptr_eq(&snapshots[0], snapshot)));
+        });
+        assert_eq!(publications.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn local_load_shares_catalog_with_publisher_and_falls_back_for_bad_providers() {
+        let directory = tempdir().expect("temporary directory");
+        write_template_fixture(directory.path());
+        fs::write(directory.path().join(PROVIDERS_SNAPSHOT_FILE), b"invalid")
+            .expect("bad providers");
+        let mut published = None;
+        let service = ModelsDevCatalogService::load_with_publisher(directory.path(), |catalog| {
+            published = Some(catalog);
+            Ok(())
+        })
+        .expect("catalog");
+        assert!(Arc::ptr_eq(
+            &published.expect("published"),
+            &service.snapshot()
+        ));
+        assert!(!service.preset_providers().providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_initializes_even_when_fresh_without_network() {
+        let directory = tempdir().expect("temporary directory");
+        fs::write(
+            directory.path().join(SUCCESS_FILE),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("clock")
+                .as_secs()
+                .to_string(),
+        )
+        .expect("fresh marker");
+        let service = ModelsDevCatalogService::deferred(directory.path());
+        assert!(!service
+            .refresh(ProxyType::None)
+            .await
+            .expect("fresh refresh"));
+        assert!(service.state.get().is_some());
+        let snapshot = service.snapshot();
+        service.prewarm();
+        assert!(Arc::ptr_eq(&snapshot, &service.snapshot()));
+        assert!(!snapshot.models.is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual startup profiling"]
+    fn profile_catalog_startup_phases() {
+        use std::time::Instant;
+        let temporary = tempdir().expect("temporary directory");
+        let directory = std::env::var_os("CHATSPEED_CATALOG_PROFILE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temporary.path().to_path_buf());
+        let started = Instant::now();
+        let catalog_path = directory.join(SNAPSHOT_FILE);
+        let providers_path = directory.join(PROVIDERS_SNAPSHOT_FILE);
+        let catalog_bytes = match fs::read(&catalog_path) {
+            Ok(bytes) => bytes,
+            Err(_) => serde_json::to_vec(models_dev_catalog().expect("embedded catalog").as_ref())
+                .expect("serialize embedded catalog"),
+        };
+        let read_catalog = started.elapsed();
+        let catalog_started = Instant::now();
+        let catalog = catalog_from_slice(&catalog_bytes).expect("catalog parse");
+        let catalog_parse = catalog_started.elapsed();
+        let providers_started = Instant::now();
+        let providers_bytes = match fs::read(&providers_path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                serde_json::to_vec(&models_dev_preset_providers().expect("embedded providers"))
+                    .expect("serialize embedded providers")
+            }
+        };
+        let providers_read = providers_started.elapsed();
+        let providers_parse_started = Instant::now();
+        let providers = providers_from_slice(&providers_bytes).expect("providers parse");
+        let providers_parse = providers_parse_started.elapsed();
+        let clone_started = Instant::now();
+        let _catalog_clone = std::hint::black_box(catalog.clone());
+        let deep_clone = clone_started.elapsed();
+        let catalog_arc = Arc::new(catalog);
+        let arc_started = Instant::now();
+        let _arc_clone = std::hint::black_box(Arc::clone(&catalog_arc));
+        let arc_clone = arc_started.elapsed();
+        let _ = providers;
+        println!(
+            "catalog phases read={read_catalog:?} catalog_parse={catalog_parse:?} providers_read={providers_read:?} providers_parse={providers_parse:?} deep_clone={deep_clone:?} arc_clone={arc_clone:?} total={:?}",
+            started.elapsed()
+        );
+        let deferred_started = Instant::now();
+        let deferred = ModelsDevCatalogService::deferred(&directory);
+        println!(
+            "catalog deferred_construct={:?}",
+            deferred_started.elapsed()
+        );
+        assert!(deferred.state.get().is_none());
+        let load_started = Instant::now();
+        deferred.prewarm();
+        let service = deferred;
+        println!(
+            "catalog service_load={:?} models={} providers={}",
+            load_started.elapsed(),
+            service.snapshot().models.len(),
+            service.preset_providers().providers.len()
+        );
+    }
 
     #[test]
     fn rollback_preserves_original_success_marker_when_backup_fails() {

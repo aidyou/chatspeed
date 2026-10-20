@@ -144,13 +144,12 @@ impl WorkflowApplicationService {
             stage_started.elapsed(),
             initialization_started.elapsed()
         );
-        // Load the catalog snapshot once, from the runtime's own application
-        // data directory, so the data-command reads and the background refresh
-        // share one owner instead of each reconstructing it.
+        // Template data is warmed by the existing background catalog task; the
+        // independent transport rules remain available without loading Models.dev.
         log::info!("[RuntimeStartup][application] stage=model_catalog starting");
         let stage_started = std::time::Instant::now();
         let catalog = Arc::new(
-            crate::model_catalog_service::ModelsDevCatalogService::load_or_embedded(&app_data_dir),
+            crate::model_catalog_service::ModelsDevCatalogService::deferred(&app_data_dir),
         );
         log::info!(
             "[RuntimeStartup][application] stage=model_catalog completed; elapsed={:?}, total={:?}",

@@ -158,11 +158,11 @@ static MODELS_DEV: Mutex<CatalogCache<Arc<ModelsDevCatalog>>> = Mutex::new(Catal
     last_used: None,
 });
 
-pub fn set_models_dev_catalog(catalog: ModelsDevCatalog) -> Result<(), CatalogError> {
+pub fn set_models_dev_catalog(catalog: Arc<ModelsDevCatalog>) -> Result<(), CatalogError> {
     MODELS_DEV
         .lock()
         .map_err(|_| CatalogError::CachePoisoned)?
-        .set(Arc::new(catalog));
+        .set(catalog);
     Ok(())
 }
 
