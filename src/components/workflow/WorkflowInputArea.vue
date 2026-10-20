@@ -754,12 +754,10 @@
             {{ $t('workflow.approvePlan') }}
           </el-button>
           <el-button
-            v-if="canContinue && currentWorkflowId"
+            v-if="canContinue && currentWorkflowId && !canContinueSubmitting"
             size="small"
             round
             type="primary"
-            :loading="canContinueSubmitting"
-            :disabled="canContinueSubmitting"
             @click="$emit('continue')">
             {{ $t('workflow.continue') }}
           </el-button>

@@ -2116,11 +2116,13 @@ export function useWorkflowCore({
         if (!sessionId || isRunning.value || !canContinue.value || isContinueSubmitting.value) return false
 
         continueRequestSessionId.value = sessionId
+        let startedSession = false
         try {
             await invokeWrapper('workflow_start', {
                 sessionId,
                 agentId: selectedAgent.value?.id
             })
+            startedSession = true
             return true
         } catch (error) {
             const errorText = String(error)
@@ -2131,6 +2133,7 @@ export function useWorkflowCore({
                         sessionId,
                         signal: JSON.stringify({ type: SIGNAL_TYPES.CONTINUE })
                     })
+                    startedSession = true
                     return true
                 } catch (signalError) {
                     console.error('Failed to recover continue request through workflow_signal:', signalError)
@@ -2149,7 +2152,11 @@ export function useWorkflowCore({
             showMessage(t('workflow.startFailed', { error: errorText }), 'error')
             return false
         } finally {
-            if (currentWorkflowId.value === sessionId && !workflowStore.hasLiveSession) {
+            // A start that reached the backend keeps the lock until the store stops reporting
+            // the session as continuable. Releasing it here, while the live session event has
+            // not arrived yet, would show the button again and allow a second start that the
+            // backend rejects with "Session already exists".
+            if (!startedSession && currentWorkflowId.value === sessionId) {
                 clearContinueRequestLock(sessionId)
             }
         }
@@ -2500,6 +2507,13 @@ export function useWorkflowCore({
             if (sessionId !== previousSessionId) clearContinueRequestLock()
         }
     )
+
+    // The continue lock belongs to the continuable state it was taken in. Once the session is
+    // live, finished, or waiting on dedicated UI, the store no longer offers continue and the
+    // lock is released for a later pause of the same session.
+    watch(canContinue, (canContinueNow) => {
+        if (!canContinueNow) clearContinueRequestLock()
+    })
 
     watch(
         () => [
