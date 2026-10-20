@@ -10,8 +10,10 @@ use chatspeed_contracts::{
     TerminalCreateRequest, TerminalResizeRequest, TerminalStreamEvent, TerminalWriteRequest,
 };
 use chatspeed_runtime_client::{ClientError, RuntimeClient, TerminalEventStream};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Emitter, Window};
+use tokio::task::JoinHandle;
 
 use crate::terminal::{TerminalSessionMetadata, TerminalShell};
 
@@ -44,11 +46,14 @@ pub(crate) async fn list_sessions(
         .await
         .map_err(client_message)?;
     for session in &sessions {
-        let stream = client
-            .terminal_stream(&client_id, &lease_id, &session.session_id)
-            .await
-            .map_err(client_message)?;
-        tokio::spawn(forward_terminal_events(window.clone(), stream));
+        ensure_stream_relay(
+            window.clone(),
+            client.clone(),
+            client_id.clone(),
+            lease_id.clone(),
+            session.session_id.clone(),
+        )
+        .await?;
     }
     Ok(sessions)
 }
@@ -72,7 +77,7 @@ pub(crate) async fn create(
         .terminal_create(&client_id, &lease_id, &request)
         .await
         .map_err(client_message)?;
-    start_stream_relay(
+    ensure_stream_relay(
         window,
         client,
         client_id,
@@ -126,18 +131,51 @@ pub(crate) async fn close(supervisor: &RuntimeSupervisor, session_id: &str) -> R
         .map_err(client_message)
 }
 
-async fn start_stream_relay(
+/// Relays already attached to a terminal session, keyed by window and session.
+///
+/// The desktop process outlives a frontend reload. The new page lists the same live sessions
+/// again, and attaching a second stream for a session would forward every runtime event more
+/// than once, so the next output would be duplicated in the terminal. One relay per session is
+/// kept until that relay ends.
+fn relays() -> &'static Mutex<HashMap<(String, String), JoinHandle<()>>> {
+    static RELAYS: OnceLock<Mutex<HashMap<(String, String), JoinHandle<()>>>> = OnceLock::new();
+    RELAYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_relays() -> std::sync::MutexGuard<'static, HashMap<(String, String), JoinHandle<()>>> {
+    relays()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+async fn ensure_stream_relay(
     window: Window,
     client: RuntimeClient,
     client_id: String,
     lease_id: String,
     session_id: String,
 ) -> Result<(), String> {
+    let key = (window.label().to_string(), session_id.clone());
+    if lock_relays().contains_key(&key) {
+        return Ok(());
+    }
+
     let stream = client
         .terminal_stream(&client_id, &lease_id, &session_id)
         .await
         .map_err(client_message)?;
-    tokio::spawn(forward_terminal_events(window, stream));
+
+    let mut registered = lock_relays();
+    if registered.contains_key(&key) {
+        // Another reconciliation attached first while this stream was opening.
+        return Ok(());
+    }
+    let cleanup_key = key.clone();
+    let handle = tokio::spawn(async move {
+        forward_terminal_events(window, stream).await;
+        lock_relays().remove(&cleanup_key);
+    });
+    registered.insert(key, handle);
     Ok(())
 }
 
