@@ -73,7 +73,7 @@ impl SandboxRuntimeDetector {
                 Some(self.options.msb_binary.clone()),
                 version,
                 "unsupported_version",
-                "Microsandbox version is outside the supported range >=0.6.6,<0.7.0",
+                "Microsandbox requires a stable version >=0.6.8",
                 Vec::new(),
                 self.options.required_images.clone(),
             );
@@ -418,7 +418,7 @@ fn supported_msb_version(version: Option<&str>) -> bool {
     let Some(version) = version.and_then(|value| semver::Version::parse(value).ok()) else {
         return false;
     };
-    version >= semver::Version::new(0, 6, 6) && version < semver::Version::new(0, 7, 0)
+    version.pre.is_empty() && version >= semver::Version::new(0, 6, 8)
 }
 
 fn supported_docker_version(version: Option<&str>) -> bool {
@@ -720,10 +720,21 @@ mod tests {
 
     #[test]
     fn validates_supported_runtime_versions() {
-        assert!(supported_msb_version(Some("0.6.6")));
+        assert!(!supported_msb_version(Some("0.6.6")));
+        assert!(!supported_msb_version(Some("0.6.7")));
+        assert!(supported_msb_version(Some("0.6.8")));
         assert!(supported_msb_version(Some("0.6.9")));
+        assert!(supported_msb_version(Some("0.7.0")));
+        assert!(supported_msb_version(Some("0.7.8")));
+        assert!(supported_msb_version(Some("0.7.8+build.1")));
         assert!(!supported_msb_version(Some("0.6.5")));
-        assert!(!supported_msb_version(Some("0.7.0")));
+        assert!(!supported_msb_version(Some("0.7.8-rc.1")));
+        assert!(!supported_msb_version(Some("0.8.0-rc.1")));
+        assert!(supported_msb_version(Some("0.8.0")));
+        assert!(supported_msb_version(Some("1.0.0")));
+        assert!(supported_msb_version(Some("10.0.0")));
+        assert!(!supported_msb_version(Some("invalid")));
+        assert!(!supported_msb_version(None));
         assert!(supported_docker_version(Some("20.10.0")));
         assert!(supported_docker_version(Some("27.0.1")));
         assert!(!supported_docker_version(Some("19.03.0")));
@@ -744,10 +755,39 @@ mod tests {
     }
 
     #[test]
+    fn msb_0_7_8_passes_version_gate_but_still_requires_healthy_runtime() {
+        for (doctor_exit, expected_state, expected_reason) in [
+            (0, SandboxAvailabilityState::Ready, "ready"),
+            (
+                2,
+                SandboxAvailabilityState::InstalledButUnhealthy,
+                "unhealthy",
+            ),
+        ] {
+            let script = format!(
+                "#!/bin/sh\ncase \"$*\" in\n'--version') echo 'msb 0.7.8';;\n'doctor') exit {doctor_exit};;\n'image list --format json') echo '[{{\"reference\":\"busybox:latest\"}}]';;\n'list --format json') echo '[{{\"name\":\"dev-msb\",\"status\":\"Running\"}}]';;\n*) exit 9;;\nesac\n"
+            );
+            let (_dir, binary) = write_fake_runtime("msb", &script);
+            let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
+                msb_binary: binary,
+                ..SandboxDetectorOptions::default()
+            });
+            let status = detector.detect_msb();
+            assert_eq!(status.version.as_deref(), Some("0.7.8"));
+            assert_eq!(status.state, expected_state);
+            assert_eq!(status.reason_code.as_deref(), Some(expected_reason));
+            if doctor_exit == 0 {
+                assert_eq!(status.running_instances, vec!["dev-msb"]);
+                assert!(status.missing_images.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn fake_msb_discovers_running_instances_and_surfaces_list_failures() {
         let (_ready_dir, ready_binary) = write_fake_runtime(
             "msb",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo '[{\"name\":\"dev-msb\",\"status\":\"Running\"},{\"name\":\"stopped-msb\",\"status\":\"Stopped\"}]'; exit 0; fi\necho \"unexpected args: $*\" >&2; exit 9\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.8'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo '[{\"name\":\"dev-msb\",\"status\":\"Running\"},{\"name\":\"stopped-msb\",\"status\":\"Stopped\"}]'; exit 0; fi\necho \"unexpected args: $*\" >&2; exit 9\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: ready_binary,
@@ -760,7 +800,7 @@ mod tests {
 
         let (_failure_dir, failure_binary) = write_fake_runtime(
             "msb",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo 'list failed' >&2; exit 7; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.8'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then echo 'list failed' >&2; exit 7; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: failure_binary,
@@ -783,7 +823,7 @@ mod tests {
 
         let (_timeout_dir, timeout_binary) = write_fake_runtime(
             "msb",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then sleep 2; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.8'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo '[{\"name\":\"busybox:latest\"}]'; exit 0; fi\nif [ \"$1\" = \"list\" ]; then sleep 2; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: timeout_binary,
@@ -810,7 +850,7 @@ mod tests {
     fn fake_msb_reports_unhealthy_when_doctor_or_images_fail() {
         let (_doctor_dir, doctor_binary) = write_fake_runtime(
             "msb",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then echo 'doctor failed' >&2; exit 2; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.8'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then echo 'doctor failed' >&2; exit 2; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: doctor_binary,
@@ -824,7 +864,7 @@ mod tests {
 
         let (_images_dir, images_binary) = write_fake_runtime(
             "msb",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.6'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo 'image list failed' >&2; exit 3; fi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'msb 0.6.8'; exit 0; fi\nif [ \"$1\" = \"doctor\" ]; then exit 0; fi\nif [ \"$1\" = \"image\" ]; then echo 'image list failed' >&2; exit 3; fi\nexit 0\n",
         );
         let detector = SandboxRuntimeDetector::new(SandboxDetectorOptions {
             msb_binary: images_binary,
