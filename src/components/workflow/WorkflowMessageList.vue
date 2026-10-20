@@ -1174,11 +1174,7 @@
               <el-alert type="warning" :closable="false" show-icon>
                 <template #title>
                   {{
-                    $t('workflow.retrying', {
-                      attempt: chatState.retryInfo.attempt,
-                      total: chatState.retryInfo.total,
-                      seconds: chatState.retryInfo.nextRetryIn
-                    })
+                    formatWorkflowRetryMessage(chatState.retryInfo, $t)
                   }}
                 </template>
               </el-alert>
@@ -1250,6 +1246,7 @@ import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
+  formatWorkflowRetryMessage,
   getWorkflowAskUserResponseItems,
   hasVisibleWorkflowText,
   isCollapsedWorkflowToolGroupMessage,

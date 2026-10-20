@@ -7,6 +7,7 @@ import {
   excludeLeadingManualClearContextMarkers,
   excludeLeadingWorkflowTaskBoundaryMessages,
   excludeManualClearContextMarkers,
+  formatWorkflowRetryMessage,
   getStructuredWorkflowToolName,
   getWorkflowMessageWindowAnchorId,
   getWorkflowPersistedMessageId,
@@ -44,6 +45,41 @@ assert.equal(
   normalizeWorkflowErrorAlertContent('Critical Error: provider failed'),
   'provider failed',
   'terminal error display should remove only the generic presentation prefix'
+)
+
+const retryCountdown = { attempt: 2, total: 5, nextRetryIn: 7 }
+const captureRetryTranslation = (key, values) => ({ key, values })
+
+assert.deepEqual(
+  formatWorkflowRetryMessage(
+    { ...retryCountdown, errorKind: 'rate_limited', errorSummary: 'provider busy' },
+    captureRetryTranslation
+  ),
+  { key: 'workflow.retrying', values: { attempt: 2, total: 5, seconds: 7 } },
+  'only the structured rate_limited category selects the rate-limit retry wording'
+)
+
+for (const errorKind of ['upstream_server', 'network', 'timeout', 'unknown', '', undefined]) {
+  const errorSummary = 'HTTP 429: request too fast; preserve the backend summary verbatim'
+  assert.deepEqual(
+    formatWorkflowRetryMessage(
+      { ...retryCountdown, errorKind, errorSummary },
+      captureRetryTranslation
+    ),
+    {
+      key: 'workflow.retryingClassified',
+      values: { attempt: 2, total: 5, seconds: 7, kind: errorKind || 'unknown', summary: errorSummary }
+    },
+    `${errorKind || 'missing category'} must preserve the summary without guessing rate limiting from text`
+  )
+}
+assert.deepEqual(
+  formatWorkflowRetryMessage(retryCountdown, captureRetryTranslation),
+  {
+    key: 'workflow.retryingClassified',
+    values: { attempt: 2, total: 5, seconds: 7, kind: 'unknown', summary: '' }
+  },
+  'missing classification and summary must not claim rate limiting'
 )
 
 const interleavedToolGroupOrders = getWorkflowToolGroupRenderOrders(

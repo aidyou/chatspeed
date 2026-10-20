@@ -28,7 +28,7 @@ impl ReActExecutor for PlanningExecutor {
     }
 
     async fn run_loop(&mut self) -> Result<(), WorkflowEngineError> {
-        self.executor.run_loop_internal().await
+        self.executor.run_loop().await
     }
 
     async fn begin_new_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
@@ -90,6 +90,11 @@ impl ReActExecutor for PlanningExecutor {
 }
 
 impl PlanningExecutor {
+    #[cfg(test)]
+    pub(crate) fn from_test_executor(executor: WorkflowExecutor) -> Self {
+        Self { executor }
+    }
+
     pub fn new(
         session_id: String,
         main_store: Arc<MainStore>,

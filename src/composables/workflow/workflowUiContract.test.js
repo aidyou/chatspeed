@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 
 import {
+  formatWorkflowRetryMessage,
+  mergeWorkflowMessagePages,
+  normalizeWorkflowErrorAlertContent,
+  projectWorkflowMessageList,
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval
 } from './messageProjectionRules.js'
@@ -124,6 +128,50 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
+test('both workflow retry displays share structured retry formatting', async () => {
+  const [messageList, notifier, ...locales] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/components/workflow/StatusNotifier.vue', 'utf8'),
+    ...['en', 'zh-Hans', 'zh-Hant'].map(locale =>
+      readFile(`src/i18n/locales/${locale}.json`, 'utf8').then(JSON.parse)
+    )
+  ])
+  const messageListCall = messageList.match(/formatWorkflowRetryMessage\(chatState\.retryInfo, \$t\)/)?.[0]
+  const notifierCall = notifier.match(/formatWorkflowRetryMessage\(retryInfo\.value, t\)/)?.[0]
+  assert.ok(messageListCall, 'the inline countdown must call the shared formatter')
+  assert.ok(notifierCall, 'the status notifier must call the shared formatter')
+  for (const source of [messageList, notifier]) {
+    assert.match(source, /import \{[^}]*\bformatWorkflowRetryMessage\b[^}]*\} from '@\/composables\/workflow\/messageProjectionRules'/)
+    assert.doesNotMatch(source, /(?:\$t|\bt)\('workflow\.retrying(?:Classified)?'/)
+  }
+
+  for (const locale of locales) {
+    const translate = (key, values) =>
+      locale.workflow[key.slice('workflow.'.length)].replace(/\{(\w+)\}/g, (_, name) => values[name])
+    for (const errorKind of ['rate_limited', 'upstream_server', 'network', 'timeout', 'unknown', undefined]) {
+      const retry = { attempt: 2, total: 5, nextRetryIn: 7, errorKind, errorSummary: 'backend detail' }
+      const context = {
+        formatWorkflowRetryMessage,
+        chatState: { retryInfo: retry },
+        retryInfo: { value: retry },
+        $t: translate,
+        t: translate
+      }
+      const inlineText = runInNewContext(messageListCall, context)
+      const notifierText = runInNewContext(notifierCall, context)
+      assert.equal(inlineText, notifierText, 'both Vue paths must produce identical localized retry text')
+      if (errorKind === 'rate_limited') {
+        assert.equal(inlineText, translate('workflow.retrying', { attempt: 2, total: 5, seconds: 7 }))
+      } else {
+        assert.equal(inlineText, translate('workflow.retryingClassified', {
+          attempt: 2, total: 5, seconds: 7, kind: errorKind || 'unknown', summary: 'backend detail'
+        }))
+        assert.ok(inlineText.includes('backend detail'), 'non-rate-limit retries must retain backend details')
+      }
+    }
+  }
+})
+
 test('workflow terminal model errors use structured localized alert titles', async () => {
   const [messageList, enLocale, zhHansLocale, zhHantLocale] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
@@ -159,6 +207,58 @@ test('workflow terminal model errors use structured localized alert titles', asy
     assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
     assert.ok(locale.workflow.errorTypes.llmRetryExhausted.length > 0)
     assert.ok(locale.workflow.errorTypes.retryAttemptsExhausted.length > 0)
+  }
+})
+
+test('terminal provider errors survive live projection and history reload as visible alerts', async () => {
+  const [messageList, locale] = await Promise.all([
+    readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse)
+  ])
+  const start = messageList.indexOf('const shouldShowErrorAlert = message =>')
+  const end = messageList.indexOf('const getExplorationBatchSummary = message =>', start)
+  assert.ok(start >= 0 && end > start)
+  const alerts = runInNewContext(
+    `${messageList.slice(start, end)}\n;({ shouldShowErrorAlert, getErrorAlertContent, getErrorAlertTitle })`,
+    {
+      normalizeWorkflowErrorAlertContent,
+      props: { removeSystemReminder: value => value },
+      t: key => key.split('.').reduce((value, part) => value?.[part], locale)
+    }
+  )
+  for (const [status, errorType, detail] of [
+    [401, 'llm_authentication', 'Invalid API key'],
+    [402, 'llm_billing', 'Insufficient balance'],
+    [403, 'engine', 'Forbidden: invalid credentials'],
+    [404, 'engine', 'Model not found'],
+    [503, 'upstream_server', 'Service unavailable']
+  ]) {
+    const liveMessage = {
+      id: String(9000 + status),
+      role: 'assistant',
+      message: JSON.stringify({ error: { message: detail } }),
+      stepType: 'Observe',
+      isError: true,
+      errorType,
+      metadata: {
+        message_kind: 'runtime_observation',
+        observation_type: 'terminal_error',
+        llm_visibility: 'hide',
+        ui_visibility: 'show',
+        error_type: errorType,
+        upstream_status_code: status,
+        provider: 'test-provider'
+      }
+    }
+    const historyMessage = { ...liveMessage, id: Number(liveMessage.id) }
+    for (const messages of [[liveMessage], [historyMessage], mergeWorkflowMessagePages([historyMessage], [liveMessage])]) {
+      const projected = projectWorkflowMessageList(messages)
+      assert.equal(projected.length, 1, `${status}: live/history overlap must render exactly one error`)
+      assert.equal(alerts.shouldShowErrorAlert(projected[0]), true)
+      assert.equal(alerts.getErrorAlertContent(projected[0]), detail)
+      assert.notEqual(alerts.getErrorAlertTitle(projected[0]), locale.workflow.retrying)
+      assert.equal(projected[0].metadata.upstream_status_code, status)
+    }
   }
 })
 

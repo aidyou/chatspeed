@@ -10685,6 +10685,208 @@ mod recovery_tests {
         assert!(started.elapsed() < Duration::from_millis(250));
     }
 
+    fn wrapper_test_executor(
+        store: Arc<MainStore>,
+        session_id: &str,
+        payloads: Arc<std::sync::Mutex<Vec<GatewayPayload>>>,
+    ) -> WorkflowExecutor {
+        let agent = test_agent(session_id);
+        store.add_agent(&agent).expect("add wrapper test agent");
+        store
+            .create_workflow(session_id, "Wrapper failure", &agent.id, None, None)
+            .expect("create wrapper test workflow");
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store,
+            chat_state,
+            Arc::new(RecordingGateway { payloads }),
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![workspace_root()],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(12).expect("create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::planning_strict(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Thinking;
+        executor
+    }
+
+    fn wrap_test_executor(executor: WorkflowExecutor, planning: bool) -> Box<dyn ReActExecutor> {
+        if planning {
+            Box::new(
+                crate::workflow::react::planners::PlanningExecutor::from_test_executor(executor),
+            )
+        } else {
+            Box::new(
+                crate::workflow::react::runners::ExecutionExecutor::from_test_executor(executor),
+            )
+        }
+    }
+
+    async fn assert_wrapper_terminal_failure(planning: bool) {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = if planning {
+            "planning-terminal"
+        } else {
+            "execution-terminal"
+        };
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut core = wrapper_test_executor(store.clone(), session_id, payloads.clone());
+        // Exercise a real core failure without depending on external model configuration.
+        core.recovery_failed = true;
+        let mut executor = wrap_test_executor(core, planning);
+        assert!(executor.run_loop().await.is_err());
+        assert_eq!(executor.state(), WorkflowState::Error);
+        assert_eq!(
+            store.get_workflow(session_id).unwrap().unwrap().status,
+            "error"
+        );
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("reload snapshot");
+        let errors: Vec<_> = snapshot
+            .messages
+            .iter()
+            .filter(|message| message.is_error)
+            .collect();
+        assert_eq!(errors.len(), 1, "exactly one durable terminal error");
+        let error = errors[0];
+        assert!(error.id.is_some());
+        assert_eq!(error.error_type.as_deref(), Some("engine"));
+        let metadata = error.metadata.as_ref().expect("terminal metadata");
+        assert_eq!(metadata["observation_type"], "terminal_error");
+        assert_eq!(metadata["ui_visibility"], "show");
+        assert_eq!(metadata["llm_visibility"], "hide");
+        assert_eq!(
+            executor
+                .messages()
+                .iter()
+                .filter(|message| message.is_error)
+                .count(),
+            1
+        );
+
+        // A second failure in an already-terminal executor must not publish again.
+        assert!(executor.run_loop().await.is_err());
+        let reloaded = store
+            .get_workflow_snapshot(session_id)
+            .expect("reload after repeated failure");
+        assert_eq!(
+            reloaded
+                .messages
+                .iter()
+                .filter(|message| message.is_error)
+                .count(),
+            1
+        );
+        assert_eq!(
+            reloaded
+                .messages
+                .iter()
+                .find(|message| message.is_error)
+                .unwrap()
+                .id,
+            error.id
+        );
+        let events = payloads.lock().expect("payload lock");
+        let message_indices: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, payload)| {
+                matches!(payload, GatewayPayload::Message { is_error: true, .. }).then_some(index)
+            })
+            .collect();
+        assert_eq!(message_indices.len(), 1);
+        let state_index = events
+            .iter()
+            .position(|payload| {
+                matches!(
+                    payload,
+                    GatewayPayload::State {
+                        state: WorkflowState::Error,
+                        ..
+                    }
+                )
+            })
+            .expect("Error state event");
+        assert!(
+            message_indices[0] < state_index,
+            "message must precede Error state"
+        );
+    }
+
+    #[tokio::test]
+    async fn planning_wrapper_terminal_failure_is_durable_and_not_duplicated() {
+        assert_wrapper_terminal_failure(true).await;
+    }
+
+    #[tokio::test]
+    async fn execution_wrapper_terminal_failure_is_durable_and_not_duplicated() {
+        assert_wrapper_terminal_failure(false).await;
+    }
+
+    #[tokio::test]
+    async fn wrappers_stop_without_publishing_terminal_error() {
+        for planning in [true, false] {
+            let (_temp_dir, store) = create_test_store();
+            let session_id = if planning {
+                "planning-stop"
+            } else {
+                "execution-stop"
+            };
+            let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut core = wrapper_test_executor(store.clone(), session_id, payloads.clone());
+            core.state = WorkflowState::AwaitingUser;
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(r#"{"type":"stop"}"#.to_string()).await.unwrap();
+            core.signal_rx = Some(rx);
+            let mut executor = wrap_test_executor(core, planning);
+            tokio::time::timeout(Duration::from_secs(2), executor.run_loop())
+                .await
+                .expect("stop must not block")
+                .expect("stop should finish normally");
+            assert_eq!(executor.state(), WorkflowState::Cancelled);
+            assert_eq!(
+                store.get_workflow(session_id).unwrap().unwrap().status,
+                "cancelled"
+            );
+            assert!(store
+                .get_workflow_snapshot(session_id)
+                .unwrap()
+                .messages
+                .iter()
+                .all(|message| !message.is_error));
+            assert!(payloads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|payload| !matches!(payload, GatewayPayload::Message { is_error: true, .. })));
+        }
+    }
+
+    #[test]
+    fn wrapper_failure_http_403_projection_preserves_upstream_details() {
+        let body = r#"{"error":{"message":"forbidden model","code":"access_denied"}}"#;
+        let error = WorkflowEngineError::Ai(crate::ai::error::AiError::RawApiRequestFailed {
+            status_code: 403,
+            provider: "wrapper-test-provider".to_string(),
+            details: body.to_string(),
+        });
+        let terminal = error.terminal_error();
+        assert!(terminal.content.contains(body));
+        assert_eq!(terminal.error_type, "engine");
+        assert_eq!(terminal.metadata["upstream_status_code"], 403);
+        assert_eq!(terminal.metadata["provider"], "wrapper-test-provider");
+        assert!(terminal.metadata.get("retry_exhausted").is_none());
+    }
+
     #[tokio::test]
     async fn run_loop_failure_transitions_to_durable_error_state() {
         let (_temp_dir, store) = create_test_store();

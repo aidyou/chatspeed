@@ -10,6 +10,22 @@ export const normalizeWorkflowTextForVisibility = value =>
 export const hasVisibleWorkflowText = value =>
   normalizeWorkflowTextForVisibility(value).trim().length > 0
 
+export const formatWorkflowRetryMessage = (retryInfo, translate) => {
+  const values = {
+    attempt: retryInfo?.attempt,
+    total: retryInfo?.total,
+    seconds: retryInfo?.nextRetryIn
+  }
+  if (retryInfo?.errorKind === 'rate_limited') {
+    return translate('workflow.retrying', values)
+  }
+  return translate('workflow.retryingClassified', {
+    ...values,
+    kind: retryInfo?.errorKind || 'unknown',
+    summary: retryInfo?.errorSummary || ''
+  })
+}
+
 export const normalizeWorkflowErrorAlertContent = value => {
   const content = String(value ?? '')
     .replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '')

@@ -15,6 +15,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { formatWorkflowRetryMessage } from '@/composables/workflow/messageProjectionRules'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 import { normalizeShellCommandForDisplay, formatDisplayPath } from '@/composables/workflow/toolDisplay'
 import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
@@ -484,19 +485,7 @@ const displayState = computed(() => {
     elapsedNow.value - latestToolUpdatedAt < 5000
 
   if (hasActiveRetry.value) {
-    const retryMessage = retryInfo.value.errorKind === 'rate_limited'
-      ? t('workflow.retrying', {
-          attempt: retryInfo.value.attempt,
-          total: retryInfo.value.total,
-          seconds: retryInfo.value.nextRetryIn
-        })
-      : t('workflow.retryingClassified', {
-          kind: retryInfo.value.errorKind || 'unknown',
-          summary: retryInfo.value.errorSummary || '',
-          attempt: retryInfo.value.attempt,
-          total: retryInfo.value.total,
-          seconds: retryInfo.value.nextRetryIn
-        })
+    const retryMessage = formatWorkflowRetryMessage(retryInfo.value, t)
     return {
       text: retryMessage,
       tone: 'warning',
