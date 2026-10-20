@@ -1224,6 +1224,14 @@ impl WorkflowExecutor {
             .pressure_handoff_reserve_tokens()
             .ceil()
             .clamp(512.0, u32::MAX as f64) as u32;
+        log::info!(
+            "[Workflow][session={}][phase=compression] Blocking compression started reason={} mode={:?} boundary={} candidate_messages={}",
+            self.session_id,
+            reason,
+            mode,
+            compressed_until_message_id,
+            compression_candidate.len()
+        );
         let compression_result = self
             .compressor
             .compress(
@@ -1246,6 +1254,14 @@ impl WorkflowExecutor {
             category: Some("info".to_string()),
         })
         .await?;
+
+        log::info!(
+            "[Workflow][session={}][phase=compression] Blocking compression call returned reason={} boundary={} succeeded={}",
+            self.session_id,
+            reason,
+            compressed_until_message_id,
+            compression_result.is_ok()
+        );
 
         match compression_result {
             Ok(result) => {
@@ -1589,6 +1605,8 @@ impl ReActExecutor for WorkflowExecutor {
     }
 
     async fn begin_manual_clear_context_segment(&mut self) -> Result<(), WorkflowEngineError> {
+        // Terminal compression can advance durable context while this stopped executor is retained.
+        self.context.load_history().await?;
         self.save_snapshot().await?;
         self.context.begin_manual_clear_context_segment(0).await?;
         self.clear_effective_task_objective("manual_clear_context")?;
@@ -10477,6 +10495,127 @@ mod recovery_tests {
             previous_context.sub_agent_sessions,
             vec!["subagent-old".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn manual_clear_context_refreshes_segment_after_terminal_compression() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "manual-clear-after-terminal-compression";
+        let agent = test_agent("manual-clear-after-compression-agent");
+        store.add_agent(&agent).expect("test agent");
+        store
+            .create_workflow(session_id, "Old task", &agent.id, None, None)
+            .expect("test workflow");
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let tsid = Arc::new(crate::libs::tsid::TsidGenerator::new(15).expect("tsid"));
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![temp_dir.path().to_path_buf()],
+            temp_dir.path().join("app-data"),
+            None,
+            None,
+            tsid.clone(),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::Completed;
+        executor.context.current_segment_id = 34;
+        let (original, _) = executor
+            .context
+            .add_message(
+                "assistant".to_string(),
+                "Finished old task".to_string(),
+                None,
+                None,
+                None,
+                1,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("durable history");
+        let boundary = original.id.expect("message id");
+        executor.save_snapshot().await.expect("completed snapshot");
+
+        // Terminal compression owns a separate context; the retained executor stays at 34.
+        let mut compressor_context = ContextManager::new(
+            session_id.to_string(),
+            store.clone(),
+            executor.context.max_tokens,
+            tsid,
+        );
+        compressor_context.load_history().await.expect("load history");
+        compressor_context
+            .compress("Checkpoint".to_string(), 1, boundary)
+            .await
+            .expect("persist compression without a model request");
+        assert_eq!(compressor_context.current_segment_id, 35);
+        let mut compressed_snapshot = executor.export_execution_context();
+        compressed_snapshot.current_segment_id = compressor_context.current_segment_id;
+        compressed_snapshot.current_context_tokens = Some(compressor_context.current_token_estimate());
+        store
+            .upsert_execution_context(&compressed_snapshot)
+            .expect("compression snapshot");
+        let before_clear = store.get_workflow_snapshot(session_id).expect("history");
+        assert_eq!(
+            before_clear.messages.iter().map(|m| m.segment_id).max(),
+            Some(34)
+        );
+        assert_eq!(executor.context.current_segment_id, 34);
+        assert!(
+            executor.save_snapshot().await.is_err(),
+            "stale saves must still be rejected"
+        );
+        let summary_id = before_clear
+            .messages
+            .last()
+            .and_then(|m| m.id)
+            .expect("summary id");
+
+        ReActExecutor::begin_manual_clear_context_segment(&mut executor)
+            .await
+            .expect("clear must refresh the stopped executor before saving");
+
+        let after_clear = store
+            .get_workflow_snapshot(session_id)
+            .expect("cleared history");
+        let marker = after_clear.messages.last().expect("clear marker");
+        assert!(ContextManager::is_manual_clear_context_message(marker));
+        assert_eq!(marker.segment_id, 36);
+        let metadata = marker.metadata.as_ref().expect("marker metadata");
+        assert_eq!(metadata["previous_segment_id"], json!(35));
+        assert_eq!(
+            metadata["previous_execution_context"]["current_segment_id"],
+            json!(35)
+        );
+        assert_eq!(metadata["compressed_until_message_id"], json!(summary_id));
+        for message in &before_clear.messages {
+            assert!(after_clear
+                .messages
+                .iter()
+                .any(|retained| retained.id == message.id));
+        }
+        let persisted = store
+            .get_execution_context(session_id)
+            .expect("snapshot")
+            .expect("context");
+        assert_eq!(persisted.current_segment_id, 36);
+        assert_eq!(persisted.state, RuntimeState::Pending);
+        assert_eq!(executor.state, WorkflowState::Pending);
+        assert!(executor.context.get_messages_for_llm().iter().all(|message| {
+            message.id != Some(boundary) && message.id != Some(summary_id)
+        }));
     }
 
     #[tokio::test]

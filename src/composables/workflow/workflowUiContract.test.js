@@ -7,6 +7,7 @@ import {
 import { deriveInlinePendingApprovals } from '../../stores/workflowApprovalRecovery.js'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 
 const sessionId = 'session-approval-contract'
 const toolCallId = 'tool_571ae521'
@@ -567,6 +568,34 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(workflowView, /@trigger-manual-compress="triggerManualCompression"/)
   assert.match(workflowView, /type: SIGNAL_TYPES\.MANUAL_COMPRESS/)
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
+})
+
+test('compression skip warnings remain visible when terminal state clears inline status', async () => {
+  const source = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
+  const branch = source.match(
+    /else if \(payload.type === 'notification'\) \{([\s\S]*?)\n\s*} else if \(payload.type === 'auto_approved_tools_updated'\)/
+  )?.[1]
+  assert.ok(branch, 'the canonical notification event must be handled')
+
+  const notifications = []
+  const toasts = []
+  const handle = runInNewContext(`payload => {${branch}\n}`, {
+    markSessionLiveFromNonTerminalEvent: () => {},
+    workflowStore: { setNotification: (...args) => notifications.push(args) },
+    showMessage: (...args) => toasts.push(args)
+  })
+  const message = '当前没有可安全压缩的上下文片段'
+  handle({ type: 'notification', category: 'warning', message })
+  assert.deepEqual(notifications, [[message, 'warning']])
+  assert.deepEqual(toasts, [[message, 'warning', 5000]])
+
+  // Ending compression clears inline state but must not erase the independent toast.
+  notifications.length = 0
+  handle({ type: 'notification', category: 'info', message: '' })
+  handle({ type: 'notification', category: 'warning', message: '   ' })
+  handle({ type: 'notification', category: 'warning' })
+  handle({ type: 'notification', category: 'info', message: 'Compressing context...' })
+  assert.equal(toasts.length, 1, 'empty and progress notifications must not create toasts')
 })
 
 test('workflow slash commands manage authorized directories', async () => {

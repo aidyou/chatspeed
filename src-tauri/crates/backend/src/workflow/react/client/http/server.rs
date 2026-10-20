@@ -288,6 +288,10 @@ impl InFlightGuard {
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
         if !self.defused {
+            log::warn!(
+                "[ControlPlane][phase=idempotency] Aborting in-flight mutation without result key={}",
+                self.key
+            );
             self.tracker.abort(&self.key, &self.reservation);
         }
     }
@@ -2941,6 +2945,11 @@ where
             "The Idempotency-Key was already used with a different request body".to_string(),
         ),
         Reservation::Wait(mut rx) => {
+            log::info!(
+                "[ControlPlane][phase=idempotency] Waiting for in-flight mutation result key={} body_hash={}",
+                key,
+                body_hash
+            );
             // A subscriber attaching after publication observes the retained
             // result immediately; otherwise wait for the single publication.
             let done = {
@@ -2948,17 +2957,34 @@ where
                 if let Some(done) = retained {
                     done
                 } else if rx.changed().await.is_err() {
+                    log::warn!(
+                        "[ControlPlane][phase=idempotency] In-flight mutation ended without a result key={} body_hash={}",
+                        key,
+                        body_hash
+                    );
                     return idempotency_failed_response();
                 } else {
                     match rx.borrow().clone() {
                         Some(done) => done,
-                        None => return idempotency_failed_response(),
+                        None => {
+                            log::warn!(
+                                "[ControlPlane][phase=idempotency] In-flight mutation published no result key={} body_hash={}",
+                                key,
+                                body_hash
+                            );
+                            return idempotency_failed_response();
+                        }
                     }
                 }
             };
             replay_response(done.status, done.body)
         }
         Reservation::Execute(reservation) => {
+            log::info!(
+                "[ControlPlane][phase=idempotency] Executing mutation key={} body_hash={}",
+                key,
+                body_hash
+            );
             // Abort on early return or panic so waiters never hang.
             let guard = InFlightGuard {
                 tracker: state.idempotency.clone(),
@@ -2970,6 +2996,12 @@ where
             let response = execute(state.clone(), body.to_string())
                 .await
                 .into_response();
+            log::info!(
+                "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
+                key,
+                body_hash,
+                response.status()
+            );
             let status = response.status();
             // Large request bodies do not widen the retained response bound.
             // Read responses bypass capture entirely.

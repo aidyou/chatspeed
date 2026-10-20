@@ -488,6 +488,10 @@ const BACKUP_SETTING_PATH: &str = "/control/v1/data-commands/backup_setting";
 /// large data set. It uses the same no-total-timeout policy as backup.
 const RESTORE_SETTING_PATH: &str = "/control/v1/data-commands/restore_setting";
 
+/// Manual compression may wait for multiple model calls before the signal returns.
+/// Other signals must retain the ordinary control-plane response timeout.
+const WORKFLOW_SIGNAL_PATH_PREFIX: &str = "/control/v1/workflows/";
+
 /// The configuration package export writes and validates a selected data set.
 const EXPORT_CONFIG_PACKAGE_PATH: &str = "/control/v1/data-commands/export_config_package";
 
@@ -500,6 +504,13 @@ const SKILL_CHECK_PATH: &str = "/control/v1/skill-check";
 /// The other route allowed the longer [`SKILL_MUTATION_TIMEOUT`] budget by
 /// default.
 const SKILL_INSTALL_PATH: &str = "/control/v1/skill-install";
+
+fn is_manual_compression_request(path: &str, body: &Value) -> bool {
+    path.strip_prefix(WORKFLOW_SIGNAL_PATH_PREFIX)
+        .and_then(|tail| tail.strip_suffix("/signal"))
+        .is_some_and(|session_id| !session_id.is_empty() && !session_id.contains('/'))
+        && body.get("type").and_then(Value::as_str) == Some("manual_compress")
+}
 
 /// Query parameter names that must never carry the bearer token. The runtime
 /// rejects these as well; rejecting them here keeps a misconfigured caller from
@@ -1176,11 +1187,7 @@ impl RuntimeClient {
         }
         let mut attempt = 0;
         loop {
-            let request = if matches!(path, BACKUP_SETTING_PATH | RESTORE_SETTING_PATH) {
-                self.build_without_timeout(Method::POST, path)?
-            } else {
-                self.build(Method::POST, path)?
-            };
+            let request = self.build_idempotent_request(path, body)?;
             let response = request
                 .header("Idempotency-Key", idempotency_key)
                 .json(body)
@@ -1709,6 +1716,20 @@ impl RuntimeClient {
         serde_json::from_value(value).map_err(|error| {
             ClientError::Serialization(format!("unexpected response body: {error}"))
         })
+    }
+
+    fn build_idempotent_request(
+        &self,
+        path: &str,
+        body: &Value,
+    ) -> Result<reqwest::RequestBuilder, ClientError> {
+        if matches!(path, BACKUP_SETTING_PATH | RESTORE_SETTING_PATH)
+            || is_manual_compression_request(path, body)
+        {
+            self.build_without_timeout(Method::POST, path)
+        } else {
+            self.build(Method::POST, path)
+        }
     }
 
     /// Builds a request carrying the bearer token in the header only, with the
@@ -3251,6 +3272,29 @@ mod tests {
             .expect("request");
         assert_eq!(request.timeout().copied(), Some(DEFAULT_TIMEOUT));
 
+        let manual = json!({"type": "manual_compress"});
+        let signal = client
+            .build_idempotent_request("/control/v1/workflows/session-1/signal", &manual)
+            .expect("build")
+            .build()
+            .expect("request");
+        assert!(signal.timeout().is_none());
+
+        for (path, body) in [
+            ("/control/v1/workflows/session-1/signal", json!({"type": "stop"})),
+            ("/control/v1/workflows/session-1/signal", json!({})),
+            ("/control/v1/workflow-commands/workflow_signal", manual.clone()),
+            ("/control/v1/workflows//signal", manual.clone()),
+            ("/control/v1/workflows/session-1/other/signal", manual),
+        ] {
+            let request = client
+                .build_idempotent_request(path, &body)
+                .expect("build")
+                .build()
+                .expect("request");
+            assert_eq!(request.timeout().copied(), Some(DEFAULT_TIMEOUT), "{path}");
+        }
+
         let stream = client
             .build_without_timeout(Method::GET, "/control/v1/workflows/s/stream")
             .expect("build")
@@ -3421,6 +3465,47 @@ mod tests {
             .await
             .expect("a skill check slower than the ordinary timeout must still answer");
         assert_eq!(value, json!({}));
+    }
+
+    #[tokio::test]
+    async fn manual_compression_outlives_the_ordinary_timeout_without_retry() {
+        let server = FakeServer::start_with_delay(Duration::from_millis(400), |_| {
+            http_response("200 OK", r#"{"result":"compressed"}"#)
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client =
+            RuntimeClient::with_timeout(&document, Duration::from_millis(100)).expect("client");
+        let value = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.post_with_idempotency(
+                "/control/v1/workflows/session-1/signal",
+                &json!({"type": "manual_compress"}),
+                "manual-compression-test",
+            ),
+        )
+        .await
+        .expect("mock compression must finish")
+        .expect("compression must outlive the ordinary request timeout");
+        assert_eq!(value["result"], "compressed");
+        assert_eq!(server.requests().len(), 1, "must not issue a timeout retry");
+
+        let ordinary = FakeServer::start_with_delay(Duration::from_millis(400), |_| {
+            http_response("200 OK", "{}")
+        })
+        .await;
+        let document = discovery_on(ordinary.addr.port(), "instance-a", 42);
+        let client =
+            RuntimeClient::with_timeout(&document, Duration::from_millis(100)).expect("client");
+        let error = client
+            .post_with_idempotency(
+                "/control/v1/workflows/session-1/signal",
+                &json!({"type": "stop"}),
+                "ordinary-signal-test",
+            )
+            .await
+            .expect_err("ordinary signals must retain their timeout");
+        assert!(matches!(error, ClientError::Transport(_)));
     }
 
     #[tokio::test]

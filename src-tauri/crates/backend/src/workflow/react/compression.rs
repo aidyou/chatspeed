@@ -250,7 +250,17 @@ impl ContextCompressor {
                 }),
             ];
 
-            match chat_interface
+            log::info!(
+                "ContextCompressor: model request started mode={:?} boundary={} attempt={}/{} provider_id={} model={}",
+                mode,
+                compressed_until_message_id,
+                attempt,
+                max_attempts,
+                self.provider_id,
+                self.model
+            );
+            let request_started_at = tokio::time::Instant::now();
+            let chat_result = chat_interface
                 .chat(
                     self.provider_id,
                     &self.model,
@@ -268,8 +278,17 @@ impl ContextCompressor {
                     }),
                     |_| {},
                 )
-                .await
-            {
+                .await;
+            log::info!(
+                "ContextCompressor: model request returned mode={:?} boundary={} attempt={}/{} elapsed_ms={} succeeded={}",
+                mode,
+                compressed_until_message_id,
+                attempt,
+                max_attempts,
+                request_started_at.elapsed().as_millis(),
+                chat_result.is_ok()
+            );
+            match chat_result {
                 Ok(result) => {
                     // File paths are deterministic tool-observation evidence. Normalize them
                     // before validation so a weak compressor cannot waste a retry by listing a
