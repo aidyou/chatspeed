@@ -123,7 +123,7 @@
       "documentationUrl": "https://docs.aixy-gateway.com/integrations/overview",
       "id": "aixy",
       "logo": "https://models.dev/logos/aixy.svg",
-      "modelCount": 11,
+      "modelCount": 13,
       "name": "Aixy",
       "protocol": "openai",
       "responses": true
@@ -184,7 +184,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/token-plan-overview",
       "id": "alibaba-token-plan",
       "logo": "https://models.dev/logos/alibaba-token-plan.svg",
-      "modelCount": 28,
+      "modelCount": 29,
       "name": "Alibaba Token Plan",
       "protocol": "openai",
       "responses": false
@@ -303,7 +303,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure-cognitive-services",
       "logo": "https://models.dev/logos/azure-cognitive-services.svg",
-      "modelCount": 87,
+      "modelCount": 97,
       "name": "Azure Cognitive Services",
       "responses": false
     },
@@ -462,7 +462,7 @@
       "documentationUrl": "https://developers.cloudflare.com/workers-ai/models/",
       "id": "cloudflare-workers-ai",
       "logo": "https://models.dev/logos/cloudflare-workers-ai.svg",
-      "modelCount": 27,
+      "modelCount": 28,
       "name": "Cloudflare Workers AI",
       "protocol": "openai",
       "responses": false
@@ -503,18 +503,8 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 105,
+      "modelCount": 106,
       "name": "Cortecs",
-      "protocol": "openai",
-      "responses": false
-    },
-    {
-      "api": "https://crof.ai/v1",
-      "documentationUrl": "https://crof.ai/docs",
-      "id": "crof",
-      "logo": "https://models.dev/logos/crof.svg",
-      "modelCount": 24,
-      "name": "CrofAI",
       "protocol": "openai",
       "responses": false
     },
@@ -632,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 336,
+      "modelCount": 343,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -642,7 +632,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 64,
+      "modelCount": 65,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -831,7 +821,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 81,
+      "modelCount": 82,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -841,7 +831,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 22,
+      "modelCount": 23,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -871,7 +861,7 @@
       "documentationUrl": "https://docs.inceptionlabs.ai/get-started/models",
       "id": "inception",
       "logo": "https://models.dev/logos/inception.svg",
-      "modelCount": 3,
+      "modelCount": 4,
       "name": "Inception",
       "protocol": "openai",
       "responses": false
@@ -991,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 398,
+      "modelCount": 397,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 213,
+      "modelCount": 216,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1081,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 433,
+      "modelCount": 438,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1171,7 +1161,7 @@
       "documentationUrl": "https://melious.ai/docs/reference/models",
       "id": "melious",
       "logo": "https://models.dev/logos/melious.svg",
-      "modelCount": 12,
+      "modelCount": 13,
       "name": "Melious",
       "protocol": "openai",
       "responses": false
@@ -1181,7 +1171,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 205,
+      "modelCount": 211,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1202,7 +1192,7 @@
       "documentationUrl": "https://platform.minimax.io/docs/guides/quickstart",
       "id": "minimax",
       "logo": "https://models.dev/logos/minimax.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "MiniMax (minimax.io)",
       "protocol": "claude",
       "responses": false
@@ -1212,7 +1202,7 @@
       "documentationUrl": "https://platform.minimaxi.com/docs/guides/quickstart",
       "id": "minimax-cn",
       "logo": "https://models.dev/logos/minimax-cn.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "MiniMax (minimax.cn)",
       "protocol": "claude",
       "responses": false
@@ -1222,7 +1212,7 @@
       "documentationUrl": "https://platform.minimaxi.com/docs/token-plan/intro",
       "id": "minimax-cn-coding-plan",
       "logo": "https://models.dev/logos/minimax-cn-coding-plan.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "MiniMax Token Plan (minimax.cn)",
       "protocol": "claude",
       "responses": false
@@ -1232,7 +1222,7 @@
       "documentationUrl": "https://platform.minimax.io/docs/token-plan/intro",
       "id": "minimax-coding-plan",
       "logo": "https://models.dev/logos/minimax-coding-plan.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "MiniMax Token Plan (minimax.io)",
       "protocol": "claude",
       "responses": false
@@ -1243,7 +1233,7 @@
       "documentationUrl": "https://docs.mistral.ai/getting-started/models/",
       "id": "mistral",
       "logo": "https://models.dev/logos/mistral.svg",
-      "modelCount": 42,
+      "modelCount": 39,
       "name": "Mistral",
       "protocol": "openai",
       "responses": false
@@ -1355,7 +1345,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 619,
+      "modelCount": 621,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1365,7 +1355,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 55,
+      "modelCount": 56,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1478,7 +1468,7 @@
       "documentationUrl": "https://docs.ollama.com/cloud",
       "id": "ollama-cloud",
       "logo": "https://models.dev/logos/ollama-cloud.svg",
-      "modelCount": 27,
+      "modelCount": 28,
       "name": "Ollama Cloud",
       "protocol": "openai",
       "responses": false
@@ -1489,7 +1479,7 @@
       "documentationUrl": "https://platform.openai.com/docs/models",
       "id": "openai",
       "logo": "https://models.dev/logos/openai.svg",
-      "modelCount": 53,
+      "modelCount": 51,
       "name": "OpenAI",
       "protocol": "openai",
       "responses": false
@@ -1499,7 +1489,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 127,
+      "modelCount": 128,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1509,7 +1499,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 32,
+      "modelCount": 33,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1530,7 +1520,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 390,
+      "modelCount": 389,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1711,7 +1701,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 179,
+      "modelCount": 180,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -1731,7 +1721,7 @@
       "documentationUrl": "https://runinfra.ai/docs",
       "id": "runinfra",
       "logo": "https://models.dev/logos/runinfra.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "RunInfra",
       "protocol": "openai",
       "responses": false
@@ -2134,7 +2124,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 124,
+      "modelCount": 125,
       "name": "Venice AI",
       "responses": false
     },
@@ -2142,7 +2132,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 414,
+      "modelCount": 415,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2343,7 +2333,7 @@
       "documentationUrl": "https://docs.zenmux.ai",
       "id": "zenmux",
       "logo": "https://models.dev/logos/zenmux.svg",
-      "modelCount": 129,
+      "modelCount": 130,
       "name": "ZenMux",
       "protocol": "openai",
       "responses": false
@@ -2351,7 +2341,7 @@
     {
       "api": "https://open.bigmodel.cn/api/paas/v4",
       "description": "Z.ai's GLM line focuses on open agentic engineering: long-horizon coding, terminal tasks, and hybrid reasoning at aggressive cost.",
-      "documentationUrl": "https://docs.z.ai/guides/overview/pricing",
+      "documentationUrl": "https://docs.bigmodel.cn/cn/guide/start/pricing",
       "id": "zhipuai",
       "logo": "https://models.dev/logos/zhipuai.svg",
       "modelCount": 17,
@@ -2371,9 +2361,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "f18f0bcb13aae2e69f9e6562197006905546627807e2082dafcb4625e8c3bd9e",
-    "generatedAt": "2026-10-19T08:55:31Z",
+    "catalogSha256": "235e79d7b56d349e90320200d55cf6e6fc0f538d2846d51a99182b3fe6d2e7e3",
+    "generatedAt": "2026-10-20T08:35:15Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "2fdda4aee66368c8a1957ba7cc3f63550e636e21"
+    "revision": "1a35f425066174a43c2e80fc9852e9ee06978b9a"
   }
 }
