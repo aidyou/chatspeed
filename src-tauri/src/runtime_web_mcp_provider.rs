@@ -297,6 +297,11 @@ impl WebMcpProviderHandle {
         self.port
     }
 
+    /// Lease identity used to reject an installation that outlived reconnection.
+    pub(crate) fn lease_id(&self) -> &str {
+        &self.lease_id
+    }
+
     /// Stops the server and unregisters the provider from the runtime.
     ///
     /// Called before the lease is released, so the runtime never keeps dialing a

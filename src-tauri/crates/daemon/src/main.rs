@@ -51,7 +51,10 @@ fn main() -> ExitCode {
     // The runtime owns subprocesses now; desktop PATH updates after a spawn
     // cannot reach it. Resolve the user environment before starting any worker
     // threads or publishing a control plane that can accept shell commands.
+    let started = std::time::Instant::now();
+    log::info!("[Runtime] initializing process environment; pid={}", std::process::id());
     environment::init_environment();
+    log::info!("[Runtime] process environment ready after {:?}", started.elapsed());
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

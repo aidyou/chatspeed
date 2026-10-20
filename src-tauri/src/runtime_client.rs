@@ -25,7 +25,8 @@ use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use chatspeed_contracts::{
@@ -89,6 +90,9 @@ const WORKFLOW_READER_MAX_RETRIES: usize = 5;
 
 /// How long to wait for a cancelled workflow reader to stop before releasing.
 const WORKFLOW_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Backoff between supervisor health checks and recovery attempts.
+const RUNTIME_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A future that resolves to one typed capability result.
 pub type BridgeDispatchFuture =
@@ -248,6 +252,9 @@ pub struct RuntimeStatus {
     pub lease_expires_at: Option<String>,
     /// Redacted message from the last failed connection attempt, if any.
     pub last_error: Option<String>,
+    /// Monotonically increasing connection generation. It changes only after
+    /// the lease and all connection state have been installed.
+    pub generation: u64,
 }
 
 /// Runtime instance identity a coordinated shutdown must target.
@@ -311,6 +318,11 @@ pub struct RuntimeStopReport {
 // Supervisor
 // ---------------------------------------------------------------------------
 
+struct MonitorState {
+    started: AtomicBool,
+    stop: watch::Sender<bool>,
+}
+
 /// Thread-safe supervisor around the desktop's relationship with the runtime.
 ///
 /// It owns the [`RuntimeClient`], the [`LeaseGuard`] and its [`Heartbeat`], and
@@ -319,6 +331,7 @@ pub struct RuntimeStopReport {
 /// every accessor is safe to call from any command.
 pub struct RuntimeSupervisor {
     inner: Arc<Mutex<SupervisorState>>,
+    monitor: Arc<MonitorState>,
 }
 
 struct SupervisorState {
@@ -326,6 +339,13 @@ struct SupervisorState {
     state: RuntimeConnectionState,
     runtime_dir: Option<PathBuf>,
     last_error: Option<String>,
+    launch_config: Option<RuntimeLaunchConfig>,
+    client_id: Option<String>,
+    connecting: bool,
+    stopping: bool,
+    generation: u64,
+    pending_child: Option<RuntimeChild>,
+    pending_pid: Option<u32>,
 }
 
 /// Everything the supervisor owns once a lease is held.
@@ -369,16 +389,18 @@ impl SupervisorState {
             client_id: connection.map(|c| c.client_id.clone()),
             base_url: connection.map(|c| c.client.base_url().to_string()),
             runtime_dir: self.runtime_dir.clone(),
-            owns_runtime_child: connection.is_some_and(|c| c.child.is_some()),
+            owns_runtime_child: connection.is_some_and(|c| c.child.is_some()) || self.pending_child.is_some(),
             runtime_child_pid: connection
                 .and_then(|c| c.child.as_ref())
-                .map(RuntimeChild::id),
+                .map(RuntimeChild::id)
+                .or(self.pending_pid),
             heartbeat_ok: connection
                 .and_then(|c| c.heartbeat.as_ref())
                 .map(|heartbeat| heartbeat.status().is_ok()),
             bridge_active: connection.is_some_and(|c| c.bridge.is_some()),
             lease_expires_at: connection.map(|c| c.lease.expires_at().to_string()),
             last_error: self.last_error.clone(),
+            generation: self.generation,
         }
     }
 }
@@ -397,7 +419,18 @@ impl RuntimeSupervisor {
                 state: RuntimeConnectionState::Disconnected,
                 runtime_dir: None,
                 last_error: None,
+                launch_config: None,
+                client_id: None,
+                connecting: false,
+                stopping: false,
+                generation: 0,
+                pending_child: None,
+                pending_pid: None,
             })),
+            monitor: Arc::new(MonitorState {
+                started: AtomicBool::new(false),
+                stop: watch::channel(false).0,
+            }),
         }
     }
 
@@ -422,7 +455,7 @@ impl RuntimeSupervisor {
         client_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
         validate_client_id(client_id)?;
-
+        self.start_health_monitor();
         let deadline = tokio::time::Instant::now() + RUNTIME_STOPPING_RETRY_WINDOW;
         let mut logged_stopping = false;
         loop {
@@ -450,62 +483,21 @@ impl RuntimeSupervisor {
         config: &RuntimeLaunchConfig,
         client_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
-        let mut state = self.inner.lock().await;
-        if state.connection.is_some() {
-            return Err(RuntimeUnavailable::InvalidConfig(
-                "runtime supervisor is already connected".to_string(),
-            ));
+        connect_once(self.inner.clone(), config, client_id).await
+    }
+
+    fn start_health_monitor(&self) {
+        if self
+            .monitor
+            .started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
         }
-        state.runtime_dir = Some(config.runtime_dir().to_path_buf());
-
-        let discovery_file = config.discovery_file();
-        let attempt = match runtime_needs_start(config) {
-            Ok(true) => {
-                log::info!(
-                    "[RuntimeSupervisor] no live runtime owns {}; starting one",
-                    config.runtime_dir().display()
-                );
-                start_runtime(config, &discovery_file).await
-            }
-            Ok(false) => attach_runtime(&discovery_file).await,
-            Err(error) => Err(RuntimeUnavailable::from_client_error(error)),
-        };
-
-        let (client, child, connection_state) = match attempt {
-            Ok(connected) => connected,
-            Err(error) => {
-                state.state = RuntimeConnectionState::Unavailable;
-                state.last_error = Some(error.to_string());
-                return Err(error);
-            }
-        };
-
-        let lease = match LeaseGuard::register(&client, client_id, CLIENT_KIND).await {
-            Ok(lease) => lease,
-            Err(error) => {
-                let error = RuntimeUnavailable::from_client_error(error);
-                state.state = RuntimeConnectionState::Unavailable;
-                state.last_error = Some(error.to_string());
-                return Err(error);
-            }
-        };
-
-        // The heartbeat keeps the lease alive for as long as the desktop runs.
-        let heartbeat = lease.heartbeat();
-        state.connection = Some(Connection {
-            heartbeat: Some(heartbeat),
-            lease,
-            child,
-            client,
-            client_id: client_id.to_string(),
-            bridge: None,
-            workflow_streams: HashMap::new(),
-            #[cfg(feature = "desktop")]
-            web_provider: None,
-        });
-        state.state = connection_state;
-        state.last_error = None;
-        Ok(())
+        let inner = Arc::downgrade(&self.inner);
+        let monitor = self.monitor.clone();
+        tokio::spawn(async move { run_health_monitor(inner, monitor).await });
     }
 
     /// Returns a clone of the connected control-plane client.
@@ -545,6 +537,11 @@ impl RuntimeSupervisor {
             connection.client_id.clone(),
             connection.lease.lease_id().to_string(),
         ))
+    }
+
+    /// Whether desktop exit has fenced off further recovery.
+    pub async fn is_stopping(&self) -> bool {
+        self.inner.lock().await.stopping
     }
 
     /// Redacted snapshot for a status command or a log line.
@@ -649,8 +646,9 @@ impl RuntimeSupervisor {
         app: tauri::AppHandle,
         session_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
-        let (client, session_id) = {
+        let (client, session_id, generation) = {
             let mut state = self.inner.lock().await;
+            let generation = state.generation;
             if state.state == RuntimeConnectionState::Released {
                 return Err(RuntimeUnavailable::NotConnected);
             }
@@ -663,7 +661,7 @@ impl RuntimeSupervisor {
             if connection.workflow_streams.contains_key(session_id) {
                 return Ok(());
             }
-            (connection.client.clone(), session_id.to_string())
+            (connection.client.clone(), session_id.to_string(), generation)
         };
 
         // Open the SSE response before the workflow starts: the subscription is
@@ -674,7 +672,7 @@ impl RuntimeSupervisor {
             .map_err(RuntimeUnavailable::from_client_error)?;
 
         let mut state = self.inner.lock().await;
-        if state.state == RuntimeConnectionState::Released {
+        if state.stopping || state.generation != generation || state.state == RuntimeConnectionState::Released {
             return Err(RuntimeUnavailable::NotConnected);
         }
         let Some(connection) = state.connection.as_mut() else {
@@ -716,18 +714,20 @@ impl RuntimeSupervisor {
         handle: crate::runtime_web_mcp_provider::WebMcpProviderHandle,
     ) -> Result<(), RuntimeUnavailable> {
         let mut state = self.inner.lock().await;
-        if state.state == RuntimeConnectionState::Released {
+        let accepted = !state.stopping
+            && state.state != RuntimeConnectionState::Released
+            && state.connection.as_ref().is_some_and(|connection| {
+                connection.lease.lease_id() == handle.lease_id()
+                    && connection.web_provider.is_none()
+            });
+        if !accepted {
+            drop(state);
+            handle.shutdown().await;
             return Err(RuntimeUnavailable::NotConnected);
         }
-        let Some(connection) = state.connection.as_mut() else {
-            return Err(RuntimeUnavailable::NotConnected);
-        };
-        if connection.web_provider.is_some() {
-            return Err(RuntimeUnavailable::InvalidConfig(
-                "the desktop Web MCP provider is already connected".to_string(),
-            ));
+        if let Some(connection) = state.connection.as_mut() {
+            connection.web_provider = Some(handle);
         }
-        connection.web_provider = Some(handle);
         Ok(())
     }
 
@@ -761,8 +761,17 @@ impl RuntimeSupervisor {
     /// left, the runtime's own idle grace decides whether it exits. Releasing
     /// twice is a no-op.
     pub async fn release(&self) -> Result<(), RuntimeUnavailable> {
-        let mut state = self.inner.lock().await;
-        release_connection(&mut state).await
+        self.monitor.stop.send_replace(true);
+        let connection = {
+            let mut state = self.inner.lock().await;
+            state.stopping = true;
+            state.state = RuntimeConnectionState::Released;
+            state.connection.take()
+        };
+        match connection {
+            Some(connection) => cleanup_connection(connection).await,
+            None => Ok(()),
+        }
     }
 
     /// Releases the lease when the application exits.
@@ -771,8 +780,7 @@ impl RuntimeSupervisor {
     /// so the Tauri exit handler can call it without handling a result. It never
     /// kills a runtime this process did not start.
     pub async fn shutdown(&self) {
-        let mut state = self.inner.lock().await;
-        if let Err(error) = release_connection(&mut state).await {
+        if let Err(error) = self.release().await {
             log::warn!("[RuntimeSupervisor] releasing the runtime lease failed: {error}");
         }
     }
@@ -816,7 +824,16 @@ impl RuntimeSupervisor {
         })
     }
 
-    /// Requests a forced, coordinated shutdown of `expected_instance_id` and
+    /// Prevents health monitoring and recovery while a coordinated runtime stop
+    /// is being observed. The existing lease remains available to the caller so
+    /// a failed stop can still be reported or retried, but no successor runtime
+    /// may be started in the meantime.
+
+    pub async fn begin_stopping(&self) {
+        self.monitor.stop.send_replace(true);
+        self.inner.lock().await.stopping = true;
+    }
+
     /// waits, within `budget`, for the observed end.
     ///
     /// The request always carries an explicit `confirm`, an explicit `force` and
@@ -837,6 +854,7 @@ impl RuntimeSupervisor {
         idempotency_key: &str,
         budget: Duration,
     ) -> RuntimeStopReport {
+        self.begin_stopping().await;
         let (client, client_id, lease_id) = match self.shutdown_connection().await {
             Ok(connection) => connection,
             Err(error) => {
@@ -940,60 +958,25 @@ impl fmt::Debug for RuntimeSupervisor {
 
 impl Drop for RuntimeSupervisor {
     fn drop(&mut self) {
-        // `Drop` cannot await. When the last handle is dropped and the async
-        // runtime is still alive, hand the lease back on it; otherwise the lease
-        // simply expires on its TTL and the runtime's idle grace ends it. A
-        // healthy runtime is never killed here.
-        let Some(state) = Arc::get_mut(&mut self.inner).map(Mutex::get_mut) else {
-            return;
-        };
-        if state.state == RuntimeConnectionState::Released {
-            return;
+        self.monitor.stop.send_replace(true);
+        let inner = self.inner.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let connection = {
+                    let mut state = inner.lock().await;
+                    state.stopping = true;
+                    state.connection.take()
+                };
+                if let Some(connection) = connection {
+                    let _ = cleanup_connection(connection).await;
+                }
+            });
         }
-        let Some(mut connection) = state.connection.take() else {
-            return;
-        };
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
-            if let Some(heartbeat) = connection.heartbeat.take() {
-                heartbeat.stop().await;
-            }
-            // Cancel the reader and unregister the bridge before releasing the
-            // lease, mirroring `release_connection`.
-            if let Some(bridge) = connection.bridge.take() {
-                bridge.cancel.send_replace(true);
-                bridge.reader.abort();
-                let _ = bridge.session.unregister().await;
-            }
-            // Cancel every workflow forwarding reader; abort guarantees each
-            // observes cancellation without the async join `Drop` cannot await.
-            for (_, handle) in connection.workflow_streams.drain() {
-                handle.cancel.send_replace(true);
-                handle.reader.abort();
-            }
-            #[cfg(feature = "desktop")]
-            if let Some(provider) = connection.web_provider.take() {
-                provider.shutdown().await;
-            }
-            let _ = connection.lease.release().await;
-            // `connection` drops here: its `RuntimeChild` only reaps an exited
-            // runtime and never kills a healthy one.
-        });
     }
 }
 
-/// Stops the heartbeat and releases the lease held by `state`, if any.
-///
-/// Order matters: the bridge reader and any in-flight invocation are cancelled
-/// first, then the bridge session is unregistered, and only then is the client
-/// lease released. Releasing the lease while the bridge still holds work would
-/// leave the runtime dispatching into a session the desktop has abandoned.
-async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUnavailable> {
-    let Some(connection) = state.connection.as_mut() else {
-        return Ok(());
-    };
+/// Stops connection-owned readers/providers, then releases its lease.
+async fn cleanup_connection(mut connection: Connection) -> Result<(), RuntimeUnavailable> {
     // Stop and join the heartbeat first: a renewal must never be in flight while
     // the lease is released.
     if let Some(heartbeat) = connection.heartbeat.take() {
@@ -1002,15 +985,11 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
     if let Some(bridge) = connection.bridge.take() {
         bridge.cancel.send_replace(true);
         bridge.reader.abort();
-        // Bound the join so a stuck reader cannot block shutdown; the abort
-        // above already guarantees it observes cancellation.
         let _ = tokio::time::timeout(BRIDGE_READER_STOP_TIMEOUT, bridge.reader).await;
         if let Err(error) = bridge.session.unregister().await {
             log::debug!("[RuntimeSupervisor] unregistering the bridge failed: {error}");
         }
     }
-    // Cancel every workflow forwarding reader before the lease is released, so
-    // no task keeps reading a stream owned by a lease the desktop has given up.
     let workflow_readers: Vec<WorkflowStreamHandle> = connection
         .workflow_streams
         .drain()
@@ -1021,8 +1000,6 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
         handle.reader.abort();
         let _ = tokio::time::timeout(WORKFLOW_READER_STOP_TIMEOUT, handle.reader).await;
     }
-    // Stop the desktop Web MCP provider before the lease is released, so the
-    // runtime never keeps dialing a provider whose lease is already gone.
     #[cfg(feature = "desktop")]
     if let Some(provider) = connection.web_provider.take() {
         provider.shutdown().await;
@@ -1031,12 +1008,150 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
         .lease
         .release()
         .await
-        .map_err(RuntimeUnavailable::from_client_error)?;
-    state.state = RuntimeConnectionState::Released;
+        .map_err(RuntimeUnavailable::from_client_error)
+}
+
+/// Watches the lease heartbeat and any desktop-owned child, then reconnects
+/// through the same discovery/lock/lease handshake after a confirmed failure.
+async fn run_health_monitor(
+    inner: Weak<Mutex<SupervisorState>>,
+    monitor: Arc<MonitorState>,
+) {
+    let mut stop_rx = monitor.stop.subscribe();
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(RUNTIME_HEALTH_CHECK_INTERVAL) => {}
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() { return; }
+                continue;
+            }
+        }
+        let Some(inner) = inner.upgrade() else { return };
+
+        let failed = {
+            let mut state = inner.lock().await;
+            if state.stopping {
+                return;
+            }
+            let reason = state.connection.as_mut().and_then(|connection| {
+                if connection.heartbeat.as_ref().is_some_and(|heartbeat| heartbeat.status().is_err()) {
+                    Some("runtime lease heartbeat failed".to_string())
+                } else if connection.child.as_mut().is_some_and(|child| matches!(child.try_wait(), Ok(Some(_)))) {
+                    Some("spawned runtime child exited".to_string())
+                } else {
+                    None
+                }
+            });
+            if let Some(reason) = reason {
+                let mut connection = state.connection.take();
+                if let Some(connection) = connection.as_mut() {
+                    if let Some(child) = connection.child.take() {
+                        state.pending_pid = Some(child.id());
+                        state.pending_child = Some(child);
+                    }
+                }
+                state.state = RuntimeConnectionState::Unavailable;
+                state.last_error = Some(reason.clone());
+                Some((connection, reason))
+            } else if state.connection.is_none() && !state.connecting && state.launch_config.is_some() {
+                Some((None, "runtime unavailable; starting controlled recovery".to_string()))
+            } else {
+                None
+            }
+        };
+
+        let Some((connection, reason)) = failed else { continue };
+        log::warn!("[RuntimeSupervisor] {reason}; starting controlled recovery");
+        if let Some(connection) = connection {
+            if let Err(error) = cleanup_connection(connection).await {
+                log::debug!("[RuntimeSupervisor] cleaning failed runtime connection: {error}");
+            }
+        }
+
+        let retry = {
+            let state = inner.lock().await;
+            if state.stopping || state.connection.is_some() || state.connecting { None }
+            else { state.launch_config.clone().zip(state.client_id.clone()) }
+        };
+        if let Some((config, client_id)) = retry {
+            if let Err(error) = connect_once(inner.clone(), &config, &client_id).await {
+                log::warn!("[RuntimeSupervisor] runtime recovery failed: {error}");
+            }
+        }
+        drop(inner);
+    }
+}
+
+async fn connect_once(
+    inner: Arc<Mutex<SupervisorState>>,
+    config: &RuntimeLaunchConfig,
+    client_id: &str,
+) -> Result<(), RuntimeUnavailable> {
+    let pending = {
+        let mut state = inner.lock().await;
+        if state.connection.is_some() || state.connecting {
+            return Err(RuntimeUnavailable::InvalidConfig(
+                "runtime supervisor is already connected or connecting".to_string(),
+            ));
+        }
+        if state.stopping {
+            return Err(RuntimeUnavailable::NotConnected);
+        }
+        state.runtime_dir = Some(config.runtime_dir().to_path_buf());
+        state.launch_config = Some(config.clone());
+        state.client_id = Some(client_id.to_string());
+        state.connecting = true;
+        state.pending_pid = state.pending_child.as_ref().map(RuntimeChild::id);
+        state.pending_child.take()
+    };
+    let discovery_file = config.discovery_file();
+    let attempt = start_runtime(config, &discovery_file, pending).await;
+    let (client, child, connection_state, pending) = match attempt {
+        Ok(connected) => connected,
+        Err((error, pending)) => {
+            let mut state = inner.lock().await;
+            state.connecting = false;
+            state.pending_pid = pending.as_ref().map(RuntimeChild::id);
+            state.pending_child = pending;
+            state.state = RuntimeConnectionState::Unavailable;
+            state.last_error = Some(error.to_string());
+            return Err(error);
+        }
+    };
+    let lease = match LeaseGuard::register(&client, client_id, CLIENT_KIND).await {
+        Ok(lease) => lease,
+        Err(error) => {
+            let error = RuntimeUnavailable::from_client_error(error);
+            let mut state = inner.lock().await;
+            state.connecting = false;
+            state.pending_pid = child.as_ref().map(RuntimeChild::id).or_else(|| pending.as_ref().map(RuntimeChild::id));
+            state.pending_child = child.or(pending);
+            state.state = RuntimeConnectionState::Unavailable;
+            state.last_error = Some(error.to_string());
+            return Err(error);
+        }
+    };
+    let connection = Connection {
+        heartbeat: Some(lease.heartbeat()), lease, child, client,
+        client_id: client_id.to_string(), bridge: None, workflow_streams: HashMap::new(),
+        #[cfg(feature = "desktop")] web_provider: None,
+    };
+    let mut state = inner.lock().await;
+    state.connecting = false;
+    state.pending_child = pending;
+    state.pending_pid = state.pending_child.as_ref().map(RuntimeChild::id);
+    if state.stopping {
+        drop(state);
+        let _ = cleanup_connection(connection).await;
+        return Err(RuntimeUnavailable::NotConnected);
+    }
+    state.connection = Some(connection);
+    state.state = connection_state;
+    state.generation = state.generation.saturating_add(1);
+    state.last_error = None;
     Ok(())
 }
 
-/// Starts the runtime child with a fully resolved launch configuration and waits
 /// for its readiness handshake.
 ///
 /// Starting can lose a race with another client: a spawn that is refused because
@@ -1046,52 +1161,80 @@ async fn release_connection(state: &mut SupervisorState) -> Result<(), RuntimeUn
 async fn start_runtime(
     config: &RuntimeLaunchConfig,
     discovery_file: &Path,
-) -> Result<(RuntimeClient, Option<RuntimeChild>, RuntimeConnectionState), RuntimeUnavailable> {
-    let mut child = match chatspeed_runtime_client::spawn_runtime_with_config(config) {
-        Ok(child) => child,
-        Err(error) => {
-            // A competing client may have published discovery between the
-            // liveness check and this spawn. Attach to that live runtime instead
-            // of surfacing an error or removing its document.
-            if !chatspeed_runtime_client::discovery_absent(discovery_file) {
-                return attach_runtime(discovery_file).await;
+    pending: Option<RuntimeChild>,
+) -> Result<(RuntimeClient, Option<RuntimeChild>, RuntimeConnectionState, Option<RuntimeChild>), (RuntimeUnavailable, Option<RuntimeChild>)> {
+    start_runtime_with_budget(config, discovery_file, pending, SPAWN_READY_TIMEOUT).await
+}
+
+async fn start_runtime_with_budget(
+    config: &RuntimeLaunchConfig,
+    discovery_file: &Path,
+    mut pending: Option<RuntimeChild>,
+    readiness_budget: Duration,
+) -> Result<(RuntimeClient, Option<RuntimeChild>, RuntimeConnectionState, Option<RuntimeChild>), (RuntimeUnavailable, Option<RuntimeChild>)> {
+    if let Some(child) = pending.as_mut() {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            pending = None;
+        }
+    }
+    let mut child = if pending.is_some() {
+        match chatspeed_runtime_client::wait_for_discovery(Some(discovery_file), readiness_budget).await {
+            Ok(document) => {
+                let owned = document.pid == pending.as_ref().map(RuntimeChild::id).unwrap_or_default()
+                    && matches!(pending.as_mut().and_then(|c| c.try_wait().ok()), Some(None));
+                let client = match RuntimeClient::new(&document) {
+                    Ok(client) => client,
+                    Err(error) => return Err((RuntimeUnavailable::from_client_error(error), pending)),
+                };
+                if owned { return Ok((client, pending, RuntimeConnectionState::Spawned, None)); }
+                return Ok((client, None, RuntimeConnectionState::Attached, pending));
             }
-            return Err(RuntimeUnavailable::from_client_error(error));
+            Err(error) => return Err((RuntimeUnavailable::from_client_error(error), pending)),
+        }
+    } else {
+        match runtime_needs_start(config) {
+            Ok(false) => return attach_runtime(discovery_file).await
+                .map(|(client, child, state)| (client, child, state, None))
+                .map_err(|error| (error, None)),
+            Err(error) => return Err((RuntimeUnavailable::from_client_error(error), None)),
+            Ok(true) => {}
+        }
+        match chatspeed_runtime_client::spawn_runtime_with_config(config) {
+            Ok(mut child) => {
+                child.forward_stderr_to(|line| {
+                    log::info!("[RuntimeChild] {}", redact_secrets(line));
+                });
+                log::info!("[RuntimeSupervisor] spawned runtime child {}; readiness budget {:?}", child.id(), SPAWN_READY_TIMEOUT);
+                child
+            },
+            Err(error) => {
+                if !chatspeed_runtime_client::discovery_absent(discovery_file) {
+                    return attach_runtime(discovery_file).await
+                        .map(|(client, child, state)| (client, child, state, None))
+                        .map_err(|e| (e, None));
+                }
+                return Err((RuntimeUnavailable::from_client_error(error), None));
+            }
         }
     };
-    let document = match chatspeed_runtime_client::wait_for_discovery(
-        Some(discovery_file),
-        SPAWN_READY_TIMEOUT,
-    )
-    .await
-    {
+    let document = match chatspeed_runtime_client::wait_for_discovery(Some(discovery_file), readiness_budget).await {
         Ok(document) => document,
         Err(error) => {
-            // Surface a failed child's stderr so a startup failure is
-            // diagnosable instead of a bare timeout.
-            if let Some(detail) = child.diagnostics() {
-                log::warn!(
-                    "[RuntimeSupervisor] runtime child failed to become ready: {}",
-                    redact_secrets(&detail)
-                );
-            }
-            return Err(RuntimeUnavailable::from_client_error(error));
+            log::warn!("[RuntimeSupervisor] readiness failed; child_pid={}, exit_status={:?}, discovery_present={}: {}",
+                child.id(), child.try_wait(), discovery_file.exists(), error);
+            return Err((RuntimeUnavailable::from_client_error(error), Some(child)));
         }
     };
-    // A competing child can still be exiting after losing the directory lock.
-    // Bind ownership to the PID proven by the readiness handshake as well as
-    // the child handle, rather than assuming every running child is the winner.
     let owned = document.pid == child.id() && matches!(child.try_wait(), Ok(None));
-    let client = RuntimeClient::new(&document).map_err(RuntimeUnavailable::from_client_error)?;
+    let client = match RuntimeClient::new(&document) {
+        Ok(client) => client,
+        Err(error) => return Err((RuntimeUnavailable::from_client_error(error), Some(child))),
+    };
     if owned {
-        // Readiness is proven; the child is long-lived from here.
         child.forward_stderr();
-        Ok((client, Some(child), RuntimeConnectionState::Spawned))
+        Ok((client, Some(child), RuntimeConnectionState::Spawned, None))
     } else {
-        log::info!(
-            "[RuntimeSupervisor] another runtime instance won the start race; attaching instead"
-        );
-        Ok((client, None, RuntimeConnectionState::Attached))
+        Ok((client, None, RuntimeConnectionState::Attached, Some(child)))
     }
 }
 
@@ -1548,15 +1691,135 @@ mod tests {
         )
         .expect("write");
 
-        let result = start_runtime(&config, &discovery_file).await;
+        let result = start_runtime(&config, &discovery_file, None).await;
         // The spawn refusal is not surfaced: the existing document was attached
         // to and its protocol mismatch reported instead.
         assert!(
-            matches!(result, Err(RuntimeUnavailable::Protocol(_))),
+            matches!(result, Err((RuntimeUnavailable::Protocol(_), _))),
             "{result:?}"
         );
     }
 
+    async fn recovery_test_server() -> (ControlPlaneDiscovery, tokio::task::JoinHandle<()>) {
+        use axum::{routing::{get, post}, Json, Router};
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind fake runtime");
+        let mut document = discovery_with_token("test-only-token");
+        document.pid = std::process::id();
+        document.port = listener.local_addr().expect("address").port();
+        let meta = serde_json::json!({
+            "service": "chatspeed-runtime", "protocol_version": PROTOCOL_VERSION,
+            "schema_version": chatspeed_contracts::SCHEMA_VERSION,
+            "server_instance_id": document.server_instance_id, "pid": document.pid
+        });
+        let app = Router::new()
+            .route("/control/v1/meta", get(move || { let meta = meta.clone(); async move { Json(meta) } }))
+            .route("/control/v1/clients/register", post(|| async { Json(serde_json::json!({
+                "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
+            })) }))
+            .route("/control/v1/clients/tauri-main/release", post(|| async { Json(serde_json::json!({})) }));
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve fake runtime"); });
+        (document, task)
+    }
+
+    #[tokio::test]
+    async fn initial_failure_recovers_after_discovery_is_repaired_without_restarting_desktop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let (document, server) = recovery_test_server().await;
+        let mut incompatible = document.clone();
+        incompatible.protocol_version = "2".to_string();
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&incompatible).expect("encode")).expect("write");
+        let supervisor = RuntimeSupervisor::new();
+        assert!(supervisor.connect_or_start(&config, "tauri-main").await.is_err());
+        assert_eq!(supervisor.status().await.generation, 0);
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&document).expect("encode")).expect("repair discovery");
+        tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                if supervisor.status().await.generation == 1 { break; }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("monitor reconnects after initial failure");
+        assert_eq!(supervisor.status().await.state, RuntimeConnectionState::Attached);
+        supervisor.release().await.expect("release lease");
+        server.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn slow_pending_child_survives_repeated_readiness_budgets_without_a_second_spawn() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("fake-runtime.sh");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&bin, "#!/bin/sh\nprintf 'spawn\\n' >> \"$CHATSPEED_RUNTIME_DIR/spawns\"\nwhile [ ! -e \"$CHATSPEED_RUNTIME_DIR/exit\" ]; do sleep 0.01; done\n").expect("write child");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).expect("permissions");
+        // Only the synchronous spawn reads this override; no await occurs while
+        // it is installed, and this module has no other environment-mutating tests.
+        let original = std::env::var_os(chatspeed_runtime_client::RUNTIME_BINARY_ENV);
+        std::env::set_var(chatspeed_runtime_client::RUNTIME_BINARY_ENV, &bin);
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let child = chatspeed_runtime_client::spawn_runtime_with_config(&config).expect("spawn fake child");
+        if let Some(original) = original { std::env::set_var(chatspeed_runtime_client::RUNTIME_BINARY_ENV, original); }
+        else { std::env::remove_var(chatspeed_runtime_client::RUNTIME_BINARY_ENV); }
+        let pid = child.id();
+        let mut pending = Some(child);
+        for _ in 0..2 {
+            let result = start_runtime_with_budget(&config, &config.discovery_file(), pending.take(), Duration::from_millis(40)).await;
+            let (error, retained) = result.expect_err("discovery remains absent");
+            assert!(matches!(error, RuntimeUnavailable::Discovery(_)));
+            pending = retained;
+            assert_eq!(pending.as_ref().map(RuntimeChild::id), Some(pid));
+        }
+        assert_eq!(std::fs::read_to_string(dir.path().join("spawns")).expect("spawn counter"), "spawn\n");
+        std::fs::write(dir.path().join("exit"), b"exit").expect("stop fake child");
+        drop(pending);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_failure_reconnects_to_a_new_generation_and_release_keeps_it_stopped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let (document, server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&document).expect("encode")).expect("write");
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.connect_or_start(&config, "tauri-main").await.expect("connect");
+        let old_heartbeat = {
+            let mut state = supervisor.inner.lock().await;
+            let connection = state.connection.as_mut().expect("connection");
+            connection.heartbeat.replace(connection.lease.heartbeat_with_interval(Duration::from_millis(20)))
+        };
+        if let Some(heartbeat) = old_heartbeat { heartbeat.stop().await; }
+        server.abort();
+        let (successor, next_server) = recovery_test_server().await;
+        std::fs::write(config.discovery_file(), serde_json::to_vec(&successor).expect("encode")).expect("write successor");
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while supervisor.status().await.generation < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("failed heartbeat triggers a new lease");
+        assert!(process_alive(std::process::id()), "attached runtime must never be killed");
+        supervisor.release().await.expect("release");
+        tokio::time::sleep(RUNTIME_HEALTH_CHECK_INTERVAL + Duration::from_millis(50)).await;
+        let status = supervisor.status().await;
+        assert_eq!(status.generation, 2);
+        assert_eq!(status.state, RuntimeConnectionState::Released);
+        next_server.abort();
+    }
+
+    #[tokio::test]
+    async fn release_and_forced_stop_fence_future_recovery() {
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.begin_stopping().await;
+        assert!(supervisor.is_stopping().await);
+        let config = chatspeed_runtime_client::sandbox_launch_config(
+            tempfile::tempdir().expect("tempdir").path(),
+        );
+        assert!(matches!(
+            supervisor.connect_or_start(&config, "tauri-main").await,
+            Err(RuntimeUnavailable::NotConnected)
+        ));
+        supervisor.release().await.expect("release is idempotent");
+        assert_eq!(supervisor.status().await.state, RuntimeConnectionState::Released);
+    }
     #[cfg(feature = "desktop")]
     #[test]
     fn workflow_event_name_matches_the_frontend_listener_contract() {

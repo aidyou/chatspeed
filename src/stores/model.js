@@ -86,7 +86,7 @@ export const useModelStore = defineStore('modelProvider', () => {
     providers.value = newProviders
   }
 
-  let isModelLoading = false
+  let modelLoadingPromise = null
 
   /**
    * Fetches all AI models from the backend and updates the state.
@@ -94,11 +94,8 @@ export const useModelStore = defineStore('modelProvider', () => {
    * If the result is empty, it sets the models to an empty array.
    */
   const updateModelStore = () => {
-    if (isModelLoading) {
-      return
-    }
-    isModelLoading = true
-    invokeWrapper('get_all_ai_models')
+    if (modelLoadingPromise) return modelLoadingPromise
+    modelLoadingPromise = invokeWrapper('get_all_ai_models')
       .then((result) => {
         if (isEmpty(result)) {
           providers.value = [];
@@ -117,10 +114,12 @@ export const useModelStore = defineStore('modelProvider', () => {
         } else {
           console.error('Failed to update model store:', error);
         }
+        return false
       })
       .finally(() => {
-        isModelLoading = false
+        modelLoadingPromise = null
       })
+    return modelLoadingPromise
   };
 
   /**

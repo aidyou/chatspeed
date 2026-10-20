@@ -278,6 +278,7 @@
             @mousedown="onCodeEditorResizeStart" />
 
           <div class="workflow-chat-pane">
+            <el-alert v-if="!runtimeUsable" :title="runtimeMessage" type="warning" :closable="false" show-icon />
             <WorkflowSessionMessagePane
               ref="messageListRef"
               :session-id="currentWorkflowId"
@@ -429,8 +430,9 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, watchEffect } from 'vue'
+import { useRuntimeStatus } from '@/composables/useRuntimeStatus'
 import { useI18n } from 'vue-i18n'
-import { listen } from '@tauri-apps/api/event'
+import { listen as tauriListen } from '@tauri-apps/api/event'
 import { homeDir } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ElMessageBox } from 'element-plus'
@@ -500,6 +502,21 @@ import {
 const IMAGE_FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'])
 
 const { t } = useI18n()
+let viewDisposed = false
+const viewListeners = new Set()
+const listen = async (...args) => {
+  const release = await tauriListen(...args)
+  let active = true
+  const unlisten = () => {
+    if (!active) return
+    active = false
+    viewListeners.delete(unlisten)
+    release()
+  }
+  if (viewDisposed) unlisten()
+  else viewListeners.add(unlisten)
+  return unlisten
+}
 const workflowStore = useWorkflowStore()
 const workflowAutomationStore = useWorkflowAutomationStore()
 const agentStore = useAgentStore()
@@ -1090,7 +1107,16 @@ const osType = ref('')
 // ============================================================
 // Local state - MUST be defined FIRST before any composables
 // ============================================================
+const runtime = useRuntimeStatus(invokeWrapper, refreshRuntimeData)
+const { usable: runtimeUsable, ready: runtimeReady, error: runtimeError } = runtime
+const runtimeMessage = computed(() => t(!runtimeReady.value
+  ? 'chat.runtimeUnavailable'
+  : runtimeError.value ? 'chat.runtimeLoadFailed' : 'chat.runtimeLoading'))
 const isInitializing = ref(true)
+watch(runtimeUsable, usable => {
+  if (usable) isInitializing.value = false
+  else isInitializing.value = true
+}, { immediate: true })
 const selectedAgent = ref(null)
 const approvalLevel = ref('default')
 const finalAuditMode = ref('off')
@@ -2169,6 +2195,7 @@ function scrollMessageListToBottom(force = true) {
 
 // Set up the onSendMessage callback for the input composable
 inputComposable.onSendMessage.value = async () => {
+  if (!runtimeUsable.value) return false
   if (isPreparingImageSend.value) {
     return false
   }
@@ -2293,6 +2320,7 @@ inputComposable.onSendMessage.value = async () => {
 
 // Wrapper function that calls the input composable's send handler
 const onSendMessage = async () => {
+  if (!runtimeUsable.value) return
   if (inputComposable.onSendMessage.value) {
     return await inputComposable.onSendMessage.value()
   }
@@ -2300,6 +2328,7 @@ const onSendMessage = async () => {
 
 // Wrapper for createNewWorkflow that also clears input
 const createNewWorkflow = async (options = null) => {
+  if (!runtimeUsable.value) return
   if (!options) {
     inputAreaRef.value?.openCreateWorkflowDialog()
     return
@@ -3368,9 +3397,47 @@ watch(
   { immediate: true }
 )
 
+async function refreshRuntimeData(isCurrent) {
+  if (await modelStore.updateModelStore() === false) throw new Error('Model refresh failed')
+  if (!isCurrent()) return
+  await workflowStore.loadWorkflows()
+  if (workflowStore.error) throw new Error('Workflow list refresh failed')
+  if (!isCurrent()) return
+  await workflowAutomationStore.fetchAutomations()
+  await agentStore.fetchAgents()
+  if (!isCurrent()) return
+  const sessionId = workflowStore.currentWorkflowId || resolveInitialWorkflowId()
+  if (sessionId) {
+    // Reuse snapshot hydration, approval reconciliation and SSE subscription; same-id selection
+    // does not trigger the input-draft watcher or clear the user's draft.
+    await selectWorkflow(sessionId)
+    if (!isCurrent()) {
+      unlistenWorkflowEvents.value?.()
+      unlistenWorkflowEvents.value = null
+      return
+    }
+    if (workflowStore.error || !unlistenWorkflowEvents.value) {
+      throw new Error('Workflow recovery failed')
+    }
+    lastHistoryWorkflowId.value = sessionId
+  } else if (agentStore.agents.length > 0) {
+    await coreCreateNewWorkflow()
+    if (!isCurrent()) {
+      unlistenWorkflowEvents.value?.()
+      unlistenWorkflowEvents.value = null
+      return
+    }
+    if (!workflowStore.currentWorkflowId || workflowStore.error) {
+      throw new Error('Workflow initialization failed')
+    }
+  }
+}
+
 onMounted(async () => {
+  runtime.start()
   await refreshPlugins()
   unlistenPlugins = await listen('cs://plugins-changed', refreshPlugins)
+  if (viewDisposed) return
   pluginRefreshTimer = setInterval(refreshPlugins, 5000)
   // The trusted surface reports through this controlled event that the runtime no longer confirms
   // it, so its tab (and its native view) is released here instead of the child closing anything.
@@ -3383,6 +3450,7 @@ onMounted(async () => {
   // to the right edge at a fixed width, so a window that only gets wider moves the surface
   // without changing its size and the observer would leave the native view at its old offset.
   await nextTick()
+  if (viewDisposed) return
   const dockSurface = dockRef.value?.getSurfaceElement?.()
   if (dockSurface && typeof ResizeObserver !== 'undefined') {
     dockResizeObserver = new ResizeObserver(onDockLayoutResize)
@@ -3407,9 +3475,6 @@ onMounted(async () => {
     console.error('Failed to get OS info:', error)
   }
 
-  await workflowStore.loadWorkflows()
-  await workflowAutomationStore.fetchAutomations()
-  await agentStore.fetchAgents()
   try {
     await chatHubStore.load()
     // The hub inventory is the other inventory that owns a dock tab, so a restore may only run
@@ -3433,16 +3498,7 @@ onMounted(async () => {
     console.error('Failed to load default image recognition prompt:', error)
   }
 
-  // Restore the last selected workflow if it still exists.
-  const initialWorkflowId = resolveInitialWorkflowId()
-  if (initialWorkflowId) {
-    lastHistoryWorkflowId.value = initialWorkflowId
-    await selectWorkflow(initialWorkflowId)
-  } else {
-    // First launch bootstrap: create one empty workflow so sending messages never hits "no session".
-    await coreCreateNewWorkflow()
-  }
-
+  if (viewDisposed) return
   windowStore.initWorkflowWindowAlwaysOnTop()
   document.addEventListener('visibilitychange', handleTodayCostVisibilityChange)
   window.addEventListener('keydown', onGlobalKeyDown)
@@ -3451,13 +3507,16 @@ onMounted(async () => {
   // that is only made wider does not leave the docked view at its previous offset.
   window.addEventListener('resize', onDockLayoutResize)
   startTodayCostRefresh()
-  isInitializing.value = false
 
   // Initial scroll
   scrollMessageListToBottom()
 })
 
 onBeforeUnmount(() => {
+  viewDisposed = true
+  runtime.stop()
+  for (const unlisten of viewListeners) unlisten()
+  viewListeners.clear()
   dockTornDown = true
   // The window keeps the width the dock reserved, so it is handed back as the dock goes away.
   void releaseDockWidth()

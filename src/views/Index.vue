@@ -97,7 +97,10 @@
           <div class="messages" ref="chatMessagesRef" :key="forceRefreshKey">
             <div ref="observerTarget"></div>
 
-            <div class="empty-message" v-if="!canChat">
+            <div class="empty-message" v-if="!runtimeUsable" role="status">
+              {{ runtimeMessage }}
+            </div>
+            <div class="empty-message" v-else-if="!canChat">
               {{ $t('chat.haveNoModel') }}
               <el-button type="primary" round @click="onOpenSettingWindow('model')">
                 <cs name="add" class="small" />
@@ -555,10 +558,11 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
+import { useRuntimeStatus } from '@/composables/useRuntimeStatus'
 import { useI18n } from 'vue-i18n'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
-import { listen } from '@tauri-apps/api/event'
+import { listen as tauriListen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 
 import markdown from '@/components/chat/Markdown.vue'
@@ -588,6 +592,21 @@ import { useWindowStore } from '@/stores/window'
 import { useMcpStore } from '@/stores/mcp'
 
 const { t } = useI18n()
+let viewDisposed = false
+const viewListeners = new Set()
+const listen = async (...args) => {
+  const release = await tauriListen(...args)
+  let active = true
+  const unlisten = () => {
+    if (!active) return
+    active = false
+    viewListeners.delete(unlisten)
+    release()
+  }
+  if (viewDisposed) unlisten()
+  else viewListeners.add(unlisten)
+  return unlisten
+}
 const unlistenChunkResponse = ref(null)
 const unlistenSendMessage = ref(null)
 const unlistenFocus = ref(null)
@@ -630,7 +649,22 @@ const currentModelAlias = computed(() => {
   return cfg?.name || cfg?.id.split('/').pop()
 })
 
-const canChat = computed(() => modelProviders.value.length > 0)
+const runtime = useRuntimeStatus(invokeWrapper, async isCurrent => {
+  if (await modelStore.updateModelStore() === false) throw new Error('Model refresh failed')
+  if (!isCurrent()) return
+  await chatStore.loadConversations()
+  if (!isCurrent()) return
+  await chatStore.getCurrentConversationId()
+  if (!isCurrent()) return
+  messageReady.value = false
+  resetPagination()
+  await chatStore.loadMessages(chatStore.currentConversationId, settingStore.windowLabel)
+})
+const { usable: runtimeUsable, ready: runtimeReady, error: runtimeError } = runtime
+const runtimeMessage = computed(() => t(!runtimeReady.value
+  ? 'chat.runtimeUnavailable'
+  : runtimeError.value ? 'chat.runtimeLoadFailed' : 'chat.runtimeLoading'))
+const canChat = computed(() => runtimeUsable.value && modelProviders.value.length > 0)
 
 const chatMessagesRef = ref(null)
 const sidebarCollapsed = ref(!windowStore.chatSidebarShow)
@@ -1864,28 +1898,6 @@ onMounted(async () => {
     }
   }
 
-  // Robust retry mechanism for loading conversations
-  // This handles cases where backend initialization is slow (especially on Windows Release builds)
-  const loadConversationsWithRetry = async (attempts = 0, maxAttempts = 10) => {
-    try {
-      await chatStore.loadConversations()
-      console.log('Conversations loaded successfully')
-    } catch (error) {
-      if (attempts < maxAttempts) {
-        console.warn(
-          `Failed to load conversations (attempt ${attempts + 1}/${maxAttempts}), retrying in 1s...`,
-          error
-        )
-        setTimeout(() => loadConversationsWithRetry(attempts + 1, maxAttempts), 1000)
-      } else {
-        console.error('Max retry attempts reached for loading conversations', error)
-        showMessage(t('chat.errorOnLoadConversations', { error: String(error) }), 'error')
-      }
-    }
-  }
-
-  await loadConversationsWithRetry() // Ensure this is awaited
-
   // listen send_message event
   unlistenSendMessage.value = await listen('chat_message', async event => {
     if (event?.payload?.windowLabel === settingStore.windowLabel) {
@@ -1900,23 +1912,6 @@ onMounted(async () => {
       }
     }
   })
-
-  chatStore
-    .getCurrentConversationId()
-    .then(() => {
-      if (chatStore.currentConversationId > 0) {
-        messageReady.value = false
-        chatStore.loadMessages(chatStore.currentConversationId, settingStore.windowLabel)
-      } else if (chatStore.conversations.length > 0) {
-        // If no current conversation is set (e.g., first launch),
-        // select the latest conversation available.
-        const latestConversation = chatStore.conversations[0]
-        selectConversation(latestConversation.id)
-      }
-    })
-    .catch(error => {
-      chatErrorMessage.value = t('chat.errorOnGetCurrentConversationId', { error })
-    })
 
   // listen chat_stream event
   unlistenChunkResponse.value = await listen('chat_stream', async event => {
@@ -1975,18 +1970,25 @@ onMounted(async () => {
     }
   })
 
+  if (viewDisposed) return
   if (chatMessagesRef.value) {
     chatMessagesRef.value.addEventListener('scroll', onScroll)
   }
 
   cleanupObserver.value = setupObserver()
 
+  if (viewDisposed) return
+  runtime.start()
   windowStore.initMainWindowAlwaysOnTop()
   sensitiveStore.fetchConfig()
   window.addEventListener('keydown', onGlobalKeyDown)
 })
 
 onBeforeUnmount(() => {
+  viewDisposed = true
+  runtime.stop()
+  for (const unlisten of viewListeners) unlisten()
+  viewListeners.clear()
   if (isChatting.value) {
     // stop chat
     invoke('stop_chat', { apiProtocol: currentModel.value.apiProtocol })

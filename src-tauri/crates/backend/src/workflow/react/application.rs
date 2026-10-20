@@ -115,6 +115,9 @@ impl WorkflowApplicationService {
         workflow_manager: Arc<WorkflowManager>,
         app_data_dir: PathBuf,
     ) -> Self {
+        let initialization_started = std::time::Instant::now();
+        log::info!("[RuntimeStartup][application] stage=capability_service starting");
+        let stage_started = std::time::Instant::now();
         let capability = Arc::new(
             crate::capability::CapabilityApplicationService::new(
                 main_store.clone(),
@@ -136,26 +139,62 @@ impl WorkflowApplicationService {
                 ),
             ),
         );
+        log::info!(
+            "[RuntimeStartup][application] stage=capability_service completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            initialization_started.elapsed()
+        );
         // Load the catalog snapshot once, from the runtime's own application
         // data directory, so the data-command reads and the background refresh
         // share one owner instead of each reconstructing it.
+        log::info!("[RuntimeStartup][application] stage=model_catalog starting");
+        let stage_started = std::time::Instant::now();
         let catalog = Arc::new(
             crate::model_catalog_service::ModelsDevCatalogService::load_or_embedded(&app_data_dir),
         );
+        log::info!(
+            "[RuntimeStartup][application] stage=model_catalog completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            initialization_started.elapsed()
+        );
         // Retained for compatibility with the bridge protocol tests. Production
         // web execution uses the desktop loopback MCP provider.
+        log::info!("[RuntimeStartup][application] stage=client_bridge starting");
+        let stage_started = std::time::Instant::now();
         let bridge = Arc::new(ClientBridgeRegistry::with_defaults());
+        log::info!(
+            "[RuntimeStartup][application] stage=client_bridge completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            initialization_started.elapsed()
+        );
         // The single plugin-management owner. It resolves the plugin root at
         // startup; the bundle content is compiled in, so no caller can inject
         // plugin code.
         #[cfg(feature = "plugin-service")]
-        let plugin = Arc::new(crate::plugin::PluginService::detect());
+        let plugin = {
+            log::info!("[RuntimeStartup][application] stage=plugin_service starting");
+            let stage_started = std::time::Instant::now();
+            let plugin = Arc::new(crate::plugin::PluginService::detect());
+            log::info!(
+                "[RuntimeStartup][application] stage=plugin_service completed; elapsed={:?}, total={:?}",
+                stage_started.elapsed(),
+                initialization_started.elapsed()
+            );
+            plugin
+        };
         // The automation runtime owner observes the live manager weakly: it holds
         // only short-lived in-flight execution evidence, never a second registry.
+        log::info!("[RuntimeStartup][application] stage=automation_owner starting");
+        let stage_started = std::time::Instant::now();
         let automation_owner = Arc::new(
             crate::workflow::automation::runtime::AutomationRuntimeOwner::new(Arc::downgrade(
                 &workflow_manager,
             )),
+        );
+        log::info!(
+            "[RuntimeStartup][application] stage=automation_owner completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            initialization_started.elapsed()
         );
         Self {
             main_store,

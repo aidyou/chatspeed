@@ -58,18 +58,19 @@ pub const SUPPORTED_PROTOCOL_MAJOR: u32 = PROTOCOL_MAJOR;
 /// A runtime child process started by a client.
 ///
 /// The child is never killed from `Drop`; lifecycle remains owned by the lease
-/// and the runtime's own graceful idle shutdown. Dropping the handle does reap a
-/// child that has already exited, so a crashed runtime cannot linger as a
-/// zombie while the client is still running.
+/// and the runtime's own graceful idle shutdown. Dropping the handle reaps an
+/// exited child or transfers a still-running child to a background waiter, so
+/// a later exit cannot linger as a zombie while the client is still running.
 pub struct RuntimeChild {
-    child: Child,
+    child: Option<Child>,
+    pid: u32,
     exit: Option<ExitStatus>,
 }
 
 impl RuntimeChild {
     /// Returns the child process id for diagnostics without exposing secrets.
     pub fn id(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     /// Reaps the child if it has already exited.
@@ -80,7 +81,10 @@ impl RuntimeChild {
         if let Some(status) = self.exit {
             return Ok(Some(status));
         }
-        let status = self.child.try_wait().map_err(|error| {
+        let Some(child) = self.child.as_mut() else {
+            return Ok(self.exit);
+        };
+        let status = child.try_wait().map_err(|error| {
             ClientError::Transport(format!("cannot poll runtime child: {error}"))
         })?;
         if let Some(status) = status {
@@ -98,11 +102,22 @@ impl RuntimeChild {
         if !matches!(self.try_wait(), Ok(Some(_))) {
             return None;
         }
-        let mut stderr = self.child.stderr.take()?;
+        let mut stderr = self.child.as_mut()?.stderr.take()?;
         let mut buffer = String::new();
         stderr.read_to_string(&mut buffer).ok()?;
         let trimmed = buffer.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
+    /// Reaps the child in a detached blocking task without terminating it.
+    ///
+    /// This is used when a startup readiness budget expires while the child is
+    /// still initializing. The runtime is allowed to finish its own graceful
+    /// startup/idle shutdown, but its parent must retain a waiter so a later
+    /// exit cannot become a zombie.
+    pub fn reap_in_background(self) {
+        // Drop transfers a still-live child to its waiter without killing it.
+        drop(self);
     }
 
     /// Forwards the child's remaining stderr to this process's stderr.
@@ -111,7 +126,12 @@ impl RuntimeChild {
     /// readiness, and leaving the pipe unread could eventually block a
     /// long-lived runtime on a full pipe.
     pub fn forward_stderr(&mut self) {
-        let Some(mut stderr) = self.child.stderr.take() else {
+        self.forward_stderr_to(|line| eprintln!("[chatspeed-runtime] {line}"));
+    }
+
+    /// Drains stderr through the host's diagnostic sink without holding up the child.
+    pub fn forward_stderr_to(&mut self, sink: impl Fn(&str) + Send + 'static) {
+        let Some(mut stderr) = self.child.as_mut().and_then(|child| child.stderr.take()) else {
             return;
         };
         std::thread::spawn(move || {
@@ -121,7 +141,7 @@ impl RuntimeChild {
                 if line.is_empty() {
                     break;
                 }
-                eprint!("[chatspeed-runtime] {line}");
+                sink(line.trim_end());
                 line.clear();
             }
         });
@@ -129,7 +149,7 @@ impl RuntimeChild {
 
     /// Detaches a reader that discards the child's remaining stderr.
     pub fn silence_stderr(&mut self) {
-        let Some(mut stderr) = self.child.stderr.take() else {
+        let Some(mut stderr) = self.child.as_mut().and_then(|child| child.stderr.take()) else {
             return;
         };
         std::thread::spawn(move || {
@@ -142,16 +162,24 @@ impl RuntimeChild {
 impl fmt::Debug for RuntimeChild {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeChild")
-            .field("pid", &self.child.id())
+            .field("pid", &self.pid)
             .finish()
     }
 }
 
 impl Drop for RuntimeChild {
     fn drop(&mut self) {
-        // Reap an exited child so it cannot stay a zombie; never kill a healthy
-        // runtime, whose lifecycle belongs to its leases.
-        let _ = self.child.try_wait();
+        self.forward_stderr();
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            // A healthy runtime outlives the client lease. Keep a waiter even
+            // when startup or registration failed, without terminating it.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
     }
 }
 
@@ -216,7 +244,7 @@ pub fn spawn_runtime_with_config(
             binary.display()
         ))
     })?;
-    Ok(RuntimeChild { child, exit: None })
+    Ok(RuntimeChild { pid: child.id(), child: Some(child), exit: None })
 }
 
 /// Resolves the runtime binary from the environment or the sibling default.
@@ -558,7 +586,40 @@ pub fn process_alive(pid: u32) -> bool {
         return true;
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    {
+        // Linux reports unreaped children as `Z` in `/proc/<pid>/stat`. A
+        // zombie has already exited even though `kill(pid, 0)` still finds it,
+        // so inspect the kernel's process state before falling back to the
+        // conservative alive result for unreadable or malformed stat data.
+        let stat_path = format!("/proc/{pid}/stat");
+        let stat = match std::fs::read_to_string(stat_path) {
+            Ok(stat) => stat,
+            Err(_) => {
+                // `/proc` can disappear between lookup and read for an exited
+                // process. Preserve the existing confirmed-exit behavior while
+                // treating permission and other errors as inconclusive.
+                if pid > i32::MAX as u32 {
+                    return true;
+                }
+                if unsafe { libc::kill(pid as libc::pid_t, 0) } == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    return false;
+                }
+                return true;
+            }
+        };
+        let Some(comm_end) = stat.rfind(") ") else {
+            return true;
+        };
+        let Some(state) = stat[comm_end + 2..].chars().next() else {
+            return true;
+        };
+        return state != 'Z';
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         // A PID that cannot round-trip through `pid_t` would make `kill` target
         // a whole process group instead of one process, so treat it as
@@ -2771,9 +2832,30 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn process_liveness_rejects_a_reaped_child() {
-        // A truly exited (and reaped) process is the only case that may be
-        // reported as not alive.
         assert!(!process_alive(reaped_child_pid()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_liveness_rejects_an_unreaped_zombie() {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn a short-lived child");
+        let pid = child.id();
+
+        // Before wait() reaps it, the child remains a zombie and should not
+        // keep stale discovery alive. Allow the child a short scheduling
+        // window to exit before checking its state.
+        for _ in 0..100 {
+            if !process_alive(pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!process_alive(pid));
+        child.wait().expect("reap the zombie child");
     }
 
     #[cfg(unix)]
@@ -2783,6 +2865,44 @@ mod tests {
         // group, so the probe must report "alive" instead of guessing.
         assert!(process_alive(0));
         assert!(process_alive(u32::MAX));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_child_drop_preserves_live_process_and_reaps_its_later_exit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = dir.path().join("exit");
+        let child = std::process::Command::new("sh")
+            .args(["-c", "while [ ! -e \"$1\" ]; do sleep 0.01; done", "child"])
+            .arg(&gate)
+            .spawn()
+            .expect("spawn gated child");
+        let pid = child.id();
+        let owned = RuntimeChild { child: Some(child), pid, exit: None };
+        drop(owned);
+        assert!(process_alive(pid), "dropping a live runtime must not kill it");
+        std::fs::write(gate, b"exit").expect("release child gate");
+        let proc_path = PathBuf::from(format!("/proc/{pid}"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while proc_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!proc_path.exists(), "the waiter must reap, not merely detect a zombie");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_child_stderr_sink_drains_during_startup() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "printf 'startup stage\\n' >&2; sleep 0.05"])
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn diagnostic child");
+        let mut owned = RuntimeChild { pid: child.id(), child: Some(child), exit: None };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        owned.forward_stderr_to(move |line| { let _ = sender.send(line.to_string()); });
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).expect("startup log"), "startup stage");
+        owned.reap_in_background();
     }
 
     #[test]

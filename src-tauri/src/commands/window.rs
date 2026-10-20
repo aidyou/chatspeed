@@ -49,7 +49,7 @@ use crate::exit_coordinator::{
     QUIT_ERROR_RUNTIME_NOT_CONNECTED, QUIT_RELEASE_BUDGET, QUIT_STATUS_EVENT, QUIT_STOP_BUDGET,
 };
 use crate::plugin_types::PluginError;
-use crate::runtime_client::{RuntimeStopOutcome, RuntimeSupervisor, RuntimeUnavailable};
+use crate::runtime_client::{RuntimeStatus, RuntimeStopOutcome, RuntimeSupervisor, RuntimeUnavailable};
 use tauri::{command, Emitter, Manager, State}; //window::Color, WindowEvent,
 
 use crate::error::{AppError, Result};
@@ -433,6 +433,14 @@ pub fn quit_window(app: tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Returns the redacted desktop/runtime lifecycle snapshot.
+#[command]
+pub async fn runtime_status(
+    supervisor: State<'_, Arc<RuntimeSupervisor>>,
+) -> std::result::Result<RuntimeStatus, String> {
+    Ok(supervisor.status().await)
+}
+
 /// Returns the pending quit prompt, when the tray opened one.
 ///
 /// The dialog host queries this on mount, so a prompt raised while the host was
@@ -504,6 +512,7 @@ pub async fn quit_confirm(
     }
 
     let supervisor = supervisor.inner().as_ref();
+    supervisor.begin_stopping().await;
     // Read the live instance first and keep it as the only target, so a runtime
     // that restarted in between is never addressed as a successor.
     let identity = match supervisor.runtime_identity().await {

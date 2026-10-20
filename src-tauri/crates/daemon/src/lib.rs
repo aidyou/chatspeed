@@ -1519,6 +1519,8 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         ));
     }
 
+    let startup_started = std::time::Instant::now();
+    log::info!("[Runtime] acquiring runtime and database authority locks");
     let lock = RuntimeDirLock::acquire(config.runtime_dir())?;
     // Take the database authority before assembling the owner: a second runtime
     // with a different runtime directory but the same database must be refused
@@ -1534,6 +1536,11 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
 
     // Assemble the one owner before anything is discoverable. A migration or
     // database failure exits here with the lock released on return.
+    log::info!(
+        "[Runtime] assembling owner (db={}, app_data={})",
+        config.db_path().display(),
+        config.app_data_dir().display()
+    );
     let owner = Arc::new(
         RuntimeOwner::assemble(RuntimeOwnerConfig {
             instance_id: instance_id.clone(),
@@ -1542,21 +1549,25 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         })
         .map_err(|error| RuntimeError::Assembly(error.to_string()))?,
     );
+    log::info!("[Runtime] owner assembly complete after {:?}", startup_started.elapsed());
 
     // Fail-closed ordering: classify crash-interrupted capability operations and
     // load the desktop-free core tool surface *before* discovery is published or
     // a lease is accepted, so a client can never observe a half-initialized
     // owner. Recovery failures are logged, not fatal, because the durable
     // journal keeps the operation repairable on the next start.
+    log::info!("[Runtime] recovering capability state and registering core tools");
     owner.recover_capability_state();
     if let Err(error) = owner.register_core_tools().await {
         log::error!("[Runtime] failed to register core tools: {error}");
     }
+    log::info!("[Runtime] core tool registration complete");
 
     // The one-time startup normalization runs once, before the control plane is
     // published and before the first scheduler tick, with a cutoff captured here
     // and never re-read. A failure is fatal: the daemon must not continue into
     // the scheduler on the strength of a normalization that never ran.
+    log::info!("[Runtime] normalizing automation schedules");
     let startup_cutoff = normalize_datetime_for_db(chrono::Local::now());
     if let Err(error) = owner.service().automation_normalize_at_startup(&startup_cutoff) {
         return Err(RuntimeError::Assembly(format!(
@@ -1605,6 +1616,7 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     // It starts before the control plane so a connecting client can rely on the
     // same paths the desktop wires in `tauri::setup`. The gate fences the
     // automation tick's dispatch, which is a canonical non-HTTP work start.
+    log::info!("[Runtime] starting background services after {:?}", startup_started.elapsed());
     let background = RuntimeBackground::start(
         &owner,
         env!("CARGO_PKG_VERSION").to_string(),
@@ -1624,6 +1636,7 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     // owner the serve task takes, so its handle is cloned before the owner moves.
     let idle_service = owner.service().clone();
 
+    log::info!("[Runtime] binding and publishing control plane after {:?}", startup_started.elapsed());
     let control = match server::start_runtime_control_plane(
         owner.service().clone(),
         RuntimeControlPlaneOptions {
@@ -1650,6 +1663,7 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         }
     };
 
+    log::info!("[Runtime] ready after {:?}; pid={}", startup_started.elapsed(), std::process::id());
     let port = control.port;
     let runtime_dir = config.runtime_dir().to_path_buf();
     let db_path = config.db_path().to_path_buf();

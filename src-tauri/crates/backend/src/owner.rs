@@ -101,12 +101,20 @@ impl RuntimeOwner {
     /// assembled owner always has the bundled agents in its store or the
     /// assembly fails.
     pub fn assemble(config: RuntimeOwnerConfig) -> Result<Self, RuntimeOwnerError> {
+        let assembly_started = std::time::Instant::now();
+        log::info!("[RuntimeStartup][owner] stage=main_store starting");
+        let stage_started = std::time::Instant::now();
         let main_store = Arc::new(MainStore::new(&config.db_path).map_err(|source| {
             RuntimeOwnerError::Database {
                 path: config.db_path.clone(),
                 source,
             }
         })?);
+        log::info!(
+            "[RuntimeStartup][owner] stage=main_store completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
 
         // Synchronize the bundled built-in agents before the rest of the owner
         // is built. The desktop used to do this from `tauri::setup`; the runtime
@@ -116,14 +124,30 @@ impl RuntimeOwner {
         // assembly instead of being downgraded to a logged warning, so a client
         // can never observe an owner whose built-in agents were silently left
         // out of the database.
+        log::info!("[RuntimeStartup][owner] stage=builtin_agents starting");
+        let stage_started = std::time::Instant::now();
         builtin_agents::sync_builtin_agents_if_needed(main_store.clone())
             .map_err(RuntimeOwnerError::BuiltinAgentSync)?;
+        log::info!(
+            "[RuntimeStartup][owner] stage=builtin_agents completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
 
         // A runtime process has no window, so the chat registry is inert and the
         // hub uses the no-window output transport: the SSE broker is the single
         // observation path.
+        log::info!("[RuntimeStartup][owner] stage=chat_state starting");
+        let stage_started = std::time::Instant::now();
         let chat_state =
             ChatState::runtime_new(Arc::new(WindowChannels::new()), main_store.clone());
+        log::info!(
+            "[RuntimeStartup][owner] stage=chat_state completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
+        log::info!("[RuntimeStartup][owner] stage=workflow_infrastructure starting");
+        let stage_started = std::time::Instant::now();
         let tsid_generator = Arc::new(TsidGenerator::new(1).map_err(RuntimeOwnerError::Tsid)?);
         let gateway = Arc::new(WorkflowRuntimeHub::with_transport(
             Arc::new(NoWindowTransport),
@@ -140,6 +164,13 @@ impl RuntimeOwner {
             tsid_generator: tsid_generator.clone(),
         });
 
+        log::info!(
+            "[RuntimeStartup][owner] stage=workflow_infrastructure completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
+        log::info!("[RuntimeStartup][owner] stage=application_service starting");
+        let stage_started = std::time::Instant::now();
         let service = Arc::new(WorkflowApplicationService::new(
             main_store.clone(),
             chat_state.clone(),
@@ -150,17 +181,37 @@ impl RuntimeOwner {
             config.app_data_dir.clone(),
         ));
 
+        log::info!(
+            "[RuntimeStartup][owner] stage=application_service completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
+
         // One runtime-wide owned-process registry. The pre-workflow automation
         // shells already register on the automation owner's signal; installing
         // that same handle on the chat state lets the workflow engine register
         // every shell-tool child on it too, so the coordinated shutdown cancels
         // and awaits both through one registry instead of a second, parallel one.
+        log::info!("[RuntimeStartup][owner] stage=owned_processes starting");
+        let stage_started = std::time::Instant::now();
         chat_state.install_owned_processes(service.automation_owner().owned_process_cancellation());
+        log::info!(
+            "[RuntimeStartup][owner] stage=owned_processes completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
 
         // The one interactive user terminal owner. It is created here, not
         // lazily, so the runtime always owns exactly one PTY registry and its
         // Drop releases every session on shutdown.
+        log::info!("[RuntimeStartup][owner] stage=terminal_manager starting");
+        let stage_started = std::time::Instant::now();
         let terminal_manager = Arc::new(TerminalManager::new());
+        log::info!(
+            "[RuntimeStartup][owner] stage=terminal_manager completed; elapsed={:?}, total={:?}",
+            stage_started.elapsed(),
+            assembly_started.elapsed()
+        );
 
         Ok(Self {
             main_store,

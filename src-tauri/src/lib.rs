@@ -460,6 +460,7 @@ pub async fn run() -> crate::error::Result<()> {
             get_window_always_on_top,
             quit_window,
             quit_status,
+            runtime_status,
             quit_confirm,
             quit_cancel,
             set_mouse_event_state,
@@ -893,67 +894,94 @@ pub async fn run() -> crate::error::Result<()> {
                         )
                         .await
                     {
-                        // The runtime owns the database and every startup value;
-                        // without it the desktop reports the redacted supervisor
-                        // status and leaves runtime-owned startup configuration
-                        // and window restore unavailable instead of falling back
-                        // to a local database.
-                        log::warn!("[RuntimeSupervisor] unavailable: {}", error);
-                        return;
+                        log::warn!("[RuntimeSupervisor] unavailable; recovery remains active: {}", error);
                     }
-                    log::info!(
-                        "[RuntimeSupervisor] connected to runtime at {:?}",
-                        runtime_dir
-                    );
+                    let mut initialized_generation = 0;
+                    let mut startup_applied = false;
+                    let mut gateway_started = false;
+                    let mut provider_generation = 0;
+                    loop {
+                        let status = supervisor.status().await;
+                        if supervisor.is_stopping().await {
+                            return;
+                        }
+                        if !matches!(status.state,
+                            crate::runtime_client::RuntimeConnectionState::Attached
+                                | crate::runtime_client::RuntimeConnectionState::Spawned)
+                            || status.heartbeat_ok == Some(false)
+                            || initialized_generation == status.generation
+                        {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                        let generation = status.generation;
+                        log::info!(
+                            "[RuntimeSupervisor] initializing runtime generation {} at {:?}",
+                            generation, runtime_dir
+                        );
 
-                    if let Some(plugin_ui_runtime) =
-                        app_handle.try_state::<crate::plugin_ui::PluginUiRuntime>()
-                    {
-                        match crate::plugin_ui::PluginUiGateway::start(supervisor.clone()).await {
-                            Ok(gateway) => {
-                                if let Err(error) = plugin_ui_runtime.set_gateway(gateway) {
-                                    log::warn!("[PluginUiGateway] unavailable: {}", error);
+                        // The gateway resolves its client through the supervisor
+                        // for each request, so one listener survives reconnection.
+                        if !gateway_started {
+                            if let Some(plugin_ui_runtime) =
+                                app_handle.try_state::<crate::plugin_ui::PluginUiRuntime>()
+                            {
+                                match crate::plugin_ui::PluginUiGateway::start(supervisor.clone()).await {
+                                    Ok(gateway) => match plugin_ui_runtime.set_gateway(gateway) {
+                                        Ok(()) => gateway_started = true,
+                                        Err(error) => log::warn!("[PluginUiGateway] unavailable: {}", error),
+                                    },
+                                    Err(error) => log::warn!("[PluginUiGateway] unavailable: {}", error),
                                 }
                             }
-                            Err(error) => log::warn!("[PluginUiGateway] unavailable: {}", error),
                         }
-                    }
 
-                    // Start the dedicated desktop Web MCP provider and register
-                    // it with the runtime. The runtime reaches `web_fetch` and
-                    // `web_search` as an ordinary MCP server, so the fixed web
-                    // tools stay on the canonical ToolManager path. A failure is
-                    // reported and leaves web capabilities unavailable; it never
-                    // starts a second runtime or a local fallback.
-                    match crate::runtime_web_mcp_provider::start(app_handle.clone(), &supervisor)
-                        .await
-                    {
-                        Ok(()) => {
-                            log::info!("[WebMcpProvider] loopback Web MCP provider started")
-                        }
-                        Err(error) => {
-                            log::warn!("[WebMcpProvider] provider unavailable: {}", error)
-                        }
-                    }
-
-                    match crate::runtime_config::load(supervisor.as_ref()).await {
-                        Ok(snapshot) => {
-                            // Cache before applying and restoring window geometry
-                            // so the geometry the restore writes back is compared
-                            // against the values it was read from.
-                            cache.store(snapshot.clone());
-                            if let Err(error) = crate::shortcut::register_desktop_shortcut(&app_handle) {
-                                log::error!("Failed to register desktop shortcuts: {:?}", error);
+                        // Optional web capabilities are rebound to the new lease;
+                        // failure never blocks core workflow readiness.
+                        if provider_generation != generation {
+                            if let Err(error) = crate::runtime_web_mcp_provider::start(
+                                app_handle.clone(), &supervisor,
+                            ).await {
+                                log::warn!("[WebMcpProvider] provider unavailable: {}", error);
                             }
-                            let _ = crate::tray::create_tray(&app_handle, None);
-                            apply_runtime_startup_config(&app_handle, supervisor.clone(), &snapshot)
-                                .await;
-                            restore_initial_windows(&app_handle, &snapshot);
+                            provider_generation = generation;
                         }
-                        Err(error) => log::error!(
-                            "[RuntimeSupervisor] failed to load the runtime configuration: {}",
-                            error
-                        ),
+
+                        match crate::runtime_config::load(supervisor.as_ref()).await {
+                            Ok(snapshot) => {
+                                let current = supervisor.status().await;
+                                if current.generation != generation || supervisor.is_stopping().await {
+                                    continue;
+                                }
+                                cache.store(snapshot.clone());
+                                if !startup_applied {
+                                    if let Err(error) = crate::shortcut::register_desktop_shortcut(&app_handle) {
+                                        log::error!("Failed to register desktop shortcuts: {:?}", error);
+                                    }
+                                    let _ = crate::tray::create_tray(&app_handle, None);
+                                    apply_runtime_startup_config(&app_handle, supervisor.clone(), &snapshot)
+                                        .await;
+                                    restore_initial_windows(&app_handle, &snapshot);
+                                    startup_applied = true;
+                                } else {
+                                    // Recovery mirrors refreshed runtime settings
+                                    // without repeating OS autostart or geometry.
+                                    let language = snapshot.get_string(
+                                        CFG_INTERFACE_LANGUAGE, &libs::lang::get_system_locale(),
+                                    );
+                                    set_locale(libs::lang::normalize_interface_locale(&language));
+                                    crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
+                                        .set_enabled(snapshot.get_bool(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false));
+                                }
+                                initialized_generation = generation;
+                            }
+                            Err(error) => {
+                                log::error!(
+                                    "[RuntimeSupervisor] failed to load runtime configuration: {}", error
+                                );
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                        }
                     }
                 });
             }
