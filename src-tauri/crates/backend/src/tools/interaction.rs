@@ -435,11 +435,12 @@ impl ToolDefinition for FinishTask {
         "Signals that the current task has been fully addressed and is now complete.\n\n\
         Strict usage rules:\n\
         - Call this only after the requested work is actually complete or you have reached a clear stopping point accepted by the user.\n\
-        - A completion report is required. Put the full report in `summary` unless a valid report is already present in this assistant response or the runtime explicitly says it captured a pending report.\n\
-        - `summary` is optional only when the runtime can use that current or pending report. Otherwise it must be a non-empty, complete report.\n\
+        - A task-specific completion report is required. Put the report in `summary` unless a valid report is already present in this assistant response or the runtime explicitly says it captured a pending report.\n\
+        - Be brief by default; provide a detailed report when final audit is enabled or the user requests detail. Do not require headings or a statement that nothing remains in brief mode.\n\
+        - `summary` is optional only when the runtime can use that current or pending report. Otherwise it must be a non-empty, task-specific report.\n\
         - If the runtime says it captured a pending completion report, omit both visible report text and the `summary` argument to commit that exact draft without repeating it.\n\
         - Equivalent report sources are deduplicated, but conflicting reports are rejected.\n\
-        - A completion report must explicitly cover: 1) what was completed, 2) what was verified, and 3) any important remaining notes or limitations.\n\
+        - A completion report must state the task outcome and relevant verification or skipped checks; disclose important remaining notes or limitations when any exist. Brevity must not hide risks or reduce required verification.\n\
         - Reasoning/thinking text does not count as a completion report.\n\
         - Do not use placeholder reports such as 'done', 'completed', or hidden reasoning.\n\
         - If completion is rejected, resolve the reported issue before calling this tool again."
@@ -460,7 +461,7 @@ impl ToolDefinition for FinishTask {
                     "summary": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "The complete user-visible completion report, formatted as readable standard Markdown. Separate distinct topics with blank lines, and use short headings plus bullet or numbered lists for multi-topic reports instead of one long paragraph. Clearly cover what was completed, what was verified, and remaining limitations or notes; write 'None' when nothing remains. Do not wrap the entire report in a code fence or include JSON, HTML, or hidden reasoning. Required unless a valid report is already present in the current assistant response or was explicitly captured by the runtime."
+                        "description": "The user-visible completion report in standard Markdown. Be brief by default: state what was completed, what was verified or skipped when relevant, and important remaining limitations only when any exist. A short paragraph or a few bullets is enough; headings and a statement that nothing remains are not required. Provide detail when final audit is enabled or the user requests it. Do not wrap the report in a code fence or include JSON, HTML, or hidden reasoning. Required unless a valid report is already present in this assistant response or was explicitly captured by the runtime."
                     }
                 },
                 "additionalProperties": true
@@ -687,11 +688,12 @@ mod tests {
             .expect("summary description should be a string");
         for required_phrase in [
             "standard Markdown",
-            "blank lines",
-            "bullet or numbered lists",
+            "Be brief by default",
+            "short paragraph or a few bullets",
             "what was completed",
-            "what was verified",
-            "remaining limitations",
+            "what was verified or skipped",
+            "remaining limitations only when any exist",
+            "final audit is enabled or the user requests it",
         ] {
             assert!(
                 summary_description.contains(required_phrase),

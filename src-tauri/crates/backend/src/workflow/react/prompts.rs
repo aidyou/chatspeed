@@ -321,11 +321,17 @@ Do not complete while a useful in-scope action remains. If user input, approval,
 Before calling `complete_workflow`, confirm that:
 - one eligibility outcome applies and no required step or useful in-scope action remains
 - todo tracking, if used, has no `pending` or `in_progress` item; explain every `failed` or `data_missing` item
-- one complete report states what was completed, what was verified or skipped, and what remains; explicitly say when nothing remains
+- one task-specific report states the outcome and relevant verification or skipped checks; disclose important remaining limitations when any exist
+
+Report depth:
+- **Default:** be brief. A short paragraph or a few bullets is enough; do not require headings, a file inventory, or a statement that nothing remains.
+- **Final audit enabled:** follow the additional detailed completion-report requirements for independent review.
+- **User-requested detail:** provide the requested depth even without final audit; this does not enable final audit.
+- Brevity never reduces required work, verification, or disclosure of important risks and skipped checks.
 
 Use exactly one report source:
-- **Default:** emit no separate report and call `complete_workflow({"summary":"..."})` with the full report.
-- **Current response:** if the full report is already visible in the same assistant response, call `complete_workflow({})`; `summary` is optional.
+- **Default:** emit no separate report and call `complete_workflow({"summary":"..."})` with the report.
+- **Current response:** if the report is already visible in the same assistant response, call `complete_workflow({})`; `summary` is optional.
 - **Pending draft:** only when the runtime explicitly says it captured a pending report, emit no visible report, do not repeat or alter that draft, and call `complete_workflow({})`. Any intervening user input or non-completion tool action invalidates it.
 
 At least one valid report must exist in the current response, the current segment's pending draft, or `summary`. Equivalent reports are deduplicated; materially conflicting reports are rejected. Reasoning does not count as a report.
@@ -1233,6 +1239,20 @@ mod tests {
                 "missing: {required}"
             );
         }
+    }
+
+    #[test]
+    fn completion_report_depth_is_conditional() {
+        for required in [
+            "**Default:** be brief",
+            "**Final audit enabled:**",
+            "**User-requested detail:**",
+            "Brevity never reduces required work, verification",
+        ] {
+            assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
+        }
+        assert!(!CORE_SYSTEM_PROMPT.contains("with the full report"));
+        assert!(!CODING_SYSTEM_PROMPT.contains("complete in the report"));
     }
 
     #[test]

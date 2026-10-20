@@ -237,11 +237,7 @@ impl IntelligenceManager {
         {
             return Some(index);
         }
-        let contents: Vec<String> = candidates
-            .iter()
-            .map(|candidate| candidate.content.clone())
-            .collect();
-        self.review_completion_with_lite(&contents, detailed_report, segment_id)
+        self.review_completion_with_lite(candidates, detailed_report, user_request, segment_id)
             .await
     }
 
@@ -260,8 +256,9 @@ impl IntelligenceManager {
 
     async fn review_completion_with_lite(
         &self,
-        candidates: &[String],
+        candidates: &[CompletionReportCandidate],
         detailed_report: bool,
+        user_request: &str,
         segment_id: i32,
     ) -> Option<usize> {
         if self.lite_provider_id <= 0 || self.lite_model_name.trim().is_empty() {
@@ -270,14 +267,19 @@ impl IntelligenceManager {
         let messages = vec![
             serde_json::json!({
                 "role": "system",
-                "content": "Choose the one accurate completion report satisfying the required detail. Return only JSON: {\"selected_candidate\":\"report_0\",\"report_meets_requirement\":true}. Use selected_candidate null when uncertain. Do not generate or merge a report.",
+                "content": "Choose one accurate completion report satisfying required_detail and any explicit request for detail in user_request. Prefer this_call_summary or this_call_text over an earlier_draft when equally faithful. Brief mode accepts a concrete one-sentence outcome with relevant verification or skipped checks; detailed mode needs deliverables and evidence for independent review. Do not favor length or headings or require a statement that nothing remains. Never omit important limitations or skipped checks. Return only JSON: {\"selected_candidate\":\"report_0\",\"report_meets_requirement\":true}. Use selected_candidate null when uncertain or candidates materially contradict each other. Do not generate or merge a report.",
             }),
             serde_json::json!({
                 "role": "user",
                 "content": serde_json::json!({
                     "required_detail": if detailed_report { "detailed" } else { "brief" },
-                    "candidates": candidates.iter().enumerate().map(|(index, content)| {
-                        serde_json::json!({"id": format!("report_{index}"), "content": content})
+                    "user_request": Self::truncate_text(user_request, 600),
+                    "candidates": candidates.iter().enumerate().map(|(index, candidate)| {
+                        serde_json::json!({
+                            "id": format!("report_{index}"),
+                            "origin": candidate.origin.label(),
+                            "content": candidate.content,
+                        })
                     }).collect::<Vec<_>>(),
                 }).to_string(),
             }),

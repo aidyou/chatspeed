@@ -2506,6 +2506,8 @@ mod tests {
         let without_audit = processor.inject_prompts(history.clone(), &ExecutionPolicy::standard());
         let without_audit_system = without_audit[0]["content"].as_str().unwrap_or_default();
         assert!(!without_audit_system.contains("Final audit is enabled"));
+        assert!(without_audit_system.contains("**Default:** be brief"));
+        assert!(without_audit_system.contains("**User-requested detail:**"));
 
         processor.agent_config.final_audit = Some(true);
         let with_audit = processor.inject_prompts(history, &ExecutionPolicy::standard());

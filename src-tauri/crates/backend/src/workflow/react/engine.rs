@@ -5369,6 +5369,19 @@ impl WorkflowExecutor {
                             "<SYSTEM_REMINDER>Error: {}. Choose one valid tool call that best advances the task, and make sure the tool name and arguments match the available schema.</SYSTEM_REMINDER>",
                             invalid_tool_call_error
                         ))
+                    } else if !self.is_child_agent_workflow()
+                        && self
+                            .pending_completion_reports
+                            .iter()
+                            .filter(|report| report.segment_id == self.context.current_segment_id)
+                            .count()
+                            > 1
+                    {
+                        Some(Self::completion_report_rejection_reminder(
+                            "multiple different completion reports are available",
+                            true,
+                            self.agent_config.final_audit.unwrap_or(false),
+                        ))
                     } else if self.consecutive_no_tool_calls >= NO_TOOL_STRONG_REMINDER_THRESHOLD {
                         Some(if self.is_child_agent_workflow() {
                             format!(
@@ -11434,6 +11447,205 @@ mod recovery_tests {
                     .and_then(Value::as_str)
                     == Some("automatic")
         }));
+    }
+
+    #[tokio::test]
+    async fn brief_completion_report_capture_snapshot_and_commit_do_not_duplicate_messages() {
+        let (_temp_dir, store) = create_test_store();
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut executor = wrapper_test_executor(store.clone(), "brief-report-roundtrip", payloads);
+        executor.policy = ExecutionPolicy::standard();
+        executor.agent_config.final_audit = Some(false);
+        executor.current_step = 7;
+        let report = "已修复窗口缩放问题，相关测试通过。";
+        executor
+            .add_message_and_notify_internal(
+                "assistant".to_string(),
+                report.to_string(),
+                None,
+                None,
+                Some(StepType::Think),
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("persist brief report source");
+        assert!(executor.capture_pending_completion_report(report));
+        executor
+            .save_snapshot()
+            .await
+            .expect("save brief draft snapshot");
+        let saved = store
+            .get_execution_context(&executor.session_id)
+            .expect("read draft snapshot")
+            .expect("snapshot exists");
+        executor.pending_completion_reports =
+            WorkflowExecutor::reconcile_pending_completion_reports(
+                saved.pending_completion_reports,
+            );
+        assert_eq!(executor.pending_completion_reports.len(), 1);
+        let message_count = executor.context.messages.len();
+        executor.current_step = 8;
+        let result = executor
+            .handle_finish_task_intercept("", &serde_json::json!({}), &HashMap::new())
+            .await
+            .expect("commit captured brief report")
+            .expect("completion result");
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(result.summary, report);
+        assert_eq!(executor.context.messages.len(), message_count);
+        assert!(executor.pending_completion_reports.is_empty());
+        assert!(store
+            .get_execution_context(&executor.session_id)
+            .expect("read committed snapshot")
+            .expect("snapshot exists")
+            .pending_completion_reports
+            .is_empty());
+
+        // A summary-only completion writes the canonical report once, even when brief.
+        let result = executor
+            .handle_finish_task_intercept(
+                "",
+                &serde_json::json!({"summary": report}),
+                &HashMap::new(),
+            )
+            .await
+            .expect("commit explicit brief report")
+            .expect("completion result");
+        assert!(!result.is_error);
+        assert_eq!(executor.context.messages.len(), message_count + 1);
+        assert_eq!(
+            executor
+                .context
+                .messages
+                .last()
+                .expect("persisted report")
+                .message,
+            report
+        );
+    }
+
+    #[tokio::test]
+    async fn brief_completion_report_conflicts_survive_snapshot_and_block_commit() {
+        let (_temp_dir, store) = create_test_store();
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut executor = wrapper_test_executor(store.clone(), "brief-report-conflict", payloads);
+        executor.policy = ExecutionPolicy::standard();
+        executor.agent_config.final_audit = Some(false);
+        for (step, report) in [
+            (7, "已修复窗口缩放问题，相关测试通过。"),
+            (8, "窗口缩放逻辑已调整，但测试失败。"),
+        ] {
+            executor.current_step = step;
+            executor
+                .add_message_and_notify_internal(
+                    "assistant".to_string(),
+                    report.to_string(),
+                    None,
+                    None,
+                    Some(StepType::Think),
+                    false,
+                    None,
+                    None,
+                )
+                .await
+                .expect("persist conflicting report source");
+            assert!(executor.capture_pending_completion_report(report));
+        }
+        executor
+            .save_snapshot()
+            .await
+            .expect("save conflicting drafts");
+        let saved = store
+            .get_execution_context(&executor.session_id)
+            .expect("read conflicting snapshot")
+            .expect("snapshot exists");
+        executor.pending_completion_reports =
+            WorkflowExecutor::reconcile_pending_completion_reports(
+                saved.pending_completion_reports,
+            );
+        assert_eq!(executor.pending_completion_reports.len(), 2);
+        let message_count = executor.context.messages.len();
+        let result = executor
+            .handle_finish_task_intercept("", &serde_json::json!({}), &HashMap::new())
+            .await
+            .expect("intercept conflict")
+            .expect("rejection result");
+        assert!(result.is_error);
+        assert_eq!(result.error_type.as_deref(), Some("InvalidFinishSummary"));
+        assert_eq!(executor.context.messages.len(), message_count);
+        assert_eq!(executor.pending_completion_reports.len(), 2);
+
+        executor
+            .enqueue_user_message("重新核实后继续".to_string(), None, None, None)
+            .await
+            .expect("new directive invalidates conflicting drafts");
+        assert!(executor.pending_completion_reports.is_empty());
+        assert!(executor
+            .flush_queued_user_messages()
+            .await
+            .expect("apply new directive"));
+        let result = executor
+            .handle_finish_task_intercept(
+                "",
+                &serde_json::json!({"summary": "已重新核实窗口缩放问题，相关测试通过。"}),
+                &HashMap::new(),
+            )
+            .await
+            .expect("finish after invalidating conflicting drafts")
+            .expect("completion result");
+        assert!(!result.is_error, "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn brief_completion_report_runtime_prefers_summary_but_retains_visible_caveats() {
+        let (_temp_dir, store) = create_test_store();
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut executor = wrapper_test_executor(store, "brief-report-same-turn", payloads);
+        executor.policy = ExecutionPolicy::standard();
+        executor.agent_config.final_audit = Some(false);
+        let brief = "已修复窗口缩放问题，相关测试通过。";
+        for (visible, expected) in [
+            (
+                format!("{brief}额外检查了窗口初始化、显示和缩放处理路径。"),
+                brief.to_string(),
+            ),
+            (
+                format!("{brief}仍有问题影响其他窗口。"),
+                format!("{brief}仍有问题影响其他窗口。"),
+            ),
+        ] {
+            executor
+                .add_message_and_notify_internal(
+                    "assistant".to_string(),
+                    visible.clone(),
+                    None,
+                    None,
+                    Some(StepType::Think),
+                    false,
+                    None,
+                    None,
+                )
+                .await
+                .expect("persist same-turn report");
+            let count = executor.context.messages.len();
+            let result = executor
+                .handle_finish_task_intercept(
+                    &visible,
+                    &serde_json::json!({"summary": brief}),
+                    &HashMap::new(),
+                )
+                .await
+                .expect("resolve same-turn sources")
+                .expect("completion result");
+            assert!(!result.is_error, "{}", result.content);
+            assert_eq!(result.summary, expected);
+            assert_eq!(
+                executor.context.messages.len(),
+                count + usize::from(expected == brief)
+            );
+        }
     }
 
     #[tokio::test]

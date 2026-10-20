@@ -44,6 +44,7 @@ struct ResolvedCompletionReport {
 }
 
 struct CompletionReportClaimDictionary {
+    placeholders: Vec<String>,
     verification: [Vec<String>; 3],
     limitations: [Vec<String>; 2],
 }
@@ -122,16 +123,29 @@ impl WorkflowExecutor {
     pub(crate) fn reconcile_pending_completion_reports(
         reports: Vec<PendingCompletionReport>,
     ) -> Vec<PendingCompletionReport> {
-        let mut reconciled = Vec::with_capacity(reports.len());
+        let mut reconciled = Vec::<PendingCompletionReport>::with_capacity(reports.len());
         for report in reports {
-            if let Some(existing) =
-                reconciled
-                    .iter_mut()
-                    .find(|existing: &&mut PendingCompletionReport| {
-                        existing.segment_id == report.segment_id
-                    })
+            let normalized = Self::normalized_finish_task_summary(&report.content);
+            let expected = PendingCompletionReport::new(
+                &normalized,
+                report.source_message_id,
+                report.segment_id,
+                report.created_at_step,
+            );
+            if !Self::is_valid_finish_task_summary(&report.content)
+                || expected.content_hash != report.content_hash
             {
-                if Self::pending_completion_report_is_preferred(&report, existing) {
+                continue;
+            }
+            if let Some(existing) = reconciled.iter_mut().find(|existing| {
+                existing.segment_id == report.segment_id
+                    && Self::completion_reports_are_compatible(&existing.content, &report.content)
+            }) {
+                // Capture order, not verbosity, identifies the current draft. Keep conflicting
+                // or caveat-dropping drafts separate so recovery cannot silently erase evidence.
+                if (report.created_at_step, report.source_message_id)
+                    >= (existing.created_at_step, existing.source_message_id)
+                {
                     *existing = report;
                 }
             } else {
@@ -139,40 +153,6 @@ impl WorkflowExecutor {
             }
         }
         reconciled
-    }
-
-    fn pending_completion_report_is_preferred(
-        candidate: &PendingCompletionReport,
-        existing: &PendingCompletionReport,
-    ) -> bool {
-        let candidate_length = candidate
-            .content
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .count();
-        let existing_length = existing
-            .content
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .count();
-
-        if candidate_length != existing_length {
-            return candidate_length > existing_length;
-        }
-
-        // When two reports have equal information density, preserve the existing
-        // similarity semantics and use the newer capture as the final tie-breaker.
-        let same_report_family =
-            Self::completion_reports_are_similar(&candidate.content, &existing.content)
-                || Self::completion_reports_have_high_similarity(
-                    &candidate.content,
-                    &existing.content,
-                );
-        if same_report_family {
-            candidate.created_at_step >= existing.created_at_step
-        } else {
-            false
-        }
     }
 
     fn final_review_mode_enabled(&self) -> bool {
@@ -1367,11 +1347,16 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .filter(|line| {
-                let lower = line.to_ascii_lowercase();
-                !matches!(
-                    lower.as_str(),
-                    "done" | "finished" | "complete" | "completed" | "task complete"
-                )
+                let placeholder = line
+                    .trim_matches(|character: char| {
+                        character.is_whitespace()
+                            || character.is_ascii_punctuation()
+                            || "。！：".contains(character)
+                    })
+                    .to_lowercase();
+                !Self::completion_report_claim_dictionary()
+                    .placeholders
+                    .contains(&placeholder)
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -1383,21 +1368,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             return false;
         }
 
-        let non_whitespace_len = normalized.chars().filter(|c| !c.is_whitespace()).count();
-        if non_whitespace_len < 32 {
-            return false;
-        }
-
-        let meaningful_lines = normalized
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count();
-        let has_sentence_shape = normalized.contains('\n')
-            || normalized.contains('。')
-            || normalized.contains('.')
-            || normalized.contains(':');
-
-        meaningful_lines >= 2 || has_sentence_shape
+        // This is only a syntactic floor, not a report-depth or task-completion check.
+        // A concrete Chinese outcome can fit well below the former 32-character minimum.
+        let meaningful_len = normalized.chars().filter(|c| c.is_alphanumeric()).count();
+        meaningful_len >= 8
     }
 
     fn completion_report_similarity_text(text: &str) -> Vec<char> {
@@ -1517,6 +1491,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             };
 
             CompletionReportClaimDictionary {
+                placeholders: load("workflow.completion_report_claims.placeholders"),
                 verification: [
                     load("workflow.completion_report_claims.verification_passed"),
                     load("workflow.completion_report_claims.verification_failed"),
@@ -1563,24 +1538,35 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             })
     }
 
+    fn completion_report_omits_caveats(source: &str, candidate: &str) -> bool {
+        let claims = Self::completion_report_claim_dictionary();
+        let verification = Self::completion_report_claim_flags(source, &claims.verification);
+        let candidate_verification =
+            Self::completion_report_claim_flags(candidate, &claims.verification);
+        let limitations = Self::completion_report_claim_flags(source, &claims.limitations);
+        let candidate_limitations =
+            Self::completion_report_claim_flags(candidate, &claims.limitations);
+        // Passing checks and 'none remain' are optional in a brief report. Failed/skipped
+        // checks and present limitations are not: compression must not erase these claims.
+        verification & 0b110 & !candidate_verification != 0
+            || limitations & 0b10 & !candidate_limitations != 0
+    }
+
+    fn completion_reports_are_compatible(left: &str, right: &str) -> bool {
+        !Self::completion_reports_have_material_conflict(left, right)
+            && !Self::completion_report_omits_caveats(left, right)
+            && !Self::completion_report_omits_caveats(right, left)
+            && (Self::completion_reports_are_similar(left, right)
+                || Self::completion_reports_have_high_similarity(left, right))
+    }
+
     fn completion_reports_have_material_conflict(left: &str, right: &str) -> bool {
         if Self::completion_report_claims_conflict(left, right) {
             return true;
         }
 
-        let left_text = Self::completion_report_similarity_text(left);
-        let right_text = Self::completion_report_similarity_text(right);
-        let shorter_len = left_text.len().min(right_text.len());
-        let longer_len = left_text.len().max(right_text.len());
-        if shorter_len < 3 || shorter_len as f64 / (longer_len as f64) < 0.60 {
-            return false;
-        }
-
-        let (dice, containment) = Self::completion_report_trigram_scores(&left_text, &right_text);
-        if dice < 0.52 || containment < 0.52 {
-            return false;
-        }
-
+        // Critical claims must survive brief/detail length differences. Similarity is
+        // evidence of equivalence, never permission to ignore conflicting provenance.
         let left_literals = Self::completion_report_code_literals(left);
         let right_literals = Self::completion_report_code_literals(right);
         let critical_literals_conflict = |left: HashSet<&str>, right: HashSet<&str>| {
@@ -1603,37 +1589,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         visible_report: &str,
         explicit_summary: &str,
     ) -> bool {
-        let visible_text = Self::completion_report_similarity_text(visible_report);
-        let summary_text = Self::completion_report_similarity_text(explicit_summary);
-        if visible_text.len() < 3 || summary_text.len() < 3 {
-            return false;
-        }
-        let (_, containment) = Self::completion_report_trigram_scores(&visible_text, &summary_text);
-        if containment < 0.70 {
-            return false;
-        }
-        if Self::completion_report_claims_conflict(visible_report, explicit_summary) {
-            return true;
-        }
-
-        let visible_literals = Self::completion_report_code_literals(visible_report);
-        let summary_literals = Self::completion_report_code_literals(explicit_summary);
-        let literals_conflict = |visible: HashSet<&str>, summary: HashSet<&str>| {
-            !visible.is_empty()
-                && !summary.is_empty()
-                && visible.intersection(&summary).next().is_none()
-        };
-
-        literals_conflict(
-            Self::completion_report_paths(&visible_literals),
-            Self::completion_report_paths(&summary_literals),
-        ) || literals_conflict(
-            Self::completion_report_hashes(&visible_literals),
-            Self::completion_report_hashes(&summary_literals),
-        ) || literals_conflict(
-            Self::completion_report_verification_commands(&visible_literals),
-            Self::completion_report_verification_commands(&summary_literals),
-        )
+        Self::completion_reports_have_material_conflict(visible_report, explicit_summary)
     }
 
     fn completion_reports_have_high_similarity(left: &str, right: &str) -> bool {
@@ -1693,7 +1649,17 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             ((left + 1)..texts.len()).all(|right| {
                 let (dice, containment) =
                     Self::completion_report_trigram_scores(&texts[left], &texts[right]);
-                dice >= EQUIVALENT_SIMILARITY && containment >= EQUIVALENT_SIMILARITY
+                !Self::completion_reports_have_material_conflict(
+                    &candidates[left].content,
+                    &candidates[right].content,
+                ) && !Self::completion_report_omits_caveats(
+                    &candidates[left].content,
+                    &candidates[right].content,
+                ) && !Self::completion_report_omits_caveats(
+                    &candidates[right].content,
+                    &candidates[left].content,
+                ) && dice >= EQUIVALENT_SIMILARITY
+                    && containment >= EQUIVALENT_SIMILARITY
             })
         })
     }
@@ -1833,7 +1799,16 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                             &unique[pending_index].content,
                             &unique[summary_index].content,
                         );
-                        if !reports_conflict {
+                        if !reports_conflict
+                            && !Self::completion_report_omits_caveats(
+                                &unique[summary_index].content,
+                                &unique[pending_index].content,
+                            )
+                            && !Self::completion_report_omits_caveats(
+                                &unique[pending_index].content,
+                                &unique[summary_index].content,
+                            )
+                        {
                             return Ok(unique.swap_remove(pending_index));
                         }
                     }
@@ -1845,11 +1820,8 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     .max_by_key(|(_, candidate)| candidate.recency)
                     .map(|(index, _)| index)
                     .ok_or("no valid completion report is available")?;
-                // A visible assistant report and the explicit summary from the same response are
-                // alternate representations of one completion attempt. They may differ in detail
-                // or add aggregate context without being contradictory. When they are clearly about
-                // the same report, retain the longer representation as the canonical completion
-                // report; otherwise keep the explicit tool argument as the completion boundary.
+                // The explicit summary is the intended current handoff, independent of length.
+                // Retain visible text only when the summary would drop an important caveat.
                 if let (Some(summary_index), Some(visible_index)) =
                     (explicit_summary_index, visible_report_index)
                 {
@@ -1858,9 +1830,10 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     if Self::completion_report_conflicts_with_explicit_summary(visible, summary) {
                         return Err("multiple different completion reports are available");
                     }
-                    if Self::completion_reports_have_high_similarity(visible, summary)
-                        && visible.chars().count() > summary.chars().count()
-                    {
+                    if Self::completion_report_omits_caveats(visible, summary) {
+                        if Self::completion_report_omits_caveats(summary, visible) {
+                            return Err("multiple different completion reports are available");
+                        }
                         latest_index = visible_index;
                     } else {
                         latest_index = summary_index;
@@ -1868,17 +1841,18 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 }
 
                 let latest = &unique[latest_index];
-                // Same-turn visible text and `complete_workflow.summary` are alternate
-                // representations of one completion attempt. A semantic contradiction is
-                // rejected; otherwise a highly similar pair uses the longer representation.
-                // Historical pending drafts still require the stricter similarity check below.
+                // Same-turn sources can differ in detail; historical drafts must remain
+                // compatible, including across large brief/detail length differences.
                 if unique.iter().enumerate().all(|(index, candidate)| {
                     index == latest_index
                         || (explicit_summary_index == Some(index)
                             && visible_report_index == Some(latest_index))
                         || (visible_report_index == Some(index)
                             && explicit_summary_index == Some(latest_index))
-                        || Self::completion_reports_are_similar(&candidate.content, &latest.content)
+                        || Self::completion_reports_are_compatible(
+                            &candidate.content,
+                            &latest.content,
+                        )
                 }) {
                     Ok(unique.swap_remove(latest_index))
                 } else {
@@ -1888,7 +1862,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         }
     }
 
-    fn completion_report_rejection_reminder(
+    pub(crate) fn completion_report_rejection_reminder(
         reason: &str,
         has_current_segment_pending_report: bool,
         final_audit_enabled: bool,
@@ -1901,11 +1875,12 @@ Return the final verdict ONLY by calling `submit_result`.\n\
         if reason == "no valid completion report is available"
             && !has_current_segment_pending_report
         {
-            let remaining_line = if final_audit_enabled {
-                "Remaining: <remaining limitations, or state that none remain>.\n"
-            } else {
-                "Remaining: <only if something remains>.\n"
-            };
+            if !final_audit_enabled {
+                return format!(
+                    "<SYSTEM_REMINDER>Completion rejected: no valid completion report is available. STATE: PENDING_COMPLETION_REPORT=false. An empty complete_workflow({{}}) call cannot succeed. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` {report_requirements}. A short paragraph is enough; no headings or 'nothing remains' statement is required. Use `complete_workflow({{\"summary\":\"...\"}})`. Do not retry with an empty object. Do not send the report as a separate text-only response.</SYSTEM_REMINDER>"
+                );
+            }
+            let remaining_line = "Remaining: <remaining limitations, or state that none remain>.\n";
             return format!(
                 "<SYSTEM_REMINDER>Completion rejected: no valid completion report is available. STATE: PENDING_COMPLETION_REPORT=false. An empty complete_workflow({{}}) call cannot succeed because neither the current response nor the runtime contains a valid report. NEXT ACTION: call complete_workflow exactly once with a non-empty `summary` containing:\nCompleted: <what you completed>.\nVerified: <what you checked, or what was not run>.\n{remaining_line}Use `complete_workflow({{\"summary\":\"...\"}})`. Do not retry with an empty object. Do not send the report as a separate text-only response.</SYSTEM_REMINDER>"
             );
@@ -2504,21 +2479,6 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }
         };
 
-        if completion_report.source_message_id.is_none() && !completion_report.persist_as_message {
-            completion_report.source_message_id = self
-                .context
-                .messages
-                .iter()
-                .rev()
-                .find(|message| {
-                    message.role == "assistant"
-                        && message.segment_id == self.context.current_segment_id
-                        && Self::normalized_finish_task_summary(&message.message)
-                            == completion_report.content
-                })
-                .and_then(|message| message.id);
-        }
-
         if let Ok(todos) = self
             .context
             .main_store
@@ -2586,12 +2546,23 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
-        // Equivalent candidates need no decision call: the deterministic resolution above already
-        // selected the canonical report, and no model answer could change which text is published.
-        let candidates_are_equivalent = !completion_report.content.is_empty()
-            && Self::completion_candidates_are_equivalent(&candidate_reports);
-        if !candidates_are_equivalent
-            && (candidate_reports.len() > 1 || completion_report.content.is_empty())
+        let has_material_conflict = candidate_reports.iter().enumerate().any(|(index, left)| {
+            candidate_reports[index + 1..].iter().any(|right| {
+                Self::completion_reports_have_material_conflict(&left.content, &right.content)
+            })
+        });
+        if has_material_conflict {
+            log::warn!(
+                "[Workflow][session={}][phase=completion] Rejecting materially conflicting report candidates: count={}, segment={}",
+                self.session_id, candidate_reports.len(), self.context.current_segment_id
+            );
+            completion_report.content.clear();
+        }
+        // Deterministic resolutions already preserve the intended source and caveats.
+        // A helper may resolve remaining semantic ambiguity, never override a known conflict.
+        if completion_report.content.is_empty()
+            && !has_material_conflict
+            && !Self::completion_candidates_are_equivalent(&candidate_reports)
         {
             let reports = candidate_reports
                 .iter()
@@ -2617,7 +2588,11 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 )
                 .await
             {
-                if let Some(selected) = candidate_reports.get(index) {
+                if let Some(selected) = candidate_reports.get(index).filter(|selected| {
+                    candidate_reports.iter().all(|other| {
+                        !Self::completion_report_omits_caveats(&other.content, &selected.content)
+                    })
+                }) {
                     completion_report = ResolvedCompletionReport {
                         content: selected.content.clone(),
                         source_message_id: selected.source_message_id,
@@ -2645,6 +2620,20 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             }));
         }
 
+        if completion_report.source_message_id.is_none() && !completion_report.persist_as_message {
+            completion_report.source_message_id = self
+                .context
+                .messages
+                .iter()
+                .rev()
+                .find(|message| {
+                    message.role == "assistant"
+                        && message.segment_id == self.context.current_segment_id
+                        && Self::normalized_finish_task_summary(&message.message)
+                            == completion_report.content
+                })
+                .and_then(|message| message.id);
+        }
         let pending_source = self.pending_completion_reports.iter().find(|pending| {
             pending.segment_id == self.context.current_segment_id
                 && pending.content_hash
@@ -3233,6 +3222,181 @@ mod tests {
     }
 
     #[test]
+    fn finish_task_summary_accepts_brief_reports_without_format_requirements() {
+        for report in [
+            "已修复窗口缩放问题，相关测试通过。",
+            "已核实此项配置，无需修改",
+            "Updated the completion report contract",
+        ] {
+            assert!(
+                WorkflowExecutor::is_valid_finish_task_summary(report),
+                "{report}"
+            );
+        }
+        for placeholder in [
+            "done.",
+            "**Completed!**",
+            "已完成。",
+            "任务已完成！",
+            "已完成任务\n已完成任务",
+            "...\n...",
+            "<think>已修复问题</think>",
+        ] {
+            assert!(
+                !WorkflowExecutor::is_valid_finish_task_summary(placeholder),
+                "{placeholder}"
+            );
+        }
+    }
+
+    #[test]
+    fn brief_completion_report_round_trips_all_sources() {
+        let text = "已修复窗口缩放问题，相关测试通过。";
+        let pending = vec![report_at(text, 61, 3, 17)];
+        for (args, visible, drafts, persisted) in [
+            (json!({"summary": text}), "", vec![], true),
+            (json!({}), text, vec![], false),
+            (json!({}), "", pending.clone(), false),
+            (json!({"summary": text}), text, pending, false),
+        ] {
+            let resolved = WorkflowExecutor::resolve_completion_report(&args, visible, &drafts, 3)
+                .expect("brief source should resolve");
+            assert_eq!(resolved.content, text);
+            assert_eq!(resolved.persist_as_message, persisted);
+        }
+    }
+
+    #[test]
+    fn brief_and_detailed_drafts_are_compatible_without_losing_caveats() {
+        let brief = "已修复窗口缩放问题，相关测试通过。";
+        let detailed = format!("{brief}\n调整了窗口初始化流程，保留原有尺寸设置；额外检查了创建窗口及显示窗口的调用路径。相关测试通过。");
+        let pending = vec![report_at(&detailed, 62, 3, 7)];
+        let resolved = WorkflowExecutor::resolve_completion_report(
+            &json!({"summary": brief}),
+            "",
+            &pending,
+            3,
+        )
+        .expect("length differences alone are not conflicts");
+        assert_eq!(resolved.content, brief);
+
+        // Reconciliation is used both at capture and during snapshot recovery.
+        for reports in [
+            vec![report_at(&detailed, 62, 3, 7), report_at(brief, 63, 3, 8)],
+            vec![report_at(brief, 63, 3, 8), report_at(&detailed, 62, 3, 7)],
+        ] {
+            let reconciled = WorkflowExecutor::reconcile_pending_completion_reports(reports);
+            assert_eq!(reconciled.len(), 1);
+            assert_eq!(reconciled[0].content, brief);
+            assert_eq!(reconciled[0].source_message_id, Some(63));
+        }
+    }
+
+    #[test]
+    fn brief_reports_preserve_conflicts_during_reconciliation() {
+        for (left, right) in [
+            (
+                "已修复窗口缩放问题，相关测试通过。",
+                "窗口缩放逻辑已调整，但测试失败。",
+            ),
+            (
+                "已修复窗口缩放问题，未运行测试。",
+                "已修复窗口缩放问题，相关测试通过。",
+            ),
+            (
+                "已修复窗口缩放问题，仍有问题。",
+                "已修复窗口缩放问题，无已知问题。",
+            ),
+            (
+                "已修改 `src/api.rs`，相关测试通过。",
+                "已修改 `src/web.rs`，相关测试通过。",
+            ),
+        ] {
+            let drafts = WorkflowExecutor::reconcile_pending_completion_reports(vec![
+                report_at(left, 64, 3, 7),
+                report_at(right, 65, 3, 8),
+            ]);
+            assert_eq!(drafts.len(), 2, "{left} / {right}");
+            assert!(
+                WorkflowExecutor::resolve_completion_report(&json!({}), "", &drafts, 3).is_err()
+            );
+            assert!(WorkflowExecutor::resolve_completion_report(
+                &json!({"summary": right}),
+                left,
+                &[],
+                3
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn brief_summary_cannot_erase_known_caveats() {
+        let brief = "已修复窗口缩放问题，相关测试通过。";
+        for caveat in ["但未运行测试。", "仍有问题影响其他窗口。"] {
+            let detailed = format!("{brief}\n{caveat}");
+            let drafts = WorkflowExecutor::reconcile_pending_completion_reports(vec![
+                report_at(&detailed, 66, 3, 7),
+                report_at(brief, 67, 3, 8),
+            ]);
+            assert_eq!(drafts.len(), 2);
+            assert!(
+                WorkflowExecutor::resolve_completion_report(&json!({}), "", &drafts, 3).is_err()
+            );
+            let resolved = WorkflowExecutor::resolve_completion_report(
+                &json!({"summary": brief}),
+                &detailed,
+                &[],
+                3,
+            )
+            .expect("visible caveats should be retained");
+            assert!(resolved.content.contains(caveat));
+            assert!(!resolved.persist_as_message);
+        }
+    }
+
+    #[test]
+    fn same_turn_reports_cannot_each_drop_a_different_caveat() {
+        let visible = "已修复窗口缩放问题，但未运行测试。";
+        let summary = "已修复窗口缩放问题，仍有问题影响其他窗口。";
+        assert!(WorkflowExecutor::resolve_completion_report(
+            &json!({"summary": summary}),
+            visible,
+            &[],
+            3,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fresh_brief_draft_cannot_hide_new_caveats_in_retry() {
+        let brief = "已修复窗口缩放问题，相关测试通过。";
+        let retry = format!("{brief}仍有问题影响其他窗口。");
+        let pending = vec![report_at(brief, 70, 3, 17)];
+        assert!(WorkflowExecutor::resolve_completion_report_at_step(
+            &json!({"summary": retry}),
+            "",
+            &pending,
+            3,
+            18,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reconciliation_does_not_allow_invalid_drafts_to_displace_valid_brief_reports() {
+        let text = "已修复窗口缩放问题，相关测试通过。";
+        let mut tampered = report_at(text, 68, 3, 9);
+        tampered.content = "已修复其他窗口问题，相关测试通过。".to_string();
+        let drafts = WorkflowExecutor::reconcile_pending_completion_reports(vec![
+            report_at(text, 69, 3, 8),
+            tampered,
+        ]);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].source_message_id, Some(69));
+    }
+
+    #[test]
     fn finish_task_summary_accepts_meaningful_user_visible_report() {
         assert!(WorkflowExecutor::is_valid_finish_task_summary(
             "Implemented the workflow fix and verified it with cargo check.\nRemaining note: UI behavior still needs manual confirmation."
@@ -3351,10 +3515,10 @@ mod tests {
             false,
         );
 
-        assert!(reminder.contains("Completed: <what you completed>."));
-        assert!(reminder.contains("Verified: <what you checked, or what was not run>."));
-        assert!(reminder.contains("Remaining: <only if something remains>."));
-        assert!(!reminder.contains("Remaining: <remaining limitations, or state that none remain>."));
+        assert!(reminder.contains("briefly stating what was completed"));
+        assert!(reminder.contains("include remaining items only when any remain"));
+        assert!(reminder.contains("no headings"));
+        assert!(!reminder.contains("Remaining: <"));
     }
     #[test]
     fn completion_report_resolution_accepts_current_report_after_reasoning() {
@@ -3506,7 +3670,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_report_resolution_prefers_longer_highly_similar_same_turn_report() {
+    fn completion_report_resolution_prefers_explicit_summary_over_longer_same_turn_report() {
         let visible_report = "所有 21 个失败测试均为预存在，与当前工作区变更无关。\n\n## ReAct 流程完整性检查报告\n- `cargo check` 通过。\n- 346 个 ReAct 工作流测试全部通过。\n- 变更覆盖 dispatch 可靠性、快照持久化、子 Agent 段守卫、上下文重置、智能审批、安全路径检查和信号缓冲上限。\n- 其余 21 个失败已在 HEAD 基础提交逐项复现，属于环境、网络、MCP 或 Docker 检测相关问题。\n\n当前工作区修改没有改坏 ReAct 流程，没有已知的本次变更回归。";
         let explicit_summary = "## ReAct 流程完整性检查结果\n\n- `cargo check` 通过。\n- 346 个 ReAct 工作流测试全部通过。\n- 21 个其他失败均已在 HEAD 基础提交验证为预存在，与当前改动无关。\n\n当前工作区修改没有改坏 ReAct 流程。";
 
@@ -3525,9 +3689,9 @@ mod tests {
 
         assert_eq!(
             resolved.content,
-            WorkflowExecutor::normalized_finish_task_summary(visible_report)
+            WorkflowExecutor::normalized_finish_task_summary(explicit_summary)
         );
-        assert!(!resolved.persist_as_message);
+        assert!(resolved.persist_as_message);
     }
 
     #[test]
@@ -3627,7 +3791,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_completion_report_reconciliation_prefers_the_longer_report() {
+    fn pending_completion_report_reconciliation_prefers_the_newer_compatible_report() {
         let short = report(
             "Answered the user's question.\nNo tools were needed.",
             51,
@@ -3647,7 +3811,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_completion_report_reconciliation_keeps_one_report_per_segment() {
+    fn pending_completion_report_reconciliation_keeps_segments_separate() {
         let reports = vec![
             report("Completed segment three.\nNo limitations remain.", 53, 3),
             report("Completed segment four.\nNo limitations remain.", 54, 4),

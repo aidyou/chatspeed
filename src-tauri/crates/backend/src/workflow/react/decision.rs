@@ -38,13 +38,16 @@ const COMPLETION_REQUEST_CHAR_LIMIT: usize = 600;
 
 const COMPLETION_DECISION_INSTRUCTIONS: &str = concat!(
     "Exactly one candidate will be published as the workflow's final completion report and shown to ",
-    "the user, so accuracy matters more than style. Decide from the candidate text alone which single ",
-    "candidate is a faithful, sufficiently detailed account of the work this workflow actually ",
-    "finished. A candidate produced by this complete_workflow call is the current answer; a candidate ",
+    "the user, so accuracy matters more than style. Respect required_detail and any explicit request ",
+    "for detail in user_request: brief reports need only a task-specific outcome, relevant verification ",
+    "or skipped checks, and important limitations when any exist; detailed reports need deliverables, ",
+    "evidence, verification, and limitations sufficient for independent review. Do not favor length, ",
+    "headings, or a declaration that nothing remains. Never drop important risks or skipped checks. ",
+    "A candidate produced by this complete_workflow call is the current answer; a candidate ",
     "captured earlier is only a draft and may describe superseded intermediate reasoning, so prefer ",
-    "the current answer unless it is clearly not a completion report. Prefer a candidate that states ",
-    "what was done, what was verified and what remains over one that merely narrates analysis or gives ",
-    "a single line without evidence. Several candidates may be equally faithful; pick the best single ",
+    "the current answer unless it is clearly not a completion report. A concrete one-sentence report ",
+    "can satisfy brief mode; analysis narration or a generic completion placeholder cannot. ",
+    "Several candidates may be equally faithful; pick the best single ",
     "one instead of refusing. Choose ambiguous only when no candidate is a plausible completion report ",
     "or two candidates materially contradict each other."
 );
@@ -61,7 +64,7 @@ pub enum CompletionReportOrigin {
 }
 
 impl CompletionReportOrigin {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::ThisCallSummary => "this_call_summary",
             Self::ThisCallText => "this_call_text",
@@ -446,7 +449,7 @@ impl IntelligenceManager {
             .map(|(index, _)| {
                 (
                     format!("report_{index}"),
-                    "a faithful, sufficiently detailed account of the work this workflow actually finished"
+                    "a faithful account of the finished task satisfying required_detail and the user's requested depth without hiding important limitations"
                         .to_string(),
                 )
             })
@@ -600,6 +603,20 @@ mod tests {
                 .map(|report| report.chars().count())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn completion_selection_respects_depth_without_preferring_length() {
+        for required in [
+            "required_detail",
+            "user_request",
+            "one-sentence",
+            "Do not favor length",
+            "Never drop important risks or skipped checks",
+        ] {
+            assert!(super::COMPLETION_DECISION_INSTRUCTIONS.contains(required));
+        }
+        assert!(!super::COMPLETION_DECISION_INSTRUCTIONS.contains("a single line without evidence"));
     }
 
     #[test]
