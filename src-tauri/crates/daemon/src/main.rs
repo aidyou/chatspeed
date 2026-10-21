@@ -65,6 +65,21 @@ fn admitted_level(metadata: &log::Metadata<'_>, max_level: log::LevelFilter) -> 
     (level.to_level_filter() <= max_level).then_some(level)
 }
 
+// Keep the target in the transport header for filtering, not in the file message.
+fn runtime_log_line(record: &log::Record<'_>, level: log::Level) -> String {
+    match (record.file(), record.line()) {
+        (Some(file), Some(line)) => format!(
+            "[{}] {} [{}:{}]: {}",
+            level,
+            record.target(),
+            file,
+            line,
+            record.args()
+        ),
+        _ => format!("[{}] {}: {}", level, record.target(), record.args()),
+    }
+}
+
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
         admitted_level(metadata, log::max_level()).is_some()
@@ -72,7 +87,7 @@ impl log::Log for StderrLogger {
 
     fn log(&self, record: &log::Record<'_>) {
         if let Some(level) = admitted_level(record.metadata(), log::max_level()) {
-            eprintln!("[{}] {}: {}", level, record.target(), record.args());
+            eprintln!("{}", runtime_log_line(record, level));
         }
     }
 
@@ -182,7 +197,31 @@ async fn termination_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{admitted_level, is_project_target, write_failure};
+    use super::{admitted_level, is_project_target, runtime_log_line, write_failure};
+
+    #[test]
+    fn runtime_log_transport_preserves_source_and_target() {
+        let record = log::Record::builder()
+            .args(format_args!("[Workflow] completed: detail"))
+            .level(log::Level::Info)
+            .target("chatspeed_runtime_backend::workflow::react::manager")
+            .file(Some("crates/backend/src/workflow/react/manager.rs"))
+            .line(Some(42))
+            .build();
+        assert_eq!(
+            runtime_log_line(&record, log::Level::Info),
+            "[INFO] chatspeed_runtime_backend::workflow::react::manager [crates/backend/src/workflow/react/manager.rs:42]: [Workflow] completed: detail"
+        );
+        let without_source = log::Record::builder()
+            .args(format_args!("diagnostic"))
+            .level(log::Level::Warn)
+            .target("rmcp::service")
+            .build();
+        assert_eq!(
+            runtime_log_line(&without_source, log::Level::Warn),
+            "[WARN] rmcp::service: diagnostic"
+        );
+    }
 
     fn metadata(level: log::Level, target: &'static str) -> log::Metadata<'static> {
         log::Metadata::builder().level(level).target(target).build()

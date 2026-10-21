@@ -2406,7 +2406,7 @@ fn reconcile_child_workflows(
                     Some("Sub-agent detached by manual context clear.".to_string());
                 store.upsert_execution_context(&child_context)?;
             }
-            log::info!(
+            log::debug!(
                 "[Workflow][session={}][phase=reconcile] Child belongs to a cleared parent context; parent projection was skipped",
                 child_id
             );
@@ -5886,7 +5886,7 @@ pub(crate) async fn get_system_skills_core(
         .map_err(|e| ApplicationError::internal(e.to_string()))?;
     let mut skills: Vec<SkillManifest> = skills_map.into_values().collect();
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    log::info!("get_system_skills returned {} skills", skills.len());
+    log::debug!("get_system_skills returned {} skills", skills.len());
     Ok(skills)
 }
 

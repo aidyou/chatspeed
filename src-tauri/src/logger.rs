@@ -79,7 +79,7 @@ pub fn console_log_formatter(
 ///
 /// # Features
 /// * Complete date-time format (YYYY-MM-DD HH:MM:SS)
-/// * Includes thread ID, target module, and file location
+/// * Includes the source file and line without repeating the target module
 /// * Preserves sufficient context for all logs for troubleshooting
 pub fn file_log_formatter(
     out: fern::FormatCallback,

@@ -1115,7 +1115,7 @@ impl WorkflowExecutor {
         self.compressor.model = compressor_model;
         self.sync_runtime_limits();
 
-        log::info!(
+        log::debug!(
             "[Workflow][session={}][phase=model_sync] Runtime models synced: phase={:?}, active_provider_id={}, active_model={}, utility_provider_id={}, utility_model={}, lite_provider_id={}, lite_model={}",
             self.session_id,
             self.policy.phase,
@@ -3548,7 +3548,7 @@ impl WorkflowExecutor {
             WorkflowEngineError::General("Signal receiver already taken".into())
         })?;
 
-        log::info!(
+        log::debug!(
             "[Workflow][session={}][phase=run_loop][event=signal_receiver_acquired] Run loop acquired signal receiver; state={:?}, sub_agent_id={:?}, pending_approvals={}",
             self.session_id,
             self.state,
@@ -4972,7 +4972,7 @@ impl WorkflowExecutor {
                 }
 
                 self.current_step += 1;
-                log::info!(
+                log::debug!(
                     "[Workflow][session={}][step] Step {}, approval_level={:?}",
                     self.session_id,
                     self.current_step,
@@ -7254,7 +7254,9 @@ impl WorkflowExecutor {
         if self.policy.approval_level == crate::workflow::react::policy::ApprovalLevel::Full
             || self.auto_approve.contains(name)
         {
-            log::info!(
+            // Routine tool auto-approval repeats on every tool call; safety-relevant
+            // auto-approval decisions are logged separately at info level.
+            log::debug!(
                 "WorkflowExecutor {}: Auto-approved tool '{}' in {} mode",
                 self.session_id,
                 name,
@@ -7570,12 +7572,28 @@ impl WorkflowExecutor {
             );
         }
 
-        log::info!(
-            "[Workflow][session={}][phase=state] State transition: {} -> {}",
-            self.session_id,
-            old_state,
-            new_state
+        // Per-step Thinking <-> Executing churn is internal loop detail; lifecycle
+        // milestones (task start, waiting, terminal) stay at info level.
+        let is_step_churn = matches!(
+            (&old_state, &new_state),
+            (WorkflowState::Thinking, WorkflowState::Executing)
+                | (WorkflowState::Executing, WorkflowState::Thinking)
         );
+        if is_step_churn {
+            log::debug!(
+                "[Workflow][session={}][phase=state] State transition: {} -> {}",
+                self.session_id,
+                old_state,
+                new_state
+            );
+        } else {
+            log::info!(
+                "[Workflow][session={}][phase=state] State transition: {} -> {}",
+                self.session_id,
+                old_state,
+                new_state
+            );
+        }
 
         // Persist state and its recovery event together before publishing either to observers.
         // A failed write must leave the transition unapplied and invisible.
@@ -9550,14 +9568,27 @@ impl WorkflowExecutor {
             )));
         }
 
-        log::info!(
-            "[Workflow][session={}][phase=snapshot] Saved durably: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
-            self.session_id,
-            ctx.state,
-            ctx.wait_reason,
-            ctx.pending_tools.len(),
-            ctx.last_event_id
-        );
+        // Every step rewrites the running snapshot; only lifecycle milestones are
+        // worth info level.
+        if matches!(ctx.state, RuntimeState::Running) {
+            log::debug!(
+                "[Workflow][session={}][phase=snapshot] Saved durably: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
+                self.session_id,
+                ctx.state,
+                ctx.wait_reason,
+                ctx.pending_tools.len(),
+                ctx.last_event_id
+            );
+        } else {
+            log::info!(
+                "[Workflow][session={}][phase=snapshot] Saved durably: state={:?}, wait_reason={:?}, pending_tools={}, last_event_id={:?}",
+                self.session_id,
+                ctx.state,
+                ctx.wait_reason,
+                ctx.pending_tools.len(),
+                ctx.last_event_id
+            );
+        }
 
         Ok(())
     }

@@ -164,7 +164,7 @@ impl SkillScanner {
             }
         }
 
-        log::info!(
+        log::debug!(
             "System skill scan completed: loaded {} skills from {:?}",
             skills.len(),
             self.search_paths

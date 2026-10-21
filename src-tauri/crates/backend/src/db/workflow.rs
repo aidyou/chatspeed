@@ -2673,10 +2673,19 @@ impl MainStore {
                     ctx.waiting_on_sub_agent_id, sub_agent_sessions,
                 ],
             )?;
-            log::info!(
-                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
-                ctx.session_id, ctx.state, ctx.wait_reason, ctx.pending_tools.len()
-            );
+            // Every step rewrites the running snapshot; only lifecycle milestones are
+            // worth info level.
+            if matches!(ctx.state, RuntimeState::Running) {
+                log::debug!(
+                    "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
+                    ctx.session_id, ctx.state, ctx.wait_reason, ctx.pending_tools.len()
+                );
+            } else {
+                log::info!(
+                    "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}",
+                    ctx.session_id, ctx.state, ctx.wait_reason, ctx.pending_tools.len()
+                );
+            }
             Ok(())
         })
     }
@@ -2750,13 +2759,25 @@ impl MainStore {
                     sub_agent_sessions,
                 ],
             )?;
-            log::info!(
-                "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}, concurrent_completions_preserved=true",
-                ctx.session_id,
-                ctx.state,
-                ctx.wait_reason,
-                ctx.pending_tools.len()
-            );
+            // Every step rewrites the running snapshot; only lifecycle milestones are
+            // worth info level.
+            if matches!(ctx.state, RuntimeState::Running) {
+                log::debug!(
+                    "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}, concurrent_completions_preserved=true",
+                    ctx.session_id,
+                    ctx.state,
+                    ctx.wait_reason,
+                    ctx.pending_tools.len()
+                );
+            } else {
+                log::info!(
+                    "[Workflow][session={}] snapshot.write - state={:?}, wait_reason={:?}, pending_tools={}, concurrent_completions_preserved=true",
+                    ctx.session_id,
+                    ctx.state,
+                    ctx.wait_reason,
+                    ctx.pending_tools.len()
+                );
+            }
             Ok(true)
         })
     }
@@ -2890,7 +2911,7 @@ impl MainStore {
                 params![event.session_id, event_type, event.version, event_data],
             )?;
             let event_id = conn.last_insert_rowid();
-            log::info!(
+            log::debug!(
                 "[Workflow][session={}] event.append - type={:?}, event_id={}",
                 event.session_id,
                 event.event_type,

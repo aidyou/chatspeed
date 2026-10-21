@@ -1328,8 +1328,19 @@ async fn connect_once(
 /// Preserve dependency targets and levels before the desktop file filter sees them.
 fn forward_runtime_log_line(line: &str) {
     let line = redact_secrets(line);
-    if let Some((level, target, message)) = runtime_log_record(&line) {
-        log::log!(target: target, level, "[RuntimeChild] {}", message);
+    if let Some(record) = runtime_log_record(&line) {
+        if record.level > log::max_level() {
+            return;
+        }
+        log::logger().log(
+            &log::Record::builder()
+                .args(format_args!("{}", record.message))
+                .target(record.target)
+                .level(record.level)
+                .file(record.file.or(Some(file!())))
+                .line(record.line.or(Some(line!())))
+                .build(),
+        );
     } else {
         // Unstructured child stderr remains available for native crash diagnosis,
         // but cannot bypass file filtering by masquerading as project info.
@@ -1337,18 +1348,51 @@ fn forward_runtime_log_line(line: &str) {
     }
 }
 
-fn runtime_log_record(line: &str) -> Option<(log::Level, &str, &str)> {
+#[derive(Debug, PartialEq)]
+struct RuntimeLogRecord<'a> {
+    level: log::Level,
+    target: &'a str,
+    message: &'a str,
+    file: Option<&'a str>,
+    line: Option<u32>,
+}
+
+fn runtime_log_record(line: &str) -> Option<RuntimeLogRecord<'_>> {
     if line.starts_with('{') {
         if let Ok(report) = serde_json::from_str::<serde_json::Value>(line) {
             if report.get("event").and_then(serde_json::Value::as_str) == Some("error_diagnostic") {
-                return Some((log::Level::Error, "error_diagnostic", line));
+                return Some(RuntimeLogRecord {
+                    level: log::Level::Error,
+                    target: "error_diagnostic",
+                    message: line,
+                    file: None,
+                    line: None,
+                });
             }
         }
     }
     let (level, record) = line.split_once("] ")?;
     let level = level.strip_prefix('[').and_then(parse_runtime_log_level)?;
-    let (target, message) = record.split_once(": ")?;
-    Some((level, target, message))
+    let (header, message) = record.split_once(": ")?;
+    // Older runtimes omit source metadata; keep accepting their original header.
+    let (target, source) = match header.rsplit_once(" [") {
+        Some((target, source)) => (target, Some(source.strip_suffix(']')?)),
+        None => (header, None),
+    };
+    let (file, line) = match source {
+        Some(source) => {
+            let (file, line) = source.rsplit_once(':')?;
+            (Some(file), Some(line.parse().ok()?))
+        }
+        None => (None, None),
+    };
+    Some(RuntimeLogRecord {
+        level,
+        target,
+        message,
+        file,
+        line,
+    })
 }
 
 fn parse_runtime_log_level(level: &str) -> Option<log::Level> {
@@ -1845,16 +1889,18 @@ mod tests {
             "[TRACE] tracing::span: THIRD_PARTY_TRACE",
             "[WARN] rmcp::service: THIRD_PARTY_WARN",
             "[ERROR] rmcp::service: THIRD_PARTY_ERROR",
-            "[INFO] chatspeed_runtime_backend::owner: PROJECT_INFO: still intact",
+            "[INFO] chatspeed_runtime_backend::owner [crates/backend/src/workflow/react/engine.rs:123]: PROJECT_INFO: still intact",
             "[DEBUG] chatspeed_runtime::startup: PROJECT_DEBUG",
             r#"{"event":"error_diagnostic","error":"STARTUP_FAILURE"}"#,
         ] {
-            let (level, target, message) = runtime_log_record(line).expect("structured child log");
+            let record = runtime_log_record(line).expect("structured child log");
             logger.log(
                 &log::Record::builder()
-                    .args(format_args!("[RuntimeChild] {}", message))
-                    .target(target)
-                    .level(level)
+                    .args(format_args!("{}", record.message))
+                    .target(record.target)
+                    .level(record.level)
+                    .file(record.file)
+                    .line(record.line)
                     .build(),
             );
         }
@@ -1876,13 +1922,92 @@ mod tests {
             assert!(output.contains(retained), "missing log: {retained}");
         }
         assert_eq!(output.lines().count(), 5);
+        assert!(output.contains(
+            "[I] crates/backend/src/workflow/react/engine.rs:123 PROJECT_INFO: still intact"
+        ));
+        assert!(!output.contains("[RuntimeChild]"));
+        assert!(!output.contains("chatspeed_runtime_backend::owner"));
+        assert!(!output.contains("[INFO]"));
         assert_eq!(
             runtime_log_record("[WARN] rmcp::service: retry"),
-            Some((log::Level::Warn, "rmcp::service", "retry"))
+            Some(RuntimeLogRecord {
+                level: log::Level::Warn,
+                target: "rmcp::service",
+                message: "retry",
+                file: None,
+                line: None,
+            })
         );
+        assert_eq!(
+            runtime_log_record(
+                r"[ERROR] chatspeed_runtime::owner [C:\workspace\main.rs:42]: failed: detail"
+            ),
+            Some(RuntimeLogRecord {
+                level: log::Level::Error,
+                target: "chatspeed_runtime::owner",
+                message: "failed: detail",
+                file: Some(r"C:\workspace\main.rs"),
+                line: Some(42),
+            })
+        );
+        assert!(runtime_log_record("[INFO] chatspeed_runtime [main.rs:bad]: invalid").is_none());
         assert!(runtime_log_record("[CodeGraph] update available").is_none());
         assert!(runtime_log_record("native stderr without metadata").is_none());
         assert!(runtime_log_record("[INVALID] rmcp::service: unknown level").is_none());
+    }
+
+    #[test]
+    fn child_debug_logs_stay_out_of_info_files_but_remain_in_debug_console() {
+        use log::Log;
+
+        let directory = tempfile::tempdir().expect("temporary log directory");
+        let file_path = directory.path().join("app.log");
+        let console_path = directory.path().join("console.log");
+        let (_, logger) = fern::Dispatch::new()
+            .level(log::LevelFilter::Debug)
+            .chain(
+                fern::Dispatch::new()
+                    .level(log::LevelFilter::Info)
+                    .format(crate::logger::file_log_formatter)
+                    .chain(fern::log_file(&file_path).expect("file sink")),
+            )
+            .chain(
+                fern::Dispatch::new()
+                    .level(log::LevelFilter::Debug)
+                    .format(crate::logger::console_log_formatter)
+                    .chain(fern::log_file(&console_path).expect("captured console sink")),
+            )
+            .into_log();
+        for line in [
+            "[DEBUG] chatspeed_runtime_backend::workflow::react::engine [crates/backend/src/workflow/react/engine.rs:12]: STEP_DETAIL",
+            "[INFO] chatspeed_runtime_backend::workflow::react::engine [crates/backend/src/workflow/react/engine.rs:34]: TASK_COMPLETED",
+            "[WARN] chatspeed_runtime_backend::workflow::react::engine [crates/backend/src/workflow/react/engine.rs:56]: RECOVERY_WARNING",
+        ] {
+            let redacted = redact_secrets(line);
+            let record = runtime_log_record(&redacted).expect("child log");
+            logger.log(
+                &log::Record::builder()
+                    .args(format_args!("{}", record.message))
+                    .target(record.target)
+                    .level(record.level)
+                    .file(record.file)
+                    .line(record.line)
+                    .build(),
+            );
+        }
+        logger.flush();
+        let file = std::fs::read_to_string(file_path).expect("read file sink");
+        let console = std::fs::read_to_string(console_path).expect("read console sink");
+        assert!(!file.contains("STEP_DETAIL"));
+        assert!(console.contains("[D] crates/backend/src/workflow/react/engine.rs:12 STEP_DETAIL"));
+        for output in [&file, &console] {
+            assert!(output
+                .contains("[I] crates/backend/src/workflow/react/engine.rs:34 TASK_COMPLETED"));
+            assert!(output
+                .contains("[W] crates/backend/src/workflow/react/engine.rs:56 RECOVERY_WARNING"));
+            assert!(!output.contains("[RuntimeChild]"));
+            assert!(!output.contains("chatspeed_runtime_backend::"));
+        }
     }
 
     fn discovery_with_token(token: &str) -> ControlPlaneDiscovery {

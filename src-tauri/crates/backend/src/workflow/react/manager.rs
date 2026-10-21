@@ -441,7 +441,7 @@ impl WorkflowManager {
             .get(&session_id)
             .is_some_and(tokio::sync::mpsc::Sender::is_closed);
         if replaced {
-            log::info!(
+            log::debug!(
                 "[WorkflowManager][session={}][event=signal_channel_replaced] Replaced existing GLOBAL_SIGNAL_TX entry, source={}, capacity={}, is_closed={}",
                 session_id,
                 source,
@@ -449,7 +449,7 @@ impl WorkflowManager {
                 is_closed
             );
         } else {
-            log::info!(
+            log::debug!(
                 "[WorkflowManager][session={}][event=signal_channel_registered] Registered GLOBAL_SIGNAL_TX entry, source={}, capacity={}, is_closed={}",
                 session_id,
                 source,

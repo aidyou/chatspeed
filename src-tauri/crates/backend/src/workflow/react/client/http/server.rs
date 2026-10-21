@@ -2990,7 +2990,7 @@ where
             replay_response(done.status, done.body)
         }
         Reservation::Execute(reservation) => {
-            log::info!(
+            log::debug!(
                 "[ControlPlane][phase=idempotency] Executing mutation key={} body_hash={}",
                 key,
                 body_hash
@@ -3006,13 +3006,23 @@ where
             let response = execute(state.clone(), body.to_string())
                 .await
                 .into_response();
-            log::info!(
-                "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
-                key,
-                body_hash,
-                response.status()
-            );
             let status = response.status();
+            // Successful mutations are routine; keep non-success statuses visible.
+            if status.is_success() {
+                log::debug!(
+                    "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
+                    key,
+                    body_hash,
+                    status
+                );
+            } else {
+                log::info!(
+                    "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
+                    key,
+                    body_hash,
+                    status
+                );
+            }
             // Large request bodies do not widen the retained response bound.
             // Read responses bypass capture entirely.
             let done =

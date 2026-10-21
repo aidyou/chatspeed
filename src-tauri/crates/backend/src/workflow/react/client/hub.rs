@@ -361,13 +361,13 @@ impl WorkflowRuntimeHub {
     ) {
         let replaced = self.input_registry.register(session_id.clone(), tx).await;
         if replaced {
-            log::info!(
+            log::debug!(
                 "[Workflow][session={}][phase=gateway][event=signal_channel_replaced] Replaced existing gateway input sender, source={}",
                 session_id,
                 source
             );
         } else {
-            log::info!(
+            log::debug!(
                 "[Workflow][session={}][phase=gateway][event=signal_channel_registered] Registered gateway input sender, source={}",
                 session_id,
                 source
