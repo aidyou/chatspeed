@@ -27,7 +27,7 @@ pub const QUIT_HOST_WINDOW_LABEL: &str = "workflow";
 pub const QUIT_PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Upper bound on releasing the desktop's runtime lease on the exit-desktop path.
-pub const QUIT_RELEASE_BUDGET: Duration = Duration::from_secs(3);
+pub const QUIT_RELEASE_BUDGET: Duration = Duration::from_secs(5);
 
 /// Upper bound on observing the coordinated runtime shutdown reach `stopped`.
 ///

@@ -4301,11 +4301,10 @@ impl WorkflowExecutor {
                                 result,
                             } => {
                                 log::info!(
-                                "[Workflow][session={}][phase=wait][event=sub_agent_complete] Sub-agent {} completed with result {:?}",
-                                self.session_id,
-                                sub_agent_id,
-                                result
-                            );
+                                    "[Workflow][session={}][phase=wait][event=sub_agent_complete] Sub-agent {} completed",
+                                    self.session_id,
+                                    sub_agent_id
+                                );
 
                                 if !self
                                     .apply_sub_agent_completion(sub_agent_id.clone(), result)

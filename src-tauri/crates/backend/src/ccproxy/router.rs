@@ -1191,29 +1191,29 @@ async fn authenticate_request_middleware(
 /// Logs the registered routes for discoverability.
 fn log_registered_routes() {
     log::info!("--- ccproxy routes registered ---");
-    log::info!("[General]");
-    log::info!("  - GET /");
-    log::info!("  - GET /api/version");
-    log::info!("[OpenAI-Compatible]");
-    log::info!("  - /v1/models, /v1/chat/completions, /v1/responses, /v1/embeddings");
-    log::info!("[Claude-Compatible]");
-    log::info!("  - /v1/messages, /v1/claude/embeddings");
-    log::info!("[Gemini-Compatible]");
-    log::info!("  - /v1beta/models, /v1beta/models/{{model_id}}:{{action}}");
-    log::info!("[System One Decision]");
-    log::info!("  - /v1/systemone");
-    log::info!("[Ollama-Specific]");
-    log::info!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
-    log::info!("[Access Modes]");
-    log::info!("  - Grouped:           /{{group_name}}/{{path}}");
-    log::info!("  - Tool Compat:       /compat/{{path}} or /compat_mode/{{path}}");
-    log::info!("  - Grouped + Compat:  /{{group_name}}/compat/{{path}} or /{{group_name}}/compat_mode/{{path}}");
-    log::info!("  - Switch:            /switch/{{path}}");
-    log::info!("  - Switch + Compat:   /switch/compat/{{path}} or /switch/compat_mode/{{path}}");
-    log::info!("-------------------------------------");
-    log::info!("[MCP]");
-    log::info!("  - MCP Http Streamable Proxy: /mcp/http");
-    log::info!("-------------------------------------");
+    log::debug!("[General]");
+    log::debug!("  - GET /");
+    log::debug!("  - GET /api/version");
+    log::debug!("[OpenAI-Compatible]");
+    log::debug!("  - /v1/models, /v1/chat/completions, /v1/responses, /v1/embeddings");
+    log::debug!("[Claude-Compatible]");
+    log::debug!("  - /v1/messages, /v1/claude/embeddings");
+    log::debug!("[Gemini-Compatible]");
+    log::debug!("  - /v1beta/models, /v1beta/models/{{model_id}}:{{action}}");
+    log::debug!("[System One Decision]");
+    log::debug!("  - /v1/systemone");
+    log::debug!("[Ollama-Specific]");
+    log::debug!("  - /api/tags, /api/show, /api/chat, /api/embeddings, /api/embed");
+    log::debug!("[Access Modes]");
+    log::debug!("  - Grouped:           /{{group_name}}/{{path}}");
+    log::debug!("  - Tool Compat:       /compat/{{path}} or /compat_mode/{{path}}");
+    log::debug!("  - Grouped + Compat:  /{{group_name}}/compat/{{path}} or /{{group_name}}/compat_mode/{{path}}");
+    log::debug!("  - Switch:            /switch/{{path}}");
+    log::debug!("  - Switch + Compat:   /switch/compat/{{path}} or /switch/compat_mode/{{path}}");
+    log::debug!("-------------------------------------");
+    log::debug!("[MCP]");
+    log::debug!("  - MCP Http Streamable Proxy: /mcp/http");
+    log::debug!("-------------------------------------");
 }
 
 #[cfg(test)]
@@ -1256,6 +1256,126 @@ mod usage_attribution_tests {
 
         assert!(!headers.contains_key("x-cs-workflow-session-id"));
         assert!(!headers.contains_key("x-cs-root-task-run-id"));
+    }
+}
+
+#[cfg(test)]
+mod log_policy_tests {
+    //! Source-level guards for the ccproxy log-noise boundary.
+    //!
+    //! Focused log capture would need a process-wide logger and live stores, so
+    //! the policy is pinned at the source instead: every asserted pattern is
+    //! matched against an explicit function body to keep this test's own literals
+    //! from matching themselves.
+
+    const ROUTER_SRC: &str = include_str!("router.rs");
+    const HELPER_SRC: &str = include_str!("helper/common.rs");
+    const BACKEND_COMMON_SRC: &str = include_str!("adapter/backend/common.rs");
+    const CHAT_HANDLER_SRC: &str = include_str!("handler/chat_handler.rs");
+
+    /// Returns the brace-delimited body starting at the first `{` after `anchor`.
+    fn function_body<'a>(source: &'a str, anchor: &str) -> &'a str {
+        let anchor_start = source.find(anchor).expect("anchored function present");
+        let open = anchor_start + source[anchor_start..].find('{').expect("body opens");
+        let mut depth = 0_usize;
+        for (offset, character) in source[open..].char_indices() {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &source[open..=open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced body for {anchor}");
+    }
+
+    /// Returns the single source line containing `needle`.
+    fn line_containing<'a>(source: &'a str, needle: &str) -> &'a str {
+        let index = source
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing source marker '{needle}'"));
+        let start = source[..index].rfind('\n').map_or(0, |newline| newline + 1);
+        let rest = &source[start..];
+        let end = rest.find('\n').unwrap_or(rest.len());
+        &rest[..end]
+    }
+
+    #[test]
+    fn route_registration_keeps_one_info_summary_and_debug_details() {
+        let body = function_body(ROUTER_SRC, "fn log_registered_routes()");
+
+        assert_eq!(body.matches("log::info!").count(), 1);
+        assert!(line_containing(body, "ccproxy routes registered").contains("log::info!"));
+        assert!(body.matches("log::debug!").count() >= 10);
+
+        for detail in [
+            "[General]",
+            "[OpenAI-Compatible]",
+            "[Claude-Compatible]",
+            "[Gemini-Compatible]",
+            "[System One Decision]",
+            "[Ollama-Specific]",
+            "[Access Modes]",
+            "[MCP]",
+            "/v1/systemone",
+            "/switch/{{path}}",
+        ] {
+            let line = line_containing(body, detail);
+            assert!(
+                line.contains("log::debug!"),
+                "route detail must stay at debug: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn proxy_client_construction_logs_category_without_url() {
+        let body = function_body(HELPER_SRC, "pub fn build_http_client(");
+
+        assert!(body.contains("log::debug!(\"Using configured HTTP proxy\");"));
+        assert!(!body.contains("log::info!(\"Using"));
+        assert!(!body.contains("Using proxy: {}"));
+        // A failed client build is a real failure and keeps its error log.
+        assert!(body.contains("log::error!(\"{}\", err_msg);"));
+    }
+
+    #[test]
+    fn tool_parse_and_stat_recording_details_stay_debug() {
+        assert!(BACKEND_COMMON_SRC.contains("log::debug!(\"tool parse success, name: {}\""));
+        assert!(!BACKEND_COMMON_SRC.contains("log::info!(\"tool parse success"));
+        assert!(BACKEND_COMMON_SRC.contains("log::warn!(\"tool use xml parse failed"));
+
+        let stats_index = CHAT_HANDLER_SRC
+            .find("Recording ccproxy stats for non-streaming response")
+            .expect("stat recording log present");
+        let window_start = stats_index.saturating_sub(80);
+        let window = &CHAT_HANDLER_SRC[window_start..stats_index];
+        assert!(window.contains("log::debug!("));
+        assert!(!window.contains("log::info!("));
+    }
+
+    #[test]
+    fn critical_operational_logs_keep_levels_and_dedicated_targets() {
+        // The resolver summary stays the single info-level routing milestone.
+        let resolver_index = HELPER_SRC
+            .find("ccproxy: alias={}, provider={}, base_url={}, protocol={}, selected={}")
+            .expect("resolver summary log present");
+        let resolver_log = &HELPER_SRC[resolver_index.saturating_sub(120)..resolver_index];
+        assert!(resolver_log.contains("log::info!("));
+        assert!(!resolver_log.contains("log::debug!("));
+
+        let auth_body = function_body(ROUTER_SRC, "async fn authenticate_request_middleware(");
+        assert!(auth_body.contains("log::warn!(\"Authentication failed for path"));
+
+        // Dedicated request/response loggers keep their own info-level target.
+        assert!(CHAT_HANDLER_SRC.contains("target: \"ccproxy_client_logger\""));
+        assert!(CHAT_HANDLER_SRC.contains("target: \"ccproxy_upstream_logger\""));
+        assert!(CHAT_HANDLER_SRC.contains("log::info!(target: \"ccproxy_upstream_logger\""));
+        assert!(CHAT_HANDLER_SRC.contains("log::info!(target: \"ccproxy_client_logger\""));
     }
 }
 

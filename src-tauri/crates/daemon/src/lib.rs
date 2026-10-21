@@ -797,20 +797,21 @@ impl LeaseRegistry {
 
     /// Releases a lease. A lease that already expired counts as unknown.
     pub fn release(&self, client_id: &str) -> Result<(), LeaseError> {
+        self.release_with_kind(client_id).map(|_| ())
+    }
+
+    fn release_with_kind(&self, client_id: &str) -> Result<String, LeaseError> {
         let now = Instant::now();
         let (removed, count) = {
             let mut leases = self.lock();
             leases.retain(|_, entry| entry.expires_at > now);
-            let removed = leases.remove(client_id).is_some();
+            let removed = leases.remove(client_id);
             (removed, leases.len())
         };
         self.publish_count(count);
-        if removed {
-            log::debug!("[Runtime] released lease for client");
-            Ok(())
-        } else {
-            Err(LeaseError::NotFound(client_id.to_string()))
-        }
+        let record = removed.ok_or_else(|| LeaseError::NotFound(client_id.to_string()))?;
+        log::debug!("[Runtime] released lease for client");
+        Ok(record.client_kind)
     }
 
     /// Drops expired leases; used by the runtime sweeper.
@@ -1361,6 +1362,33 @@ impl RuntimeControlPlane for RuntimeControl {
         self.leases
             .release(client_id)
             .map_err(RuntimeLeaseError::from)
+    }
+
+    fn release_lease_for_desktop_exit(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<ShutdownHandoff>, RuntimeLeaseError> {
+        let client_kind = self
+            .leases
+            .release_with_kind(client_id)
+            .map_err(RuntimeLeaseError::from)?;
+        if client_kind != "tauri" {
+            return Ok(None);
+        }
+        let activity_epoch = self.gate.activity_epoch();
+        let mut last_unknown_log = Instant::now();
+        if keep_alive(
+            &self.leases.subscribe(),
+            &self.service,
+            &self.gate,
+            &mut last_unknown_log,
+        ) || !self.gate.try_begin_idle(activity_epoch, 0)
+        {
+            return Ok(None);
+        }
+        log::info!("[Runtime] desktop released the last lease; shutting down while idle");
+        let (_, handoff) = self.shutdown.request(false);
+        Ok(Some(handoff))
     }
 
     fn runtime_status(&self) -> RuntimeStatusDto {
@@ -2920,6 +2948,135 @@ mod tests {
             .await
             .expect("grace expires and runtime stops");
         assert!(!discovery::discovery_path_in(dir.path()).exists());
+    }
+
+    #[tokio::test]
+    async fn desktop_exit_release_shuts_down_idle_runtime_before_grace() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token,
+        };
+        let response = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"tauri-main","client_kind":"tauri"}"#,
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        let response = http
+            .post(
+                "/control/v1/clients/tauri-main/release?shutdown_if_idle=true",
+                "",
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let result: Value = response.json().await.expect("release result");
+        assert_eq!(result["idle_shutdown"], true);
+        tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("idle runtime exits before its 30-second grace");
+    }
+
+    #[tokio::test]
+    async fn desktop_exit_release_keeps_runtime_with_another_lease() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token,
+        };
+        for client_id in ["tauri-main", "other-client"] {
+            let response = http
+                .post(
+                    "/control/v1/clients/register",
+                    &format!(r#"{{"client_id":"{client_id}","client_kind":"tauri"}}"#),
+                )
+                .await;
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+        }
+
+        let response = http
+            .post(
+                "/control/v1/clients/tauri-main/release?shutdown_if_idle=true",
+                "",
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let result: Value = response.json().await.expect("release result");
+        assert_eq!(result["idle_shutdown"], false);
+        let status: Value = http
+            .get("/control/v1/runtime/status")
+            .await
+            .json()
+            .await
+            .expect("status");
+        assert_eq!(status["phase"], "running");
+        assert_eq!(status["active_leases"], 1);
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("runtime stops");
+    }
+
+    #[tokio::test]
+    async fn non_desktop_release_cannot_request_immediate_idle_shutdown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token,
+        };
+        let response = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"cscli-1","client_kind":"cli"}"#,
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        let response = http
+            .post(
+                "/control/v1/clients/cscli-1/release?shutdown_if_idle=true",
+                "",
+            )
+            .await;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let result: Value = response.json().await.expect("release result");
+        assert_eq!(result["idle_shutdown"], false);
+        assert!(!handle.is_finished());
+
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("runtime stops");
     }
 
     #[tokio::test]

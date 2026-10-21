@@ -322,6 +322,8 @@ const LEASE_TTL_ENV: &str = "CHATSPEED_RUNTIME_LEASE_TTL_MS";
 const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(20);
 /// Lease TTL assumed when the environment configures none.
 const DEFAULT_ASSUMED_LEASE_TTL: Duration = Duration::from_secs(60);
+/// Keep lease loss detection bounded without making the default runtime chatty.
+const DEFAULT_MAX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// `GET` route that reports runtime metadata.
 pub const META_PATH: &str = "/control/v1/meta";
@@ -2389,6 +2391,13 @@ impl Heartbeat {
         let _ = self.stop.send(true);
         let _ = self.task.await;
     }
+
+    /// Cancels an in-flight renewal so desktop exit can release its lease promptly.
+    pub async fn stop_for_desktop_exit(self) {
+        let _ = self.stop.send(true);
+        self.task.abort();
+        let _ = self.task.await;
+    }
 }
 
 /// A held client lease, registered with and released against the runtime.
@@ -2527,16 +2536,21 @@ impl LeaseGuard {
     ///
     /// `expires_at` carries only second precision, so an explicit millisecond
     /// TTL (the same one the runtime reads) is preferred when present; otherwise
-    /// a third of the assumed TTL keeps the lease ahead of expiry. A wire TTL
-    /// field would remove this guesswork, but the contract does not carry one.
+    /// a third of the TTL keeps the lease ahead of expiry, capped at five
+    /// seconds so a stale connection is noticed promptly. A wire TTL field
+    /// would remove this guesswork, but the contract does not carry one.
     fn renew_interval(&self) -> Duration {
         if let Some(millis) = read_env_millis(HEARTBEAT_MS_ENV) {
             return millis.max(MIN_HEARTBEAT_INTERVAL);
         }
         if let Some(millis) = read_env_millis(LEASE_TTL_ENV) {
-            return (millis / 3).max(MIN_HEARTBEAT_INTERVAL);
+            return (millis / 3)
+                .min(DEFAULT_MAX_HEARTBEAT_INTERVAL)
+                .max(MIN_HEARTBEAT_INTERVAL);
         }
-        (DEFAULT_ASSUMED_LEASE_TTL / 3).max(MIN_HEARTBEAT_INTERVAL)
+        (DEFAULT_ASSUMED_LEASE_TTL / 3)
+            .min(DEFAULT_MAX_HEARTBEAT_INTERVAL)
+            .max(MIN_HEARTBEAT_INTERVAL)
     }
 
     fn clone_for_heartbeat(&self) -> Self {
@@ -2567,12 +2581,23 @@ impl LeaseGuard {
     /// Releases the lease explicitly. Releasing twice is a no-op, so a caller
     /// may release defensively without risking a `not_found`.
     pub async fn release(&mut self) -> Result<(), ClientError> {
+        self.release_with_idle_check(false).await
+    }
+
+    /// Releases the desktop lease and asks the runtime to shut down if idle.
+    pub async fn release_for_desktop_exit(&mut self) -> Result<(), ClientError> {
+        self.release_with_idle_check(true).await
+    }
+
+    async fn release_with_idle_check(&mut self, check_idle: bool) -> Result<(), ClientError> {
         if self.released {
             return Ok(());
         }
-        self.client
-            .send_without_body(Method::POST, &release_path(&self.client_id))
-            .await?;
+        let mut path = release_path(&self.client_id);
+        if check_idle {
+            path.push_str("?shutdown_if_idle=true");
+        }
+        self.client.send_without_body(Method::POST, &path).await?;
         self.released = true;
         Ok(())
     }
@@ -3946,6 +3971,9 @@ mod tests {
                         b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                             .to_vec()
                     }
+                    ("POST", "/control/v1/clients/cscli-1/release?shutdown_if_idle=true") => {
+                        http_response("200 OK", r#"{"idle_shutdown":false}"#)
+                    }
                     _ => http_response(
                         "404 Not Found",
                         r#"{"error":{"code":"not_found","message":"no such route"}}"#,
@@ -3972,6 +4000,24 @@ mod tests {
         let before = server.requests().len();
         guard.release().await.expect("second release is a no-op");
         assert_eq!(server.requests().len(), before);
+
+        let mut desktop_guard = LeaseGuard::from_response(
+            client,
+            "tauri",
+            ClientLeaseResponse {
+                client_id: "cscli-1".to_string(),
+                lease_id: "lease-2".to_string(),
+                expires_at: "2026-01-01T00:00:20Z".to_string(),
+            },
+        );
+        desktop_guard
+            .release_for_desktop_exit()
+            .await
+            .expect("desktop exit release");
+        assert!(desktop_guard.is_released());
+        assert!(server.requests().iter().any(|request| {
+            request.path == "/control/v1/clients/cscli-1/release?shutdown_if_idle=true"
+        }));
     }
 
     #[tokio::test]
@@ -4092,8 +4138,13 @@ mod tests {
         std::env::set_var(HEARTBEAT_MS_ENV, "50");
         assert_eq!(lease.renew_interval(), Duration::from_millis(50));
 
-        // A tiny TTL is still clamped above zero so it renews in time.
+        // The default 60-second lease is renewed every five seconds so a
+        // broken control plane is detected well before the lease expires.
+        std::env::remove_var(LEASE_TTL_ENV);
         std::env::remove_var(HEARTBEAT_MS_ENV);
+        assert_eq!(lease.renew_interval(), Duration::from_secs(5));
+
+        // A tiny TTL is still clamped above zero so it renews in time.
         std::env::set_var(LEASE_TTL_ENV, "10");
         assert_eq!(lease.renew_interval(), MIN_HEARTBEAT_INTERVAL);
 

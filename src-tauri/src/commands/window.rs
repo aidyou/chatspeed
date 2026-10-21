@@ -581,11 +581,12 @@ pub async fn quit_confirm(
 ///
 /// A release can block on I/O, so a stuck one must not hold the exit open.
 async fn release_lease_bounded(supervisor: &RuntimeSupervisor) {
-    if tokio::time::timeout(QUIT_RELEASE_BUDGET, supervisor.release())
-        .await
-        .is_err()
-    {
-        log::warn!("[ExitCoordinator] releasing the runtime lease timed out");
+    match tokio::time::timeout(QUIT_RELEASE_BUDGET, supervisor.release()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            log::warn!("[ExitCoordinator] releasing the runtime lease failed: {error}")
+        }
+        Err(_) => log::warn!("[ExitCoordinator] releasing the runtime lease timed out"),
     }
 }
 

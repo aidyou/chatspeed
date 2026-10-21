@@ -322,7 +322,7 @@ fn parse_and_emit_tool_call(
             index: status.message_index,
         });
 
-        log::info!("tool parse success, name: {}", parsed_tool.name.clone());
+        log::debug!("tool parse success, name: {}", parsed_tool.name.clone());
     } else {
         let malformed_xml = tool_xml.to_string();
         log::warn!("tool use xml parse failed, xml: {}", malformed_xml);

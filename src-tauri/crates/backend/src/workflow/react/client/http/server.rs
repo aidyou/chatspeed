@@ -372,6 +372,15 @@ mod runtime_extension {
         /// Releases a lease.
         fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError>;
 
+        /// Releases the desktop lease and checks whether shutdown can start now.
+        fn release_lease_for_desktop_exit(
+            &self,
+            client_id: &str,
+        ) -> Result<Option<crate::lifecycle::ShutdownHandoff>, RuntimeLeaseError> {
+            self.release_lease(client_id)?;
+            Ok(None)
+        }
+
         /// Reads the authoritative runtime lifecycle status.
         ///
         /// The daemon assembles the phase, the admission gate's epoch/active
@@ -1223,13 +1232,36 @@ async fn renew_client(
 }
 
 #[cfg(not(feature = "desktop"))]
+#[derive(Deserialize, Default)]
+struct ReleaseLeaseQuery {
+    #[serde(default)]
+    shutdown_if_idle: bool,
+}
+
+#[cfg(not(feature = "desktop"))]
 async fn release_client(
     State(state): State<ControlPlaneState>,
     Path(client_id): Path<String>,
+    Query(query): Query<ReleaseLeaseQuery>,
 ) -> Response {
     let Some(runtime) = state.runtime.as_ref() else {
         return runtime_missing_response();
     };
+    if query.shutdown_if_idle {
+        return match runtime.release_lease_for_desktop_exit(&client_id) {
+            Ok(handoff) => {
+                let response = (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "idle_shutdown": handoff.is_some()
+                    })),
+                )
+                    .into_response();
+                attach_shutdown_handoff(response, handoff).await
+            }
+            Err(error) => runtime_lease_error_response(&error),
+        };
+    }
     match runtime.release_lease(&client_id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => runtime_lease_error_response(&error),

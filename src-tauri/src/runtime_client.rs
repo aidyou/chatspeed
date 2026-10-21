@@ -92,6 +92,9 @@ const WORKFLOW_READER_MAX_RETRIES: usize = 5;
 /// How long to wait for a cancelled workflow reader to stop before releasing.
 const WORKFLOW_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Leave time for lease release if the optional Web MCP provider stalls on exit.
+const DESKTOP_PROVIDER_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Backoff between supervisor health checks and recovery attempts.
 const RUNTIME_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -559,15 +562,14 @@ impl RuntimeSupervisor {
         client_id: &str,
     ) -> Result<(), RuntimeUnavailable> {
         validate_client_id(client_id)?;
-        self.start_health_monitor();
         let deadline = tokio::time::Instant::now() + RUNTIME_STOPPING_RETRY_WINDOW;
         let mut logged_stopping = false;
-        loop {
+        let result = loop {
             match self.connect_or_start_once(config, client_id).await {
                 Err(error) if error.is_runtime_stopping() => {
                     let now = tokio::time::Instant::now();
                     if now >= deadline {
-                        return Err(error);
+                        break Err(error);
                     }
                     if !logged_stopping {
                         log::warn!(
@@ -577,9 +579,11 @@ impl RuntimeSupervisor {
                     }
                     tokio::time::sleep(RUNTIME_STOPPING_RETRY_INTERVAL.min(deadline - now)).await;
                 }
-                result => return result,
+                result => break result,
             }
-        }
+        };
+        self.start_health_monitor();
+        result
     }
 
     async fn connect_or_start_once(
@@ -868,9 +872,10 @@ impl RuntimeSupervisor {
 
     /// Releases the lease and stops the heartbeat.
     ///
-    /// A healthy runtime owned by another client is never stopped: with no lease
-    /// left, the runtime's own idle grace decides whether it exits. Releasing
-    /// twice is a no-op.
+    /// A runtime with another active lease or continued work is never stopped.
+    /// When this desktop releases the last lease and the runtime is idle, the
+    /// runtime may begin its coordinated shutdown immediately. Releasing twice
+    /// is a no-op.
     pub async fn release(&self) -> Result<(), RuntimeUnavailable> {
         self.monitor.stop.send_replace(true);
         let connection = {
@@ -880,7 +885,7 @@ impl RuntimeSupervisor {
             state.connection.take()
         };
         match connection {
-            Some(connection) => cleanup_connection(connection).await,
+            Some(connection) => cleanup_connection(connection, true).await,
             None => Ok(()),
         }
     }
@@ -1083,20 +1088,35 @@ impl Drop for RuntimeSupervisor {
                     state.connection.take()
                 };
                 if let Some(connection) = connection {
-                    let _ = cleanup_connection(connection).await;
+                    let _ = cleanup_connection(connection, false).await;
                 }
             });
         }
     }
 }
 
-/// Stops connection-owned readers/providers, then releases its lease.
-async fn cleanup_connection(mut connection: Connection) -> Result<(), RuntimeUnavailable> {
+/// Stops connection-owned readers/providers and releases its lease.
+///
+/// On desktop exit the lease is released immediately after the heartbeat stops,
+/// so a slow local reader cannot postpone the runtime's idle check.
+async fn cleanup_connection(
+    mut connection: Connection,
+    desktop_exit: bool,
+) -> Result<(), RuntimeUnavailable> {
     // Stop and join the heartbeat first: a renewal must never be in flight while
     // the lease is released.
     if let Some(heartbeat) = connection.heartbeat.take() {
-        heartbeat.stop().await;
+        if desktop_exit {
+            heartbeat.stop_for_desktop_exit().await;
+        } else {
+            heartbeat.stop().await;
+        }
     }
+    let early_release = if desktop_exit {
+        Some(connection.lease.release_for_desktop_exit().await)
+    } else {
+        None
+    };
     if let Some(bridge) = connection.bridge.take() {
         bridge.cancel.send_replace(true);
         bridge.reader.abort();
@@ -1117,13 +1137,24 @@ async fn cleanup_connection(mut connection: Connection) -> Result<(), RuntimeUna
     }
     #[cfg(feature = "desktop")]
     if let Some(provider) = connection.web_provider.take() {
-        provider.shutdown().await;
+        if desktop_exit {
+            if tokio::time::timeout(DESKTOP_PROVIDER_STOP_TIMEOUT, provider.shutdown())
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "[RuntimeSupervisor] Web MCP provider stop timed out during desktop exit"
+                );
+            }
+        } else {
+            provider.shutdown().await;
+        }
     }
-    connection
-        .lease
-        .release()
-        .await
-        .map_err(RuntimeUnavailable::from_client_error)
+    let result = match early_release {
+        Some(result) => result,
+        None => connection.lease.release().await,
+    };
+    result.map_err(RuntimeUnavailable::from_client_error)
 }
 
 /// Watches control-plane reachability, the lease heartbeat and any desktop-owned
@@ -1230,7 +1261,7 @@ async fn run_health_monitor(inner: Weak<Mutex<SupervisorState>>, monitor: Arc<Mo
         };
         log::warn!("[RuntimeSupervisor] {reason}; starting controlled recovery");
         if let Some(connection) = connection {
-            if let Err(error) = cleanup_connection(connection).await {
+            if let Err(error) = cleanup_connection(connection, false).await {
                 log::debug!("[RuntimeSupervisor] cleaning failed runtime connection: {error}");
             }
         }
@@ -1321,7 +1352,7 @@ async fn connect_once(
     state.pending_pid = state.pending_child.as_ref().map(RuntimeChild::id);
     if state.stopping {
         drop(state);
-        let _ = cleanup_connection(connection).await;
+        let _ = cleanup_connection(connection, false).await;
         return Err(RuntimeUnavailable::NotConnected);
     }
     state.connection = Some(connection);
@@ -2276,6 +2307,91 @@ mod tests {
                 .expect("serve fake runtime");
         });
         (document, task)
+    }
+
+    #[tokio::test]
+    async fn initial_runtime_stopping_retries_without_monitor_competing_for_connection() {
+        use axum::{
+            http::StatusCode,
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind fake runtime");
+        let mut document = discovery_with_token("test-only-token");
+        document.pid = std::process::id();
+        document.port = listener.local_addr().expect("address").port();
+        let meta = serde_json::json!({
+            "service": "chatspeed-runtime", "protocol_version": PROTOCOL_VERSION,
+            "schema_version": chatspeed_contracts::SCHEMA_VERSION,
+            "server_instance_id": document.server_instance_id, "pid": document.pid
+        });
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let register_attempts = attempts.clone();
+        let app = Router::new()
+            .route(
+                "/control/v1/meta",
+                get(move || {
+                    let meta = meta.clone();
+                    async move { Json(meta) }
+                }),
+            )
+            .route(
+                "/control/v1/clients/register",
+                post(move || {
+                    let attempts = register_attempts.clone();
+                    async move {
+                        if attempts.fetch_add(1, Ordering::SeqCst) < 5 {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(serde_json::json!({
+                                    "error": {"code": "runtime_stopping", "message": "quiescing"}
+                                })),
+                            )
+                        } else {
+                            (
+                                StatusCode::OK,
+                                Json(serde_json::json!({
+                                    "client_id": "tauri-main", "lease_id": "test-lease",
+                                    "expires_at": "2099-01-01T00:00:00Z"
+                                })),
+                            )
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/control/v1/clients/tauri-main/release",
+                post(|| async { Json(serde_json::json!({})) }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake runtime");
+        });
+        std::fs::write(
+            config.discovery_file(),
+            serde_json::to_vec(&document).expect("encode discovery"),
+        )
+        .expect("write discovery");
+
+        let supervisor = RuntimeSupervisor::new();
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            supervisor.connect_or_start(&config, "tauri-main"),
+        )
+        .await
+        .expect("retry budget")
+        .expect("attach after stopping");
+        assert_eq!(attempts.load(Ordering::SeqCst), 6);
+        assert_eq!(supervisor.status().await.generation, 1);
+        supervisor.release().await.expect("release");
+        server.abort();
     }
 
     #[tokio::test]

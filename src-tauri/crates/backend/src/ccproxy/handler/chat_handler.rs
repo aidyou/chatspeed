@@ -632,7 +632,7 @@ pub(crate) async fn execute_unified_chat_request(
 
         {
             let store = main_store_arc.as_ref();
-            log::info!(
+            log::debug!(
                 "Recording ccproxy stats for non-streaming response: model={}, provider={}",
                 &proxy_model.model,
                 &proxy_model.provider

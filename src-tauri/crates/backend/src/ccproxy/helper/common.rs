@@ -924,7 +924,8 @@ impl ModelResolver {
             }
             ProxyType::Http(proxy_url, proxy_username, proxy_password) => {
                 if !proxy_url.trim().is_empty() {
-                    log::info!("Using proxy: {}", proxy_url);
+                    // Keep the diagnostic category only; the proxy URL may embed credentials.
+                    log::debug!("Using configured HTTP proxy");
                     if let Ok(mut proxy) = reqwest::Proxy::all(&proxy_url) {
                         if let (Some(user), Some(pass)) = (proxy_username, proxy_password) {
                             if !user.is_empty() && !pass.is_empty() {
